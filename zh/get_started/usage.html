@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="2026 年 09 月 30 日"/>
+    <meta name="docbuild:last-update" content="2026 年 10 月 02 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -514,6 +514,7 @@
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout">自定义 rollout 函数</a><ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-fully-async">持久化 rollout 队列和分布式 fully async</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#kv-pipelinerl">跨权重更新保留 KV（PipelineRL）</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">sglang 使用方法</a><ul class="pst-show_toc_level nav section-nav flex-column">
@@ -922,6 +923,47 @@
 <p>所有节点必须以相同绝对路径挂载该目录，并安装 <code class="docutils literal notranslate"><span class="pre">straw-queue</span></code>。标准 slime 安装已包含此依赖；已有环境可以执行 <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">'straw-queue&gt;=0.1.2'</span></code>。JuiceFS storage profile 和部署声明的配置见 <a class="reference internal" href="../advanced/straw.html#id1"><span class="std std-ref">straw 指南</span></a>。只选择 straw 时使用同步 rollout 入口。新任务已设置 <code class="docutils literal notranslate"><span class="pre">--save</span></code> 时，省略 <code class="docutils literal notranslate"><span class="pre">--rollout-data-dir</span></code> 会使用 <code class="docutils literal notranslate"><span class="pre">&lt;save&gt;/rollout_data</span></code>。</p>
 <p>使用 straw 时，<code class="docutils literal notranslate"><span class="pre">--use-rollout-routing-replay</span></code> 和 <code class="docutils literal notranslate"><span class="pre">--use-score-centering</span></code> 将 R3、SC 张量随 sample 持久化，也支持 partial continuation。<code class="docutils literal notranslate"><span class="pre">--rollout-queue-online-gc</span></code> 可开启未使用存储的回收，默认关闭。恢复使用 <code class="docutils literal notranslate"><span class="pre">--load</span></code>、<code class="docutils literal notranslate"><span class="pre">--save</span></code> 和可选的 <code class="docutils literal notranslate"><span class="pre">--ckpt-step</span></code>。调度、checkpoint 恢复和 debug 回放见 <a class="reference internal" href="../advanced/straw.html"><span class="std std-doc">straw 指南</span></a>，自定义 rollout 函数见<a class="reference internal" href="customization.html"><span class="std std-doc">自定义功能</span></a>。</p>
 </section>
+<section id="kv-pipelinerl">
+<h3>跨权重更新保留 KV（PipelineRL）<a class="headerlink" href="#kv-pipelinerl" title="链接到此标题。">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">--flush-cache-interval</span></code> 控制权重同步时的缓存刷新策略：</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>值</p></th>
+<th class="head"><p>行为</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">1</span></code>（默认）</p></td>
+<td><p>保持原有实现：abort 生成、flush KV、更新权重，再恢复生成。</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">&lt;=</span> <span class="pre">0</span></code></p></td>
+<td><p>原地暂停生成，更新权重后让未完成请求沿用已有 KV 继续生成。</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">N</span> <span class="pre">&gt;</span> <span class="pre">1</span></code></p></td>
+<td><p>每 N 次训练权重更新完整刷新一次，其余更新保留 KV。</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>首次发布权重总会刷新，包括从 checkpoint 恢复时。例如 <code class="docutils literal notranslate"><span class="pre">2</span></code> 会在 serving
+version 2 保留 KV、version 3 刷新、version 4 再次保留。周期按权重同步次数
+计算，而不是 optimizer step 或 rollout batch 数。</p>
+<p>使用默认 rollout 函数时，非 <code class="docutils literal notranslate"><span class="pre">1</span></code> 的值会自动选择 fully async rollout 实现。
+自定义 rollout 函数保留自己的调度逻辑。训推需要使用独立 GPU，不能开启
+rollout offload 或 <code class="docutils literal notranslate"><span class="pre">--release-train</span></code>。默认评估仍使用标准 SGLang rollout 函数。</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--flush-cache-interval<span class="w"> </span><span class="m">8</span><span class="w"> </span><span class="se">\</span>
+--use-rollout-logprobs
+</pre></div>
+</div>
+<p>实现使用 SGLang 已有的 <code class="docutils literal notranslate"><span class="pre">pause_generation(mode=&quot;in_place&quot;)</span></code> API，无需修改
+SGLang 源码。跨更新的请求会使用旧权重计算的 KV；rollout log probabilities
+对应实际生成各 token 的策略。周期性完整刷新会 abort 未完成请求，标准
+fully async worker 会将其重新排队生成。</p>
+<p>公共 prefix 也可能在刷新前一直复用旧 KV。设为 <code class="docutils literal notranslate"><span class="pre">&lt;=</span> <span class="pre">0</span></code> 时，高频 prefix 没有
+缓存年龄上限。可选地添加 <code class="docutils literal notranslate"><span class="pre">--sglang-disable-radix-cache</span></code>，关闭跨请求 prefix
+复用，同时保留未完成请求自身的 KV。周期性刷新则可以限制公共 KV 的存活
+时间，暂不引入权重版本缓存命名空间。</p>
+</section>
 </section>
 <section id="id7">
 <h2>sglang 使用方法<a class="headerlink" href="#id7" title="链接到此标题。">#</a></h2>
@@ -1073,6 +1115,7 @@
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout">自定义 rollout 函数</a><ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-fully-async">持久化 rollout 队列和分布式 fully async</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#kv-pipelinerl">跨权重更新保留 KV（PipelineRL）</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">sglang 使用方法</a><ul class="pst-show_toc_level nav section-nav flex-column">
@@ -1119,7 +1162,7 @@
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 09 月 30 日.
+  最后更新于 2026 年 10 月 02 日.
   <br/>
 </p>
   </div>

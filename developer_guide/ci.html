@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="Sep 30, 2026"/>
+    <meta name="docbuild:last-update" content="Oct 02, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -570,6 +570,13 @@ GPU tests exercise the local filesystem profile; multi-host JuiceFS durability
 requires separate validation. The other e2e cases retain their Ray object-store
 or NIXL transport coverage. GPU containers install straw in both fixed and
 changed-test jobs.</p>
+<p><code class="docutils literal notranslate"><span class="pre">test_qwen2.5_0.5B_pipeline_rl.py</span></code> runs three real GRPO steps with fully async
+rollout on 4 GPUs. Its probes verify that the same HTTP requests keep generating
+across weight updates, and that policy weights actually change. The fixed
+matrix covers NCCL and full disk weight sync with <code class="docutils literal notranslate"><span class="pre">--flush-cache-interval</span> <span class="pre">0</span></code>,
+plus periodic refresh with NCCL and interval <code class="docutils literal notranslate"><span class="pre">2</span></code>. <code class="docutils literal notranslate"><span class="pre">test_pipeline_rl.py</span></code> checks
+the cache schedule and SGLang control payloads on CPU. These are functional
+checks; they do not measure PipelineRL learning quality or throughput gains.</p>
 </section>
 <section id="changed-test-job">
 <h3>Changed-Test Job<a class="headerlink" href="#changed-test-job" title="Link to this heading">#</a></h3>
@@ -860,7 +867,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Sep 30, 2026.
+  Last updated on Oct 02, 2026.
   <br/>
 </p>
   </div>

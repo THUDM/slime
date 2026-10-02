@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="Sep 30, 2026"/>
+    <meta name="docbuild:last-update" content="Oct 02, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -518,6 +518,7 @@
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-rollout-function">Custom Rollout Function</a><ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#persistent-rollout-queue-and-distributed-fully-async">Persistent rollout queue and distributed fully async</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#preserve-kv-across-weight-updates-pipelinerl">Preserve KV across weight updates (PipelineRL)</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-to-use-sglang">How to Use SGLang</a><ul class="pst-show_toc_level nav section-nav flex-column">
@@ -940,6 +941,52 @@ See the <a class="reference internal" href="../advanced/straw.html"><span class=
 checkpoint recovery and debug replay, and <a class="reference internal" href="customization.html"><span class="std std-doc">customization</span></a>
 for custom rollout functions.</p>
 </section>
+<section id="preserve-kv-across-weight-updates-pipelinerl">
+<h3>Preserve KV across weight updates (PipelineRL)<a class="headerlink" href="#preserve-kv-across-weight-updates-pipelinerl" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">--flush-cache-interval</span></code> controls the cache refresh policy at weight synchronization:</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Value</p></th>
+<th class="head"><p>Behavior</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">1</span></code> (default)</p></td>
+<td><p>Keep the existing behavior: abort generation, flush KV, update weights, then resume.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">&lt;=</span> <span class="pre">0</span></code></p></td>
+<td><p>Pause generation in place, update weights, and continue unfinished requests with their existing KV.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">N</span> <span class="pre">&gt;</span> <span class="pre">1</span></code></p></td>
+<td><p>Fully flush every N training weight updates; preserve KV on the intervening updates.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>The initial weight publication always flushes, including after checkpoint recovery.
+For example, <code class="docutils literal notranslate"><span class="pre">2</span></code> preserves KV at serving version 2, flushes at version 3, and
+preserves it again at version 4. This counts weight synchronizations, rather
+than optimizer steps or rollout batches.</p>
+<p>Values other than <code class="docutils literal notranslate"><span class="pre">1</span></code> automatically select the fully async rollout implementation
+when using the default rollout function. Custom rollout functions keep their
+own scheduling. Training and rollout must use separate GPUs, without rollout
+offload or <code class="docutils literal notranslate"><span class="pre">--release-train</span></code>. Stock evaluation remains available through the
+standard SGLang rollout function.</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--flush-cache-interval<span class="w"> </span><span class="m">8</span><span class="w"> </span><span class="se">\</span>
+--use-rollout-logprobs
+</pre></div>
+</div>
+<p>This uses SGLang’s existing <code class="docutils literal notranslate"><span class="pre">pause_generation(mode=&quot;in_place&quot;)</span></code> API and does
+not require a SGLang source patch. Requests spanning an update use KV computed
+with older weights; rollout log probabilities reflect the policies that
+generated their tokens. Periodic full refreshes abort unfinished requests, which
+the stock fully async worker requeues.</p>
+<p>Shared prefixes can also retain old KV between refreshes. With <code class="docutils literal notranslate"><span class="pre">&lt;=</span> <span class="pre">0</span></code>, frequently
+reused prefixes have no age bound. To prevent prefix reuse across requests while
+preserving each unfinished request’s KV, optionally add
+<code class="docutils literal notranslate"><span class="pre">--sglang-disable-radix-cache</span></code>. Periodic refresh bounds the lifetime of shared KV
+without introducing weight-version cache namespaces.</p>
+</section>
 </section>
 <section id="how-to-use-sglang">
 <h2>How to Use SGLang<a class="headerlink" href="#how-to-use-sglang" title="Link to this heading">#</a></h2>
@@ -1091,6 +1138,7 @@ for custom rollout functions.</p>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-rollout-function">Custom Rollout Function</a><ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#persistent-rollout-queue-and-distributed-fully-async">Persistent rollout queue and distributed fully async</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#preserve-kv-across-weight-updates-pipelinerl">Preserve KV across weight updates (PipelineRL)</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-to-use-sglang">How to Use SGLang</a><ul class="pst-show_toc_level nav section-nav flex-column">
@@ -1137,7 +1185,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Sep 30, 2026.
+  Last updated on Oct 02, 2026.
   <br/>
 </p>
   </div>

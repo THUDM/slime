@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="2026 年 09 月 30 日"/>
+    <meta name="docbuild:last-update" content="2026 年 10 月 02 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -557,6 +557,12 @@
 <li><p>Checkpoint 保存/加载测试跨阶段共用 straw 存储池，验证队列和训练状态恢复。<code class="docutils literal notranslate"><span class="pre">test_straw_checkpoint_fork.py</span></code> 覆盖 step 选择、多次回退、自动分支选择和 debug 回放。</p></li>
 </ul>
 <p>R3、SC 和 fully async 同时启用在线 GC。普通 straw 测试使用独立临时目录，执行后清理。这些单机 GPU 测试使用本地文件系统 profile；多机 JuiceFS 持久性仍需单独验证。其余 e2e 保留 Ray object-store 或 NIXL 传输覆盖。固定矩阵和 changed-test 的 GPU 容器均安装 straw。</p>
+<p><code class="docutils literal notranslate"><span class="pre">test_qwen2.5_0.5B_pipeline_rl.py</span></code> 使用 4 张 GPU，运行 fully async rollout
+和三个真实 GRPO step。探针验证同一个 HTTP 请求跨权重更新持续生成，并检查
+训练确实改变了策略权重。固定矩阵覆盖 <code class="docutils literal notranslate"><span class="pre">--flush-cache-interval</span> <span class="pre">0</span></code> 下的 NCCL
+和 full disk 权重同步，以及 NCCL 下 interval <code class="docutils literal notranslate"><span class="pre">2</span></code> 的周期性刷新。
+<code class="docutils literal notranslate"><span class="pre">test_pipeline_rl.py</span></code> 在 CPU 上检查刷新周期和 SGLang 控制请求。这些测试验证
+功能，不衡量 PipelineRL 的学习效果或吞吐增益。</p>
 </section>
 <section id="changed-test-job">
 <h3>Changed-Test Job<a class="headerlink" href="#changed-test-job" title="链接到此标题。">#</a></h3>
@@ -838,7 +844,7 @@ python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> <
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 09 月 30 日.
+  最后更新于 2026 年 10 月 02 日.
   <br/>
 </p>
   </div>
