@@ -133,7 +133,9 @@ def load_debug_rollout_data(path_template, *, rollout_id: int, subsample_ratio=N
     return data
 
 
-def save_debug_rollout_data(path_template, data, *, rollout_id: int, evaluation: bool, args=None) -> None:
+def save_debug_rollout_data(
+    path_template, data, *, rollout_id: int, evaluation: bool, args=None, reference=None
+) -> None:
     if path_template is None:
         return
 
@@ -145,7 +147,9 @@ def save_debug_rollout_data(path_template, data, *, rollout_id: int, evaluation:
         from slime.data.archive import RolloutArchive
 
         samples = [sample for info in data.values() for sample in info["samples"]] if evaluation else data
-        RolloutArchive.save(path, samples, rollout_id=rollout_id, evaluation=evaluation, args=args)
+        RolloutArchive.save(
+            path, samples, rollout_id=rollout_id, evaluation=evaluation, args=args, reference=reference
+        )
         return
 
     if evaluation:

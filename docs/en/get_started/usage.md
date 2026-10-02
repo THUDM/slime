@@ -437,7 +437,7 @@ To enable distributed fully async rollout with straw, add:
 
 All nodes must mount the directory at the same absolute path and have
 `straw-queue` installed. The standard slime installation includes it; for an
-existing environment, run `pip install straw-queue`. Configure the JuiceFS
+existing environment, run `pip install 'straw-queue>=0.1.2'`. Configure the JuiceFS
 storage profile and deployment declaration as described in the
 [straw guide](../advanced/straw.md#enable-it). Selecting straw alone uses the
 synchronous rollout entrypoint. For a fresh run, omitting `--rollout-data-dir`
@@ -447,9 +447,47 @@ With straw, `--use-rollout-routing-replay` and `--use-score-centering` persist
 R3 and SC tensors with their samples, including partial continuations.
 `--rollout-queue-online-gc` optionally reclaims unused storage; it is disabled
 by default. Recovery uses `--load`, `--save` and optional `--ckpt-step`.
-See the [straw guide](../advanced/straw.md) for scheduling, storage limits,
+See the [straw guide](../advanced/straw.md) for scheduling,
 checkpoint recovery and debug replay, and [customization](customization.md)
 for custom rollout functions.
+
+### Preserve KV across weight updates (PipelineRL)
+
+`--flush-cache-interval` controls the cache refresh policy at weight synchronization:
+
+| Value | Behavior |
+| --- | --- |
+| `1` (default) | Keep the existing behavior: abort generation, flush KV, update weights, then resume. |
+| `<= 0` | Pause generation in place, update weights, and continue unfinished requests with their existing KV. |
+| `N > 1` | Fully flush every N training weight updates; preserve KV on the intervening updates. |
+
+The initial weight publication always flushes, including after checkpoint recovery.
+For example, `2` preserves KV at serving version 2, flushes at version 3, and
+preserves it again at version 4. This counts weight synchronizations, rather
+than optimizer steps or rollout batches.
+
+Values other than `1` automatically select the fully async rollout implementation
+when using the default rollout function. Custom rollout functions keep their
+own scheduling. Training and rollout must use separate GPUs, without rollout
+offload or `--release-train`. Stock evaluation remains available through the
+standard SGLang rollout function.
+
+```bash
+--flush-cache-interval 8 \
+--use-rollout-logprobs
+```
+
+This uses SGLang's existing `pause_generation(mode="in_place")` API and does
+not require a SGLang source patch. Requests spanning an update use KV computed
+with older weights; rollout log probabilities reflect the policies that
+generated their tokens. Periodic full refreshes abort unfinished requests, which
+the stock fully async worker requeues.
+
+Shared prefixes can also retain old KV between refreshes. With `<= 0`, frequently
+reused prefixes have no age bound. To prevent prefix reuse across requests while
+preserving each unfinished request's KV, optionally add
+`--sglang-disable-radix-cache`. Periodic refresh bounds the lifetime of shared KV
+without introducing weight-version cache namespaces.
 
 ## How to Use SGLang
 

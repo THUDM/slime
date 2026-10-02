@@ -25,7 +25,7 @@ import ray
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 from straw.coordinator import Coordinator
 from straw.errors import LeaseExpired, StaleAttempt
-from straw.protocol import Lease, Limits, Record, RecordSetRef, TaskSpec, encode
+from straw.protocol import Lease, Record, RecordSetRef, TaskSpec, encode
 from straw.reporting import write_report
 
 from slime.data.checkpoint import RestorePlan, SourceRestore
@@ -55,6 +55,10 @@ class RolloutQueueController:
     def __init__(self, args, *, producer=None, restore_plan=None, defer_gc=False):
         self.args = args
         self.restore_plan = restore_plan or RestorePlan()
+        if (getattr(args, "load_debug_rollout_data", None) or "").endswith(".straw.json"):
+            # Replay shares immutable storage, but never the source queue's
+            # leases, accepted positions or training cursor.
+            self.restore_plan = RestorePlan(queue_id=f"debug:{uuid.uuid4().hex}")
         self._checkpoint_lock = None
         with ExitStack() as cleanup:
             # The controller owns both the queue and its checkpoint branch.
@@ -136,10 +140,6 @@ class RolloutQueueController:
                 exclusive_owner="job owns this non-restarting actor; prior coordinator and readers must be stopped",
                 recover=recovering,
                 lease_seconds=getattr(args, "rollout_queue_lease_seconds", 300),
-                limits=Limits(
-                    pending_tasks=getattr(args, "rollout_queue_max_pending", 65536),
-                    inflight_tasks=getattr(args, "rollout_queue_max_inflight", 65536),
-                ),
             )
             cleanup.callback(self._queue.close)
             self.producer = producer
@@ -515,7 +515,7 @@ class RolloutQueueController:
                 source.dataset.shuffle(source.epoch_id)
             start = source.sample_group_index
             # Bounded refill, without unused index reservations held in readers.
-            count = min(max(count, 8), 64, self.queue.limits.pending_tasks)
+            count = min(max(count, 8), 64)
             groups = source.get_samples(count)
             group_ids = [next(iter_samples(group)).group_index for group in groups]
             task_ids = [f"prompt:{group_id}" for group_id in group_ids]
