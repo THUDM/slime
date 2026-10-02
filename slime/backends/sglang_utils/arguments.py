@@ -1,11 +1,19 @@
 import argparse
 import logging
+import math
 
 from sglang.srt.server_args import ServerArgs
 from sglang_router.launch_router import RouterArgs
 from slime.utils.http_utils import _wrap_ipv6
 
 logger = logging.getLogger(__name__)
+
+
+def _positive_finite_float(value):
+    number = float(value)
+    if not math.isfinite(number) or number <= 0:
+        raise argparse.ArgumentTypeError("must be a positive finite number")
+    return number
 
 
 # TODO: use all sglang router arguments with `--sglang-router` prefix
@@ -45,6 +53,12 @@ def add_sglang_arguments(parser):
     parser = add_sglang_router_arguments(parser)
     parser.set_defaults(router_balance_abs_threshold=10, router_balance_rel_threshold=1.2)
     parser.add_argument("--sglang-server-concurrency", type=int, default=512)
+    parser.add_argument(
+        "--sglang-server-startup-timeout",
+        type=_positive_finite_float,
+        default=600,
+        help="Timeout in seconds for a locally managed SGLang server to become healthy.",
+    )
 
     old_add_argument = parser.add_argument
 
