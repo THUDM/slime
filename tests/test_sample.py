@@ -23,7 +23,6 @@ import pytest
 
 from slime.utils.types import Sample
 
-
 NUM_GPUS = 0
 
 
@@ -40,6 +39,7 @@ def _make_sample(**overrides) -> Sample:
         group_index=0,
         index=42,
         rollout_id=7,
+        policy_version=3,
         prompt="hello",
         tokens=[1, 2, 3],
         multimodal_inputs={"images": ["fake_url"]},
@@ -123,6 +123,7 @@ def test_round_trip_preserves_every_field():
         "group_index",
         "index",
         "rollout_id",
+        "policy_version",
         "prompt",
         "tokens",
         "multimodal_inputs",
