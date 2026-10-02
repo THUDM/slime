@@ -22,6 +22,7 @@ from ray.actor import ActorHandle
 from slime.utils import accelerator
 from slime.utils.disk_delta import NUM_WORKERS, checksum, make_tensor_reader, overwrite_encode
 from slime.utils.distributed_utils import get_gloo_group
+from slime.utils.weight_sync import should_flush_cache
 
 from .update_weight_from_distributed import UpdateWeightFromDistributed
 
@@ -175,14 +176,26 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
             self._post_write_hook(self.args, self._version_dir, list(self.rollout_engines))
         dist.barrier(group=get_gloo_group())
         if dist.get_rank() == 0:
+            flush_cache = should_flush_cache(
+                self.args.flush_cache_interval,
+                self.weight_version,
+                getattr(self.args, "update_weight_start_version", 0),
+            )
             ray.get([engine.pull_weights.remote(self.weight_version) for engine in self.rollout_engines])
-            ray.get([engine.pause_generation.remote() for engine in self.rollout_engines])
-            ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
+            ray.get(
+                [
+                    engine.pause_generation.remote(mode="abort" if flush_cache else "in_place")
+                    for engine in self.rollout_engines
+                ]
+            )
+            if flush_cache:
+                ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
             ray.get(
                 [
                     engine.update_weights_from_disk.remote(
                         model_path=self.args.update_weight_local_checkpoint_dir,
                         weight_version=str(self.weight_version),
+                        flush_cache=flush_cache,
                     )
                     for engine in self.rollout_engines
                 ]

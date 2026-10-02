@@ -407,6 +407,39 @@ slime 支持不同程度的自定义数据生成（rollout）。
 
 使用 straw 时，`--use-rollout-routing-replay` 和 `--use-score-centering` 将 R3、SC 张量随 sample 持久化，也支持 partial continuation。`--rollout-queue-online-gc` 可开启未使用存储的回收，默认关闭。恢复使用 `--load`、`--save` 和可选的 `--ckpt-step`。调度、checkpoint 恢复和 debug 回放见 [straw 指南](../advanced/straw.md)，自定义 rollout 函数见[自定义功能](customization.md)。
 
+### 跨权重更新保留 KV（PipelineRL）
+
+`--flush-cache-interval` 控制权重同步时的缓存刷新策略：
+
+| 值 | 行为 |
+| --- | --- |
+| `1`（默认） | 保持原有实现：abort 生成、flush KV、更新权重，再恢复生成。 |
+| `<= 0` | 原地暂停生成，更新权重后让未完成请求沿用已有 KV 继续生成。 |
+| `N > 1` | 每 N 次训练权重更新完整刷新一次，其余更新保留 KV。 |
+
+首次发布权重总会刷新，包括从 checkpoint 恢复时。例如 `2` 会在 serving
+version 2 保留 KV、version 3 刷新、version 4 再次保留。周期按权重同步次数
+计算，而不是 optimizer step 或 rollout batch 数。
+
+使用默认 rollout 函数时，非 `1` 的值会自动选择 fully async rollout 实现。
+自定义 rollout 函数保留自己的调度逻辑。训推需要使用独立 GPU，不能开启
+rollout offload 或 `--release-train`。默认评估仍使用标准 SGLang rollout 函数。
+
+```bash
+--flush-cache-interval 8 \
+--use-rollout-logprobs
+```
+
+实现使用 SGLang 已有的 `pause_generation(mode="in_place")` API，无需修改
+SGLang 源码。跨更新的请求会使用旧权重计算的 KV；rollout log probabilities
+对应实际生成各 token 的策略。周期性完整刷新会 abort 未完成请求，标准
+fully async worker 会将其重新排队生成。
+
+公共 prefix 也可能在刷新前一直复用旧 KV。设为 `<= 0` 时，高频 prefix 没有
+缓存年龄上限。可选地添加 `--sglang-disable-radix-cache`，关闭跨请求 prefix
+复用，同时保留未完成请求自身的 KV。周期性刷新则可以限制公共 KV 的存活
+时间，暂不引入权重版本缓存命名空间。
+
 ## sglang 使用方法
 
 slime 通过 `HttpServerEngineAdapter` 作为中介，实现了基于 sglang 的 server based engine。

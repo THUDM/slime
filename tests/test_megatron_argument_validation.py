@@ -216,6 +216,7 @@ def test_update_weight_disk_dir_required_for_disk_transport(monkeypatch):
 
 def make_slime_validate_args(**overrides):
     values = dict(
+        flush_cache_interval=1,
         rollout_data_transport="object-store",
         rollout_data_dir=None,
         rollout_queue_lease_seconds=300,
@@ -302,6 +303,57 @@ def make_slime_validate_args(**overrides):
     )
     values.update(overrides)
     return types.SimpleNamespace(**values)
+
+
+@pytest.mark.parametrize(
+    "rollout_path",
+    [
+        "slime.rollout.sglang_rollout.generate_rollout",
+        "slime.rollout.fully_async_rollout.generate_rollout_fully_async",
+        "custom.rollout",
+    ],
+)
+def test_pipeline_rl_defaults_to_fully_async_with_separate_eval(monkeypatch, rollout_path):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(flush_cache_interval=0, rollout_function_path=rollout_path)
+    module.slime_validate_args(args)
+    expected = (
+        "slime.rollout.fully_async_rollout.generate_rollout_fully_async"
+        if "sglang_rollout" in rollout_path
+        else rollout_path
+    )
+    assert args.rollout_function_path == expected
+    assert args.eval_function_path == "slime.rollout.sglang_rollout.generate_rollout"
+
+
+@pytest.mark.parametrize(
+    "options",
+    [{"colocate": True}, {"offload_rollout": True}, {"debug_train_only": True}, {"debug_rollout_only": True}],
+)
+def test_pipeline_rl_rejects_incompatible_lifecycles(monkeypatch, options):
+    module = load_slime_arguments_module(monkeypatch)
+    with pytest.raises(ValueError, match="flush-cache-interval"):
+        module.slime_validate_args(make_slime_validate_args(flush_cache_interval=0, **options))
+
+
+def test_flush_cache_interval_defaults_to_existing_behavior(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    parser = module.get_slime_extra_args_provider()(argparse.ArgumentParser())
+    assert parser.parse_args(["--rollout-batch-size", "1"]).flush_cache_interval == 1
+    assert parser.parse_args(["--rollout-batch-size", "1", "--flush-cache-interval", "0"]).flush_cache_interval == 0
+    args = make_slime_validate_args(rollout_function_path="slime.rollout.sglang_rollout.generate_rollout")
+    module.slime_validate_args(args)
+    assert args.rollout_function_path == args.eval_function_path == "slime.rollout.sglang_rollout.generate_rollout"
+
+
+@pytest.mark.parametrize("interval", [-1, -100])
+def test_negative_flush_cache_interval_disables_training_flush(monkeypatch, interval):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(
+        flush_cache_interval=interval, rollout_function_path="slime.rollout.sglang_rollout.generate_rollout"
+    )
+    module.slime_validate_args(args)
+    assert args.rollout_function_path == "slime.rollout.fully_async_rollout.generate_rollout_fully_async"
 
 
 def test_distributed_fully_async_is_opt_in(monkeypatch):

@@ -40,6 +40,13 @@ straw e2e 测试显式设置 `--rollout-data-transport straw`，因此本地执�
 
 R3、SC 和 fully async 同时启用在线 GC。普通 straw 测试使用独立临时目录，执行后清理。这些单机 GPU 测试使用本地文件系统 profile；多机 JuiceFS 持久性仍需单独验证。其余 e2e 保留 Ray object-store 或 NIXL 传输覆盖。固定矩阵和 changed-test 的 GPU 容器均安装 straw。
 
+`test_qwen2.5_0.5B_pipeline_rl.py` 使用 4 张 GPU，运行 fully async rollout
+和三个真实 GRPO step。探针验证同一个 HTTP 请求跨权重更新持续生成，并检查
+训练确实改变了策略权重。固定矩阵覆盖 `--flush-cache-interval 0` 下的 NCCL
+和 full disk 权重同步，以及 NCCL 下 interval `2` 的周期性刷新。
+`test_pipeline_rl.py` 在 CPU 上检查刷新周期和 SGLang 控制请求。这些测试验证
+功能，不衡量 PipelineRL 的学习效果或吞吐增益。
+
 ### Changed-Test Job
 
 `run-ci-changed` 会动态检测相对于 `origin/main` 新增或修改的 `tests/test_*.py` 和 `tests/plugin_contracts/test_*.py` 文件。
