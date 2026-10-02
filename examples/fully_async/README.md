@@ -71,12 +71,34 @@ multi-turn agent (Claude Code in a Docker-Proxy sandbox) this way.
   by `sample.index`.
 * Groups containing an `ABORTED` sample are pushed back into
   `data_buffer.add_samples` instead of being shipped to training.
+* Evaluation (`--eval-interval`) runs on the worker's event loop, sharing the
+  engines with the in-flight trajectories. Leave `--eval-function-path` unset:
+  pointing it at `slime.rollout.sglang_rollout.generate_rollout` would run
+  evaluation on a second event loop against the same loop-bound
+  `GenerateState`.
 * Worker is stopped automatically at process exit via `atexit`.
+
+## Trajectories Across Weight Updates
+
+A weight update pauses the SGLang engines, which aborts every in-flight
+request. The aborted sample keeps its partial response and per-token rollout
+log-probs; when its group is picked up again, generation continues from that
+prefix with the remaining token budget under the new weights. A finished
+sample can therefore contain tokens from several policy versions, recorded in
+`Sample.weight_versions` and summarized by the `rollout/staleness/*` metrics
+(`multi_version_frac` is the fraction of such samples). Either correct those
+tokens with importance sampling (`--use-tis`) or keep only the latest segment
+with `--partial-rollout --mask-offpolicy-in-partial-rollout`.
+
+This continuation applies to slime's `generate` and `generate_streaming`, for
+text and multimodal samples (a resumed multimodal request resends the
+processor-expanded prompt ids plus the partial response with its images).
+Custom generate functions decide for themselves how to handle an `ABORTED`
+sample.
 
 ## Limitations
 
-* No evaluation mode (would conflict with the continuous-running model).
+* Distributed fully-async (`--rollout-data-transport straw`) does not support
+  evaluation yet.
 * Ordering across rollouts is best-effort — within a rollout, groups are
   sorted by index before being handed to training.
-* TODO: partial-rollout-style resume for `ABORTED` trajectories is not
-  yet wired; for now the trajectory is re-queued and starts over.
