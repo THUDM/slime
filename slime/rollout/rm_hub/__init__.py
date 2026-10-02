@@ -31,6 +31,12 @@ def _get_shared_session() -> aiohttp.ClientSession:
     return _shared_session
 
 
+def _compute_ifbench_reward(response, label, metadata):
+    from .ifbench import compute_ifbench_reward
+
+    return compute_ifbench_reward(response, label, metadata=metadata)
+
+
 async def remote_rm(args, sample: Sample, max_retries: int = 10):
     payload = {
         "prompt": sample.prompt,
@@ -75,19 +81,17 @@ async def async_rm(args, sample: Sample, **kwargs):
     if rm_type == "remote_rm":
         return await remote_rm(args, sample)
     elif rm_type == "deepscaler":
-        return get_deepscaler_rule_based_reward(response, label)
+        return await asyncio.to_thread(get_deepscaler_rule_based_reward, response, label)
     elif rm_type == "dapo":
-        return compute_score_dapo(response, label)
+        return await asyncio.to_thread(compute_score_dapo, response, label)
     elif rm_type == "math":
-        return 1 if grade_answer_verl(response, label) else 0
+        return 1 if await asyncio.to_thread(grade_answer_verl, response, label) else 0
     elif rm_type == "f1":
-        return f1_score(response, label)[0]
+        return (await asyncio.to_thread(f1_score, response, label))[0]
     elif rm_type == "gpqa":
-        return compute_gpqa_reward(response, label, metadata=metadata)
+        return await asyncio.to_thread(compute_gpqa_reward, response, label, metadata=metadata)
     elif rm_type == "ifbench":
-        from .ifbench import compute_ifbench_reward
-
-        return compute_ifbench_reward(response, label, metadata=metadata)
+        return await asyncio.to_thread(_compute_ifbench_reward, response, label, metadata)
     elif rm_type == "random":
         return random.randint(0, 1)
     elif rm_type:
