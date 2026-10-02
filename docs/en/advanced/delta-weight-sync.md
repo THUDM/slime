@@ -34,11 +34,14 @@ Deltas are always zstd-compressed (level 1); profiling showed it dominates lz4 /
 
 ## How it works
 
-1. **Seed.** On the first sync the trainer captures a CPU snapshot of every parameter — seeded
-   from `--hf-checkpoint`, which is exactly what each rollout host materializes its local
-   checkpoint from. Nothing is published; this snapshot is the base the next sync diffs against.
-   The trainer also issues `/pull_weights` with `target_version=0` so every host materializes
-   its local base now, overlapped with the snapshot capture.
+1. **Seed.** For a fresh finetune, on the first sync the trainer captures a CPU snapshot of every
+   parameter — seeded from `--hf-checkpoint`, which is exactly what each rollout host materializes
+   its local checkpoint from. Nothing is published; this snapshot is the base the next sync diffs
+   against. The trainer also issues `/pull_weights` with `target_version=0` so every host
+   materializes its local base now, overlapped with the snapshot capture. When resuming from a
+   Megatron checkpoint, the loaded actor may differ from `--hf-checkpoint`; the first sync instead
+   publishes the current actor as a full HF checkpoint, snapshots that published checkpoint as
+   the base for later deltas, and reloads the rollout engines from it.
 2. **Publish.** On every later sync the trainer diffs each gathered HF tensor against the
    snapshot, encodes and compresses the change, and writes a new version directory
    `weight_v{N:06d}/` under `--update-weight-disk-dir`. The directory is a canonical HF
@@ -60,9 +63,11 @@ Deltas are always zstd-compressed (level 1); profiling showed it dominates lz4 /
 4. **Reload.** The engines reload the patched local checkpoint through the vanilla
    `update_weights_from_disk` path — the weight-loading code never sees the delta format.
 
-Because the snapshot is seeded from `--hf-checkpoint` (the engine's actual base) rather than
-from the current GPU weights, the scheme is correct for any model even where the Megatron→HF
-round-trip is not byte-exact (e.g. trimmed vocab-padding rows in the embedding / LM head).
+For a fresh finetune, the snapshot is seeded from `--hf-checkpoint` (the engine's actual base)
+rather than from the current GPU weights. For a Megatron resume, it is seeded from the full
+checkpoint just published to the engines. Both paths therefore stay correct even where the
+Megatron→HF round-trip is not byte-exact (e.g. trimmed vocab-padding rows in the embedding /
+LM head).
 
 ## Encodings
 
