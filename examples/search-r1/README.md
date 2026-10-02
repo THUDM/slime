@@ -109,7 +109,7 @@ SEARCH_R1_CONFIGS = {
 2. Configure `"google"` section with your serper.dev API key
 3. Get your API key from [serper.dev](https://serper.dev)
 
-### Enabling TIS (Trajectory Importance Sampling)
+### Enabling TIS (Truncated Importance Sampling)
 
 TIS requires log probability collection. To enable TIS:
 
