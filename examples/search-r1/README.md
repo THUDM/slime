@@ -176,6 +176,17 @@ CUSTOM_ARGS=(
 
 These are the `generate` and `reward_func` functions in `generate_with_search.py`.
 
+### Partial Rollout
+
+Search-R1 also supports slime's partial rollout path for long-tail search trajectories:
+
+```bash
+--partial-rollout
+--mask-offpolicy-in-partial-rollout
+```
+
+When a rollout round aborts unfinished requests, Search-R1 keeps the generated response, search observations, loss mask, and rollout log probabilities on the `Sample`. The next rollout resumes from that context instead of starting the prompt over. With `--mask-offpolicy-in-partial-rollout`, tokens generated before the latest weight update are kept as context but masked out of training.
+
 ## Appendix: Setting up Local Retriever
 
 This section provides detailed instructions for setting up the local dense retriever for use with the local search backend.
