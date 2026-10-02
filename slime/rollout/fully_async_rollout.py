@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import copy
 import logging
 import queue
 import threading
@@ -168,6 +169,7 @@ class AsyncRolloutWorker:
                     for group in groups:
                         gid = gid_counter
                         gid_counter += 1
+                        retry_group = copy.deepcopy(group)
                         task = asyncio.create_task(
                             generate_and_rm_group(
                                 self.args,
@@ -176,7 +178,7 @@ class AsyncRolloutWorker:
                                 evaluation=False,
                             )
                         )
-                        task.add_done_callback(self._make_done_cb(gid))
+                        task.add_done_callback(self._make_done_cb(gid, retry_group))
                         active_tasks.add(task)
 
                 await asyncio.sleep(self.poll_interval)
@@ -194,7 +196,7 @@ class AsyncRolloutWorker:
             except Exception:  # noqa: BLE001
                 pass
 
-    def _make_done_cb(self, gid: int):
+    def _make_done_cb(self, gid: int, input_group: list[Sample]):
         def _cb(done_task: asyncio.Task) -> None:
             try:
                 result = done_task.result()
@@ -207,10 +209,12 @@ class AsyncRolloutWorker:
                     type(result).__name__,
                 )
                 return
-            # Aborted group → requeue, don't ship to training.
-            if any(getattr(s, "status", None) == Sample.Status.ABORTED for s in result):
+            samples = [sample for item in result for sample in (item if isinstance(item, list) else [item])]
+            # Aborted group → requeue, don't ship to training. Requeue the
+            # original flat input shape when custom generation fans out.
+            if any(getattr(sample, "status", None) == Sample.Status.ABORTED for sample in samples):
                 try:
-                    self.data_buffer.add_samples([result])
+                    self.data_buffer.add_samples([input_group])
                 except Exception:  # noqa: BLE001
                     logger.exception("fully-async: failed to requeue aborted group")
                 return
