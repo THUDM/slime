@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from slime.utils.types import Sample
@@ -14,6 +15,8 @@ class RolloutFnTrainOutput:
     # Accept Sample groups or a straw manifest referencing the selected batch.
     samples: list[list[Sample]] | DiskPayloadRef
     metrics: dict[str, Any] = None
+    on_accepted: Callable[[], None] | None = field(default=None, repr=False, compare=False)
+    sample_refs: list[list[DiskPayloadRef]] | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass

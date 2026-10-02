@@ -143,6 +143,12 @@ class MegatronTrainRayActor(TrainRayActor):
             hf_vocab = getattr(self.hf_config, "vocab_size", None)
             self.args.vocab_size = hf_vocab if hf_vocab is not None else self.tokenizer.vocab_size
 
+        # Model-only resumes keep the serving version aligned with the next
+        # rollout. Actor recreation can supply the latest version explicitly.
+        if not hasattr(args, "update_weight_start_version"):
+            args.update_weight_start_version = (
+                args.start_rollout_id if args.start_rollout_id is not None else start_rollout_id
+            )
         self.weight_updater = create_weight_updater(
             self.args,
             self.model,

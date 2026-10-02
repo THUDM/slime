@@ -337,6 +337,17 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--flush-cache-interval",
+                type=int,
+                default=1,
+                help=(
+                    "Flush rollout KV cache every N weight syncs after the initial publication. "
+                    "1 preserves the default abort/flush behavior; values <= 0 never flush during training. "
+                    "Other syncs pause generation in place and preserve unfinished sequences (PipelineRL). "
+                    "Values other than 1 select fully-async rollout by default and require separate GPUs."
+                ),
+            )
+            parser.add_argument(
                 "--rollout-function-path",
                 type=str,
                 default="slime.rollout.sglang_rollout.generate_rollout",
@@ -629,8 +640,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="Reclaim sealed straw packs after acknowledged use; retain checkpoints explicitly.",
             )
             parser.add_argument("--rollout-queue-lease-seconds", type=float, default=300)
-            parser.add_argument("--rollout-queue-max-pending", type=int, default=65536)
-            parser.add_argument("--rollout-queue-max-inflight", type=int, default=65536)
             parser.add_argument(
                 "--rollout-queue-segment-mib",
                 type=int,
@@ -2004,8 +2013,6 @@ def slime_validate_args(args):
             raise ValueError("--rollout-queue-online-gc requires --rollout-data-transport straw")
     for name in (
         "rollout_queue_lease_seconds",
-        "rollout_queue_max_pending",
-        "rollout_queue_max_inflight",
         "rollout_queue_segment_mib",
         "rollout_io_concurrency",
     ):
@@ -2159,7 +2166,7 @@ def slime_validate_args(args):
         args.disable_grad_buffers_cpu_backup = True
         args.disable_param_buffers_cpu_backup = True
 
-    if args.eval_function_path is None:
+    if args.flush_cache_interval == 1 and args.eval_function_path is None:
         args.eval_function_path = args.rollout_function_path
 
     if args.num_steps_per_rollout is not None:
@@ -2260,5 +2267,21 @@ def slime_validate_args(args):
                 "--update-weight-mode=delta requires --update-weight-local-checkpoint-dir "
                 "(a rollout-host-local NVMe directory)."
             )
+
+    if args.flush_cache_interval != 1:
+        if args.colocate or args.offload_rollout or args.release_train:
+            raise ValueError(
+                "--flush-cache-interval values other than 1 require separate training/rollout GPUs "
+                "without rollout offload or release-train."
+            )
+        if args.debug_train_only or args.debug_rollout_only or args.load_debug_rollout_data:
+            raise ValueError("--flush-cache-interval values other than 1 require live rollout and training.")
+        if args.rollout_function_path == "slime.rollout.sglang_rollout.generate_rollout":
+            args.rollout_function_path = "slime.rollout.fully_async_rollout.generate_rollout_fully_async"
+        if args.eval_function_path is None:
+            args.eval_function_path = "slime.rollout.sglang_rollout.generate_rollout"
+
+    if args.eval_function_path is None:
+        args.eval_function_path = args.rollout_function_path
 
     return restore_plan

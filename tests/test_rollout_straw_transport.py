@@ -628,6 +628,147 @@ def test_archive_index_reads_only_selected_chunk_and_preserves_duplicate_keys(ar
         assert len(read) == 1
 
 
+@pytest.mark.parametrize("start_rollout_id", [None, 7])
+@pytest.mark.parametrize("archive_kind", ["reference", "chunks", "standalone"])
+def test_debug_archive_replay_reuses_records_and_isolates_training(
+    args, tmp_path, monkeypatch, start_rollout_id, archive_kind
+):
+    import copy
+
+    import ray
+    from straw.tensor import TensorRef
+
+    from slime.data.archive import RolloutArchive
+    from slime.data.batch_builder import BatchBuilder
+    from slime.data.codec import SampleCodec
+    from slime.data.transport import rollout_store
+    from slime.ray.rollout import RolloutManager
+    from slime.rollout.base_types import iter_samples
+    from slime.utils.data import process_rollout_data
+
+    args.rollout_queue_run_id = "source-run"
+    samples = [Sample(index=i, rollout_id=i, tokens=[1, 2, 3], response_length=2, reward=0.5) for i in range(2)]
+    for sample in samples:
+        sample.rollout_routed_experts = torch.zeros((2, 1, 1), dtype=torch.int32)
+        # Archives must discard live source-queue authorization before replay.
+        sample._queue_receipt = {"position": 999, "task_id": "original"}
+    raw = pack_rollout_payload(samples, args, 7)
+    template = str(tmp_path / "rollout_{rollout_id:07d}.straw.json")
+    for step in (7, 8):
+        RolloutArchive.save(
+            template.format(rollout_id=step),
+            samples,
+            rollout_id=step,
+            args=args if archive_kind != "standalone" else None,
+            reference=raw if archive_kind == "reference" else None,
+        )
+    with RolloutArchive(template.format(rollout_id=7)) as archive:
+        tensor_records = [s.rollout_routed_experts.record_ref for s in archive.load_samples()]
+        pool = archive.index["root"]
+        run = archive.manifest.manifest.segment.run_id
+    replay_args = SimpleNamespace(
+        **{**vars(args), "rollout_data_dir": str(tmp_path / "unused-pool"), "rollout_queue_run_id": "unused-run"},
+        load_debug_rollout_data=template,
+        load_debug_rollout_data_subsample=None,
+        start_rollout_id=start_rollout_id,
+        custom_reward_post_process_path=None,
+        custom_convert_samples_to_train_data_path=None,
+        reward_key=None,
+        advantage_estimator="grpo",
+        rewards_normalization=False,
+        use_score_centering=False,
+        use_rollout_routing_replay=False,
+        num_experts=1,
+        global_batch_size=2,
+        micro_batch_size=1,
+        use_dynamic_batch_size=False,
+        balance_data=False,
+        balance_by_flops=False,
+    )
+    resolve_rollout_data_dir(replay_args)
+    assert replay_args.rollout_data_dir == pool
+    assert replay_args.rollout_queue_run_id == run
+    monkeypatch.setattr(ray, "get", lambda value: value)
+    monkeypatch.setattr(ray, "put", lambda value: value)
+    with closing(RolloutQueueController(args)) as original:
+        original.begin_collection("unfinished")
+        source_tasks = copy.deepcopy(original.queue.tasks)
+        for _ in range(2):  # Replaying again must start another independent queue.
+            with closing(RolloutQueueController(replay_args)) as replay:
+                assert replay.queue.queue_id != original.queue.queue_id
+                handle = SimpleNamespace(
+                    **{
+                        name: SimpleNamespace(remote=getattr(replay, name))
+                        for name in (
+                            "begin_collection",
+                            "complete",
+                            "batch",
+                            "plan_batch",
+                            "ready_batch",
+                            "finish_batch",
+                        )
+                    }
+                )
+                manager = object.__new__(RolloutManager.__ray_metadata__.modified_class)
+                manager.args, manager.controller = replay_args, handle
+                builder = manager.batch_builder = BatchBuilder(replay_args, controller=handle)
+                builder.train_parallel_config = dict(
+                    dp_size=1, cp_size=1, vpp_size=1, microbatch_group_size_per_vp_stage=1
+                )
+                for step in (7, 8):
+                    builder.rollout_id = step
+                    with monkeypatch.context() as guard:
+                        guard.setattr(
+                            SampleCodec, "_prepare_sample", lambda *a: pytest.fail("republished archived Sample")
+                        )
+                        guard.setattr(TensorRef, "load", lambda *a, **kw: pytest.fail("materialized archived tensor"))
+                        store, _, _ = rollout_store(replay_args)
+                        written = store.metrics["payload_bytes"]
+                        loaded, metrics = manager._get_rollout_data(step)
+                        assert metrics is None and [s.index for s in loaded] == [0, 1]
+                        assert all(not hasattr(s, "_queue_receipt") for s in loaded)
+                        if step == 7:
+                            assert [s.rollout_routed_experts.record_ref for s in loaded] == tensor_records
+                        assert [s.index for s in iter_samples(load_rollout_samples(builder.raw_ref))] == [0, 1]
+                        assert store.metrics["payload_bytes"] - written < 10000
+                        assert builder.begin(loaded) is None
+                        assert builder._positions == [step - 7]
+                        refs = builder.split_by_dp(builder.convert(loaded))
+                    batch = process_rollout_data(refs, 0, 1)
+                    assert [t.tolist() for t in batch["tokens"]] == [[1, 2, 3], [1, 2, 3]]
+                    assert [box.inner for box in builder.begin(loaded)] == [box.inner for box in refs]
+                    builder.training_completed(step)
+                assert replay.training_state()["processed_cursor"] == 2
+            assert original.queue.tasks == source_tasks
+    assert not (tmp_path / "unused-pool").exists()
+
+
+@pytest.mark.parametrize("different", ["pool", "run"])
+def test_debug_archive_replay_rejects_changing_storage(args, tmp_path, different):
+    from slime.data.archive import RolloutArchive
+    from slime.ray.rollout import RolloutManager
+
+    template = str(tmp_path / "rollout_{rollout_id}.straw.json")
+    samples = [Sample(index=0, tokens=[1, 2], response_length=1)]
+    RolloutArchive.save(template.format(rollout_id=0), samples, rollout_id=0, args=args)
+    other = SimpleNamespace(**vars(args))
+    if different == "pool":
+        other.rollout_data_dir = str(tmp_path / "another-pool")
+    else:
+        other.rollout_queue_run_id = "another-run"
+    RolloutArchive.save(template.format(rollout_id=1), samples, rollout_id=1, args=other)
+    args.load_debug_rollout_data = template
+    args.load_debug_rollout_data_subsample = None
+    args.start_rollout_id = 0
+    resolve_rollout_data_dir(args)
+    manager = object.__new__(RolloutManager.__ray_metadata__.modified_class)
+    manager.args = args
+    with pytest.raises(ValueError, match="same Straw storage pool and run"):
+        manager._get_rollout_data(1)
+    assert args.rollout_data_dir == str(tmp_path)
+    assert args.rollout_queue_run_id == "rollout"
+
+
 def test_straw_debug_archive_uses_existing_train_only_conversion(args, tmp_path):
     from slime.data.batch_builder import BatchBuilder
     from slime.observability.rollout_data_utils import load_debug_rollout_data, save_debug_rollout_data

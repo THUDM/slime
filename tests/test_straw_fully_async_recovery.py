@@ -104,8 +104,6 @@ def _run_job(directory, phase, online_gc):
     args.rollout_batch_size = 2
     args.sglang_server_concurrency = 4
     args.rollout_queue_segment_mib = 1
-    args.rollout_queue_max_pending = 16
-    args.rollout_queue_max_inflight = 4
     args.rollout_queue_online_gc = online_gc
     from slime.data.checkpoint import RestorePlan
 

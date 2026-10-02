@@ -360,9 +360,10 @@ class SGLangEngine(RayActor):
         model_path: str,
         load_format: str | None = None,
         weight_version: str | None = None,
+        flush_cache: bool = True,
     ):
         """Reload weights from the checkpoint at *model_path* without restarting the engine."""
-        payload: dict = {"model_path": model_path}
+        payload: dict = {"model_path": model_path, "flush_cache": flush_cache}
         if load_format is not None:
             payload["load_format"] = load_format
         if weight_version is not None:
@@ -420,10 +421,10 @@ class SGLangEngine(RayActor):
             payload,
         )
 
-    def pause_generation(self):
+    def pause_generation(self, mode: str = "abort"):
         if self.node_rank != 0:
             return
-        response = requests.post(f"http://{self.server_host}:{self.server_port}/pause_generation", json={})
+        response = requests.post(f"http://{self.server_host}:{self.server_port}/pause_generation", json={"mode": mode})
         response.raise_for_status()
         return response
 

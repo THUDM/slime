@@ -8,6 +8,7 @@ from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from slime.ray.utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, add_default_ray_env_vars
+from slime.utils.weight_sync import should_flush_cache
 
 
 class RayTrainGroup:
@@ -241,13 +242,18 @@ class RayTrainGroup:
             model_path = self.args.update_weight_local_checkpoint_dir
         else:
             model_path = str(disk_weight_dir)
-        ray.get([engine.pause_generation.remote() for engine in engines])
-        ray.get([engine.flush_cache.remote() for engine in engines])
+        flush_cache = should_flush_cache(
+            self.args.flush_cache_interval, int(weight_version), getattr(self.args, "update_weight_start_version", 0)
+        )
+        ray.get([engine.pause_generation.remote(mode="abort" if flush_cache else "in_place") for engine in engines])
+        if flush_cache:
+            ray.get([engine.flush_cache.remote() for engine in engines])
         ray.get(
             [
                 engine.update_weights_from_disk.remote(
                     model_path=model_path,
                     weight_version=weight_version,
+                    flush_cache=flush_cache,
                 )
                 for engine in engines
             ]

@@ -565,3 +565,45 @@ def test_generate_requests_complete_top_p_probabilities(monkeypatch):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
+
+
+def test_top_p_published_captures_need_only_metadata_checks(tmp_path, monkeypatch):
+    from test_score_centering import args
+
+    from slime.data.tensor import TensorRef
+    from slime.data.transport import pack_rollout_payload, seal_rollout_store
+    from slime.utils.score_centering import validate_sampler_top_p
+
+    count = 4097
+    a = args(rollout_top_p=0.95, rollout_data_transport="straw", rollout_data_dir=str(tmp_path))
+    sample = Sample(
+        tokens=[9] + [4] * count,
+        response_length=count,
+        rollout_log_probs=[0.0] * count,
+        rollout_top_p_token_ids=torch.full((count,), 4, dtype=torch.int32),
+        rollout_top_p_token_offsets=torch.arange(count + 1, dtype=torch.int32),
+        rollout_top_p_log_probs=torch.zeros(count),
+        status=Sample.Status.COMPLETED,
+    )
+    restored = pack_rollout_payload(sample, a, 0).load()
+    seal_rollout_store(a)
+    fields = (restored.rollout_top_p_token_ids, restored.rollout_top_p_token_offsets, restored.rollout_top_p_log_probs)
+    assert all(ref.validated for ref in fields)
+
+    # Round-end republication must not read or revalidate immutable payloads.
+    def no_payload_read(*args, **kwargs):
+        raise AssertionError("validated top-p payload was reread during republication")
+
+    with monkeypatch.context() as guarded:
+        for method in ("load", "__getitem__", "validate"):
+            guarded.setattr(TensorRef, method, no_payload_read)
+        validate_sampler_top_p(*fields, count)
+        republished = pack_rollout_payload({"buffer": [restored]}, a, 1)
+        assert republished.manifest is not None
+
+    with monkeypatch.context() as guarded:
+        for method in ("load", "__getitem__", "validate"):
+            guarded.setattr(TensorRef, method, no_payload_read)
+        validate_sampler_top_p(*fields, count, tokens=[4] * count, sampled_logps=[0.0] * count)
+        with pytest.raises(ValueError, match="align"):
+            validate_sampler_top_p(*fields, count, tokens=[4], sampled_logps=[0.0])
