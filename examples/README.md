@@ -10,6 +10,7 @@ These examples provide concrete examples to leverage slime in your own RL workfl
 - **[geo3k_vlm](./geo3k_vlm)**: Training VLMs on a single-turn reasoning task using GRPO on the GEO3K dataset.
 - **[geo3k_vlm_multi_turn](./geo3k_vlm_multi_turn)**: VLM multi-turn training on Geo3k dataset.
 - **[low_precision](../scripts/low_precision/)**: Launch recipes for FP8/INT4 training and inference.
+- **[lmcache](./lmcache)**: LMCache MP for frozen models, with a same-checkpoint SGLang restart check and per-model configuration.
 - **[multi_agent](./multi_agent)**: Example of running multi-agent RL with `slime`.
 - **[on_policy_distillation](./on_policy_distillation)**: Example implementation for on-policy distillation, extending the reinforcement learning pipeline to support teacher–student distillation directly within on-policy training.
 - **[delta_weight_sync](./delta_weight_sync)**: Non-colocated weight sync that ships only the changed bytes over a shared filesystem (training/inference disaggregation), reloading via the vanilla `update_weights_from_disk` path.
