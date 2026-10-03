@@ -118,16 +118,19 @@ def distributed_masked_whiten(
     """
     Performs whitening on a tensor using global statistics from all participating GPUs.
 
-    It calculates the global mean and variance across all ranks in the default
-    process group (the WORLD) and uses these global statistics to normalize the
-    local data on each rank.
+    It calculates the global mean and variance across all ranks in the given
+    process group and uses these global statistics to normalize the local data
+    on each rank.
 
     Args:
         values (torch.Tensor): The local tensor of values to whiten.
         mask (torch.Tensor): The local mask corresponding to the values.
         process_group: The process group for all_reduce.
                       If None, uses the default world group.
-        shift_mean (bool): If True, the output is zero-mean. Defaults to True.
+        shift_mean (bool): If True (default), center then scale:
+            ``(values - mean) * rsqrt(var + epsilon)`` (zero-mean, unit-variance).
+            If False, scale only: ``values * rsqrt(var + epsilon)``
+            (do not subtract the mean, and do not add it back).
         epsilon (float): A small value for numerical stability.
 
     Returns:
@@ -162,10 +165,8 @@ def distributed_masked_whiten(
         bessel_correction = global_mask_sum / (global_mask_sum - 1)
         global_var = global_var * bessel_correction
 
-    # Whiten local data using global stats
-    whitened_values = (values - global_mean) * torch.rsqrt(global_var + epsilon)
-
-    if not shift_mean:
-        whitened_values += global_mean
-
-    return whitened_values
+    # Both paths share the same global var (including Bessel correction).
+    inv_std = torch.rsqrt(global_var + epsilon)
+    if shift_mean:
+        return (values - global_mean) * inv_std
+    return values * inv_std
