@@ -1,0 +1,166 @@
+# Backport of ROCm/rocm-systems#6151, "rocr: Fix IPC memory leaks in the dmabuf
+# path", for ordinary GPU-memory HIP IPC in ROCm 7.2.0.
+#
+# Target: ROCm/rocm-systems rocm-7.2.0, projects/rocr-runtime
+# Target commit: fc0010cf6a5a972d42b276df946510f30343d493
+# Upstream: https://github.com/ROCm/rocm-systems/pull/6151
+# Upstream merge: d3a0cbab6017e080979efbe61f8588dac5839bd8
+#
+# Problem
+# -------
+# The ROCr 7.2 dma-buf IPC path imports temporary libdrm BO handles to transfer
+# and validate the IPC token. The exporter stores its extra handle in
+# allocation_map_, and the GPU importer also uses allocation_map_ to pass its
+# temporary handle from IPCClientImport() to IPCAttach(). Neither handle is
+# released before its entry is overwritten, so repeated HIP/RCCL IPC keeps BO
+# references and VRAM alive after the application frees the allocations.
+#
+# Backport
+# --------
+# * IPCCreate() releases the exporter BO after reading or setting token metadata.
+# * IPCClientImport() receives the expected token. Ordinary GPU-memory imports
+#   validate metadata and release their temporary BO there, without inserting it
+#   into allocation_map_ or adding another memory_lock_ critical section.
+# * The existing dma-buf system-memory path is unchanged: it retains the BO in
+#   allocation_map_ because CPU/VA mapping and IPCDetach still require it.
+# * Both persistent Unix-domain IPC socket creation sites use SOCK_CLOEXEC.
+#
+# Upstream uses the newer hsaKmtHandleImport() and
+# hsaKmtMemHandleFreePreserveMetadata() thunk APIs. ROCr 7.2 lacks those APIs,
+# so this backport preserves its existing amdgpu_bo_import/query/free mechanism
+# while matching the upstream GPU BO ownership and release lifetime.
+#
+diff --git a/projects/rocr-runtime/runtime/hsa-runtime/core/inc/runtime.h b/projects/rocr-runtime/runtime/hsa-runtime/core/inc/runtime.h
+index 6853234a..cdc38db3 100644
+--- a/projects/rocr-runtime/runtime/hsa-runtime/core/inc/runtime.h
++++ b/projects/rocr-runtime/runtime/hsa-runtime/core/inc/runtime.h
+@@ -1008,7 +1008,8 @@ class Runtime {
+   bool ipc_dmabuf_supported_;
+   int  IPCClientImport(uint32_t conn_handle, uint64_t dmabuf_fd_handle,
+                        unsigned int numNodes, HSAuint32 *nodes,
+-                       void **importAddress, HSAuint64 *importSize, bool isdmabufSysmem);
++                       void **importAddress, HSAuint64 *importSize, bool isdmabufSysmem,
++                       uint32_t ipc_token);
+ };
+ 
+ }  // namespace core
+diff --git a/projects/rocr-runtime/runtime/hsa-runtime/core/runtime/runtime.cpp b/projects/rocr-runtime/runtime/hsa-runtime/core/runtime/runtime.cpp
+index 4450f4bc..9f014629 100644
+--- a/projects/rocr-runtime/runtime/hsa-runtime/core/runtime/runtime.cpp
++++ b/projects/rocr-runtime/runtime/hsa-runtime/core/runtime/runtime.cpp
+@@ -1429,7 +1429,14 @@ hsa_status_t Runtime::IPCCreate(void* ptr, size_t len, hsa_amd_ipc_memory_t* han
+         buf_info.umd_metadata[0] = handle->handle[7];
+ 
+         DRM_CALL(amdgpu_bo_set_metadata(res.buf_handle, &buf_info));
+-        allocation_map_[ptr].ldrm_bo = res.buf_handle;
++      }
++
++      /* The BO imported above is only used to read/write the IPC token in the
++         metadata; release it instead of parking it in allocation_map_.
++         amdgpu_bo_free() keeps the metadata intact for later importers. */
++      if (DRM_CALL(amdgpu_bo_free(res.buf_handle))) {
++        close(dmabuf_fd);
++        return HSA_STATUS_ERROR;
+       }
+     }
+ #else
+@@ -1443,7 +1450,7 @@ hsa_status_t Runtime::IPCCreate(void* ptr, size_t len, hsa_amd_ipc_memory_t* han
+ #if defined(__linux__)
+   if (!ipc_sock_server_conns_.size()) { // create new runtime socket server
+     struct sockaddr_un address;
+-    ipc_sock_server_fd_ = socket(AF_UNIX, SOCK_STREAM, 0);
++    ipc_sock_server_fd_ = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+     assert(ipc_sock_server_fd_ > -1 && "DMA buffer could not be exported for IPC!");
+     if (ipc_sock_server_fd_ == -1) return HSA_STATUS_ERROR;
+ 
+@@ -1484,8 +1491,9 @@ hsa_status_t Runtime::IPCCreate(void* ptr, size_t len, hsa_amd_ipc_memory_t* han
+ 
+ int Runtime::IPCClientImport(uint32_t conn_handle, uint64_t dmabuf_fd_handle,
+                              unsigned int numNodes, HSAuint32 *nodes,
+-                             void **importAddress, HSAuint64 *importSize, bool isDmabufSysmem) {
+-    int dmabuf_fd = -1, socket_fd = socket(AF_UNIX, SOCK_STREAM, 0);
++                             void **importAddress, HSAuint64 *importSize, bool isDmabufSysmem,
++                             uint32_t ipc_token) {
++    int dmabuf_fd = -1, socket_fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+     assert(socket_fd > -1 && "DMA buffer could not be imported for IPC!");
+     if (socket_fd == -1) return -1;
+ 
+@@ -1547,12 +1555,30 @@ int Runtime::IPCClientImport(uint32_t conn_handle, uint64_t dmabuf_fd_handle,
+       err = DRM_CALL(amdgpu_bo_import(agent->libDrmDev(), amdgpu_bo_handle_type_dma_buf_fd,
+                               dmabuf_fd, &res));
+ 
+-      // Store the buffer object handle in allocation map for later use
+       if (err == HSAKMT_STATUS_SUCCESS) {
+-        ScopedAcquire<KernelSharedMutex> lock(&memory_lock_);
+-        allocation_map_[*importAddress] =
+-            AllocationRegion(nullptr, *importSize, *importSize, core::MemoryRegion::AllocateNoFlags);
+-        allocation_map_[*importAddress].ldrm_bo = res.buf_handle;
++        if (isDmabufSysmem || thunkLoader()->IsDXG()) {
++          // System-memory IPC retains the BO for CPU/VA map and IPCDetach.
++          ScopedAcquire<KernelSharedMutex> lock(&memory_lock_);
++          allocation_map_[*importAddress] = AllocationRegion(
++              nullptr, *importSize, *importSize, core::MemoryRegion::AllocateNoFlags);
++          allocation_map_[*importAddress].ldrm_bo = res.buf_handle;
++        } else {
++          // GPU-memory IPC needs this extra BO only to validate the token.
++          struct amdgpu_bo_info bo_info = {0};
++          const int query_ret = DRM_CALL(amdgpu_bo_query_info(res.buf_handle, &bo_info));
++          const bool invalid_metadata =
++              query_ret || bo_info.metadata.umd_metadata[0] != ipc_token;
++          const int free_ret = DRM_CALL(amdgpu_bo_free(res.buf_handle));
++
++          if (invalid_metadata) {
++            fprintf(stderr, "IPC Client Import: Invalid IPC handle! expected %u, got %u\n",
++                    ipc_token, bo_info.metadata.umd_metadata[0]);
++          }
++          if (invalid_metadata || free_ret) {
++            HSAKMT_CALL(hsaKmtDeregisterMemory(*importAddress));
++            err = HSAKMT_STATUS_ERROR;
++          }
++        }
+       }
+       close(dmabuf_fd);
+     }
+@@ -1588,31 +1614,14 @@ hsa_status_t Runtime::IPCAttach(const hsa_amd_ipc_memory_t* handle, size_t len,
+   auto importMemory = [&](unsigned int numNodes, HSAuint32 *nodes, bool isSysMem) {
+ 
+       int ret = ipc_dmabuf_supported_ ? IPCClientImport(importHandle.handle[2], dmaBufFDHandle, numNodes,
+-                                                        nodes, &importAddress, &importSize, isSysMem) :
++                                                        nodes, &importAddress, &importSize, isSysMem,
++                                                        importHandle.handle[7]) :
+                                                         HSAKMT_CALL(hsaKmtRegisterSharedHandle(
+                                                         reinterpret_cast<const HsaSharedMemoryHandle*>(&importHandle),
+                                                         &importAddress, &importSize
+                                                         ));
+ 
+       if (ret) return HSA_STATUS_ERROR_INVALID_ARGUMENT;
+-      if (ipc_dmabuf_supported_ && !isSysMem) {
+-#if defined(__linux__)
+-        if (!thunkLoader()->IsDXG()) {
+-          // use the bo from the allocation map
+-          // Only check metadata for GPU memory
+-          struct amdgpu_bo_info info = {0};
+-          int ret = DRM_CALL(amdgpu_bo_query_info(allocation_map_[importAddress].ldrm_bo, &info));
+-
+-          // Validate metadata for IPC handle
+-          if (ret || info.metadata.umd_metadata[0] != importHandle.handle[7]) {
+-              fprintf(stderr, "IPC Attach: Invalid IPC handle! %u and %u\n", importHandle.handle[7], info.metadata.umd_metadata[0]);
+-              return HSA_STATUS_ERROR_INVALID_ARGUMENT;
+-          }
+-        }
+-#else
+-        assert(!"Unimplemented!");
+-#endif
+-      }
+       return HSA_STATUS_SUCCESS;
+     };
+ 
+@@ -2441,7 +2450,7 @@ void Runtime::Unload() {
+   // Close IPC socket server
+   if (ipc_sock_server_conns_.size())
+     IPCClientImport(getpid(), IPC_SOCK_SERVER_CONN_CLOSE_HANDLE,
+-                    0, NULL, NULL, NULL, false);
++                    0, NULL, NULL, NULL, false, 0);
+ 
+   svm_profile_.reset(nullptr);
+ 
