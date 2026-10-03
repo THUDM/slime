@@ -1,19 +1,22 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from slime.utils.types import Sample
 
 if TYPE_CHECKING:
-    from slime.utils.rollout_transport import DiskPayloadRef
+    from slime.data.transport import DiskPayloadRef
 
 
 @dataclass
 class RolloutFnTrainOutput:
-    # straw rollouts return a batch manifest; legacy functions may return Samples.
+    # Accept Sample groups or a straw manifest referencing the selected batch.
     samples: list[list[Sample]] | DiskPayloadRef
     metrics: dict[str, Any] = None
+    on_accepted: Callable[[], None] | None = field(default=None, repr=False, compare=False)
+    sample_refs: list[list[DiskPayloadRef]] | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass
@@ -23,7 +26,7 @@ class RolloutFnEvalOutput:
 
 
 def call_rollout_fn(fn, *args, evaluation: bool, **kwargs):
-    from slime.utils.rollout_transport import DiskPayloadRef, RawRolloutRef
+    from slime.data.transport import DiskPayloadRef, RawRolloutRef
 
     output = fn(*args, **kwargs, evaluation=evaluation)
     if isinstance(output, RawRolloutRef):
@@ -46,10 +49,10 @@ def call_rollout_fn(fn, *args, evaluation: bool, **kwargs):
     raise TypeError(f"Unsupported rollout output: {type(output).__name__}")
 
 
-def finalize_rollout_groups(args, rollout_id, groups, metrics=None):
+def finalize_rollout_groups(args, rollout_id, groups, metrics=None, *, controller=None):
     """Order selected groups, run the batch hook once, and publish the batch."""
+    from slime.data.transport import RolloutGroupRef, load_rollout_samples, pack_rollout_payload
     from slime.utils.misc import load_function
-    from slime.utils.rollout_transport import RolloutGroupRef, load_rollout_samples, pack_rollout_payload
 
     groups.sort(
         key=lambda group: (group.index if isinstance(group, RolloutGroupRef) else next(iter_samples(group)).index) or 0
@@ -79,7 +82,7 @@ def finalize_rollout_groups(args, rollout_id, groups, metrics=None):
         decision = pack_rollout_payload(
             {"positions": sorted(dropped), "reason": "rollout_sample_filter", "output": samples}, args, rollout_id
         )
-        ray.get(args._rollout_queue_controller.record_dispositions.remote(decision.manifest))
+        ray.get(controller.record_dispositions.remote(decision.manifest))
     elif incoming and args.rollout_data_transport != "straw":
         import ray
 
@@ -88,7 +91,7 @@ def finalize_rollout_groups(args, rollout_id, groups, metrics=None):
             args,
             rollout_id,
         )
-        ray.get(args._rollout_queue_controller.record_dispositions.remote(decision.manifest))
+        ray.get(controller.record_dispositions.remote(decision.manifest))
     return RolloutFnTrainOutput(samples=samples, metrics=metrics)
 
 

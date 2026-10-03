@@ -116,8 +116,8 @@ except ImportError:
                         iteration = int(checkpoint_step.split("_")[1])
 
         # Allow user to specify the loaded iteration.
-        if getattr(args, "ckpt_step", None):
-            iteration = args.ckpt_step
+        if getattr(args, "ckpt_step", None) is not None:
+            iteration, release = args.ckpt_step, False
 
         return get_checkpoint_name(load_dir, iteration, release, return_base_dir=True)
 

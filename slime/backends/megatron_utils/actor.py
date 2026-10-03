@@ -12,6 +12,7 @@ from megatron.core import mpu
 from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoTokenizer
 
+from slime.data.tensor import TensorRef
 from slime.observability import train_data_utils, train_metric_utils
 from slime.observability.logging_utils import init_tracking
 from slime.observability.profile_utils import TrainProfiler
@@ -34,7 +35,6 @@ from slime.utils.routed_experts import (
     RoutedExpertsMicrobatchPrefetcher,
 )
 from slime.utils.routing_replay import RoutingReplay
-from slime.utils.tensor_store import TensorRef
 from slime.utils.types import RolloutBatch
 
 from ...utils.tensor_backper import TensorBackuper
@@ -153,6 +153,12 @@ class MegatronTrainRayActor(TrainRayActor):
             hf_vocab = getattr(self.hf_config, "vocab_size", None)
             self.args.vocab_size = hf_vocab if hf_vocab is not None else self.tokenizer.vocab_size
 
+        # Model-only resumes keep the serving version aligned with the next
+        # rollout. Actor recreation can supply the latest version explicitly.
+        if not hasattr(args, "update_weight_start_version"):
+            args.update_weight_start_version = (
+                args.start_rollout_id if args.start_rollout_id is not None else start_rollout_id
+            )
         self.weight_updater = create_weight_updater(
             self.args,
             self.model,
@@ -440,6 +446,7 @@ class MegatronTrainRayActor(TrainRayActor):
         data_iterator: list[DataIterator],
         num_microbatches: list[int],
         store_prefix: str = "",
+        use_rollout_top_p_replay: bool = True,
     ) -> dict[str, list[torch.Tensor]]:
         with timer(f"{store_prefix}log_probs"):
             return forward_only(
@@ -449,7 +456,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 data_iterator,
                 num_microbatches,
                 store_prefix=store_prefix,
-                use_rollout_top_p_replay=True,
+                use_rollout_top_p_replay=use_rollout_top_p_replay,
             )
 
     def train(self, rollout_id: int, rollout_data_ref: Box, external_data=None):
@@ -522,6 +529,7 @@ class MegatronTrainRayActor(TrainRayActor):
                             data_iterator,
                             num_microbatches,
                             store_prefix="ref_",
+                            use_rollout_top_p_replay=False,
                         )
                     )
 

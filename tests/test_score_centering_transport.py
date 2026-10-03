@@ -27,7 +27,7 @@ def no_gpu_server_imports(monkeypatch):
 
 
 def manager(**overrides):
-    from slime.rollout.batch_builder import BatchBuilder
+    from slime.data.batch_builder import BatchBuilder
 
     cls = BatchBuilder
     result = cls.__new__(cls)
@@ -107,6 +107,7 @@ def test_r3_resume_appends_routes_without_replacing_the_persisted_prefix(
     monkeypatch, echo_start, returned_rows, error
 ):
     import base64
+
     from slime.rollout import sglang_rollout as rollout
 
     a = args(
@@ -161,7 +162,7 @@ def test_streaming_score_centering_rejected():
 
 @pytest.mark.parametrize("transport", ["object-store", "nixl"])
 def test_dp_transport_keeps_heads_aligned(monkeypatch, transport):
-    from slime.rollout import batch_builder as rollout
+    from slime.data import batch_builder as rollout
 
     mgr = manager(rollout_data_transport=transport, global_batch_size=2)
     mgr.train_parallel_config = {"dp_size": 2}
@@ -183,6 +184,7 @@ def test_dp_transport_keeps_heads_aligned(monkeypatch, transport):
 
 def test_evaluation_preserves_training_score_centering(monkeypatch):
     from contextlib import nullcontext
+
     from slime.rollout import sglang_rollout as rollout
 
     a = args(partial_rollout=False, group_rm=True, custom_generate_function_path=None)
@@ -222,10 +224,10 @@ def test_evaluation_preserves_training_score_centering(monkeypatch):
 
 
 def test_straw_heads_survive_buffer_and_debug_dump_lifetimes(tmp_path):
+    from slime.data.tensor import TensorRef
+    from slime.data.transport import pack_rollout_payload, seal_rollout_store
     from slime.observability.rollout_data_utils import load_debug_rollout_data, save_debug_rollout_data
-    from slime.utils.rollout_transport import pack_rollout_payload, seal_rollout_store
     from slime.utils.score_centering import validate_sampler_topk
-    from slime.utils.tensor_store import TensorRef
 
     a = args(rollout_data_transport="straw", rollout_data_dir=str(tmp_path))
     sample = pack_rollout_payload(samples()[0], a, 1).load()
@@ -248,9 +250,9 @@ def test_rollout_metrics_read_only_top_p_offsets_from_straw(tmp_path, monkeypatc
     import numpy as np
     from test_score_centering import binary_top_p_meta
 
+    from slime.data.tensor import TensorRef
+    from slime.data.transport import pack_rollout_payload, seal_rollout_store
     from slime.observability import rollout_metrics
-    from slime.utils.rollout_transport import pack_rollout_payload, seal_rollout_store
-    from slime.utils.tensor_store import TensorRef
 
     a = args(
         rollout_top_p=0.95,
@@ -301,6 +303,7 @@ def test_rollout_metrics_read_only_top_p_offsets_from_straw(tmp_path, monkeypatc
 @pytest.mark.parametrize("disk", [False, True])
 def test_training_metrics_ignore_sampler_head_payloads(monkeypatch, tmp_path, disk):
     from megatron.core import mpu
+
     from slime.observability import train_metric_utils as metrics
 
     for name, value in {
@@ -336,7 +339,8 @@ def test_training_metrics_ignore_sampler_head_payloads(monkeypatch, tmp_path, di
 def test_exact_top_p_transport_and_microbatch(monkeypatch, tmp_path, transport):
     import numpy as np
     from test_score_centering import binary_top_p_meta
-    from slime.rollout import batch_builder as rollout
+
+    from slime.data import batch_builder as rollout
 
     packed = types.ModuleType("megatron.core.packed_seq_params")
     packed.PackedSeqParams = object
@@ -345,9 +349,8 @@ def test_exact_top_p_transport_and_microbatch(monkeypatch, tmp_path, transport):
     monkeypatch.setitem(sys.modules, "megatron.core.packed_seq_params", packed)
     monkeypatch.setitem(sys.modules, "megatron.training", training)
     from slime.backends.megatron_utils.data import DataIterator
-
-    from slime.utils.rollout_transport import pack_rollout_payload, seal_rollout_store
-    from slime.utils.tensor_store import TensorRef
+    from slime.data.tensor import TensorRef
+    from slime.data.transport import pack_rollout_payload, seal_rollout_store
 
     mgr = manager(
         rollout_top_p=0.9, rollout_data_transport=transport, rollout_data_dir=str(tmp_path), global_batch_size=2
@@ -394,8 +397,8 @@ def test_top_p_resume_from_straw(tmp_path, monkeypatch, score_centering, append)
     import numpy as np
     from test_score_centering import binary_top_p_meta
 
-    from slime.utils.rollout_transport import pack_rollout_payload, seal_rollout_store
-    from slime.utils.tensor_store import TensorRef
+    from slime.data.tensor import TensorRef
+    from slime.data.transport import pack_rollout_payload, seal_rollout_store
 
     a = args(
         rollout_top_p=0.95,
@@ -486,9 +489,9 @@ def test_top_p_mask_reads_only_local_cp_support(tmp_path, monkeypatch, rank, all
 
 
 def test_top_p_validation_checks_shared_support_in_chunks(tmp_path, monkeypatch):
-    from slime.utils.rollout_transport import pack_rollout_payload, seal_rollout_store
+    from slime.data.tensor import TensorRef
+    from slime.data.transport import pack_rollout_payload, seal_rollout_store
     from slime.utils.score_centering import validate_sampler_top_p
-    from slime.utils.tensor_store import TensorRef
 
     count = 1025
     a = args(rollout_top_p=0.95, rollout_data_transport="straw", rollout_data_dir=str(tmp_path))
@@ -533,6 +536,7 @@ def test_top_p_validation_checks_shared_support_in_chunks(tmp_path, monkeypatch)
 def test_generate_requests_complete_top_p_probabilities(monkeypatch):
     import numpy as np
     from test_score_centering import binary_top_p_meta
+
     from slime.rollout import sglang_rollout as rollout
 
     a = args(
@@ -561,3 +565,45 @@ def test_generate_requests_complete_top_p_probabilities(monkeypatch):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
+
+
+def test_top_p_published_captures_need_only_metadata_checks(tmp_path, monkeypatch):
+    from test_score_centering import args
+
+    from slime.data.tensor import TensorRef
+    from slime.data.transport import pack_rollout_payload, seal_rollout_store
+    from slime.utils.score_centering import validate_sampler_top_p
+
+    count = 4097
+    a = args(rollout_top_p=0.95, rollout_data_transport="straw", rollout_data_dir=str(tmp_path))
+    sample = Sample(
+        tokens=[9] + [4] * count,
+        response_length=count,
+        rollout_log_probs=[0.0] * count,
+        rollout_top_p_token_ids=torch.full((count,), 4, dtype=torch.int32),
+        rollout_top_p_token_offsets=torch.arange(count + 1, dtype=torch.int32),
+        rollout_top_p_log_probs=torch.zeros(count),
+        status=Sample.Status.COMPLETED,
+    )
+    restored = pack_rollout_payload(sample, a, 0).load()
+    seal_rollout_store(a)
+    fields = (restored.rollout_top_p_token_ids, restored.rollout_top_p_token_offsets, restored.rollout_top_p_log_probs)
+    assert all(ref.validated for ref in fields)
+
+    # Round-end republication must not read or revalidate immutable payloads.
+    def no_payload_read(*args, **kwargs):
+        raise AssertionError("validated top-p payload was reread during republication")
+
+    with monkeypatch.context() as guarded:
+        for method in ("load", "__getitem__", "validate"):
+            guarded.setattr(TensorRef, method, no_payload_read)
+        validate_sampler_top_p(*fields, count)
+        republished = pack_rollout_payload({"buffer": [restored]}, a, 1)
+        assert republished.manifest is not None
+
+    with monkeypatch.context() as guarded:
+        for method in ("load", "__getitem__", "validate"):
+            guarded.setattr(TensorRef, method, no_payload_read)
+        validate_sampler_top_p(*fields, count, tokens=[4] * count, sampled_logps=[0.0] * count)
+        with pytest.raises(ValueError, match="align"):
+            validate_sampler_top_p(*fields, count, tokens=[4], sampled_logps=[0.0])

@@ -8,6 +8,7 @@ from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from slime.ray.utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, add_default_ray_env_vars
+from slime.utils.weight_sync import should_flush_cache
 
 
 class RayTrainGroup:
@@ -148,21 +149,21 @@ class RayTrainGroup:
             for actor in self._actor_handlers
         ]
 
-    def save_model(self, rollout_id, force_sync=False):
-        """Save actor model"""
-        ret = ray.get([actor.save_model.remote(rollout_id, force_sync=force_sync) for actor in self._actor_handlers])
+    def save_model(self, rollout_id, force_sync=False) -> None:
+        """Save on all ranks; force_sync also waits for asynchronous writes."""
+        ray.get([actor.save_model.remote(rollout_id, force_sync=force_sync) for actor in self._actor_handlers])
         if self._release_train_enabled():
             self.args.load = self.args.save
             self.args.ckpt_step = None
             self.args.finetune = False
             self.args.no_load_optim = self.args.no_save_optim
             self.args.no_load_rng = False
-        return ret
 
-    def update_weights(self):
-        """Broadcast weights from rank 0 to all other ranks."""
+    def update_weights(self) -> None:
+        """Publish actor weights; disk reload is coordinated after all ranks save."""
         if not self._full_disk_weight_update_enabled():
-            return ray.get([actor.update_weights.remote() for actor in self._actor_handlers])
+            ray.get([actor.update_weights.remote() for actor in self._actor_handlers])
+            return
 
         weight_version = self._disk_weight_version + 1
         disk_weight_dir = Path(self.args.update_weight_disk_dir) / f"weight_v{weight_version:06d}"
@@ -241,13 +242,18 @@ class RayTrainGroup:
             model_path = self.args.update_weight_local_checkpoint_dir
         else:
             model_path = str(disk_weight_dir)
-        ray.get([engine.pause_generation.remote() for engine in engines])
-        ray.get([engine.flush_cache.remote() for engine in engines])
+        flush_cache = should_flush_cache(
+            self.args.flush_cache_interval, int(weight_version), getattr(self.args, "update_weight_start_version", 0)
+        )
+        ray.get([engine.pause_generation.remote(mode="abort" if flush_cache else "in_place") for engine in engines])
+        if flush_cache:
+            ray.get([engine.flush_cache.remote() for engine in engines])
         ray.get(
             [
                 engine.update_weights_from_disk.remote(
                     model_path=model_path,
                     weight_version=weight_version,
+                    flush_cache=flush_cache,
                 )
                 for engine in engines
             ]

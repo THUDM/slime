@@ -54,16 +54,12 @@ def optimizer_args(optimizer: str):
 def execute(mode: str = "", optimizer: str = "cpu", checkpoint_dir: str = ""):
     ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /root/models/{MODEL_NAME}_torch_dist "
     checkpoint_dir_arg = quote(checkpoint_dir)
-    if mode == "save":
-        ckpt_args += f"--save {checkpoint_dir_arg} "
-        ckpt_args += "--save-interval 2 "
-    elif mode == "async_save":
-        ckpt_args += f"--save {checkpoint_dir_arg} "
-        ckpt_args += "--save-interval 2 "
+    if mode in ("save", "async_save", "load"):
+        ckpt_args += f"--save {checkpoint_dir_arg} --save-interval 2 "
+    if mode == "async_save":
         ckpt_args += "--async-save "
     elif mode == "load":
-        ckpt_args += f"--load {checkpoint_dir_arg} "
-        ckpt_args += "--ckpt-step 1 --rollout-queue-resume "
+        ckpt_args += f"--load {checkpoint_dir_arg} --ckpt-step 1 "
 
     rollout_args = (
         "--rollout-data-transport straw "

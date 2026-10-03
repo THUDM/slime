@@ -384,7 +384,6 @@ def test_empty_sample_topk_shape():
     "ids,logps",
     [
         ([[1, 1, 2]], [[-1.0, -2.0, -3.0]]),
-        ([[1, 2, 3]], [[0.0, 0.0, 0.0]]),
         ([[1, 2, 3]], [[float("nan"), -2.0, -3.0]]),
     ],
 )
@@ -743,7 +742,7 @@ def test_exact_loss_gradient(mode, dtype, disk, monkeypatch, tmp_path):
     original = dict(batch)
     if disk:
         store_top_p_batch(batch, tmp_path)
-        from slime.utils.tensor_store import TensorRef
+        from slime.data.tensor import TensorRef
 
         load = TensorRef.load
         offsets_refs = batch["rollout_top_p_token_offsets"]
@@ -945,7 +944,7 @@ def test_binary_resume_and_masked_environment():
     assert sample.rollout_topk_token_ids is None
 
 
-@pytest.mark.parametrize("corruption", ["missing", "partial", "duplicate", "offsets", "nan", "sampled"])
+@pytest.mark.parametrize("corruption", ["missing", "duplicate", "offsets", "nan", "sampled"])
 @pytest.mark.parametrize("disk", [False, True])
 def test_invalid_support_rejected(corruption, disk, tmp_path):
     from slime.utils.score_centering import validate_sampler_top_p
@@ -953,8 +952,6 @@ def test_invalid_support_rejected(corruption, disk, tmp_path):
     ids, offsets, q = [1, 2], [0, 2], np.log([0.3, 0.7])
     if corruption == "missing":
         q = None
-    elif corruption == "partial":
-        q = np.log([0.2, 0.4])
     elif corruption == "duplicate":
         ids = [1, 1]
     elif corruption == "offsets":
@@ -970,6 +967,10 @@ def test_invalid_support_rejected(corruption, disk, tmp_path):
             values["logps"] = torch.tensor(q)
         with SharedFilesystemStore(tmp_path, "invalid-top-p", codecs=("tensor.v1",)) as store:
             refs = dict(zip(values, publish_tensors(store, values, submission_id="sample"), strict=True))
+        # These deliberately malformed captures have not passed sampler validation.
+        from dataclasses import replace
+
+        refs = {key: replace(value, validated=False) for key, value in refs.items()}
         ids, offsets, q = refs["ids"], refs["offsets"], refs.get("logps")
     with pytest.raises(ValueError):
         validate_sampler_top_p(
@@ -979,3 +980,13 @@ def test_invalid_support_rejected(corruption, disk, tmp_path):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
+
+
+@pytest.mark.parametrize("mass", [0.6, 0.999898, 1.0001005, 1.5])
+def test_sampler_normalization_is_not_rechecked(mass):
+    from slime.utils.score_centering import validate_sampler_top_p
+
+    logps = np.log(np.array([mass / 2, mass / 2]))
+    validate_sampler_top_p([0, 1], [0, 2], logps, 1)
+    sample = Sample(response_length=1, rollout_topk_token_ids=[[0, 1]], rollout_topk_log_probs=[logps])
+    validate_sampler_topk(sample, 2)

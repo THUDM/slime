@@ -7,15 +7,19 @@ import json
 import os
 import threading
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import ray
-from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
 if TYPE_CHECKING:
     from straw.protocol import CommitReceipt, RecordSetRef
+
+
+def use_straw(args):
+    return getattr(args, "rollout_data_transport", "object-store") == "straw"
+
 
 _writers = {}
 _writers_lock = threading.Lock()
@@ -24,16 +28,41 @@ _async_limits = {}
 
 def seal_rollout_store(args):
     """Seal local packs after generation/publication work has been drained."""
-    if args.rollout_data_transport == "straw":
+    if use_straw(args):
         store, _, lock = rollout_store(args)
         with lock:
             store.seal()
 
 
 def resolve_rollout_data_dir(args):
+    debug_path = getattr(args, "load_debug_rollout_data", None)
+    if debug_path and debug_path.endswith(".straw.json"):
+        import glob
+        from string import Formatter
+
+        from straw.protocol import RecordSetRef
+
+        start = getattr(args, "start_rollout_id", None)
+        if start is None:
+            # Model loading may determine the starting rollout later. Read only
+            # an index to bind the shared pool before creating any actors.
+            pattern = "".join(
+                glob.escape(text) + ("*" if field else "") for text, field, _, _ in Formatter().parse(debug_path)
+            )
+            paths = sorted(glob.glob(str(Path(pattern).expanduser())))
+            if not paths:
+                raise FileNotFoundError(f"No Straw rollout archive matches {debug_path}")
+            path = paths[0]
+        else:
+            path = Path(debug_path.format(rollout_id=start)).expanduser()
+        index = json.loads(Path(path).read_text())
+        if index.get("format") != "slime.straw-debug" or index.get("version") != 1:
+            raise ValueError(f"Unsupported straw rollout archive: {path}")
+        args.rollout_data_dir = index["root"]
+        args.rollout_queue_run_id = RecordSetRef.from_dict(index["manifest"]).manifest.segment.run_id
     if args.rollout_data_dir is None:
         if args.save is None:
-            raise ValueError("straw rollout transport requires --rollout-data-dir or --save on shared storage")
+            raise ValueError("Straw rollout transport requires --rollout-data-dir or --save on shared storage")
         args.rollout_data_dir = str(Path(args.save) / "rollout_data")
     args.rollout_data_dir = str(Path(args.rollout_data_dir).expanduser().resolve())
 
@@ -42,18 +71,14 @@ def rollout_store(args):
     """One physical writer incarnation per process/run, shared by producer calls."""
     try:
         from straw.backend import FilesystemBackend
-        from straw.store import SharedFilesystemStore
-        from straw.tensor import MAX_PUBLICATION_BYTES, MAX_TENSOR_BYTES
     except ModuleNotFoundError as error:
         if error.name != "straw":
             raise
-        raise ModuleNotFoundError(
-            "straw rollout transport requires straw-queue. "
-            "Install it on every rollout/training node: pip install straw-queue",
-            name="straw",
-        ) from error
+        raise ModuleNotFoundError("Install straw with: pip install straw-queue", name="straw") from error
+    from straw.store import SharedFilesystemStore
+    from straw.tensor import MAX_PUBLICATION_BYTES, MAX_TENSOR_BYTES
 
-    from slime.rollout.queue_codec import CODECS, SampleCodec
+    from slime.data.codec import CODECS, SampleCodec
 
     root = str(Path(args.rollout_data_dir).resolve())
     run_id = getattr(args, "rollout_queue_run_id", None) or "rollout"
@@ -75,27 +100,31 @@ def rollout_store(args):
                 max_buffer_bytes=MAX_PUBLICATION_BYTES,
                 backend=FilesystemBackend(root, profile=profile, declaration=declaration),
             )
-            _writers[key] = (store, SampleCodec(store, args=args), threading.RLock())
-        return _writers[key]
+            _writers[key] = (store, threading.RLock())
+        store, lock = _writers[key]
+        return store, SampleCodec(store, args=args), lock
 
 
 @dataclass(frozen=True)
 class DiskPayloadRef:
     """Bounded protocol ref plus a deployment mount hint, overridable by readers.
 
-    Only ``manifest`` is persisted by SampleCodec. Its paths are relative; root
-    is a local mount binding, never a dependency embedded in a durable record.
+    SampleCodec persists the manifest, projection path and small metadata edits.
+    Root is a local mount binding, never a dependency in a durable record.
     """
 
     manifest: RecordSetRef
     root: str
+    # Select a completed group's generation inside its existing worker result.
+    # Small CA scheduling/reward edits travel alongside the immutable reference.
+    path: tuple = field(default=(), kw_only=True)
+    sample_metadata: list[dict] | None = field(default=None, kw_only=True)
 
     def load(self, *, root=None):
         from straw.store import SharedFilesystemStore
-
         from straw.tensor import MAX_PUBLICATION_BYTES, MAX_TENSOR_BYTES
 
-        from slime.rollout.queue_codec import CODECS, SampleCodec
+        from slime.data.codec import CODECS, SampleCodec
 
         store = SharedFilesystemStore(
             root or self.root,
@@ -104,13 +133,33 @@ class DiskPayloadRef:
             max_record_bytes=MAX_TENSOR_BYTES,
             max_buffer_bytes=MAX_PUBLICATION_BYTES,
         )
-        return SampleCodec(store).load(self.manifest)
+        value = SampleCodec(store).load(self.manifest)
+        for part in self.path:
+            value = value[part] if isinstance(part, int) else getattr(value, part)
+        if self.sample_metadata is not None:
+            import copy
+            from slime.utils.types import Sample
+
+            samples = []
+            if isinstance(value, Sample):
+                value = [value]
+            for sample, metadata in zip(value, self.sample_metadata, strict=True):
+                sample = copy.copy(sample)
+                updates = dict(metadata)
+                if "metadata" in updates:
+                    sample.metadata = {**(sample.metadata or {}), **updates.pop("metadata")}
+                sample.__dict__.update(updates)
+                samples.append(sample)
+            value = samples
+        return value
 
 
 @dataclass(frozen=True)
 class RolloutGroupRef(DiskPayloadRef):
     index: int
     receipt: CommitReceipt | None = None
+    # A fork reuses the payload but supplies positions in its own accepted log.
+    source_positions: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -127,6 +176,8 @@ class TrainBatchRef(DiskPayloadRef):
 
 
 def group_lease(group):
+    from straw.protocol import Lease
+
     from slime.rollout.base_types import iter_samples
 
     samples = list(iter_samples(group))
@@ -135,8 +186,6 @@ def group_lease(group):
         return None
     if not all(value == leases[0] for value in leases):
         raise ValueError("A queue group must preserve one task authorization across all trajectories")
-    from straw.protocol import Lease
-
     return Lease(**leases[0])
 
 
@@ -152,6 +201,7 @@ def inherit_queue_context(source, output):
         "_queue_source_positions",
         "_queue_resume_origin",
         "_queue_generation_start",
+        "_queue_branch",
         "queue_policy_segments",
         "queue_generation_requests",
     )
@@ -167,12 +217,12 @@ def inherit_queue_context(source, output):
     return output
 
 
-def record_generation_provenance(group, args):
+def record_generation_provenance(group):
     from slime.rollout.base_types import iter_samples
 
     for sample in iter_samples(group):
         start = getattr(sample, "_queue_generation_start", None)
-        branch = getattr(args, "_rollout_queue_branch", None)
+        branch = getattr(sample, "_queue_branch", None)
         if start is not None and branch is not None and len(sample.tokens) > start:
             segments = list(getattr(sample, "queue_policy_segments", []))
             if not segments and start:
@@ -189,21 +239,20 @@ def record_generation_provenance(group, args):
             sample._queue_generation_start = len(sample.tokens)
 
 
-def pack_rollout_group(group, args, rollout_id):
-    if args.rollout_data_transport != "straw":
+def pack_rollout_group(group, args, rollout_id, *, controller=None):
+    if getattr(args, "rollout_data_transport", "object-store") != "straw":
         return group
     from slime.rollout.base_types import iter_samples
 
     first = next(iter_samples(group))
     lease = group_lease(group)
-    record_generation_provenance(group, args)
+    record_generation_provenance(group)
     metadata = {"task_id": lease.task_id, "attempt_id": lease.attempt_id} if lease else {}
     ref = pack_rollout_payload(
         group, args, rollout_id, metadata=metadata, submission_id=f"group:{lease.attempt_id}" if lease else None
     )
     receipt = None
     if lease:
-        controller = getattr(args, "_rollout_queue_controller", None)
         if controller is None:
             raise ValueError("Queue group has a lease but no coordinator binding")
         receipt = ray.get(controller.complete.remote(lease, ref.manifest))
@@ -212,8 +261,9 @@ def pack_rollout_group(group, args, rollout_id):
 
 def release_rollout_publications(group, args):
     """Relinquish tensor staging before ending the group's current read lifetime."""
-    if args.rollout_data_transport == "straw":
+    if use_straw(args):
         from straw.tensor import TensorRef, release_tensor_publications
+
         from slime.rollout.base_types import iter_samples
 
         tensors = []
@@ -236,13 +286,13 @@ def release_rollout_publications(group, args):
                 release_tensor_publications(store, tensors)
 
 
-def discard_rollout_group(group, args, reason="dynamic filter"):
+def discard_rollout_group(group, args, reason="dynamic filter", *, controller=None):
     lease = group_lease(group)
     release_rollout_publications(group, args)
     # Release staging while the task/accepted-result owner still protects any
     # previously adopted continuation, then acknowledge that reading is done.
     if lease:
-        ray.get(args._rollout_queue_controller.reject.remote(lease, reason))
+        ray.get(controller.reject.remote(lease, reason))
     else:
         from slime.rollout.base_types import iter_samples
 
@@ -251,29 +301,40 @@ def discard_rollout_group(group, args, reason="dynamic filter"):
         }
         if positions:
             decision = pack_rollout_payload({"positions": sorted(positions), "reason": reason}, args, -1)
-            ray.get(args._rollout_queue_controller.record_dispositions.remote(decision.manifest))
+            ray.get(controller.record_dispositions.remote(decision.manifest))
 
 
 def load_rollout_samples(value):
     """Read raw collections without changing group or trajectory nesting."""
     from slime.rollout.base_types import iter_samples
 
-    groups = []
-    for reference in unpack_rollout_payload(value):
+    def read_group(reference):
         group = unpack_rollout_payload(reference)
+        if isinstance(group, list):
+            # CA selects several existing worker results for one prompt group.
+            expanded = []
+            for child in group:
+                if isinstance(child, DiskPayloadRef):
+                    expanded.extend(read_group(child))
+                else:
+                    expanded.append(child)
+            group = expanded
         if isinstance(reference, RolloutGroupRef) and reference.receipt:
             for sample in iter_samples(group):
+                if reference.source_positions is not None:
+                    sample._queue_source_positions = list(reference.source_positions)
                 sample.__dict__.pop("_queue_lease", None)
                 sample._queue_receipt = asdict(reference.receipt)
-        groups.append(group)
-    return groups
+        return group
+
+    return [read_group(reference) for reference in unpack_rollout_payload(value)]
 
 
 def pack_rollout_payload(value, args, rollout_id, *, metadata=None, submission_id=None):
-    if args.rollout_data_transport != "straw":
+    if not use_straw(args):
         return value
     store, codec, lock = rollout_store(args)
-    if isinstance(value, DiskPayloadRef):
+    if isinstance(value, DiskPayloadRef) and value.root is not None:
         store.validate(value.manifest)
         return value
     with lock:
@@ -283,22 +344,24 @@ def pack_rollout_payload(value, args, rollout_id, *, metadata=None, submission_i
     return DiskPayloadRef(ref, str(store.backend.root))
 
 
-async def publish_rollout_async(value, args, rollout_id, *, group=False):
-    return await run_rollout_io(args, pack_rollout_group if group else pack_rollout_payload, value, args, rollout_id)
+async def publish_rollout_async(value, args, rollout_id, *, group=False, controller=None):
+    if group:
+        return await run_rollout_io(args, pack_rollout_group, value, args, rollout_id, controller=controller)
+    return await run_rollout_io(args, pack_rollout_payload, value, args, rollout_id)
 
 
-async def run_rollout_io(args, function, *values):
+async def run_rollout_io(args, function, *values, **kwargs):
     """Bound the executor backlog before submitting encoding/sync work."""
     loop = asyncio.get_running_loop()
     key = (os.getpid(), loop)
     if key not in _async_limits:
         _async_limits[key] = asyncio.Semaphore(getattr(args, "rollout_io_concurrency", 4))
     async with _async_limits[key]:
-        pending = asyncio.create_task(asyncio.to_thread(function, *values))
+        pending = asyncio.create_task(asyncio.to_thread(function, *values, **kwargs))
         try:
             return await asyncio.shield(pending)
         except asyncio.CancelledError:
-            # A cancelled coroutine cannot stop a filesystem commit in its thread.
+            # Repeated cancellation still cannot stop a filesystem commit.
             # Keep capacity and input ownership until the accepted write finishes.
             while not pending.done():
                 try:
@@ -309,29 +372,55 @@ async def run_rollout_io(args, function, *values):
             raise
 
 
+def release_payload_publications(args, payloads):
+    """Release transfer staging after readers finish and durable owners adopt it."""
+    if not use_straw(args):
+        return
+    refs = {payload.manifest.digest: payload.manifest for payload in payloads if isinstance(payload, DiskPayloadRef)}
+    store, _, lock = rollout_store(args)
+    refs = list(refs.values())
+    with lock:
+        for offset in range(0, len(refs), 128):
+            store.release_publications(refs[offset : offset + 128])
+
+
 def unpack_rollout_payload(value):
     while isinstance(value, DiskPayloadRef):
         value = value.load()
     return value
 
 
-def accept_raw_rollout(output, args, rollout_id):
-    """Validate accepted producers, or commit a legacy collection once.
+async def unpack_published_payload(value):
+    """Load off the event loop; Straw handles visibility for every read path."""
+    if not isinstance(value, DiskPayloadRef):
+        return await asyncio.to_thread(unpack_rollout_payload, value)
+    from straw.errors import CorruptData
+
+    segment = value.manifest.manifest.segment
+    context = f"submitted manifest: root={value.root}, segment={segment.path}, offset={segment.offset}"
+    try:
+        return await asyncio.to_thread(unpack_rollout_payload, value)
+    except CorruptData as error:
+        error.add_note(context)
+        raise
+
+
+def accept_raw_rollout(output, args, rollout_id, *, controller):
+    """Validate an accepted collection, or persist and accept returned Samples.
 
     A small wrapper adds task provenance to existing sealed collections without
     rewriting their Sample or tensor payloads.
     """
     from straw.protocol import Lease
 
-    controller = args._rollout_queue_controller
     if isinstance(output, RawRolloutRef):
         receipt = ray.get(controller.accepted.remote(output.receipt))
         if output.manifest != receipt.result_ref:
             raise ValueError("Raw rollout manifest differs from its accepted receipt")
         return output
-    # Legacy custom producers may borrow queue inputs and return Samples without
-    # publishing task results themselves. Complete those inputs before accepting
-    # the compatibility collection, so closing the reader cannot requeue them.
+    # Custom producers can return Samples without publishing task results.
+    # Complete their borrowed inputs before accepting the collection, so closing
+    # the reader cannot requeue work that has already finished.
     from slime.rollout.base_types import iter_samples
 
     borrowed = {}
@@ -345,16 +434,18 @@ def accept_raw_rollout(output, args, rollout_id):
                 borrowed.setdefault(lease, []).append(sample)
     for lease, samples in borrowed.items():
         if ray.get(controller.result.remote(lease)) is None:
-            pack_rollout_group(samples, args, rollout_id)
+            pack_rollout_group(samples, args, rollout_id, controller=controller)
     lease = ray.get(controller.begin_collection.remote(str(rollout_id)))
     store, codec, lock = rollout_store(args)
     with lock:
         ref = codec.publish(
-            output.samples,
+            output.sample_refs if getattr(output, "sample_refs", None) is not None else output.samples,
             submission_id=f"collection:{lease.attempt_id}",
             metadata={"task_id": lease.task_id, "attempt_id": lease.attempt_id},
         )
     receipt = ray.get(controller.complete.remote(lease, ref))
+    if output.on_accepted is not None:
+        output.on_accepted()
     return RawRolloutRef(receipt.result_ref, str(store.backend.root), receipt, output.metrics)
 
 
@@ -363,6 +454,8 @@ def _storage_probe(reference, args):
 
 
 def check_rollout_storage(args):
+    from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
+
     marker = uuid.uuid4().hex
     reference = pack_rollout_payload(marker, args, 0)
     probes = [
@@ -373,9 +466,11 @@ def check_rollout_storage(args):
         if node["Alive"] and (node["Resources"].get("CPU", 0) or node["Resources"].get("GPU", 0))
     ]
     try:
-        for result in ray.get(probes, timeout=60):
+        results = ray.get(probes, timeout=60)
+        for result in results:
             if result.load(root=args.rollout_data_dir) != marker:
                 raise ValueError("Rollout storage probe content differs across nodes")
+        release_payload_publications(args, [reference, *results])
     except Exception as error:
         raise RuntimeError(
             f"All rollout/training nodes must share the run at --rollout-data-dir={args.rollout_data_dir}"

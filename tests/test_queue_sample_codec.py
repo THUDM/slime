@@ -6,14 +6,14 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 import torch
-
 from straw import SharedFilesystemStore
 from straw.errors import CorruptData
 from straw.protocol import decode
 from straw.tensor import CHUNK_BYTES, publish_tensors
-from slime.rollout.queue_codec import CODECS, QueueTensorRef, SampleCodec
+
+from slime.data.codec import CODECS, QueueTensorRef, SampleCodec
+from slime.data.tensor import TensorRef
 from slime.utils.score_centering import validate_sampler_topk
-from slime.utils.tensor_store import TensorRef
 from slime.utils.types import Sample
 
 NUM_GPUS = 0
@@ -235,7 +235,7 @@ def test_unknown_custom_fields_fail_without_silent_loss(codec):
 def test_batch_builder_preserves_group_rewards_masks_and_r3_sc_after_replay(codec, tmp_path):
     import copy
 
-    from slime.rollout.batch_builder import BatchBuilder
+    from slime.data.batch_builder import BatchBuilder
 
     args = SimpleNamespace(
         custom_reward_post_process_path=None,
@@ -327,7 +327,7 @@ def test_completed_capture_is_validated_before_publication(tmp_path, invalid_fie
     assert not list(tmp_path.rglob("*.pack"))
 
 
-def test_large_group_bundle_obeys_native_budget_and_preserves_tensor_aliases(tmp_path, monkeypatch):
+def test_large_group_bundle_streams_past_scratch_budget_and_preserves_tensor_aliases(tmp_path, monkeypatch):
     store = SharedFilesystemStore(
         tmp_path, "bounded", codecs=CODECS, max_buffer_bytes=32 * 1024, max_record_bytes=16 * 1024
     )
@@ -339,15 +339,14 @@ def test_large_group_bundle_obeys_native_budget_and_preserves_tensor_aliases(tmp
     publish = store.publish_many
     calls = []
 
-    def bounded(publications, **kwargs):
+    def tracked(publications, **kwargs):
         size = sum(len(record.payload) for publication in publications for record in publication.records)
-        assert size <= codec.payload_budget
         calls.append(size)
         return publish(publications, **kwargs)
 
-    monkeypatch.setattr(store, "publish_many", bounded)
+    monkeypatch.setattr(store, "publish_many", tracked)
     refs = codec.publish_many(values, submission_ids=[str(i) for i in range(len(values))])
-    assert len(calls) > 1
+    assert max(calls) > store.max_buffer_bytes
     for expected, ref in zip(values, refs, strict=True):
         actual = codec.load(ref)
         assert actual["first"] is actual["same"]

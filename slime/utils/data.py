@@ -302,7 +302,7 @@ class Dataset:
 
 def process_rollout_data(rollout_data_ref, dp_rank, dp_size):
     assert len(rollout_data_ref) == dp_size
-    from slime.utils.rollout_transport import TrainBatchRef, unpack_rollout_payload
+    from slime.data.transport import TrainBatchRef, unpack_rollout_payload
 
     reference = ray.get(rollout_data_ref[dp_rank].inner)
     if isinstance(reference, TrainBatchRef):

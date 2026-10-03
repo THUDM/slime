@@ -5,7 +5,7 @@ from typing import Any
 
 import torch
 
-from slime.utils.tensor_store import TensorRef, materialize_tensor_refs
+from slime.data.tensor import TensorRef, materialize_tensor_refs
 
 logger = logging.getLogger(__name__)
 

@@ -352,10 +352,16 @@ def test_checkpoint_other_loading_paths_are_unchanged(monkeypatch, tmp_path, use
 
 
 @pytest.mark.unit
-def test_megatron_lora_preflight_success_calls_loader(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    "ckpt_step, loaded_step, finetune, mismatch",
+    [(None, 7, False, False), (7, 7, False, False), (0, 0, False, False), (0, 7, False, True), (0, 7, True, False)],
+)
+def test_megatron_lora_preflight_success_calls_loader(
+    monkeypatch, tmp_path, ckpt_step, loaded_step, finetune, mismatch
+):
     from slime.backends.megatron_utils.lora import state
 
-    args = SimpleNamespace(use_lora=True, load=str(tmp_path))
+    args = SimpleNamespace(use_lora=True, load=str(tmp_path), ckpt_step=ckpt_step, finetune=finetune)
     model = [object()]
     events = []
     checkpoint_path = tmp_path / "iter_0000001"
@@ -370,7 +376,7 @@ def test_megatron_lora_preflight_success_calls_loader(monkeypatch, tmp_path):
     def loader(**kwargs):
         assert kwargs["ddp_model"] is model
         events.append("load")
-        return (7, 0)
+        return (loaded_step, 0)
 
     monkeypatch.setattr(state, "validate_megatron_lora_checkpoint", validate)
     load = _production_function(
@@ -382,7 +388,11 @@ def test_megatron_lora_preflight_success_calls_loader(monkeypatch, tmp_path):
         _is_megatron_checkpoint=lambda path: True,
         _load_checkpoint_megatron=loader,
     )
-    assert load(model, None, None, {}) == (7, 0)
+    if mismatch:
+        with pytest.raises(ValueError, match="checkpoint restoration requires step"):
+            load(model, None, None, {})
+    else:
+        assert load(model, None, None, {}) == (loaded_step, 0)
     assert events == ["validate", "load"]
 
 

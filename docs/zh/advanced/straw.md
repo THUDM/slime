@@ -1,88 +1,18 @@
 # 使用 straw 持久化 rollout
 
-[straw](https://github.com/zhuzilin/straw) 为 slime 提供基于文件系统的持久化队列和打包张量存储。启用 `--rollout-data-transport straw` 后，prompt 任务、部分 rollout、已接收结果和训练 batch 都拥有持久化身份。多台机器上的生成与训练进程通过共享文件系统直接读写载荷；Ray 调度 actor，传递控制消息和小型引用。
+[straw](https://github.com/zhuzilin/straw) 为 slime 提供基于文件系统的队列和打包张量存储，持久化 prompt 任务、partial rollout、已完成 sample 和训练 batch。多机上的生成与训练进程可以并行读写载荷，Ray 负责传递控制消息和引用。
 
-当前共享文件系统目标为 JuiceFS。各节点需要在同一个绝对路径挂载同一存储池。包括 NFS 在内的其他网络文件系统，需要单独验证跨客户端锁、数据可见性和持久化语义。
-
-## 架构发生了什么变化
-
-| 职责 | Ray object-store 传输（默认） | straw 传输 |
-|---|---|---|
-| 数据源 | `RolloutDataSourceWithBuffer` | 基于持久化 prompt 任务的 `QueueDataSource` |
-| 载荷交换 | Ray object reference | 指向共享 pack 的 `RecordSetRef` / 张量引用 |
-| Worker 分配 | 内存中的 producer 状态 | Lease、attempt、持久化 continuation 和结果 receipt |
-| Rollout 转训练数据 | `BatchBuilder` 执行 hook 和 DP 分片 | 同一转换流程，额外持久化选择计划与 ready batch |
-| 数据生命周期 | 进程/object-store 所有权 | 显式 task、consumer、reader 和 checkpoint 所有权 |
-| 清理 | Object-store 生命周期 | 可选在线 GC，回收没有所有者的封存 pack |
-
-逻辑上分成 rollout 工作与结果、ready training batch 两个阶段。它们共享同一个 straw 存储池；只要任意阶段或 checkpoint 仍引用某个张量，该张量就保持存活，不需要为两个阶段各复制一份。slime controller 协调两个阶段，straw 用 Rust 实现存储、日志、任务接收和所有权协议。
-
-```{mermaid}
-flowchart LR
-    D[数据集 producer] -->|cursor + 任务提交| Q[持久化 prompt 任务]
-    Q -->|lease + 输入引用| W[分布式生成 worker]
-    W -->|持久化部分 continuation| Q
-    W -->|已接收 group 引用| R[Rollout 结果]
-    R --> B[BatchBuilder: 选择计划与 DP 分片]
-    B -->|ready batch 引用| T[训练 rank]
-    T -->|训练完成| C[Queue controller: 进度与所有权]
-    C --> G[straw 在线 GC]
-    P[(JuiceFS 共享 pack 文件)] -. 载荷读写 .-> W
-    P -. 共享张量引用 .-> B
-    P -. 当前 rank 所需数据 .-> T
-```
-
-一个不自动重启的 Ray actor 持有本次运行的 coordinator，串行协调队列状态转换和数据集分配；载荷由各 producer 进程写入。因此，多机 I/O 可以并行，每个队列日志仍只有一个写入所有者。当前没有 coordinator 自动选主或故障接管。
-
-## 端到端数据流
-
-1. **提交 prompt。** 数据集 cursor 与 prompt 任务一起提交。Worker 领取 lease，从共享存储读取 prompt group；丢失 worker 不会永久丢弃已经预分配的数据集索引区间。
-2. **生成与续跑。** 分布式 fully async 在每个符合资源条件的 Ray 节点上启动生成 worker。Worker 生成、评分并过滤完整 group，将部分 group 保存为持久化 continuation。R3 routes 和 SC rows 必须覆盖已保存的 token 前缀；服务端 capture 不完整时，从上一份一致的输入重试。
-3. **接收结果。** 先持久化载荷，再接收引用。Receipt 标识已接收 group，因此即使 RPC 回复丢失也能恢复结果。任务重新分配会产生新 attempt，旧 attempt 无法接收替代结果。
-4. **构造训练 batch。** `BatchBuilder` 在调用 reward/conversion hook 前持久化输入选择和转换配置，发布所有 DP shard 后才将整个 batch 标记为 ready。训练 reader 检查 batch、plan 和 rank 身份。Manager 仍会将选中的 sample 物化用于转换，其主机内存仍需纳入容量规划。
-5. **确认完成。** 所有 rank 的训练调用返回后，Manager 报告 `training_completed`，推进运行时消费进度并释放 ready batch 容量。这与模型/优化器 checkpoint 持久化是两件事。
-
-Ray 继续负责调度、RPC 和执行进程故障；slime 负责 Sample schema、reward、filter、batch 和训练；straw 负责字节、引用、持久化和存储生命周期。自定义 rollout 仍可返回 Sample 列表，由 Manager 发布为兼容 collection。接口见[自定义指南](../get_started/customization.md)。
-
-## 队列调度
-
-`QueueReader` 是 worker 的队列客户端，负责领取、归还 group 和为正在执行的 lease 续租。`QueueDataSource` 增加整个作业的 reader 创建、consumer 生命周期和 source checkpoint 管理；它继承同一套取样方法，没有另实现一层 buffer。`--rollout-data-transport straw` 会自动选择此数据源；显式指定 `--data-source-path` 时使用 `slime.rollout.queue_data_source.QueueDataSource`。
-
-`QueueReader` 不再有本地 continuation buffer。`add_samples()` 先发布可用的续跑前缀，再通过 `yield_tasks()` 在每个有界批次的一次 WAL 事务中替换输入并归还任务。旧 lease 随之结束，任意 worker 都能用新 lease 领取这些输入。reader 本地只保留正在执行的样本和 lease，关闭时无需重写已归还的 group。
-
-持久化顺序为 **已完成待交付 → partial → 新 prompt**。同类任务按 group 中最旧的数值型 `weight_versions` 排序：版本越旧，staleness 越高，越先取用；相同版本按提交/归还的 FIFO 顺序，没有有效版本的排在同类末尾。比较已有版本即可，无需每次更新模型权重都改写队列。staleness 定义为“当前 serving 权重版本 − 最旧生成权重版本”，新鲜样本为 0。排序本身不会自动丢弃过旧样本。这是在一个队列内建立索引，不是维护三个独立队列。
-
-straw 明确拒绝 `--buffer-filter-path`；`--buffer-sort-by-staleness` 仍用于内存数据源，straw 始终采用上述顺序。reward 和样本筛选 hook 继续可用。已经接收的 group 如果显式放回，会创建独立的 delivery task，保留原 accepted 历史；消费或丢弃 delivery 时也会确认被其替代的已接收版本。fully async scheduler 仍保留有界的 ready result 窗口，其 checkpoint 状态和已接收结果引用单独持久化。
-
-source checkpoint 统一保存共享 pending 任务、准确的不可变输入引用和排序 metadata；worker checkpoint 只保存 reader metadata。reader 快照格式升级为 v3，旧 v1/v2 本地 buffer 快照需要迁移，加载时明确报错。此功能需要带 `yield_tasks()` 和持久化排序字段的新版 `straw-queue` 构建，原 PyPI 0.1.0 wheel 尚无这些接口。
-
-## 共享张量、R3 与 SC
-
-每个 writer 进程复用 pack writer。slime adapter 默认按 **256 MiB** 目标大小轮换，由 `--rollout-queue-segment-mib` 配置。记录和 manifest 都嵌入 pack，**不会为每个 sample 或张量单独创建文件**，避免大量小文件带来的共享文件系统元数据开销。队列与所有权元数据使用追加日志。
-
-已完成的 R3 routes 和 SC 张量，在 custom sample hook 之后随其 sample group 一起发布。后续 rollout、continuation 和训练数据发布复用不可变张量依赖；修改时写入新记录，旧引用保持有效。这是张量级共享与写时复制，不是 GPU 共享内存或内存页级写时复制。R3 训练只读取分配给当前 CP/TP rank 的行。大 bundle 会按 native 写入预算拆分；SC 也支持不启用 R3 的场景。
-
-需要持久化 R3/SC 张量时，使用 `--rollout-data-transport straw`；object-store 传输将它们保存在内存中。不再提供独立的 spill hook、每个 sample 的张量文件或 spill 清理步骤。导入另一个 straw 存储池的引用时，先将数据复制到目标池，再接收依赖这些数据的结果。Debug dump 直接保存张量内容，因此队列 GC 后仍可读取；启用 dump 会增加主机内存和 I/O 开销。
-
-## Sample 编码与完整性校验
-
-Adapter 将 sample 保存为 `slime.v1` JSON record：`{version: 1, tree: ...}`，通过显式标签编码容器、Sample 字段、NumPy 数组、图像和 rollout 引用。嵌套 group、支持的动态字段、多模态输入、R3、SC top-k 和 ragged top-p 都会保留。未知 Python 类型及循环引用明确报错；载荷协议不使用 pickle，也不会根据存储数据中的名称导入类。
-
-Tensor 节点包含 shape、dtype、semantic kind、lazy/validated 标志，以及指向外层 manifest 依赖的 `{dependency: index, ordinal: index}`。物理位置保存在这些依赖 manifest 中，因此后续 sample 或训练 batch 发布可以共享相同的不可变张量记录。所有张量依赖必须先发布，才能接收所属 sample。
-
-straw 的 `tensor.v1` 保存连续、行优先、小端的 typed bytes。Lazy reader 校验元数据及所读行覆盖的每个 chunk 的 checksum，不会校验未读取的 chunk；完整检查则校验整个 segment。张量描述符批量恢复，以复用共享 pack 索引。
+当前支持的共享文件系统是 JuiceFS，所有节点必须以相同绝对路径挂载存储池。包括 NFS 在内的其他网络文件系统，需要单独验证锁、可见性和持久性。
 
 ## 启用方式
 
-`requirements.txt` 已包含 `straw-queue`，标准 Docker 构建和正常安装 slime 时会自动安装。已有环境可以在每个生成和训练节点执行以下命令，同一任务的所有节点使用相同版本：
+标准 slime 安装和 Docker 构建包含 `straw-queue`。已有环境可以在每个 rollout 和训练节点执行以下命令，同一任务使用相同版本：
 
 ```bash
-pip install straw-queue
+pip install 'straw-queue>=0.1.2'
 ```
 
-未安装 straw 时，默认 Ray `object-store` 传输仍可运行，启动日志会提示安装命令。如果显式选择 `--rollout-data-transport straw`，则在启动检查阶段报错并给出同样的安装命令。
-
-Python 导入名为 `straw`。在原有训练命令中追加以下参数，使用新的共享目录：
+在训练命令中添加：
 
 ```bash
 --rollout-data-transport straw \
@@ -92,60 +22,130 @@ Python 导入名为 `straw`。在原有训练命令中追加以下参数，使�
 --rollout-storage-declaration /shared/juicefs/deployment.json
 ```
 
-声明文件包含 `direct_mount: true`、`writeback: false`、`open_cache: 0`、`readdir_cache: false`、已部署的 `client_version` 和 `durability_description`。它记录经过验证的部署设置，不会自动探测或配置挂载。详见 straw 的[文件系统要求](https://github.com/zhuzilin/straw/blob/main/docs/FILESYSTEM_zh.md)。
+部署声明描述已经验证的挂载设置，不会修改挂载配置。其中包含 `direct_mount: true`、`writeback: false`、`open_cache: 0`、`readdir_cache: false`、`client_version` 和 `durability_description`。详见 straw 的[文件系统约定](https://github.com/zhuzilin/straw/blob/main/docs/FILESYSTEM.md)。本地 POSIX 开发和测试使用默认的 `local` profile。
 
-默认 `local` 存储 profile 对应 POSIX 开发契约；在共享挂载上选择它，并不意味着已验证该存储服务的持久性。
+新任务省略 `--rollout-data-dir` 时使用 `<save>/rollout_data`；未设置 `--save` 时必须显式指定共享目录。从 checkpoint 恢复时，可以从 checkpoint 中读取存储池路径。
 
-存储方式和执行模式分别选择。默认传输仍为 `object-store`，默认 rollout 入口仍为同步模式。使用 straw 的分布式 fully async 时，额外添加：
+存储方式和执行方式独立选择。默认使用 Ray `object-store` 传输和同步 rollout。分布式 fully async 还需要添加：
 
 ```bash
 --rollout-function-path slime.rollout.fully_async_rollout.generate_rollout_fully_async
 ```
 
-未指定 `--rollout-data-dir` 时，straw 模式使用 `<save>/rollout_data`；没有 `--save` 则必须显式指定共享目录。`--rollout-io-concurrency` 限制事件循环之外的序列化和 I/O 并发，默认 4。Adapter 使用 worker 进程和有界线程，straw 本身不创建 I/O 进程池。`--rollout-queue-max-pending` 与 `--rollout-queue-max-inflight` 限制任务准入，默认均为 65,536；它们不是保留字节数或文件数配额。
+Fully async 在每个有 CPU 资源的 Ray 节点启动一个生成进程，分配总并发。快速 worker 可以提供训练 batch，无需等待所有 worker。权重同步期间暂停接收新任务，持久化在途结果后再恢复生成。
 
-权重同步期间，分布式 producer 暂停提交新任务，让在途请求完成并持久化；还有下一次训练 rollout 时恢复。权重同步本身仍是独立子系统。
+未安装 straw 时，默认 object-store 传输可以运行；显式选择 straw 则在启动时报错并给出安装命令。
 
-关闭时，所有生成 worker 共用五分钟期限完成持久化写入。超时会报告错误，不会被视为成功关闭。
+## 数据流与调度
 
-## 在线 GC 与所有权
+1. Worker 请求 prompt group，数据源从 dataset 读取数据，将 group 和更新后的游标一起保存到队列。
+2. Worker 生成和打分。归还的 partial group 持久化后等待续跑；已接收的完整 group 可供训练使用。
+3. Batch builder 执行 reward/conversion hook，将选中的 sample 分配给各训练 rank。训练结束后，slime 确认数据已消费；没有其他引用需要它们时即可回收存储。
 
-在线 GC 默认关闭，添加 `--rollout-queue-online-gc` 后，straw 可在任务运行期间回收不再使用的封存 pack。slime 通过 straw API 提供使用完成和丢弃信号。只有 task、publication、queue、reader、checkpoint 等所有者全部释放后，pack 才能删除。仅 lease 超时不能证明 reader 已停止。一条存活记录就会保留整个 pack；活跃 writer、保留 checkpoint 和 WAL 历史仍会占用空间。
+Rollout 和训练数据共用存储池，R3、SC 等大张量可以跨阶段复用。队列通过可续租的 lease 将任务分配给 worker；worker 失联后，未完成任务在 lease 到期后可重新领取。
 
-GC 失败会停止后台循环，后续 coordinator 操作传播原始原因，关闭时也会报告错误；它不会停止已在远端 worker 中运行的工作。数据保留供排查。容量用尽时应使用背压或由操作者明确决定处理方式，不能 reset 活跃队列或直接删除 pack 腾空间。离线删除目录要求所有参与者停止；仍需配置存储配额与应用保留策略。
+调度优先级为 **已完成 group → partial group → 新 prompt**。同类中，生成 token 的权重版本越旧越先取用；版本相同时按 FIFO 顺序，没有数值型版本的排在同类末尾。Staleness 为当前 serving 版本减去最旧生成 token 版本，因此新鲜 sample 的 staleness 为 0。调度排序不会自动丢弃过旧 sample。
 
-已处理位置和过滤决策被显式记录，避免接收顺序中的空洞使已消费数据持续占用容量。独立且有界的 control task 配额允许 Manager 在生产背压时仍能提交 collection。
+straw 不支持 `--buffer-filter-path`。`--buffer-sort-by-staleness` 适用于内存数据源，straw 使用上述排序规则。Reward 和 sample-selection hook 可用；分布式 fully async 不支持 `--rollout-all-samples-process-path`。自定义 rollout 函数和 queue reader 的用法见[自定义功能](../get_started/customization.md)。
+
+## 数据打包与支持类型
+
+每个 writer 向 pack 文件追加多条 sample 和 tensor，不会为每个 sample 或 tensor 单独创建文件，从而减少共享存储上的小文件元数据开销。不可变张量引用允许 rollout、训练 batch 和 checkpoint 共享数据；修改时写入新记录，保留的引用始终指向原有内容。
+
+Sample codec 支持嵌套 list、tuple、dict、标量、字节数据、NumPy 数组、PyTorch 张量、PIL 图像和 Sample 字段，包括受支持的自定义字段。R3 routes、SC top-k 和 ragged top-p 数据以 typed tensor 保存。不支持的 Python 对象和循环引用会在发布时报错。记录和张量读取都有校验和检查。
+
+R3 使用 `--use-rollout-routing-replay`，SC 使用 `--use-score-centering`。选择 straw 传输后，这些张量随 sample group 一起持久化。R3 训练只读取当前 CP/TP rank 分配到的行。大 replay 张量在 batch 转换时保持 lazy，但选中的 Sample 元数据和普通字段仍会占用 manager 内存。
+
+| 参数 | 默认值 | 用途 |
+|---|---|---|
+| `--rollout-queue-segment-mib` | `256` | Pack 轮转的目标大小，单位 MiB |
+| `--rollout-io-concurrency` | `4` | 限制并发序列化与文件系统 I/O 提交 |
+| `--rollout-queue-lease-seconds` | `300` | Worker 租期，活跃 reader 会续租 |
+
+## 在线 GC
+
+在线 GC 默认关闭，通过 `--rollout-queue-online-gc` 开启。slime 在任务和训练 batch 使用完成或被丢弃后通知 straw。只有所有任务、reader、checkpoint 和归档都释放引用后，straw 才会回收封存的 pack。一条存活记录就会保留整个 pack，活跃 writer 和日志历史也会占用空间。
+
+保留的 checkpoint 和归档在 GC 开启时也能保护其载荷，因此回退不需要关闭 GC。数据不再需要时还应释放对应的存储保留关系；只删除索引文件不会释放所有权。不要手动删除活跃存储池中的 pack 文件。离线删除前，先停止所有 coordinator、writer 和 reader。
+
+GC 失败会通过后续队列操作和关闭流程报告。容量耗尽时需要释放不再使用的保留数据或增加容量，不会自动 reset 队列。目前没有活跃 pack 和日志压缩功能。
 
 ## 恢复与 checkpoint
 
-| 故障或重启场景 | 支持行为与边界 |
-|---|---|
-| Worker 在结果接收前丢失 | 恢复最近一次持久化 continuation，以新 attempt 重新分配 |
-| 已提交结果但回复丢失 | 恢复已有 receipt，不重复进行逻辑接收 |
-| 第一个 batch 计划生成前整个任务停止 | `--rollout-queue-resume` 使用相同初始模型和 rollout 配置恢复已接收 group 与持久化前缀 |
-| 已生成 batch 计划后重启 | 需要匹配的模型/优化器及 rollout checkpoint，单独恢复队列会明确报错 |
+正常训练 checkpoint 同时保存模型和 rollout 状态，包括 dataset 游标、sample/group 编号、pending/partial 输入、ready group 和训练进度。已经保存在 straw 中的载荷通过引用保存，不会在每次 checkpoint 时重新复制。保留 checkpoint 会保留它依赖的数据。
 
-Resume 要求整个旧任务（包括 coordinator 和 reader）已停止，并使用同一个 root 与 run ID。该参数是操作者声明，不是自动 fencing。尚未发布的推理可能重新执行；SGLang GPU KV cache 不会恢复。
+重启前需要停止整个原任务，包括远端 worker。Save 目录锁会拒绝并发 coordinator，但不会终止遗留 reader。目前没有 coordinator 自动故障转移。
 
-Checkpoint 的 `<save>/rollout/queue_state_<rollout_id>.json` 保存 source 和已注册 scheduler consumer；`builder_state_<rollout_id>.json` 保存训练 consumer 视图。它们的引用保留相应存储依赖图。Continuation 增量持久化，checkpoint 引用已有数据，不会再次重写全部归还样本的 token。恢复旧 checkpoint 不会抹去 WAL 中后来已接收的历史。
+### 续跑或选择 step
 
-部分 R3/SC 张量在 continuation 快照中保持 lazy 引用，生成追加新行时才加载。恢复 source 和 builder 状态会保留已保存的 warm groups 和行为策略版本，并记录哪些后续输出不属于恢复分支。恢复后的 pending task 独立于过滤决策保留存储引用。包含尚未重启 consumer 的完整 source 快照，必须先保留并持久记录，才能释放旧引用；保存失败保留旧引用，后台 GC 在恢复后的 consumer 状态提交后才启动。
-
-Adapter 目前尚未建立模型、优化器、RNG 与队列状态的联合最终提交 manifest。因此，持久化 rollout 不代表任意崩溃后的 optimizer 精确恢复，也不承诺训练结果逐位一致。
-
-dataset producer 游标尚未随 source checkpoint 保存，恢复 pending 快照也尚未排除所有后来新增的任务。因此，任意旧训练步的完整回退仍属于待实现能力。
-
-## 验证与当前限制
-
-CPU 测试覆盖 codec、R3/SC 传输、CP/TP 按行读取、worker 故障、continuation、checkpoint 视图和 GC 所有权。straw 独立验证 Rust/Python 核心、有界所有权模型和 native 崩溃边界。物理多客户端文件系统检查及真实 GPU 训练补充这些测试。
-
-`tests/test_straw_fully_async_recovery.py` 启动两个本地 Ray 节点，以 SIGKILL 中断整个 driver、coordinator 和 generation 进程树，再启动新任务读取同一个 straw 存储池，不经过正常 checkpoint。测试覆盖已接收结果重放、token/logprob/R3/SC 前缀保持不变、新 lease 和 reward 只计算一次，并分别检查在线 GC 关闭与开启的情况。推理和 reward 使用 CPU fixture，不代表 optimizer 恢复验证。此测试在 `cpu-unittest` 中自动运行，安装方式见 [CI 配置](../developer_guide/ci.md)。
-
-本地运行分布式 rollout 与中断恢复测试：
+使用相同的逻辑目录恢复最近一次完整 checkpoint：
 
 ```bash
-PYTHONPATH=. python tests/test_distributed_rollout.py
-PYTHONPATH=. python tests/test_straw_fully_async_recovery.py
+--rollout-data-transport straw \
+--load /shared/checkpoints/run \
+--save /shared/checkpoints/run \
+--save-interval 1
 ```
 
-主要部署限制包括共享存储带宽、持久化延迟、coordinator 吞吐和 Manager 转换内存。目前尚无存活 pack 整理、日志压缩或 coordinator 自动接管。Rollout 参数见[使用指南](../get_started/usage.md)，存储验证及其覆盖边界见 straw 的[验证文档](https://github.com/zhuzilin/straw/blob/main/docs/VERIFICATION_zh.md)。
+设置 `--save` 时，Megatron 要求同时指定正数的 `--save-interval`。示例每轮 rollout 保存一次，可按实际需求调整间隔。
+
+如需恢复 rollout 7 结束后的状态，添加 `--ckpt-step 7`，下一轮从 rollout 8 开始。Dataset、模型/tokenizer 配置、straw run ID、storage profile 和 fully async worker 拓扑应与 checkpoint 一致。训练恢复需要保留 optimizer 和训练 RNG 状态。
+
+恢复时创建独立队列，共享 checkpoint 中的不可变载荷。Pending/partial 输入和 ready group 顺序来自该 checkpoint，dataset 游标恢复到保存的位置；不会混入原任务在此之后产生的 sample。后续写入不会修改原 checkpoint。
+
+当 `--save` 已包含任务时，输出写入独立的 `branches/<id>` 目录，由 `rollout/current.json` 记录当前分支。以后重启可以继续使用相同的逻辑 `--load` 和 `--save`。省略 `--load` 且 `--save` 存在当前分支时，也会自动续跑。启动日志会显示实际路径。不可变的 `.straw.json` debug 归档需要为每次运行指定新的输出路径。
+
+| 选择方式 | 参数 |
+|---|---|
+| 当前分支历史中的某一步 | `--load /shared/checkpoints/run --ckpt-step 7` |
+| 指定分支 | `--load /shared/checkpoints/run/branches/<id> --ckpt-step 7` |
+| 指定完整 checkpoint | `--load /shared/checkpoints/run/rollout/committed_7.json` |
+| 单独的输出目录 | `--save /shared/checkpoints/another-run` |
+
+也可以修改逻辑 save 目录或当前分支中的 `latest_checkpointed_iteration.txt`，选择更早的 step。显式 `--ckpt-step` 或具体提交文件优先。自动选择只使用完整的模型与队列 checkpoint，不会跟随更晚但未完成的模型保存。沿父分支查找时只追溯到各分支起点；如需加载其他分支已放弃的后续历史，请指定具体提交文件。
+
+### 缺失状态与恢复限制
+
+如果模型存在但没有保存队列快照，则从空队列开始。存在 `rollout/global_dataset_state_dict_<step>.pt` 时恢复其中的 dataset 游标，否则从 offset 0 开始并打印警告。不会从其他 step 借用 pending、partial 或 ready 数据。模型缺失、快照不完整或损坏、载荷缺失、快照版本不受支持等情况会报错，不会静默退化成空队列。
+
+尚无模型 checkpoint 时，使用相同 `--save` 和模型/输入配置重启原任务，可以恢复已持久化的 rollout 工作，但仅限于第一个训练 batch 尚未开始规划的阶段。之后恢复需要匹配的模型/optimizer 和 rollout checkpoint。
+
+恢复依赖原 straw 存储池，单独复制 checkpoint 目录不会复制载荷。恢复边界是完成的 rollout 训练 batch，不是 optimizer microstep。GPU KV cache 和生成 RNG 状态不会恢复，新生成的 token 和随机 hook 结果可能不同。
+
+增大 `--num-rollout` 时，如需沿用保存的 optimizer schedule，可使用 Megatron 的 `--use-checkpoint-opt-param-scheduler`。队列恢复不会覆盖 optimizer 设置。
+
+## Debug 归档与按 key 查询
+
+Debug 保存和加载参数支持 `.pt` 与 `.straw.json` 两种格式：
+
+```bash
+--save-debug-rollout-data '/shared/debug/rollout_{rollout_id}.straw.json'
+# 在独立的只训练任务中加载，不启动 SGLang：
+--load-debug-rollout-data '/shared/debug/rollout_{rollout_id}.straw.json'
+```
+
+| 格式 | 内容 | 存储要求 |
+|---|---|---|
+| `.pt` | Sample 数据和实际张量内容 | 独立文件 |
+| `.straw.json` | 带 sample/task key 的不可变索引 | 需要保留所引用的 straw 存储池 |
+
+索引归档独立保留数据，不受队列消费和 GC 影响。使用 straw 传输保存时复用已有张量，否则在索引旁创建 `straw-data` 存储池。每个 rollout 只有一个索引，sample 打包存储。Evaluation 使用 `eval_<id>` 替代 rollout ID。单独复制 JSON 索引不会复制载荷。使用 straw 做只训练回放时，自动使用归档的存储池和 run，覆盖 `--rollout-data-dir` 和 `--rollout-queue-run-id`，并在该可写存储池中新建独立队列，不改变原队列。完整回放（不抽样）直接复用已有 Sample 和张量记录，不重新写入。一次回放的所有归档必须属于同一存储池和 run。`--load-debug-rollout-data-subsample` 也适用于归档。
+
+```python
+from slime.data.archive import RolloutArchive
+from slime.observability.rollout_data_utils import load_debug_rollout_data
+
+with RolloutArchive('/shared/debug/rollout_7.straw.json') as archive:
+    print(archive.keys())  # 按归档顺序返回 (sample key, 可选 task key)
+    samples = archive.load_samples(sample_key='sample:42')
+    group = archive.load_samples(task_key='prompt:21')
+    archive.export_pt('/shared/debug/rollout_7.pt')
+
+# 将 .pt 转为索引归档，在索引旁创建 straw-data 存储池。
+samples = load_debug_rollout_data('/shared/debug/rollout_7.pt', rollout_id=7)
+RolloutArchive.save('/shared/debug/imported_7.straw.json', samples, rollout_id=7)
+```
+
+Key 选择的是该归档保存的数据版本，找不到时抛出 `KeyError`。Compact trajectory 可能共享 sample index，因此查询返回列表。没有 index 的 sample 使用 `position:<序号>`；没有队列来源信息的 sample 没有 task key。
+
+关闭归档只会关闭 reader，数据继续保留。所有 reader 使用完后，可以打开归档并调用 `archive.release()` 释放保留关系。其他 checkpoint、队列和归档的引用独立保留。导出的 `.pt` 在 straw 回收载荷后仍可读取。
