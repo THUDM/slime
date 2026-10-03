@@ -103,13 +103,19 @@ def _encode_observation_for_generation(
     else:
         prompt_ids = tokenizer.encode(formatted_prompt, add_special_tokens=False)
 
+    # SGLang expands image placeholders itself; keep its input separate from
+    # the processor-expanded sequence used for training.
+    rollout_prompt_ids = (
+        tokenizer.encode(formatted_prompt, add_special_tokens=False) if processor else list(prompt_ids)
+    )
     if trim_length:
         prompt_ids = prompt_ids[trim_length:]
+        rollout_prompt_ids = rollout_prompt_ids[trim_length:]
 
     image_data = []
     if multimodal_inputs and multimodal_inputs.get("images"):
         image_data = [encode_image_for_rollout_engine(img) for img in multimodal_inputs["images"]]
-    return prompt_ids, image_data, multimodal_inputs, multimodal_train_inputs
+    return prompt_ids, rollout_prompt_ids, image_data, multimodal_inputs, multimodal_train_inputs
 
 
 def _merge_multimodal_train_inputs(chunks: list[dict | None]) -> dict | None:
@@ -177,6 +183,10 @@ def _prepare_start_state(sample: Sample, state, args: Any, sampling_params: dict
     if not sample.tokens:
         sample.tokens = list(prompt_ids)
     response_tokens: list[int] = sample.tokens[len(prompt_ids) :] if len(sample.tokens) >= len(prompt_ids) else []
+    rollout_tokens = (
+        state.tokenizer.encode(sample.prompt, add_special_tokens=False) if state.processor else list(prompt_ids)
+    )
+    rollout_tokens.extend(response_tokens)
     sample.loss_mask = sample.loss_mask or []
     sample.rollout_log_probs = sample.rollout_log_probs or []
     sample.response_length = len(response_tokens)
@@ -186,7 +196,7 @@ def _prepare_start_state(sample: Sample, state, args: Any, sampling_params: dict
         budget = args.rollout_max_context_len - len(sample.tokens)
     elif sampling_params.get("max_new_tokens") is not None:
         budget = sampling_params["max_new_tokens"] - len(sample.tokens)
-    return current_image_data, response_tokens, budget, multimodal_train_inputs_buffer
+    return current_image_data, response_tokens, rollout_tokens, budget, multimodal_train_inputs_buffer
 
 
 async def _run_inference_step(url: str, tokens: list[int], sampling_params: dict, image_data, tokenizer):
@@ -212,10 +222,10 @@ async def _run_inference_step(url: str, tokens: list[int], sampling_params: dict
 def _process_env_step(env: BaseInteractionEnv, response_text: str, tokenizer, processor, args, sample_metadata):
     observation, done, _ = env.step(response_text)
     if done:
-        return None, None, None, None, True
+        return None, None, None, None, None, True
 
     next_user_message = env.format_observation(observation)
-    obs_prompt_ids, obs_image_data, obs_multimodal_inputs, obs_multimodal_train_inputs = (
+    obs_prompt_ids, obs_rollout_ids, obs_image_data, obs_multimodal_inputs, obs_multimodal_train_inputs = (
         _encode_observation_for_generation(
             tokenizer,
             processor,
@@ -230,14 +240,17 @@ def _process_env_step(env: BaseInteractionEnv, response_text: str, tokenizer, pr
     if bos_id is not None and obs_prompt_ids and obs_prompt_ids[0] == bos_id:
         obs_prompt_ids = obs_prompt_ids[1:]
 
-    return obs_prompt_ids, obs_image_data, obs_multimodal_inputs, obs_multimodal_train_inputs, False
+    if bos_id is not None and obs_rollout_ids and obs_rollout_ids[0] == bos_id:
+        obs_rollout_ids = obs_rollout_ids[1:]
+
+    return obs_prompt_ids, obs_rollout_ids, obs_image_data, obs_multimodal_inputs, obs_multimodal_train_inputs, False
 
 
 def _append_to_sample(
     sample: Sample,
     response_tokens: list[int],
     tokens_to_add: list[int],
-    logprobs: list[float],
+    logprobs: list[float] | None,
     loss_mask_val: int,
     args: Any | None = None,
     meta_info: dict | None = None,
@@ -318,7 +331,7 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
 
     env, env_module, config, state, url = _initialize_resources(args, sample)
     sampling_params = sampling_params.copy()
-    current_image_data, response_tokens, budget, multimodal_train_inputs_buffer = _prepare_start_state(
+    current_image_data, response_tokens, rollout_tokens, budget, multimodal_train_inputs_buffer = _prepare_start_state(
         sample, state, args, sampling_params
     )
     try:
@@ -333,7 +346,9 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
                 cur_sampling_params["max_new_tokens"] = budget
 
             response_text, new_response_tokens, new_response_log_probs, finish_type, meta_info = (
-                await _run_inference_step(url, sample.tokens, cur_sampling_params, current_image_data, state.tokenizer)
+                await _run_inference_step(
+                    url, rollout_tokens, cur_sampling_params, current_image_data, state.tokenizer
+                )
             )
             _append_to_sample(
                 sample,
@@ -344,6 +359,7 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
                 args=args,
                 meta_info=meta_info,
             )
+            rollout_tokens.extend(new_response_tokens)
             budget = _update_budget(budget, len(new_response_tokens))
 
             if _should_stop_on_finish(sample, finish_type):
@@ -352,15 +368,20 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
                 sample.status = Sample.Status.TRUNCATED
                 break
 
-            obs_prompt_ids, obs_image_data, obs_multimodal_inputs, obs_multimodal_train_inputs, done = (
-                _process_env_step(env, response_text, state.tokenizer, state.processor, args, sample.metadata)
-            )
+            (
+                obs_prompt_ids,
+                obs_rollout_ids,
+                obs_image_data,
+                obs_multimodal_inputs,
+                obs_multimodal_train_inputs,
+                done,
+            ) = _process_env_step(env, response_text, state.tokenizer, state.processor, args, sample.metadata)
             if done:
                 sample.status = Sample.Status.COMPLETED
                 break
 
-            obs_log_probs = [0.0] * len(obs_prompt_ids)
-            _append_to_sample(sample, response_tokens, obs_prompt_ids, obs_log_probs, loss_mask_val=0)
+            _append_to_sample(sample, response_tokens, obs_prompt_ids, None, loss_mask_val=0)
+            rollout_tokens.extend(obs_rollout_ids)
             budget = _update_budget(budget, len(obs_prompt_ids))
 
             current_image_data = _update_multimodal_state(
