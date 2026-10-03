@@ -42,6 +42,7 @@ Start by Use Case
 - Sync weights as byte-level deltas: :doc:`advanced/delta-weight-sync`
 - Use PD disaggregation: :doc:`advanced/pd-disaggregation`
 - Use BF16 training with FP8 rollout or FP8 KV cache: :doc:`advanced/low-precision`
+- Train parameter-efficiently with LoRA, including MoE routed experts: :doc:`advanced/lora`
 - Understand CI and reliability coverage: :doc:`developer_guide/ci`
 - Debug, trace, and profile long-running jobs: :doc:`developer_guide/debug`, :doc:`developer_guide/trace`, :doc:`developer_guide/profiling`
 
@@ -79,6 +80,7 @@ Start by Use Case
    advanced/on-policy-distillation.md
    advanced/speculative-decoding.md
    advanced/low-precision.md
+   advanced/lora.md
    advanced/reproducibility.md
    advanced/fault-tolerance.md
    advanced/straw.md

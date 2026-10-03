@@ -553,12 +553,24 @@ def train_one_step(
     for model_chunk in model:
         model_chunk.zero_grad_buffer()
     optimizer.zero_grad()
+    lora_runtime_hooks_installed = 0
 
     if args.custom_megatron_before_train_step_hook_path:
         from slime.utils.misc import load_function
 
         custom_before_train_step_hook = load_function(args.custom_megatron_before_train_step_hook_path)
         custom_before_train_step_hook(args, rollout_id, step_id, model, optimizer, opt_param_scheduler)
+
+    if getattr(args, "use_lora", False):
+        from .lora import prepare_lora_backward, reset_lora_forward_counters
+
+        reset_lora_forward_counters(model)
+        lora_runtime_hooks_installed = prepare_lora_backward(model)
+        if lora_runtime_hooks_installed:
+            logger.info(
+                "Installed LoRA gradient hooks on %d runtime adapter parameters after Megatron model wrapping",
+                lora_runtime_hooks_installed,
+            )
 
     def forward_step(data_iterator: DataIterator, model: GPTModel, return_schedule_plan: bool = False) -> tuple[
         torch.Tensor,
@@ -659,6 +671,15 @@ def train_one_step(
         forward_only=False,
     )
 
+    if getattr(args, "use_lora", False):
+        from .lora import assert_lora_backward, assert_lora_gradients
+
+        assert_lora_backward(model)
+        if args.lora_debug:
+            logger.info("LoRA gradients: %s", assert_lora_gradients(model).numeric_metrics())
+
+    # Keep Megatron's optimizer/scheduler semantics for warmup and zero gradients.
+    # A local zero gradient does not imply a zero gradient on all TP/PP/DP ranks.
     valid_step = True
     grad_norm = float("nan")
     if not getattr(args, "check_for_nan_in_loss_and_grad", True):

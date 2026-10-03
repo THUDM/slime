@@ -13,6 +13,7 @@ from slime.backends.sglang_utils.arguments import validate_args as sglang_valida
 from slime.backends.sglang_utils.external import apply_external_engine_info_to_args
 from slime.observability.logging_utils import configure_logger
 from slime.utils.eval_config import EvalDatasetConfig, build_eval_dataset_configs, ensure_dataset_list
+from slime.utils.lora_config import add_lora_arguments, validate_lora_args, validate_lora_checkpoint_args
 
 logger = logging.getLogger(__name__)
 
@@ -309,6 +310,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 action="store_true",
                 default=False,
             )
+            add_lora_arguments(parser)
 
             return parser
 
@@ -1849,12 +1851,15 @@ def slime_validate_args(args):
     validate_score_centering_args(args)
     args.eval_datasets = _resolve_eval_datasets(args)
 
+    # LoRA is opt-in; validate_lora_args() is a no-op unless --use-lora is set.
+    validate_lora_args(args)
+
     if args.rollout_temperature <= 0:
         raise ValueError(
             "--rollout-temperature must be > 0; temperature 0 is greedy decoding and is not a valid RL policy."
         )
 
-    if args.kl_coef != 0 or args.use_kl_loss:
+    if (args.kl_coef != 0 or args.use_kl_loss) and not getattr(args, "use_lora", False):
         if not os.path.exists(args.ref_load):
             raise FileNotFoundError(f"ref_load {args.ref_load} does not exist, please check the path.")
 
@@ -2193,3 +2198,6 @@ def slime_validate_args(args):
                 "--update-weight-mode=delta requires --update-weight-local-checkpoint-dir "
                 "(a rollout-host-local NVMe directory)."
             )
+
+    # Loading and release-train defaults must be resolved before checkpoint validation.
+    validate_lora_checkpoint_args(args)

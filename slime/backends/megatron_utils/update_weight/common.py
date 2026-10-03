@@ -1,7 +1,7 @@
 import inspect
 import re
 from argparse import Namespace
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 
 import torch
 import torch.distributed as dist
@@ -126,7 +126,100 @@ def all_gather_params_async(
     return gathered_params
 
 
-def named_params_and_buffers(args: Namespace, model: Sequence[torch.nn.Module]) -> Iterator[tuple[str, torch.Tensor]]:
+def named_params_and_buffers(
+    args: Namespace, model: Sequence[torch.nn.Module], convert_to_global_name: bool = True
+) -> Iterator[tuple[str, torch.Tensor]]:
+    """
+    Yield (global_name, param/buffer) with consistent names across PP/EP. Adjusts indices for
+    virtual PP + EP offsets. Handles decoder.layers, mtp.layers (Multi-Token Prediction), expert_bias.
+
+    ``convert_to_global_name=False`` yields raw per-vp-stage parameter names instead
+    (used by LoRA, which does not need the PP/EP-adjusted global names).
+    """
+    if not convert_to_global_name:
+        return _named_params_and_buffers_vanilla(model)
+    return _named_params_and_buffers_global(args, model)
+
+
+def base_named_params_and_buffers(
+    args: Namespace, model: Sequence[torch.nn.Module], convert_to_global_name: bool = True
+) -> Iterator[tuple[str, torch.Tensor]]:
+    """``named_params_and_buffers`` without LoRA adapter parameters.
+
+    Names and shapes are those of the standard model, which is what checkpoint
+    loading and cross-rank parameter metadata need. Identical to
+    ``named_params_and_buffers`` when LoRA is disabled.
+    """
+    ans = named_params_and_buffers(args, model, convert_to_global_name)
+    if not getattr(args, "use_lora", False):
+        return ans
+
+    from slime.utils.lora_config import is_lora_param_name
+
+    return ((name, tensor) for name, tensor in ans if not is_lora_param_name(name))
+
+
+def effective_named_params_and_buffers(
+    args: Namespace, model: Sequence[torch.nn.Module], convert_to_global_name: bool = True
+) -> Iterator[tuple[str, torch.Tensor]]:
+    """Parameters as seen by the rollout policy: ``W_base + scale * B @ A``.
+
+    Adapter parameters are dropped, the base weights are never modified in place and
+    each merged tensor is released as soon as the consumer is done with it. Identical
+    to ``named_params_and_buffers`` when LoRA is disabled.
+    """
+    if not getattr(args, "use_lora", False):
+        return named_params_and_buffers(args, model, convert_to_global_name)
+
+    from ..lora.merge import merged_named_params
+
+    return merged_named_params(args, model, convert_to_global_name)
+
+
+def effective_weight_mapping(
+    args: Namespace,
+    model: Sequence[torch.nn.Module],
+    backing: Mapping[str, torch.Tensor] | None = None,
+    *,
+    convert_to_global_name: bool = True,
+) -> Mapping[str, torch.Tensor]:
+    """Random-access variant of :func:`effective_named_params_and_buffers`.
+
+    ``backing`` defaults to the live parameters; pass a host-side backup dict to
+    merge on top of a ``TensorBackuper`` snapshot instead. With LoRA disabled the
+    plain backing mapping is returned unchanged.
+    """
+    if backing is None:
+        backing = dict(named_params_and_buffers(args, model, convert_to_global_name))
+    if not getattr(args, "use_lora", False):
+        return backing
+
+    from ..lora.merge import EffectiveWeightMapping
+
+    return EffectiveWeightMapping(args, model, backing, convert_to_global_name=convert_to_global_name)
+
+
+def _named_params_and_buffers_vanilla(model: Sequence[torch.nn.Module]) -> Iterator[tuple[str, torch.Tensor]]:
+    from .. import misc_utils
+
+    for vp_stage, model_module in enumerate(model):
+
+        def _compute_fqn(name, vp_stage=vp_stage):
+            return f"vp_stages.{vp_stage}.{misc_utils.strip_param_name_prefix(name)}"
+
+        for name, param in model_module.named_parameters():
+            yield _compute_fqn(name), param
+
+        for name, buffer in model_module.named_buffers():
+            # TODO shall we handle (almost) all buffers
+            if "expert_bias" not in name:
+                continue
+            yield _compute_fqn(name), buffer
+
+
+def _named_params_and_buffers_global(
+    args: Namespace, model: Sequence[torch.nn.Module]
+) -> Iterator[tuple[str, torch.Tensor]]:
     """
     Yield (global_name, param/buffer) with consistent names across PP/EP. Adjusts indices for
     virtual PP + EP offsets. Handles decoder.layers, mtp.layers (Multi-Token Prediction), expert_bias.
