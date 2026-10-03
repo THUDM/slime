@@ -22,6 +22,18 @@ class ParsedModelOutput:
     ill_formed: bool = False
 
 
+def _parse_tool_arguments(raw_arguments: str | None) -> tuple[dict[str, Any], str, bool]:
+    """Return canonical mapping, original wire text, and object validity."""
+    raw = raw_arguments if raw_arguments is not None else "{}"
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {"_raw_arguments": raw}, raw, False
+    if not isinstance(parsed, dict):
+        return {"_raw_arguments": raw}, raw, False
+    return parsed, raw, True
+
+
 def parse_model_output(
     raw_output: str,
     *,
@@ -77,12 +89,17 @@ def parse_tool_uses(
             except Exception:
                 logger.exception("[agent.parsing] sglang tool-call parsing failed; falling back")
         for c in calls:
-            try:
-                args = json.loads(c.parameters or "{}")
-            except json.JSONDecodeError:
-                args = {"_raw_arguments": c.parameters}
+            args, raw_arguments, arguments_valid = _parse_tool_arguments(c.parameters)
+            if not arguments_valid:
                 ill_formed = True
-            tool_uses.append({"name": c.name or "tool", "input": args})
+            tool_uses.append(
+                {
+                    "name": c.name or "tool",
+                    "input": args,
+                    "raw_arguments": raw_arguments,
+                    "arguments_valid": arguments_valid,
+                }
+            )
 
     if not tool_uses and tools_schema:
         body_text, tool_uses = parse_xml_tool_uses(body_text, tools_schema)
