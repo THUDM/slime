@@ -17,6 +17,7 @@ from megatron.core.transformer.spec_utils import import_module
 from megatron.core.transformer.transformer_config import TransformerConfig
 from megatron.training.arguments import core_transformer_config_from_args
 
+from slime.backends.megatron_utils.compact_logits import CompactLogitsGPTModel, can_compact_actor_logits
 from slime.utils.misc import load_function
 
 _INDEXER_DIRECT_SUBMODULE_NAMES = frozenset(
@@ -228,8 +229,11 @@ def _get_model_provider_func(
             mtp_block_spec = get_gpt_mtp_block_spec(config, transformer_layer_spec, **mtp_kwargs)
             kwargs["mtp_block_spec"] = mtp_block_spec
 
+        model_cls = (
+            CompactLogitsGPTModel if role == "actor" and post_process and can_compact_actor_logits(args) else GPTModel
+        )
         with build_model_context(**build_model_context_args):
-            model = GPTModel(**kwargs)
+            model = model_cls(**kwargs)
 
         if post_process and role == "critic":
             model.output_layer = LinearForLastLayer(input_size=config.hidden_size, output_size=1, config=config)
