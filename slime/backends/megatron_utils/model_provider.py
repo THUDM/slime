@@ -267,6 +267,13 @@ def get_model_provider_func(args, role="actor"):
 
 
 def freeze_model_params(model: GPTModel, args: argparse.Namespace):
+    if getattr(args, "use_lora", False):
+        # LoRA validation rejects combining --use-lora with the freeze-list
+        # arguments below (LoRA already defines exactly which parameters are
+        # trainable), so injection fully replaces the rest of this function.
+        maybe_inject_lora(model, args)
+        return
+
     if getattr(args, "only_train_params_name_list", None):
         for name, param in model.named_parameters():
             param.requires_grad = False
@@ -300,3 +307,27 @@ def freeze_model_params(model: GPTModel, args: argparse.Namespace):
         # Some pipeline stages may legitimately own no indexer weights, so an
         # empty local tuple is not itself an error.
         model._slime_frozen_indexer_param_names = tuple(frozen_indexer_params)
+
+
+def maybe_inject_lora(model: GPTModel, args: argparse.Namespace) -> None:
+    """Inject LoRA adapters and freeze the base model. Only called when --use-lora is set.
+
+    Injection happens inside the model provider, i.e. before Megatron wraps the model
+    in DistributedDataParallel and before get_megatron_optimizer() builds parameter
+    groups. That ordering is what keeps the frozen base out of the gradient buffers
+    and out of the optimizer state, instead of relying on a post-hoc requires_grad
+    filter that Megatron's optimizer/DDP construction would not otherwise honour.
+    """
+    from .lora import LoRAConfig, inject_lora, log_injection_report
+
+    config = LoRAConfig.from_args(args)
+    report = inject_lora(model, config)
+    if not hasattr(args, "_lora_reports"):
+        args._lora_reports = []
+    args._lora_reports.append(report)
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        should_log = torch.distributed.get_rank() == 0
+    else:
+        should_log = True
+    if should_log:
+        log_injection_report(report, log_modules=(len(args._lora_reports) == 1))

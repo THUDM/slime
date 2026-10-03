@@ -19,7 +19,7 @@ from slime.utils.http_utils import _wrap_ipv6
 from slime.utils.weight_sync import should_flush_cache
 
 from ..megatron_to_hf import convert_to_hf
-from .common import all_gather_param, named_params_and_buffers
+from .common import all_gather_param, effective_named_params_and_buffers
 
 
 class UpdateWeightFromDistributed:
@@ -167,7 +167,7 @@ class UpdateWeightFromDistributed:
         """
         buffer_size = 0
         buffer: list[tuple[str, torch.Tensor]] = []
-        for name, param in named_params_and_buffers(self.args, self.model):
+        for name, param in effective_named_params_and_buffers(self.args, self.model):
             if ".experts." in name:
                 continue
             param = all_gather_param(name, param)
@@ -189,7 +189,7 @@ class UpdateWeightFromDistributed:
         Yield one HF chunk per EP-weighted batch of expert params: TP gather +
         buffer until threshold, then EP gather + HF convert.
         """
-        params = ((n, p) for n, p in named_params_and_buffers(self.args, self.model) if ".experts." in n)
+        params = ((n, p) for n, p in effective_named_params_and_buffers(self.args, self.model) if ".experts." in n)
         buffer_size = 0
         batch: list[tuple[str, torch.Tensor]] = []
         for name, param in params:

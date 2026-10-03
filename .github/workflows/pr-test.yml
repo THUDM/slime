@@ -222,6 +222,10 @@ jobs:
               "test_file": "test_ppo_logprob_entropy_gpu.py"
             },
             {
+              "num_gpus": 2,
+              "test_file": "test_lora_parallel_gpu.py"
+            },
+            {
               "enable_eval": "0",
               "num_gpus": 8,
               "test_file": "test_moonlight_16B_A3B.py"
@@ -634,6 +638,30 @@ jobs:
               "num_gpus": 0,
               "straw": true,
               "test_file": "test_megatron_argument_validation.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_lora_config.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_megatron_lora.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_lora_checkpoint.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_lora_weight_sync.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_lora_lifecycle.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_lora_parallel.py"
             },
             {
               "num_gpus": 0,
@@ -1160,6 +1188,10 @@ jobs:
             {
               "num_gpus": 2,
               "test_file": "test_ppo_logprob_entropy_gpu.py"
+            },
+            {
+              "num_gpus": 2,
+              "test_file": "test_lora_parallel_gpu.py"
             },
             {
               "enable_eval": "0",

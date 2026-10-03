@@ -42,6 +42,7 @@ slime 的设计目标，是让这两大能力彼此强化，同时避免把系�
 - 以字节级 delta 同步权重：:doc:`advanced/delta-weight-sync`
 - 使用 PD disaggregation：:doc:`advanced/pd-disaggregation`
 - 使用 BF16 训练 + FP8 rollout 或 FP8 KV cache：:doc:`advanced/low-precision`
+- 使用 LoRA 做参数高效训练（含 MoE routed experts）：:doc:`advanced/lora`
 - 了解 CI 和可靠性覆盖：:doc:`developer_guide/ci`
 - 调试、trace 和 profiling 长时间任务：:doc:`developer_guide/debug`、:doc:`developer_guide/trace`、:doc:`developer_guide/profiling`
 
@@ -79,6 +80,7 @@ slime 的设计目标，是让这两大能力彼此强化，同时避免把系�
    advanced/on-policy-distillation.md
    advanced/speculative-decoding.md
    advanced/low-precision.md
+   advanced/lora.md
    advanced/reproducibility.md
    advanced/fault-tolerance.md
    advanced/straw.md

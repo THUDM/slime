@@ -73,8 +73,42 @@ def _is_moe_config(hf_config):
     )
 
 
+def _apply_lora_optimizer_overrides(args):
+    """Route the LoRA optimizer hyper-parameters into Megatron's global ones.
+
+    In LoRA mode every trainable parameter is a LoRA factor, so slime does not need a
+    separate parameter group: ``--lr`` / ``--weight-decay`` *are* the adapter's. When
+    ``--lora-learning-rate`` is unset the global ``--lr`` is used unchanged, whereas
+    ``--lora-weight-decay`` always wins because it has a concrete default (0.0), which
+    is the regularisation adapter-only training wants.
+    """
+    if not getattr(args, "use_lora", False):
+        return
+
+    lora_lr = getattr(args, "lora_learning_rate", None)
+    if lora_lr is not None and lora_lr != args.lr:
+        logger.info("LoRA mode: --lr %s overridden by --lora-learning-rate %s", args.lr, lora_lr)
+        args.lr = lora_lr
+
+    lora_wd = getattr(args, "lora_weight_decay", 0.0)
+    if lora_wd != args.weight_decay:
+        logger.info("LoRA mode: --weight-decay %s overridden by --lora-weight-decay %s", args.weight_decay, lora_wd)
+        args.weight_decay = lora_wd
+
+    for attr in ("start_weight_decay", "end_weight_decay"):
+        if getattr(args, attr, None) is not None:
+            setattr(args, attr, args.weight_decay)
+
+    min_lr = getattr(args, "min_lr", None)
+    if min_lr is not None and min_lr > args.lr:
+        logger.info("LoRA mode: clamping --min-lr %s to --lr %s", min_lr, args.lr)
+        args.min_lr = args.lr
+
+
 def validate_args(args):
     """Run megatron's own validate_args plus slime-specific megatron validations."""
+
+    _apply_lora_optimizer_overrides(args)
 
     _megatron_validate_args(args)
 

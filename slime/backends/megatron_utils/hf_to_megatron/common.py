@@ -150,11 +150,11 @@ def load_model_hf_weights(
     config,
     get_hf_tensor: Callable[[str, SafetensorReader, object], torch.Tensor],
 ) -> None:
-    from slime.backends.megatron_utils.update_weight.common import named_params_and_buffers
+    from slime.backends.megatron_utils.update_weight.common import base_named_params_and_buffers
 
     reader = SafetensorReader(path)
     with torch.no_grad():
-        for name, parameter in named_params_and_buffers(args, model):
+        for name, parameter in base_named_params_and_buffers(args, model):
             tensor = get_hf_tensor(name, reader, config)
             if name.endswith("output_layer.weight") and parameter.shape[0] == 1 and tensor.shape[0] != 1:
                 continue

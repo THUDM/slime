@@ -573,5 +573,58 @@ def test_force_fp8_ue8m0_scale_argument(monkeypatch):
     assert configured.force_fp8_ue8m0_scale is True
 
 
+@pytest.mark.unit
+@pytest.mark.parametrize("kl_args", [{"kl_coef": 0.1}, {"use_kl_loss": True, "kl_loss_coef": 0.1}])
+def test_lora_kl_uses_frozen_base_without_ref_load(monkeypatch, tmp_path, kl_args):
+    from slime.utils.lora_config import add_lora_arguments
+
+    module = load_slime_arguments_module(monkeypatch)
+    parser = argparse.ArgumentParser()
+    add_lora_arguments(parser)
+    lora_args = vars(parser.parse_args(["--use-lora"]))
+    (tmp_path / "latest_checkpointed_iteration.txt").write_text("1")
+    args = make_slime_validate_args(**lora_args, **kl_args, load=str(tmp_path))
+    module.slime_validate_args(args)
+    assert args.ref_load is None
+    assert args.load == str(tmp_path)
+
+
+@pytest.mark.unit
+def test_lora_rejects_ppo_before_use_critic_is_derived(monkeypatch):
+    from slime.utils.lora_config import LoRAConfigError, add_lora_arguments
+
+    module = load_slime_arguments_module(monkeypatch)
+    parser = argparse.ArgumentParser()
+    add_lora_arguments(parser)
+    args = make_slime_validate_args(**vars(parser.parse_args(["--use-lora"])), advantage_estimator="ppo")
+    with pytest.raises(LoRAConfigError, match="critic"):
+        module.slime_validate_args(args)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("resume", [False, True])
+def test_lora_path_validation_uses_resolved_loading_mode(monkeypatch, tmp_path, resume):
+    from slime.utils.lora_config import LoRAConfigError, add_lora_arguments
+
+    module = load_slime_arguments_module(monkeypatch)
+    parser = argparse.ArgumentParser()
+    add_lora_arguments(parser)
+    lora_args = vars(parser.parse_args(["--use-lora", "--lora-load", str(tmp_path / "missing_adapter")]))
+    load = None
+    if resume:
+        checkpoint = tmp_path / "full"
+        checkpoint.mkdir()
+        (checkpoint / "latest_checkpointed_iteration.txt").write_text("1")
+        load = str(checkpoint)
+    args = make_slime_validate_args(**lora_args, load=load, finetune=False)
+    if resume:
+        module.slime_validate_args(args)
+        assert args.finetune is False
+    else:
+        with pytest.raises(LoRAConfigError, match="not an existing directory"):
+            module.slime_validate_args(args)
+        assert args.finetune is True
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))

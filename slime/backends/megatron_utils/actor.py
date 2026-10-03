@@ -52,7 +52,7 @@ from .loss import (
 )
 from .model import forward_only, initialize_model_and_optimizer, save, train
 from .update_weight import create_weight_updater
-from .update_weight.common import named_params_and_buffers
+from .update_weight.common import effective_weight_mapping, named_params_and_buffers
 
 logging.getLogger("megatron").setLevel(logging.WARNING)
 
@@ -128,10 +128,20 @@ class MegatronTrainRayActor(TrainRayActor):
             source_getter=lambda: named_params_and_buffers(self.args, self.model),
         )
         self._active_model_tag: str | None = "actor"
+
+        if self.args.use_lora:
+            self._init_lora()
+
         self.weights_backuper.backup("actor")
 
         if with_ref:
-            self.load_other_checkpoint("ref", args.ref_load)
+            if self.args.use_lora:
+                # The LoRA reference policy is the frozen base model, i.e. a zeroed adapter.
+                # validate_lora_args() rejects --ref-load with --use-lora, so there is no
+                # checkpoint to load here.
+                self._backup_lora_reference()
+            else:
+                self.load_other_checkpoint("ref", args.ref_load)
 
         # Load teacher model for Megatron-based on-policy distillation
         if with_opd_teacher:
@@ -152,7 +162,7 @@ class MegatronTrainRayActor(TrainRayActor):
         self.weight_updater = create_weight_updater(
             self.args,
             self.model,
-            weights_getter=lambda: self.weights_backuper.get("actor"),
+            weights_getter=lambda: effective_weight_mapping(self.args, self.model, self.weights_backuper.get("actor")),
             model_name=type(self.hf_config).__name__.lower() if self.args.model_name is None else self.args.model_name,
             quantization_config=getattr(self.hf_config, "quantization_config", None),
         )
@@ -294,6 +304,59 @@ class MegatronTrainRayActor(TrainRayActor):
             raise ValueError(f"Cannot switch to unknown model tag: {target_tag}")
         self.weights_backuper.restore(target_tag)
         self._active_model_tag = target_tag
+
+    def _init_lora(self) -> None:
+        """Load an adapter-only checkpoint (if given) and sanity-check the optimizer.
+
+        Injection itself already happened inside the model provider (before DDP/optimizer
+        construction); this only wires up the post-construction bookkeeping that needs the
+        final runtime model and optimizer objects.
+        """
+        from .lora import LoRAConfig, assert_optimizer_holds_only_lora, load_lora_adapter
+
+        self.lora_config = LoRAConfig.from_args(self.args)
+
+        if not getattr(self.args, "_lora_reports", None):
+            raise RuntimeError("--use-lora is set but no LoRA injection report was produced by the model provider")
+
+        if self.optimizer is not None:
+            # Fail fast rather than silently letting the frozen base drift into the optimizer.
+            assert_optimizer_holds_only_lora(self.optimizer, self.model)
+
+        if self.lora_config.load_path is not None:
+            if not self.args.finetune:
+                logger.info(
+                    "Ignoring --lora-load=%s during checkpoint resume; keeping the restored adapter and optimizer. "
+                    "Use --finetune to initialize a new run from an adapter.",
+                    self.lora_config.load_path,
+                )
+                return
+            training_state = load_lora_adapter(self.args, self.model, self.lora_config.load_path, self.lora_config)
+            if self.optimizer is not None:
+                self.optimizer.reload_model_params()
+            if training_state:
+                logger.info(
+                    "Loaded LoRA adapter from %s (training_state=%s)",
+                    self.lora_config.load_path,
+                    training_state,
+                )
+
+    def _backup_lora_reference(self) -> None:
+        """Back up the frozen base policy and restore the live adapter even if backup fails."""
+        from .lora import iter_lora_modules
+
+        modules = [module for _, module in iter_lora_modules(self.model)]
+        live_factors = [(module.lora_A.detach().clone(), module.lora_B.detach().clone()) for module in modules]
+        try:
+            with torch.no_grad():
+                for module in modules:
+                    module.lora_B.zero_()
+            self.weights_backuper.backup("ref")
+        finally:
+            with torch.no_grad():
+                for module, (lora_a, lora_b) in zip(modules, live_factors, strict=True):
+                    module.lora_A.copy_(lora_a)
+                    module.lora_B.copy_(lora_b)
 
     def fill_routing_replay(self, data_iterator, num_microbatches, rollout_data):
         if "rollout_routed_experts" not in rollout_data:
@@ -619,8 +682,30 @@ class MegatronTrainRayActor(TrainRayActor):
         if self.args.save_hf is not None and self.role == "actor":
             save_hf_model_to_path(self.args, Path(self.args.save_hf.format(rollout_id=rollout_id)), self.model)
 
+        if self.args.use_lora:
+            self._save_lora_checkpoints(rollout_id)
+
         if self.args.offload_train:
             self.sleep()
+
+    def _save_lora_checkpoints(self, rollout_id: int) -> None:
+        from .lora import save_lora_adapter
+
+        if self.lora_config.save_path is not None:
+            path = Path(self.lora_config.save_path.format(rollout_id=rollout_id))
+            save_lora_adapter(
+                self.args,
+                self.model,
+                path,
+                self.lora_config,
+                rollout_id=rollout_id,
+                policy_version=str(getattr(self.weight_updater, "weight_version", 0)),
+            )
+
+        if self.lora_config.save_merged_hf is not None and self.role == "actor":
+            save_hf_model_to_path(
+                self.args, Path(self.lora_config.save_merged_hf.format(rollout_id=rollout_id)), self.model
+            )
 
     @timer
     def update_weights(self) -> None:

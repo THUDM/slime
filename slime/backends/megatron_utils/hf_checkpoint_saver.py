@@ -44,7 +44,7 @@ def save_hf_model_to_path(
     import torch.distributed as dist
     from transformers import AutoConfig
 
-    from .update_weight.common import named_params_and_buffers
+    from .update_weight.common import effective_weight_mapping
     from .update_weight.hf_weight_iterator_direct import HfWeightIteratorDirect
 
     is_save_rank = _is_global_rank_zero()
@@ -90,7 +90,7 @@ def save_hf_model_to_path(
         quantization_config=quantization_config,
         transform_ue8m0=False,
     )
-    megatron_local_weights = dict(named_params_and_buffers(args, model))
+    megatron_local_weights = effective_weight_mapping(args, model)
     num_save_nodes, save_node_rank, is_writer_rank, writer_ranks = _get_node_save_layout(args)
     if is_save_rank:
         logger.info(

@@ -2120,6 +2120,12 @@ def _wrap_te_grouped_mlp(
     module: torch.nn.Module,
     module_name: str,
 ) -> bool:
+    if any(hasattr(getattr(module, name, None), "lora_A") for name in ("linear_fc1", "linear_fc2")):
+        raise RuntimeError(
+            f"DeepGEMM MoE forward cannot replace {module_name}: it has routed-expert LoRA adapters. "
+            "This fused path bypasses the linear-module hooks and would omit the adapters. "
+            "Disable DeepGEMM MoE forward for this layer or exclude its routed experts from LoRA targets."
+        )
     if getattr(module, "_slime_deepgemm_moe_forward_wrapped", False):
         return False
 
