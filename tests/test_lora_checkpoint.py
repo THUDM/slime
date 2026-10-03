@@ -16,8 +16,8 @@ from types import SimpleNamespace
 import _lora_fakes  # noqa: F401  (installs the megatron stub before slime imports)
 import pytest
 import torch
-from safetensors.torch import load_file, save_file
 from _lora_fakes import FakeGPTModel, make_config, make_lora_args, patch_named_tensor_iterator
+from safetensors.torch import load_file, save_file
 
 from slime.backends.megatron_utils.lora import (  # noqa: E402
     ADAPTER_CONFIG_FILE,
@@ -373,13 +373,17 @@ def test_megatron_checkpoint_requires_all_adapter_keys(monkeypatch, tmp_path, av
     serialization = types.ModuleType("megatron.core.dist_checkpointing.serialization")
     serialization.load_tensors_metadata = lambda path: dict.fromkeys(available)
     monkeypatch.setitem(sys.modules, serialization.__name__, serialization)
-    model = [SimpleNamespace(sharded_state_dict=lambda: {
-        "nested": [
-            SimpleNamespace(key="decoder.fc.lora_A"),
-            {"factor": SimpleNamespace(key="decoder.fc.lora_B")},
-            SimpleNamespace(key="decoder.fc.weight"),
-        ]
-    })]
+    model = [
+        SimpleNamespace(
+            sharded_state_dict=lambda: {
+                "nested": [
+                    SimpleNamespace(key="decoder.fc.lora_A"),
+                    {"factor": SimpleNamespace(key="decoder.fc.lora_B")},
+                    SimpleNamespace(key="decoder.fc.weight"),
+                ]
+            }
+        )
+    ]
     if len(available) == 2:
         validate_megatron_lora_checkpoint(tmp_path, model)
     else:

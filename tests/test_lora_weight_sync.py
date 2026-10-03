@@ -12,15 +12,8 @@ import _lora_fakes  # noqa: F401  (installs the megatron stub before slime impor
 import pytest
 import torch
 import torch.nn.functional as F
-from _lora_fakes import (
-    FakeGPTModel,
-    FakeMoEModel,
-    make_config,
-    make_lora_args,
-    patch_named_tensor_iterator,
-)
+from _lora_fakes import FakeGPTModel, FakeMoEModel, make_config, make_lora_args, patch_named_tensor_iterator
 
-from slime.backends.megatron_utils.lora.merge import merged_named_params  # noqa: E402
 from slime.backends.megatron_utils.lora import (  # noqa: E402
     EffectiveWeightMapping,
     build_merge_plan,
@@ -28,6 +21,7 @@ from slime.backends.megatron_utils.lora import (  # noqa: E402
     iter_lora_modules,
     lora_local_delta,
 )
+from slime.backends.megatron_utils.lora.merge import merged_named_params  # noqa: E402
 
 NUM_GPUS = 0
 
@@ -334,9 +328,7 @@ def test_lazy_mapping_merges_one_coherent_host_snapshot(lora_setup):
         module.lora_A.fill_(7.0)
         module.lora_B.fill_(9.0)
 
-    expected_delta = lora_setup[2].scale * (
-        backing[f"{target}.lora_B"].float() @ backing[f"{target}.lora_A"].float()
-    )
+    expected_delta = lora_setup[2].scale * (backing[f"{target}.lora_B"].float() @ backing[f"{target}.lora_A"].float())
     torch.testing.assert_close(
         mapping[f"{target}.weight"],
         backing[f"{target}.weight"] + expected_delta.to(backing[f"{target}.weight"].dtype),

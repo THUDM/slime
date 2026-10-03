@@ -31,9 +31,9 @@ from slime.backends.megatron_utils.lora import (
     LoRAInjectionError,
     inject_lora,
     iter_lora_modules,
+    layers,
     save_lora_adapter,
 )
-from slime.backends.megatron_utils.lora import layers
 
 NUM_GPUS = 0
 BACKEND = Path(__file__).resolve().parents[1] / "slime/backends/megatron_utils"
@@ -189,10 +189,15 @@ def test_training_step_preserves_zero_lr_warmup_and_zero_gradient_semantics(sign
     inject_lora(model, make_config(lora_rank=4))
     args = make_lora_args(
         custom_megatron_before_train_step_hook_path=None,
-        seq_length=4, micro_batch_size=1, decoder_seq_length=None,
-        check_for_nan_in_loss_and_grad=True, ci_test=False,
-        enable_mtp_training=False, save_debug_train_data=None,
-        data_pad_size_multiplier=1, allgather_cp=False,
+        seq_length=4,
+        micro_batch_size=1,
+        decoder_seq_length=None,
+        check_for_nan_in_loss_and_grad=True,
+        ci_test=False,
+        enable_mtp_training=False,
+        save_debug_train_data=None,
+        data_pad_size_multiplier=1,
+        allgather_cp=False,
     )
     params = [p for p in model.parameters() if p.requires_grad]
     inner = torch.optim.Adam(params, lr=0.01)
@@ -209,10 +214,19 @@ def test_training_step_preserves_zero_lr_warmup_and_zero_gradient_semantics(sign
         loss_fn(output).backward()
         return []
 
-    batch = {"tokens": torch.tensor([[1, 2, 3, 4]]), "multimodal_train_inputs": None,
-             "packed_seq_params": None, "full_loss_masks": None}
+    batch = {
+        "tokens": torch.tensor([[1, 2, 3, 4]]),
+        "multimodal_train_inputs": None,
+        "packed_seq_params": None,
+        "full_loss_masks": None,
+    }
     step = _production_function(
-        "model.py", "train_one_step", get_args=lambda: args, math=math, os=os, partial=partial,
+        "model.py",
+        "train_one_step",
+        get_args=lambda: args,
+        math=math,
+        os=os,
+        partial=partial,
         mpu=SimpleNamespace(is_pipeline_last_stage=lambda **_: False),
         _wrap_forward_step_with_microbatch_pbar=lambda f, _: f,
         _with_rollout_top_p_token_keys=lambda args, keys: keys,
@@ -300,8 +314,12 @@ def test_megatron_lora_preflight_failure_never_calls_loader(monkeypatch, tmp_pat
 
     monkeypatch.setattr(state, "validate_megatron_lora_checkpoint", reject)
     load = _production_function(
-        "checkpoint.py", "load_checkpoint", get_args=lambda: args, Path=Path,
-        _is_dir_nonempty=lambda path: True, _is_megatron_checkpoint=lambda path: True,
+        "checkpoint.py",
+        "load_checkpoint",
+        get_args=lambda: args,
+        Path=Path,
+        _is_dir_nonempty=lambda path: True,
+        _is_megatron_checkpoint=lambda path: True,
         _load_checkpoint_megatron=unexpected_loader,
     )
     with pytest.raises(state.LoRACheckpointError, match="missing adapter"):
@@ -321,8 +339,12 @@ def test_checkpoint_other_loading_paths_are_unchanged(monkeypatch, tmp_path, use
     monkeypatch.setattr(state, "validate_megatron_lora_checkpoint", unexpected_preflight)
     expected = (7, 0) if megatron_checkpoint else (0, 0)
     load = _production_function(
-        "checkpoint.py", "load_checkpoint", get_args=lambda: args, Path=Path,
-        _is_dir_nonempty=lambda path: True, _is_megatron_checkpoint=lambda path: megatron_checkpoint,
+        "checkpoint.py",
+        "load_checkpoint",
+        get_args=lambda: args,
+        Path=Path,
+        _is_dir_nonempty=lambda path: True,
+        _is_megatron_checkpoint=lambda path: megatron_checkpoint,
         _load_checkpoint_megatron=lambda **kwargs: expected,
         _load_checkpoint_hf=lambda **kwargs: expected,
     )
@@ -352,8 +374,12 @@ def test_megatron_lora_preflight_success_calls_loader(monkeypatch, tmp_path):
 
     monkeypatch.setattr(state, "validate_megatron_lora_checkpoint", validate)
     load = _production_function(
-        "checkpoint.py", "load_checkpoint", get_args=lambda: args, Path=Path,
-        _is_dir_nonempty=lambda path: True, _is_megatron_checkpoint=lambda path: True,
+        "checkpoint.py",
+        "load_checkpoint",
+        get_args=lambda: args,
+        Path=Path,
+        _is_dir_nonempty=lambda path: True,
+        _is_megatron_checkpoint=lambda path: True,
         _load_checkpoint_megatron=loader,
     )
     assert load(model, None, None, {}) == (7, 0)

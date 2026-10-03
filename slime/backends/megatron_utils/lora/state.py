@@ -36,6 +36,7 @@ from slime.utils.lora_config import (
     LoRAConfig,
     is_lora_param_name,
 )
+
 from .layers import expert_tensor_parallel_world_size, parallel_rank_context
 
 logger = logging.getLogger(__name__)
@@ -73,10 +74,7 @@ def _parallel_layout() -> dict[str, int]:
 
 
 def _shard_filename(layout: dict[str, int]) -> str:
-    return (
-        f"adapter_model-tp{layout['tensor_parallel_rank']}"
-        f"-pp{layout['pipeline_parallel_rank']}.safetensors"
-    )
+    return f"adapter_model-tp{layout['tensor_parallel_rank']}" f"-pp{layout['pipeline_parallel_rank']}.safetensors"
 
 
 def _is_distributed() -> bool:
@@ -250,16 +248,19 @@ def save_lora_adapter(
                 tmp_path / ADAPTER_INDEX_FILE,
                 {"metadata": {"format": "slime-lora", "format_version": ADAPTER_FORMAT_VERSION}, "shards": shard_map},
             )
-            _write_json(tmp_path / ADAPTER_TRAINING_STATE_FILE, {
-                "rollout_id": rollout_id,
-                "policy_version": policy_version,
-                "contains_optimizer_state": False,
-                "contains_scheduler_state": False,
-                "resume_note": (
-                    "Adapter-only checkpoints restore LoRA weights only. For exact resume (optimizer moments, "
-                    "LR scheduler, RNG state, rollout_id) use the standard Megatron checkpoint written by --save."
-                ),
-            })
+            _write_json(
+                tmp_path / ADAPTER_TRAINING_STATE_FILE,
+                {
+                    "rollout_id": rollout_id,
+                    "policy_version": policy_version,
+                    "contains_optimizer_state": False,
+                    "contains_scheduler_state": False,
+                    "resume_note": (
+                        "Adapter-only checkpoints restore LoRA weights only. For exact resume (optimizer moments, "
+                        "LR scheduler, RNG state, rollout_id) use the standard Megatron checkpoint written by --save."
+                    ),
+                },
+            )
             link_path.symlink_to(tmp_path.name, target_is_directory=True)
             os.replace(link_path, final_path)
             logger.info("Saved LoRA adapter checkpoint to %s", final_path)
@@ -270,7 +271,9 @@ def save_lora_adapter(
 
     publish_error = _broadcast_object(publish_error)
     if publish_error is not None:
-        raise LoRACheckpointError(f"Adapter publication failed: {publish_error}. Previous checkpoint remains published.")
+        raise LoRACheckpointError(
+            f"Adapter publication failed: {publish_error}. Previous checkpoint remains published."
+        )
 
     _barrier()
     return final_path

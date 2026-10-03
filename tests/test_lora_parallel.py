@@ -103,32 +103,54 @@ def _check_network(sequence_parallel, fused_norm=False, implementation="cpu"):
             from megatron.core.transformer.transformer_config import TransformerConfig
 
             mconfig = TransformerConfig(
-                num_layers=2, hidden_size=hidden, num_attention_heads=4,
+                num_layers=2,
+                hidden_size=hidden,
+                num_attention_heads=4,
                 tensor_model_parallel_size=dist.get_world_size(),
-                sequence_parallel=sequence_parallel, use_cpu_initialization=False,
-                params_dtype=dtype, normalization="RMSNorm", gradient_accumulation_fusion=False,
+                sequence_parallel=sequence_parallel,
+                use_cpu_initialization=False,
+                params_dtype=dtype,
+                normalization="RMSNorm",
+                gradient_accumulation_fusion=False,
             )
             if implementation == "te":
                 from megatron.core.extensions.transformer_engine import (
-                    TELayerNormColumnParallelLinear, TERowParallelLinear,
+                    TELayerNormColumnParallelLinear,
+                    TERowParallelLinear,
                 )
 
                 col = TELayerNormColumnParallelLinear(
-                    hidden, ffn, config=mconfig, init_method=torch.nn.init.normal_,
-                    gather_output=False, bias=False, skip_bias_add=False, is_expert=False,
+                    hidden,
+                    ffn,
+                    config=mconfig,
+                    init_method=torch.nn.init.normal_,
+                    gather_output=False,
+                    bias=False,
+                    skip_bias_add=False,
+                    is_expert=False,
                 )
                 row_cls = TERowParallelLinear
             else:
                 from megatron.core.tensor_parallel import ColumnParallelLinear, RowParallelLinear
 
                 col = ColumnParallelLinear(
-                    hidden, ffn, config=mconfig, init_method=torch.nn.init.normal_,
-                    gather_output=False, bias=False,
+                    hidden,
+                    ffn,
+                    config=mconfig,
+                    init_method=torch.nn.init.normal_,
+                    gather_output=False,
+                    bias=False,
                 )
                 row_cls = RowParallelLinear
             row = row_cls(
-                ffn, hidden, config=mconfig, init_method=torch.nn.init.normal_,
-                input_is_parallel=True, bias=False, skip_bias_add=False, is_expert=False,
+                ffn,
+                hidden,
+                config=mconfig,
+                init_method=torch.nn.init.normal_,
+                input_is_parallel=True,
+                bias=False,
+                skip_bias_add=False,
+                is_expert=False,
             )
         col, row = col.to(device=device, dtype=dtype), row.to(device=device, dtype=dtype)
         for module, suffix in [(col, "linear_fc1"), (row, "linear_fc2")]:
@@ -151,7 +173,7 @@ def _check_network(sequence_parallel, fused_norm=False, implementation="cpu"):
         parameters.extend(shards)
         normed = reference
         if fused_norm:
-            normed = (reference.float() * torch.rsqrt(reference.float().square().mean(-1, keepdim=True) + col.eps))
+            normed = reference.float() * torch.rsqrt(reference.float().square().mean(-1, keepdim=True) + col.eps)
             normed = (normed * col.layer_norm_weight.float()).to(dtype)
         ref_hidden = torch.tanh(F.linear(F.linear(normed, a1), b1) * config.scale)
         reference = reference + F.linear(F.linear(ref_hidden, a2), b2) * config.scale

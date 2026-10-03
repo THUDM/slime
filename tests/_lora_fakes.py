@@ -46,6 +46,7 @@ else:
 import torch  # noqa: E402
 import torch.nn.functional as F  # noqa: E402
 
+
 class FakeColumnParallelLinear(torch.nn.Module):
     """Stands in for ``linear_qkv`` / ``linear_fc1``: weight is ``[out_local, in_full]``."""
 
@@ -115,15 +116,15 @@ class TEColumnParallelGroupedLinear(torch.nn.Module):
         # TEGroupedLinear disables TE's own TP, so parallel_mode really is None.
         self.parallel_mode = None
         for index in range(num_local_experts):
-            self.register_parameter(
-                f"weight{index}", torch.nn.Parameter(torch.randn(ffn, hidden) * 0.02)
-            )
+            self.register_parameter(f"weight{index}", torch.nn.Parameter(torch.randn(ffn, hidden) * 0.02))
 
     def _weights(self):
         return [getattr(self, f"weight{index}") for index in range(self.num_gemms)]
 
     def forward(self, x: torch.Tensor, m_splits: list[int]):
-        outputs = [F.linear(chunk, weight) for chunk, weight in zip(torch.split(x, m_splits), self._weights(), strict=True)]
+        outputs = [
+            F.linear(chunk, weight) for chunk, weight in zip(torch.split(x, m_splits), self._weights(), strict=True)
+        ]
         return torch.cat(outputs, dim=0), None
 
 

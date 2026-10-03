@@ -30,7 +30,6 @@ from _lora_fakes import (
     make_config,
 )
 
-from slime.backends.megatron_utils.lora import layers as lora_layers  # noqa: E402
 from slime.backends.megatron_utils.lora import (  # noqa: E402
     LoRAConfigError,
     LoRAInjectionError,
@@ -42,6 +41,9 @@ from slime.backends.megatron_utils.lora import (  # noqa: E402
     is_lora_module,
     is_lora_param_name,
     iter_lora_modules,
+)
+from slime.backends.megatron_utils.lora import layers as lora_layers  # noqa: E402
+from slime.backends.megatron_utils.lora import (  # noqa: E402
     lora_local_delta,
     match_target_modules,
     prepare_lora_backward,
@@ -349,9 +351,7 @@ def test_report_counts_are_consistent():
 def _moe_model_and_config(num_local_experts: int = 3):
     torch.manual_seed(11)
     model = FakeMoEModel(num_layers=1, hidden=HIDDEN, ffn=FFN, num_local_experts=num_local_experts)
-    config = make_config(
-        lora_rank=RANK, lora_alpha=float(2 * RANK), lora_target_preset="moe_language_all"
-    )
+    config = make_config(lora_rank=RANK, lora_alpha=float(2 * RANK), lora_target_preset="moe_language_all")
     return model, config
 
 
@@ -441,9 +441,7 @@ def test_initial_logits_match_the_base_model_bitwise():
 @pytest.mark.parametrize("factory", ["column", "row"])
 def test_forward_matches_the_lora_formula(factory):
     torch.manual_seed(3)
-    module = (
-        FakeColumnParallelLinear(HIDDEN, FFN) if factory == "column" else FakeRowParallelLinear(HIDDEN, FFN)
-    )
+    module = FakeColumnParallelLinear(HIDDEN, FFN) if factory == "column" else FakeRowParallelLinear(HIDDEN, FFN)
     base_weight = module.weight.detach().clone()
     config = _small_config()
     spec = describe_lora_target("decoder.layers.0.mlp.linear_fc1", module, config)
@@ -740,9 +738,7 @@ def test_gradient_sanity_check_prefers_megatron_main_grad():
 def test_megatron_main_grad_bridge_accumulates_lora_backward():
     model, config = _model_and_config()
     inject_lora(model, config)
-    adapter_parameters = [
-        param for name, param in model.named_parameters() if is_lora_param_name(name)
-    ]
+    adapter_parameters = [param for name, param in model.named_parameters() if is_lora_param_name(name)]
     for param in adapter_parameters:
         param.main_grad = torch.zeros_like(param, dtype=torch.float32)
         param.grad_added_to_main_grad = False
@@ -789,11 +785,7 @@ def test_main_grad_bridge_leaves_plain_pytorch_grad_unchanged():
 
     stats = assert_lora_gradients(model, require_nonzero=True)
     assert stats.parameter_count_seen_in_backward == stats.parameter_count
-    assert all(
-        param.grad is not None
-        for name, param in model.named_parameters()
-        if is_lora_param_name(name)
-    )
+    assert all(param.grad is not None for name, param in model.named_parameters() if is_lora_param_name(name))
 
 
 @pytest.mark.unit

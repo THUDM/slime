@@ -156,9 +156,7 @@ class MegatronTrainRayActor(TrainRayActor):
         self.weight_updater = create_weight_updater(
             self.args,
             self.model,
-            weights_getter=lambda: effective_weight_mapping(
-                self.args, self.model, self.weights_backuper.get("actor")
-            ),
+            weights_getter=lambda: effective_weight_mapping(self.args, self.model, self.weights_backuper.get("actor")),
             model_name=type(self.hf_config).__name__.lower() if self.args.model_name is None else self.args.model_name,
             quantization_config=getattr(self.hf_config, "quantization_config", None),
         )

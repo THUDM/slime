@@ -497,7 +497,6 @@ def test_lora_rejects_ppo_before_use_critic_is_derived(monkeypatch):
         module.slime_validate_args(args)
 
 
-
 @pytest.mark.unit
 @pytest.mark.parametrize("resume", [False, True])
 def test_lora_path_validation_uses_resolved_loading_mode(monkeypatch, tmp_path, resume):

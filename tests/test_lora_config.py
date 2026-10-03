@@ -351,13 +351,15 @@ def test_model_specific_presets_are_rejected(preset):
 def test_hybrid_replicated_modules_require_explicit_opt_in():
     pattern = r"linear_attn\.in_proj_qkv$"
     config = LoRAConfig.from_args(
-        _args([
-            "--use-lora",
-            "--lora-target-preset",
-            "hybrid_language",
-            "--lora-allow-replicated-modules",
-            pattern,
-        ])
+        _args(
+            [
+                "--use-lora",
+                "--lora-target-preset",
+                "hybrid_language",
+                "--lora-allow-replicated-modules",
+                pattern,
+            ]
+        )
     )
     assert config.allow_replicated_modules == (pattern,)
 

@@ -31,7 +31,9 @@ def _worker(rank, rendezvous, checkpoint_root):
     try:
         for implementation in ["local", "te"]:
             for sequence_parallel in [False, True]:
-                modules = _check_network(sequence_parallel, fused_norm=implementation == "te", implementation=implementation)
+                modules = _check_network(
+                    sequence_parallel, fused_norm=implementation == "te", implementation=implementation
+                )
                 checkpoint = Path(checkpoint_root) / f"{implementation}-sp{sequence_parallel}"
                 if rank == 0:
                     checkpoint.mkdir()
@@ -60,7 +62,9 @@ def _worker(rank, rendezvous, checkpoint_root):
 
 
 @pytest.mark.integration
-@pytest.mark.skipif(torch.cuda.device_count() < NUM_GPUS, reason="requires two CUDA GPUs and the Megatron training image")
+@pytest.mark.skipif(
+    torch.cuda.device_count() < NUM_GPUS, reason="requires two CUDA GPUs and the Megatron training image"
+)
 def test_megatron_lora_backward_and_checkpoint(tmp_path):
     torch.multiprocessing.spawn(
         _worker, args=((tmp_path / "rendezvous").as_uri(), str(tmp_path)), nprocs=NUM_GPUS, join=True

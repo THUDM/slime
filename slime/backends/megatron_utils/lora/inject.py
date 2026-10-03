@@ -15,12 +15,13 @@ from dataclasses import dataclass, field
 import torch
 
 from slime.utils.lora_config import LORA_A_NAME, LORA_B_NAME, LoRAConfig, LoRAConfigError, is_lora_param_name
+
 from .layers import (
     _BACKWARD_CALLS_ATTR,
     _INPUT_GRAD_PROMOTIONS_ATTR,
-    _register_megatron_main_grad_bridge,
     LoRAInjectionError,
     LoRAParallelSpec,
+    _register_megatron_main_grad_bridge,
     attach_lora_adapter,
     describe_lora_target,
     is_lora_module,
@@ -52,9 +53,7 @@ class LoRAInjectionReport:
         return self.trainable_parameters / total if total else 0.0
 
     def expected_trainable_parameters(self) -> int:
-        return sum(
-            spec.rank * spec.lora_in_features + spec.lora_out_features * spec.rank_local for spec in self.specs
-        )
+        return sum(spec.rank * spec.lora_in_features + spec.lora_out_features * spec.rank_local for spec in self.specs)
 
     def numeric_metrics(self) -> dict[str, float]:
         """Only scalars — never modules, tensors or nested dicts."""
@@ -394,8 +393,7 @@ def assert_lora_gradients(
 
     if squared_norm is None:
         raise LoRAInjectionError(
-            "LoRA gradient sanity check found no adapter parameters.\n"
-            f"  ranks: {parallel_rank_context()}"
+            "LoRA gradient sanity check found no adapter parameters.\n" f"  ranks: {parallel_rank_context()}"
         )
 
     gradient_norm = float(squared_norm.sqrt().item())
@@ -476,9 +474,7 @@ def assert_optimizer_holds_only_lora(optimizer, model: torch.nn.Module | list[to
             # Float16OptimizerWithFloat16Params also owns FP32 master copies,
             # even when the distributed optimizer is disabled.
             main_to_model = {}
-            for model_group, main_group in zip(
-                chained.float16_groups, chained.fp32_from_float16_groups, strict=True
-            ):
+            for model_group, main_group in zip(chained.float16_groups, chained.fp32_from_float16_groups, strict=True):
                 for model_param, main_param in zip(model_group, main_group, strict=True):
                     main_to_model[id(main_param)] = id(model_param)
             optimizer_model_param_ids.update(main_to_model.get(param_id, param_id) for param_id in inner_param_ids)

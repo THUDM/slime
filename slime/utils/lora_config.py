@@ -254,7 +254,8 @@ def add_lora_arguments(parser) -> None:
         "Unrelated to architectural low-rank parameters such as --q-lora-rank.",
     )
     parser.add_argument(
-        "--lora-debug", action="store_true",
+        "--lora-debug",
+        action="store_true",
         help="Compute per-step LoRA gradient diagnostics (adds tensor scans and device synchronization).",
     )
     parser.add_argument("--lora-rank", type=int, default=64, help="LoRA rank r (> 0).")

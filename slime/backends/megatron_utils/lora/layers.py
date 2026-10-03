@@ -1060,9 +1060,7 @@ def _mark_expert_adapter_replicas(sharded_tensors: dict) -> None:
     for key, sharded_tensor in sharded_tensors.items():
         replica_id = sharded_tensor.replica_id
         if not isinstance(replica_id, tuple) or len(replica_id) != 3:
-            raise LoRAInjectionError(
-                f"Expected replica_id for {key} to be in (PP, TP, DP) format, got: {replica_id}"
-            )
+            raise LoRAInjectionError(f"Expected replica_id for {key} to be in (PP, TP, DP) format, got: {replica_id}")
         sharded_tensor.replica_id = (*replica_id[:2], replica_index)
 
 
