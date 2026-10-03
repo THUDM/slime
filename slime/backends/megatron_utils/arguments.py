@@ -5,6 +5,8 @@ from megatron.training.arguments import parse_args as _megatron_parse_args
 from megatron.training.arguments import validate_args as _megatron_validate_args
 from transformers import AutoConfig
 
+from slime.backends.qwen3_5_expert_layout import is_qwen3_5_moe_config
+
 try:
     from megatron.core.tokenizers.utils.build_tokenizer import vocab_size_with_padding as _vocab_size_with_padding
 except ImportError:
@@ -198,6 +200,10 @@ def megatron_parse_args(extra_args_provider, skip_hf_validate=False):
     if args.hf_checkpoint and not skip_hf_validate:
         hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
         _hf_validate_args(args, hf_config)
+
+    # Resolve the model identity once from config. Downstream bridge code uses
+    # this flag instead of inferring Qwen3.5 from generic parameter names.
+    args.is_qwen3_5_moe = is_qwen3_5_moe_config(hf_config)
 
     if not skip_hf_validate:
         _validate_allgather_cp_supported(args, hf_config)

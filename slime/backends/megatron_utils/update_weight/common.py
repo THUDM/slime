@@ -8,6 +8,7 @@ import torch.distributed as dist
 from megatron.core import mpu
 from megatron.core.transformer.transformer_layer import get_transformer_layer_offset
 
+from slime.backends.qwen3_5_expert_layout import encode_expert_parallel_offset, megatron_fused_expert_projection
 from slime.utils.types import ParamInfo
 
 
@@ -183,6 +184,21 @@ def named_params_and_buffers(args: Namespace, model: Sequence[torch.nn.Module]) 
                 rest, param_type, expert_idx = match.groups()
                 expert_idx = int(expert_idx) + expert_offset
                 yield f"{prefix}decoder.layers.{layer_idx}.mlp.experts.{rest}.{param_type}{expert_idx}", param
+            elif (
+                getattr(args, "is_qwen3_5_moe", False)
+                and args.num_experts
+                and param.dim() == 3
+                and megatron_fused_expert_projection(rest) is not None
+            ):
+                if getattr(args, "expert_tensor_parallel_size", 1) != 1:
+                    raise ValueError("Qwen3.5 fused-expert INT4 sync currently requires expert tensor parallel size 1")
+                # Fused grouped experts have no per-expert digit in their MCore
+                # name. Keep the Parameter intact so its TP attributes survive
+                # gathering, and carry the EP rank's global offset through the
+                # name-only ParamInfo interface. The Qwen3.5 exporter consumes
+                # this suffix after collectives and then splits the 3D tensor.
+                rest = encode_expert_parallel_offset(rest, expert_offset)
+                yield f"{prefix}decoder.layers.{layer_idx}.{rest}", param
             else:
                 yield f"{prefix}decoder.layers.{layer_idx}.{rest}", param
 

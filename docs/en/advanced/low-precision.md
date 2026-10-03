@@ -124,6 +124,39 @@ RUNTIME_ENV_JSON="{
 - `128` for `moonlight-16B-A3B`, `qwen3-30B-A3B`, and `qwen3-235B-A22B-int4`;
 - `32` for `kimi-k2-Thinking-int4`.
 
+### Qwen3.5 MoE INT4-QAT
+
+Qwen3.5 MoE supports routed-expert INT4-QAT through slime's native HF-to-Megatron and Megatron-to-HF bridge. The converter first requires the exact Qwen3.5 MoE `model_type` and `architectures`, then detects the fused 3D expert tensors and writes the per-expert 2D compressed-tensors layout expected by SGLang. The same strict model identity and layout adapter are used for online actor weight updates.
+
+Current precision scope:
+
+```text
+INT4: routed experts
+BF16: attention, linear_attn, conv1d, shared_expert, router gate,
+      visual, mtp, embedding, norm, lm_head
+```
+
+Convert the rollout checkpoint:
+
+```bash
+python tools/convert_hf_to_int4_direct.py \
+  --model-dir /path/to/Qwen3.5-35B-A3B \
+  --save-dir /path/to/Qwen3.5-35B-A3B-INT4 \
+  --group-size 128 \
+  --is-symmetric
+```
+
+The training actor remains BF16. In this recipe, `--ref-load` is only the first-run initialization fallback when `SAVE_DIR` is not yet a valid Megatron checkpoint; the reference/KL-loss path is disabled. Point `HF_MODEL` at the original Hugging Face directory and `INT4_MODEL` at the converted checkpoint. The native bridge loads the BF16 checkpoint directly, so a separate `torch_dist` conversion is not required:
+
+```bash
+BASE_FOLDER=/path/to/workdir \
+HF_MODEL=/path/to/Qwen3.5-35B-A3B \
+INT4_MODEL=/path/to/Qwen3.5-35B-A3B-INT4 \
+bash scripts/low_precision/run-qwen3.5-35B-A3B-int4-qat-rl.sh
+```
+
+This path currently requires `--expert-tensor-parallel-size 1`. MTP training and visual INT4-QAT are not included.
+
 3. Launch an example:
 
 ```bash
@@ -138,6 +171,9 @@ bash scripts/low_precision/run-qwen3-235B-A22B-int4.sh
 
 # Kimi-k2-Thinking INT4 training (32 nodes)
 bash scripts/low_precision/run-kimi-k2-Thinking-int4.sh
+
+# Qwen3.5-35B-A3B routed-expert INT4-QAT training
+bash scripts/low_precision/run-qwen3.5-35B-A3B-int4-qat-rl.sh
 ```
 
 For multi-node environments, start the Ray service according to your cluster configuration.
