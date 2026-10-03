@@ -17,7 +17,9 @@ The scheduling philosophy is **pack first, distribute second**:
      single first-fit pass (dynamic batch) or fixed-size chunking
      (static batch).
   3. Adjust ``K`` to a multiple of ``dp_size * (mb_group if vpp>1 else 1)``
-     by splitting the largest multi-sample bins (dynamic only).
+     by splitting the largest multi-sample bins (dynamic only); if up-rounding
+     the mbs count exceeds the step's sample count, first drop whole trailing
+     rollouts until the aligned target is reachable.
   4. Distribute the ``K`` mbs across ``dp_size`` ranks, ``K / dp_size``
      each, with either a strided round-robin or a Karmarkar-Karp pass on
      estimated mbs FLOPs.
@@ -106,8 +108,8 @@ def build_dp_schedule(
 
     Returns:
         ``(partitions, micro_batch_indices, num_microbatches, global_batch_sizes)``.
-        ``global_batch_sizes[s]`` = rollout count for step s (constant
-        ``global_batch_size`` for every step).
+        ``global_batch_sizes[s]`` = kept rollout count for step s (may be
+        ``< global_batch_size`` when trailing rollouts are dropped).
     """
     dp_size = train_parallel_config["dp_size"]
     cp_size = train_parallel_config["cp_size"]
@@ -143,19 +145,12 @@ def build_dp_schedule(
     num_microbatches: list[int] = []
     global_batch_sizes: list[int] = []
 
-    for step_i in range(num_steps):
-        step_rollouts = rollout_ids[step_i * global_batch_size : (step_i + 1) * global_batch_size]
-        sample_indices = [pos for rid in step_rollouts for pos in rollout_id_to_samples[rid]]
-        step_lengths = [total_lengths[i] for i in sample_indices]
-        global_batch_sizes.append(global_batch_size)
-        assert len(sample_indices) >= dp_size, (
-            f"step {step_i}: {len(sample_indices)} samples < dp_size {dp_size}; "
-            f"each step needs at least one sample per rank."
-        )
+    def _collect_step_samples(step_rollouts: list[int]) -> tuple[list[int], list[int]]:
+        indices = [pos for rid in step_rollouts for pos in rollout_id_to_samples[rid]]
+        return indices, [total_lengths[i] for i in indices]
 
-        # 1. Pack samples in this step into mbs with one global pass.
-        # ``step_mbs`` indices are LOCAL into ``sample_indices``.
-        step_mbs = _pack_step_into_mbs(
+    def _pack(step_lengths: list[int]) -> list[list[int]]:
+        return _pack_step_into_mbs(
             step_lengths,
             args=args,
             use_dynamic_batch_size=args.use_dynamic_batch_size,
@@ -164,16 +159,65 @@ def build_dp_schedule(
             balance_by_flops=args.balance_by_flops,
         )
 
+    def _aligned_target(num_mbs: int) -> int:
+        """mbs count rounded up to the next multiple of ``align_to`` (>= align_to)."""
+        return max(((num_mbs + align_to - 1) // align_to) * align_to, align_to)
+
+    for step_i in range(num_steps):
+        step_rollouts = rollout_ids[step_i * global_batch_size : (step_i + 1) * global_batch_size]
+        sample_indices, step_lengths = _collect_step_samples(step_rollouts)
+        assert len(sample_indices) >= dp_size, (
+            f"step {step_i}: {len(sample_indices)} samples < dp_size {dp_size}; "
+            f"each step needs at least one sample per rank."
+        )
+
+        # 1. Pack samples in this step into mbs with one global pass.
+        # ``step_mbs`` indices are LOCAL into ``sample_indices``.
+        step_mbs = _pack(step_lengths)
+
+        if args.use_dynamic_batch_size and align_to > 1:
+            dropped_rollouts = 0
+            while (
+                _aligned_target(len(step_mbs)) > len(sample_indices)
+                and len(sample_indices) - len(rollout_id_to_samples[step_rollouts[-1]]) >= align_to
+            ):
+                step_rollouts.pop()
+                dropped_rollouts += 1
+                sample_indices, step_lengths = _collect_step_samples(step_rollouts)
+                step_mbs = _pack(step_lengths)
+            if dropped_rollouts:
+                logger.warning(
+                    "[dp_schedule] step %d: dropped %d trailing rollout(s) (%d kept, %d samples) so the "
+                    "aligned micro-batch target stays reachable (dp_size=%d, align_to=%d).",
+                    step_i,
+                    dropped_rollouts,
+                    len(step_rollouts),
+                    len(sample_indices),
+                    dp_size,
+                    align_to,
+                )
+
+        global_batch_sizes.append(len(step_rollouts))
+
         # 2. Align mbs count to a multiple of ``align_to``.
-        target_K = max(((len(step_mbs) + align_to - 1) // align_to) * align_to, align_to)
+        target_K = _aligned_target(len(step_mbs))
         if target_K != len(step_mbs):
             if args.use_dynamic_batch_size:
                 expand_bins_by_splitting(step_mbs, target_K, step_lengths)
-                assert len(step_mbs) == target_K, (
-                    f"dynamic path: could only produce {len(step_mbs)} mbs after maximal splitting; "
-                    f"need {target_K}. step {step_i} has {len(sample_indices)} samples, below the "
-                    f"alignment threshold ({align_to})."
-                )
+                if len(step_mbs) != target_K:
+                    # Rollout atomicity means no kept prefix may land on a multiple
+                    # of align_to; raise with an actionable message so the operator
+                    # can retune global_batch_size / n_samples_per_prompt.
+                    raise ValueError(
+                        f"dp_schedule step {step_i}: cannot align micro-batches to a multiple of "
+                        f"align_to={align_to} (dp_size={dp_size}). After dropping trailing rollouts the "
+                        f"step has {len(sample_indices)} samples packed into {len(step_mbs)} singleton "
+                        f"micro-batches, but the aligned target is {target_K} and singleton bins cannot "
+                        f"split further. This happens with ragged rollout sizes where every long sample "
+                        f"fills its own micro-batch. Adjust global_batch_size / n_samples_per_prompt "
+                        f"(or max_tokens_per_gpu) so each step's kept-sample count can reach a multiple "
+                        f"of align_to."
+                    )
             else:
                 raise AssertionError(
                     f"static path: num_mbs ({len(step_mbs)}) is not a multiple of "
