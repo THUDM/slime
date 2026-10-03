@@ -136,7 +136,7 @@ class BaseAdapter:
     # body keys that cap max_new_tokens and carry stop sequences, in priority order
     max_token_keys: tuple[str, ...] = ()
     stop_keys: tuple[str, ...] = ()
-    manager: Any
+    manager: TrajectoryManager
 
     def __init__(
         self,
