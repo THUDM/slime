@@ -59,9 +59,18 @@ def checksum(algorithm: str, buf) -> str:
 
 
 def _tensor_locations(ckpt_dir: str) -> dict[str, tuple[str, int, int]]:
-    """Map each tensor name to (file, byte offset, nbytes) by reading every safetensors header."""
+    """Map each tensor to (file, byte offset, nbytes), honoring the HF shard index."""
+    index_path = os.path.join(ckpt_dir, "model.safetensors.index.json")
+    if os.path.isfile(index_path):
+        with open(index_path) as f:
+            weight_map = json.load(f)["weight_map"]
+        # Match the model loader: unreferenced files may contain stale copies of
+        # the same tensors. Open indexed shards directly so missing files fail.
+        paths = [os.path.join(ckpt_dir, name) for name in sorted(set(weight_map.values()))]
+    else:
+        paths = glob.glob(os.path.join(ckpt_dir, "*.safetensors"))
     locations: dict[str, tuple[str, int, int]] = {}
-    for path in glob.glob(os.path.join(ckpt_dir, "*.safetensors")):
+    for path in paths:
         with open(path, "rb") as f:
             (header_len,) = struct.unpack("<Q", f.read(8))
             header = json.loads(f.read(header_len))
