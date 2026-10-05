@@ -26,6 +26,63 @@ from slime.utils.types import Sample
 NUM_GPUS = 0
 
 
+@pytest.mark.parametrize("missing_engine", [False, True])
+def test_first_weight_update_preserves_connections_or_recovers_missing_engine(monkeypatch, missing_engine):
+    from slime.ray import rollout
+
+    manager = object.__new__(rollout.RolloutManager.__ray_metadata__.modified_class)
+    manager.rollout_id = -1
+    manager.servers = {"model": SimpleNamespace(update_weights=True, engines=[None if missing_engine else object()])}
+    calls = []
+
+    def recover():
+        calls.append("recover")
+        return SimpleNamespace(servers={"replacement": object()})
+
+    manager.serving = SimpleNamespace(recover_updatable_engines=SimpleNamespace(remote=recover))
+    monkeypatch.setattr(rollout.ray, "get", lambda value: value)
+    manager.recover_updatable_engines()
+    assert calls == (["recover"] if missing_engine else [])
+    assert set(manager.servers) == ({"replacement"} if missing_engine else {"model"})
+
+
+@pytest.mark.parametrize("evaluation", [False, True])
+def test_rollout_boundary_checks_serving_before_returning_data(monkeypatch, evaluation):
+    from slime.ray import rollout
+
+    events = []
+    manager = object.__new__(rollout.RolloutManager.__ray_metadata__.modified_class)
+    manager.args = SimpleNamespace(
+        ci_test=False, use_fault_tolerance=False, debug_train_only=False, save_debug_rollout_data=None
+    )
+    manager.batch_builder = SimpleNamespace()
+    manager.data_source = object()
+    manager.eval_generate_rollout = object()
+    manager.health_monitoring_resume = lambda: events.append("resume")
+    manager._generate = lambda *a: events.append("generate") or "batch"
+
+    def check(*, check):
+        assert check
+        events.append("check")
+        return SimpleNamespace(servers={"live": object()})
+
+    manager.serving = SimpleNamespace(health_monitoring_pause=SimpleNamespace(remote=check))
+    monkeypatch.setattr(rollout.ray, "get", lambda value: value)
+    monkeypatch.setattr(
+        rollout,
+        "call_rollout_fn",
+        lambda *a, **kw: events.append("generate") or SimpleNamespace(data=[], metrics=None),
+    )
+    monkeypatch.setattr(rollout, "save_debug_rollout_data", lambda *a, **kw: None)
+    monkeypatch.setattr(rollout, "log_eval_rollout_data", lambda *a, **kw: None)
+    if evaluation:
+        manager.eval(0)
+    else:
+        assert manager.generate(0) == "batch"
+    assert events == ["resume", "generate", "check"]
+    assert set(manager.servers) == {"live"}
+
+
 def test_cpu_rollout_imports_do_not_require_sglang():
     subprocess.run(
         [
@@ -150,6 +207,7 @@ def test_local_test_launcher_does_not_invent_storage_paths(options, monkeypatch)
     commands = []
     monkeypatch.setattr(command_utils, "exec_command", commands.append)
     monkeypatch.setattr(command_utils, "check_has_nvlink", lambda: False)
+    monkeypatch.setattr(command_utils.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=1))
     monkeypatch.setenv("SLIME_SCRIPT_EXTERNAL_RAY", "0")
     monkeypatch.setenv("SLIME_SCRIPT_ENABLE_RAY_SUBMIT", "1")
     command_utils.execute_train(options, num_gpus_per_node=1, megatron_model_type=None)

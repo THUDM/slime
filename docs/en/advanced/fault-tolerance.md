@@ -2,7 +2,7 @@
 
 Long-running RL jobs fail in different ways from short supervised runs. Rollout engines can hang, long-tail samples can keep a round open, and serving state must be refreshed after weight updates. slime's fault-tolerance support focuses on making the rollout side observable, restartable, and debuggable without changing the training / rollout / Data Buffer loop.
 
-Internal serving always has an independent, detached owner. Enable optional health checks and unhealthy-engine recovery with:
+Internal serving always has an independent, detached owner, health checks and unhealthy-engine recovery. The following flag is retained for compatibility and the existing external-serving policy:
 
 ```bash
 --use-fault-tolerance
@@ -19,11 +19,11 @@ slime provides rollout-engine fault tolerance and manual Megatron restart:
 - trace/profiling hooks for inspecting long-tail rollout behavior.
 - retain SGLang servers and replay training data after a Megatron failure, when Straw transport or debug rollout dumps are enabled.
 
-Cluster-level preemption and loss of the Ray cluster still require your cluster scheduler and slime checkpointing. A retained serving session survives training driver and rollout manager failures within the same live Ray cluster. This lifetime is the same with health checking enabled or disabled. External-cluster behavior is unchanged.
+Cluster-level preemption and loss of the Ray cluster still require your cluster scheduler and slime checkpointing. A retained serving session survives training driver and rollout manager failures within the same live Ray cluster. Internal serving follows the same lifetime and health policy with or without the compatibility flag. External-cluster behavior is unchanged.
 
 ## Manual Megatron Restart
 
-For replayable training recovery, use either mode below. Persistence is always enabled for these modes; `--use-fault-tolerance` only controls serving health checking.
+For replayable training recovery, use either mode below. Persistence is always enabled for these modes, independently of `--use-fault-tolerance`.
 
 ```bash
 --rollout-data-transport straw --rollout-data-dir /shared/my-run/queue
@@ -47,13 +47,13 @@ Without Straw or debug dumps, serving still survives failures, but uncheckpointe
 
 ## Rollout Health Checks
 
-During rollout, slime periodically sends heartbeat requests (`/health_generate`) to all SGLang servers. If a heartbeat times out, the unhealthy SGLang server is stopped. After the current rollout round completes, slime restarts the server and updates it with the correct parameters before it serves future rollout requests.
+During rollout, slime periodically sends heartbeat requests (`/health_generate`) to all internal SGLang servers. At the rollout boundary it also checks immediately, regardless of interval or warmup grace. Synchronous rollout prunes failed router workers before abort/drain requests; the serving owner then unregisters failed engines and removes their actor handles before offload or other control requests. These checks have bounded HTTP and Ray RPC waits. Failed engines restart before the next weight update.
 
 The main arguments are:
 
-- `--rollout-health-check-first-wait`: wait before starting heartbeat checks for the first rollout. Large MoE models may compile kernels on first run. Default: `300` seconds.
-- `--rollout-health-check-interval`: interval between heartbeat checks. Default: `10` seconds.
-- `--rollout-health-check-timeout`: timeout for one heartbeat request. Default: `5` seconds.
+- `--rollout-health-check-first-wait`: grace before background checks after resume. Large MoE models may compile kernels on first run. Boundary checks bypass this grace. Default: `0` seconds.
+- `--rollout-health-check-interval`: interval between background checks. Default: `600` seconds.
+- `--rollout-health-check-timeout`: timeout for a heartbeat request or queued health RPC. Default: `30` seconds.
 
 Example:
 
@@ -79,7 +79,7 @@ This lets you isolate whether a failure belongs to serving/rollout, data convers
 
 For long-running jobs:
 
-1. Enable `--use-fault-tolerance`.
+1. Tune the always-on internal health checks with `--rollout-health-check-*` for model warmup and response latency.
 2. Save checkpoints regularly with `--save-interval`.
 3. Save rollout debug dumps for new agentic or verifier-heavy workloads.
 4. Use [Trace Viewer](../developer_guide/trace.md) to inspect long-tail samples and reward/model-call spans.

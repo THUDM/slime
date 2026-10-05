@@ -38,6 +38,7 @@ class ServerGroup:
     model_path: str | None = None  # checkpoint path for update_weights_from_disk
     router_ip: str | None = None
     router_port: int | None = None
+    engine_urls: dict[int, str] = dataclasses.field(default_factory=dict)
 
     @property
     def nodes_per_engine(self):
@@ -170,6 +171,12 @@ class ServerGroup:
             base_port=base_port,
         )
 
+        for rank, _engine in rollout_engines:
+            address = addr_and_ports[rank]
+            host = address["host"]
+            if ":" in host and not host.startswith("["):
+                host = f"[{host}]"
+            self.engine_urls[rank - self.rank_offset] = f"http://{host}:{address['port']}"
         init_handles = [
             engine.init.remote(
                 **(addr_and_ports[rank]),

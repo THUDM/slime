@@ -66,10 +66,17 @@ fixed matrix covers debug dumps, replay of completed but uncheckpointed Straw
 batches with online GC, and Straw recovery from a model/optimizer checkpoint
 with Megatron YAML overrides. All three scenarios also kill the rollout manager
 and verify its new process reconnects to the original serving owner. Straw replay
-and debug replay run without health checking; checkpoint recovery enables it.
+and debug replay omit the legacy flag; checkpoint recovery passes it. Internal
+serving is monitored in all three scenarios.
 `test_training_recovery.py` checks
 driver fencing, replay retention/resharding, launcher behavior and checkpoint
 boundaries on CPU.
+
+`test_qwen2.5_0.5B_rollout_health.py` stops a real HTTP server immediately before
+rollout drain, leaving its router registration intact. The two four-GPU cases
+keep or kill its Ray actor, then verify bounded drain, removal before training,
+recovery at weight update and a final checkpoint. Both omit the compatibility
+flag and set the check interval and warmup grace to 600 seconds.
 
 ### Changed-Test Job
 

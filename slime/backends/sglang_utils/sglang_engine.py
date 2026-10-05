@@ -11,6 +11,7 @@ from sglang.srt.utils import kill_process_tree
 from urllib3.exceptions import NewConnectionError
 
 from slime.backends.sglang_utils.external import get_server_info
+from slime.backends.sglang_utils.server_control import unregister_worker
 from slime.ray.ray_actor import RayActor
 from slime.utils import accelerator
 from slime.utils.http_utils import get_host_info
@@ -301,21 +302,14 @@ class SGLangEngine(RayActor):
         logger.info(f"Shutdown engine {self.server_host}:{self.server_port}...")
         if self.worker_type != "encoder" and self.node_rank == 0:
             worker_url = f"http://{self.server_host}:{self.server_port}"
-            response = None
             try:
-                all_workers = requests.get(f"http://{self.router_ip}:{self.router_port}/workers").json()["workers"]
-                for worker in all_workers:
-                    if worker["url"] == worker_url:
-                        worker_id = worker["id"]
-                        response = requests.delete(f"http://{self.router_ip}:{self.router_port}/workers/{worker_id}")
-                        break
-                else:
-                    logger.warning(f"Worker {worker_url} not found in router during shutdown.")
+                unregister_worker(
+                    f"http://{self.router_ip}:{self.router_port}",
+                    worker_url,
+                    timeout=self.args.rollout_health_check_timeout,
+                )
             except Exception as e:
                 logger.warning(f"Failed to fetch workers list or remove worker: {e}")
-
-            if response is not None:
-                response.raise_for_status()
         kill_process_tree(self.process.pid)
 
     def get_weight_version(self):

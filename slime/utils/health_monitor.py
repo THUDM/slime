@@ -2,6 +2,9 @@ import logging
 import threading
 
 import ray
+import requests
+
+from slime.backends.sglang_utils.server_control import unregister_worker
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +32,7 @@ class RolloutHealthMonitor:
         self._check_timeout = args.rollout_health_check_timeout
         self._check_first_wait = args.rollout_health_check_first_wait
         self._need_first_wait = True  # Need to wait after each resume
+        self._check_lock = threading.Lock()
 
     def start(self) -> bool:
         """Start the health monitor thread. Called once during initialization.
@@ -84,6 +88,9 @@ class RolloutHealthMonitor:
             return
         logger.info("Pausing health monitor...")
         self._pause_event.set()
+        # Finish an in-flight check before weights or memory ownership change.
+        with self._check_lock:
+            pass
 
     def resume(self) -> None:
         """Resume health checking. Called when engines are onloaded."""
@@ -119,37 +126,51 @@ class RolloutHealthMonitor:
 
             # Run health checks
             if not self._pause_event.is_set() and not self._stop_event.is_set():
-                self._run_health_checks()
+                try:
+                    self._run_health_checks()
+                except requests.RequestException:
+                    logger.exception("Failed to unregister an unhealthy worker; retaining it for the next check")
 
             # Wait for next check interval
             if self._stop_event.wait(self._check_interval):
                 break
 
-    def _run_health_checks(self) -> None:
-        for rollout_engine_id, engine in enumerate(self._server_group.engines):
+    def check_once(self) -> None:
+        """Check at the rollout boundary, regardless of interval or warmup grace."""
+        self._run_health_checks(force=True)
+
+    def _run_health_checks(self, *, force=False) -> None:
+        with self._check_lock:
             if self._stop_event is not None and self._stop_event.is_set():
-                break
-            if self._pause_event is not None and self._pause_event.is_set():
-                break
-            self._check_engine_health(rollout_engine_id, engine)
-
-    def _check_engine_health(self, rollout_engine_id, engine) -> None:
-        if engine is None:
-            logger.info(f"Skipping health check for engine {rollout_engine_id} (None)")
-            return
-
-        try:
-            ray.get(engine.health_generate.remote(timeout=self._check_timeout))
-        except Exception as e:
-            logger.error(
-                f"Health check failed for rollout engine {rollout_engine_id} (ray timeout or error). Killing actor. Exception: {e}"
-            )
-            self._kill_engine(rollout_engine_id=rollout_engine_id)
-        else:
-            logger.debug(f"Health check passed for rollout engine {rollout_engine_id}")
+                return
+            if not force and self._pause_event is not None and self._pause_event.is_set():
+                return
+            checks = {
+                engine.health_generate.remote(timeout=self._check_timeout): rollout_engine_id
+                for rollout_engine_id, engine in enumerate(self._server_group.engines)
+                if engine is not None
+            }
+            if checks:
+                # Bound queued/wedged actor RPCs as well as the underlying HTTP
+                # requests. All engines are probed concurrently.
+                ray.wait(list(checks), num_returns=len(checks), timeout=self._check_timeout)
+            for handle, rollout_engine_id in checks.items():
+                try:
+                    ray.get(handle, timeout=0)
+                except Exception as error:
+                    logger.error("Health check failed for engine %s: %s", rollout_engine_id, error)
+                    self._kill_engine(rollout_engine_id)
 
     def _kill_engine(self, rollout_engine_id: int):
         logger.info(f"Killing server group {rollout_engine_id}...")
+        group = self._server_group
+        first = rollout_engine_id * group.nodes_per_engine
+        if group.worker_type != "encoder":
+            unregister_worker(
+                f"http://{group.router_ip or group.args.sglang_router_ip}:{group.router_port or group.args.sglang_router_port}",
+                group.engine_urls[first],
+                timeout=self._check_timeout,
+            )
         for i in range(
             rollout_engine_id * self._server_group.nodes_per_engine,
             (rollout_engine_id + 1) * self._server_group.nodes_per_engine,
@@ -158,11 +179,12 @@ class RolloutHealthMonitor:
             if engine:
                 logger.info(f"Shutting down and killing engine at index {i}")
                 try:
-                    ray.get(engine.shutdown.remote())
-                    ray.kill(engine)
+                    ray.get(engine.shutdown.remote(), timeout=self._check_timeout)
                     logger.info(f"Successfully killed engine at index {i}")
                 except Exception as e:
                     logger.warning(f"Fail to kill engine at index {i} (e: {e})")
+                finally:
+                    ray.kill(engine, no_restart=True)
             else:
                 logger.info(f"Engine at index {i} is already None")
             self._server_group.all_engines[i] = None

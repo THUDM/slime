@@ -321,6 +321,12 @@ class RolloutManager:
                 self.servers = ray.get(self.serving.try_ci_fault_injection.remote()).servers
             else:
                 self._try_ci_fault_injection()
+        result = self._generate(rollout_id, start_time)
+        if self.serving is not None:
+            self.health_monitoring_pause(check=True)
+        return result
+
+    def _generate(self, rollout_id, start_time):
         if self.recovery is not None and rollout_id in self.recovery.batches:
             batch = self.recovery.batches[rollout_id]
             logger.info("Replaying retained rollout %s with the current trainer parallelism", rollout_id)
@@ -376,6 +382,8 @@ class RolloutManager:
         self.health_monitoring_resume()
 
         result = call_rollout_fn(self.eval_generate_rollout, self.args, rollout_id, self.data_source, evaluation=True)
+        if self.serving is not None:
+            self.health_monitoring_pause(check=True)
         data = result.data
         save_debug_rollout_data(
             self.args.save_debug_rollout_data,
@@ -448,7 +456,9 @@ class RolloutManager:
 
     def recover_updatable_engines(self):
         if self.rollout_id == -1:
-            return
+            server = self._get_updatable_server()
+            if server is None or all(engine is not None for engine in server.engines):
+                return
         if self.serving is not None:
             self.servers = ray.get(self.serving.recover_updatable_engines.remote()).servers
             return
@@ -465,9 +475,12 @@ class RolloutManager:
         if srv:
             srv.num_new_engines = 0
 
-    def health_monitoring_pause(self) -> None:
+    def health_monitoring_pause(self, *, check=False) -> None:
         if self.serving is not None:
-            return ray.get(self.serving.health_monitoring_pause.remote())
+            deployment = ray.get(self.serving.health_monitoring_pause.remote(check=check))
+            if check:
+                self.servers = deployment.servers
+            return
         for monitor in self._health_monitors:
             monitor.pause()
 

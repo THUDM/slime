@@ -646,14 +646,14 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 action="store_true",
                 default=False,
                 help=(
-                    "Enable rollout health checks and unhealthy-engine recovery. Internal serving always "
-                    "survives stopped trainers and rollout managers on the same Ray cluster."
+                    "Compatibility flag: internal serving always checks engine health and recovers failed engines. "
+                    "Enable the existing health-check policy for external serving."
                 ),
             )
             parser.add_argument(
                 "--rollout-health-check-interval",
                 type=float,
-                default=30.0,
+                default=600.0,
                 help="Interval in seconds between rollout engine /health_generate checks during generate/eval.",
             )
             parser.add_argument(

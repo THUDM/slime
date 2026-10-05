@@ -54,9 +54,14 @@ placement、保留的 batch 内容、训练 scheduler 进度、非零梯度和�
 固定矩阵覆盖 debug dump、启用在线 GC 的 Straw 对已训练但未保存 batch 的重放，
 以及已有模型/optimizer checkpoint 和 Megatron YAML 配置时的 Straw 恢复。
 三个场景都会杀掉 rollout manager，并检查新进程接回原 serving owner。
-Straw 重放和 debug 重放关闭健康检查，checkpoint 恢复开启健康检查。
+Straw 重放和 debug 重放不传兼容开关，checkpoint 恢复传入该开关；三个场景均启用内部 serving 健康检查。
 `test_training_recovery.py` 在 CPU 上检查 driver
 所有权、数据保留与重新分片、launcher 行为和 checkpoint 边界。
+
+`test_qwen2.5_0.5B_rollout_health.py` 在 rollout drain 前停掉真实 HTTP server，
+保留 router 注册。两个四卡场景分别保留或杀掉 Ray actor，检查收尾超时限制、
+训练前注销、权重更新时恢复和最终 checkpoint。两者均不传兼容开关，
+并将检查间隔和首次等待设为 600 秒。
 
 ### Changed-Test Job
 

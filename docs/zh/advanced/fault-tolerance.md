@@ -2,7 +2,7 @@
 
 长时间 RL 任务的失败模式和短 SFT 任务很不一样：rollout engine 可能 hang，long-tail sample 可能拖住整个 round，serving state 也必须在权重更新后保持一致。slime 的容灾能力主要聚焦在 rollout 侧：让 rollout engine 可观测、可重启、可调试，同时不改变 training / rollout / Data Buffer 主路径。
 
-内部 serving 始终由独立的 detached owner 持有。以下开关控制健康检查和异常 engine 恢复：
+内部 serving 始终由独立的 detached owner 持有，并启用健康检查和异常 engine 恢复。以下开关保留用于兼容及原有 external serving 策略：
 
 ```bash
 --use-fault-tolerance
@@ -19,11 +19,11 @@ slime 提供 rollout-engine 容灾和 Megatron 手动重启恢复：
 - trace/profiling hook，用于检查 long-tail rollout 行为。
 - 开启 Straw 传输或 debug rollout dump 时，Megatron 失败后保留 SGLang 集群，并重放训练数据。
 
-集群级抢占和 Ray 集群丢失仍需集群调度器与 slime checkpointing 处理。同一个存活的 Ray 集群内，训练 driver 或 rollout manager 退出后，serving 会话仍可继续使用；开关健康检查不会改变这个生命周期。external cluster 路径保持原有行为。
+集群级抢占和 Ray 集群丢失仍需集群调度器与 slime checkpointing 处理。同一个存活的 Ray 集群内，训练 driver 或 rollout manager 退出后，serving 会话仍可继续使用；是否传入兼容开关不会改变内部 serving 的生命周期和健康检查策略。external cluster 路径保持原有行为。
 
 ## Megatron 手动重启
 
-训练数据重放需要以下任意一种模式。这些模式始终启用恢复记录持久化；`--use-fault-tolerance` 仅控制 serving 健康检查。
+训练数据重放需要以下任意一种模式。这些模式始终启用恢复记录持久化，不依赖 `--use-fault-tolerance`。
 
 ```bash
 --rollout-data-transport straw --rollout-data-dir /shared/my-run/queue
@@ -47,13 +47,13 @@ Megatron OOM 后，等待失败的训练任务结束，调整训练配置，再�
 
 ## Rollout Health Checks
 
-rollout 过程中，slime 会定期向所有 SGLang server 发送 heartbeat 请求（`/health_generate`）。如果 heartbeat timeout，异常 SGLang server 会被停止。当前 rollout round 完成后，slime 会重启 server，并在其继续服务后续 rollout 请求前更新到正确参数。
+rollout 过程中，slime 定期向内部 SGLang server 发送 heartbeat 请求（`/health_generate`）。rollout 收尾时还会立即检查，不受检查间隔和首次等待限制。同步 rollout 在发 abort/drain 请求前先清理 router 中失效的 worker；serving owner 随后注销失效 engine 并移除 actor handle，避免 offload 等控制请求访问坏 server。HTTP 和 Ray 检查都有超时。重启仍在下一次权重更新前进行。
 
 主要参数：
 
-- `--rollout-health-check-first-wait`：第一次 rollout 前等待多久再开始 heartbeat。大 MoE 模型首次运行可能需要 kernel compilation。默认 `300` 秒。
-- `--rollout-health-check-interval`：heartbeat 间隔。默认 `10` 秒。
-- `--rollout-health-check-timeout`：单次 heartbeat timeout。默认 `5` 秒。
+- `--rollout-health-check-first-wait`：resume 后后台检查的等待时间，供大 MoE 模型 kernel compilation 使用。收尾检查不受此等待限制。默认 `0` 秒。
+- `--rollout-health-check-interval`：后台 heartbeat 间隔。默认 `600` 秒。
+- `--rollout-health-check-timeout`：单次 heartbeat 或排队中的健康检查 RPC 超时。默认 `30` 秒。
 
 示例：
 
@@ -79,7 +79,7 @@ rollout 过程中，slime 会定期向所有 SGLang server 发送 heartbeat 请�
 
 对于长时间任务：
 
-1. 开启 `--use-fault-tolerance`。
+1. 内部健康检查默认开启，按模型预热和响应时间调整 `--rollout-health-check-*`。
 2. 通过 `--save-interval` 定期保存 checkpoint。
 3. 对新的 agentic 或 verifier-heavy workload 保存 rollout debug dump。
 4. 使用 [Trace Viewer](../developer_guide/trace.md) 检查 long-tail samples 和 reward/model-call spans。

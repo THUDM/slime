@@ -2,6 +2,9 @@ import asyncio
 import logging
 from typing import Any
 
+import httpx
+import requests
+
 from slime.utils.http_utils import get, post
 
 logger = logging.getLogger(__name__)
@@ -9,6 +12,41 @@ logger = logging.getLogger(__name__)
 ABORT_RETRY_INTERVAL_SECONDS = 3
 DEFAULT_ABORT_TIMEOUT_SECONDS = 180.0
 DEFAULT_CONTROL_REQUEST_TIMEOUT_SECONDS = 10.0
+
+
+def unregister_worker(router_url: str, worker_url: str, *, timeout: float) -> None:
+    """Remove a worker even when its engine actor can no longer answer RPCs."""
+    with requests.Session() as client:
+        client.trust_env = False
+        response = client.get(f"{router_url}/workers", timeout=timeout)
+        response.raise_for_status()
+        for worker in response.json()["workers"]:
+            if worker["url"] == worker_url:
+                response = client.delete(f"{router_url}/workers/{worker['id']}", timeout=timeout)
+                if response.status_code != 404:
+                    response.raise_for_status()
+
+
+async def get_live_router_workers(router_url: str, *, timeout: float) -> list[dict]:
+    """Prune failed workers before rollout drains requests through the router."""
+    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+        response = await client.get(f"{router_url}/workers")
+        response.raise_for_status()
+
+        async def check(worker):
+            try:
+                response = await client.get(f"{worker['url']}/health_generate")
+                response.raise_for_status()
+            except httpx.HTTPError as error:
+                logger.warning("Removing failed rollout worker %s: %s", worker["url"], error)
+                response = await client.delete(f"{router_url}/workers/{worker['id']}")
+                if response.status_code != 404:
+                    response.raise_for_status()
+                return None
+            return worker
+
+        workers = await asyncio.gather(*(check(worker) for worker in response.json()["workers"]))
+        return [worker for worker in workers if worker is not None]
 
 
 def num_requests_from_load(load: Any) -> int:

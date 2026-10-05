@@ -106,18 +106,16 @@ class ServingCluster:
             if server:
                 for group in server.server_groups:
                     group.num_new_engines = len([engine for engine in group.engines if engine is not None])
-        # Health checking is policy; the serving ownership and placements are
-        # identical with the flag enabled or disabled.
+        # Internal serving is always monitored, independently of the legacy flag.
         for monitor in self._health_monitors:
             monitor.stop()
         self._health_monitors = []
-        if args.use_fault_tolerance:
-            for server in self.servers.values():
-                for group in server.server_groups:
-                    monitor = RolloutHealthMonitor(group, args)
-                    monitor.start()
-                    monitor.pause()
-                    self._health_monitors.append(monitor)
+        for server in self.servers.values():
+            for group in server.server_groups:
+                monitor = RolloutHealthMonitor(group, args)
+                monitor.start()
+                monitor.pause()
+                self._health_monitors.append(monitor)
         for name, value in self.deployment().routers.items():
             setattr(args, name, value)
         self.args = args
@@ -126,16 +124,15 @@ class ServingCluster:
         return self.deployment(reused)
 
     def try_ci_fault_injection(self):
-        import time
-
         server = self._updatable_server()
         if not self._ci_fault_injection_pending or server is None:
             return self.deployment()
         self._ci_fault_injection_pending = False
         engines = [engine for engine in server.all_engines if engine is not None]
         if engines:
-            engines[0].simulate_crash.remote()
-            time.sleep(self.args.rollout_health_check_interval + self.args.rollout_health_check_timeout + 5)
+            ray.get(engines[0].simulate_crash.remote(), timeout=self.args.rollout_health_check_timeout)
+            for monitor in self._health_monitors:
+                monitor.check_once()
         return self.deployment()
 
     def register_trainers(self, role, actors):
@@ -197,9 +194,13 @@ class ServingCluster:
         if server:
             server.num_new_engines = 0
 
-    def health_monitoring_pause(self):
+    def health_monitoring_pause(self, *, check=False):
         for monitor in self._health_monitors:
             monitor.pause()
+        if check:
+            for monitor in self._health_monitors:
+                monitor.check_once()
+            return self.deployment()
 
     def health_monitoring_resume(self):
         for monitor in self._health_monitors:
