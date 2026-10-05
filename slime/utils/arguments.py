@@ -639,7 +639,10 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--use-fault-tolerance",
                 action="store_true",
                 default=False,
-                help="Whether to enable the fault tolerance function during rollout.",
+                help=(
+                    "Enable rollout health checks. With straw transport or --save-debug-rollout-data, "
+                    "also preserve serving and replay batches across manual Megatron restarts on the same Ray cluster."
+                ),
             )
             parser.add_argument(
                 "--rollout-health-check-interval",
@@ -2221,5 +2224,14 @@ def slime_validate_args(args):
 
     if args.eval_function_path is None:
         args.eval_function_path = args.rollout_function_path
+
+    from slime.ray.training_recovery import configure_recovery_checkpoint, training_recovery_enabled
+
+    if training_recovery_enabled(args):
+        configure_recovery_checkpoint(args)
+        if args.save_debug_rollout_data is not None and "{rollout_id" not in args.save_debug_rollout_data:
+            raise ValueError(
+                "Trainer fault tolerance requires a unique --save-debug-rollout-data path containing {rollout_id}"
+            )
 
     return restore_plan

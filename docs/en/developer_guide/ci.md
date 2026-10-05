@@ -57,6 +57,17 @@ plus periodic refresh with NCCL and interval `2`. `test_pipeline_rl.py` checks
 the cache schedule and SGLang control payloads on CPU. These are functional
 checks; they do not measure PipelineRL learning quality or throughput gains.
 
+`test_qwen2.5_0.5B_training_recovery.py` uses 4 GPUs and two Ray jobs on the
+same cluster. It triggers a real CUDA allocation OOM with TP=1, verifies serving
+still responds after that job exits, then restarts with TP=2 and a new DP size.
+It checks serving process/router/placement identity, retained batch contents,
+training scheduler progress, nonzero gradients and the final checkpoint. The
+fixed matrix covers debug dumps, replay of completed but uncheckpointed Straw
+batches with online GC, and Straw recovery from a model/optimizer checkpoint
+with Megatron YAML overrides. `test_training_recovery.py` checks
+driver fencing, replay retention/resharding, launcher behavior and checkpoint
+boundaries on CPU.
+
 ### Changed-Test Job
 
 `run-ci-changed` dynamically detects added or modified files under `tests/test_*.py` and `tests/plugin_contracts/test_*.py` relative to `origin/main`.

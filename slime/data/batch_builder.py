@@ -415,7 +415,7 @@ class BatchBuilder:
 
         return train_data
 
-    def split_by_dp(self, data):
+    def split_by_dp(self, data, *, publish_batch=True):
         """Compute the DP/mbs schedule and package each rank's rollout_data
         into a Ray Box. The schedule itself is computed by
         :func:`build_dp_schedule` so it stays unit-testable without Ray/sglang.
@@ -482,7 +482,7 @@ class BatchBuilder:
             transport = self.args.rollout_data_transport
             if transport == "straw":
                 ref = pack_rollout_payload(rollout_data, self.args, self.rollout_id)
-                if getattr(self, "batch_id", None):
+                if getattr(self, "batch_id", None) and publish_batch:
                     ref = TrainBatchRef(ref.manifest, ref.root, self.batch_id, r, self.plan_digest)
                 stored_ranks.append(ref)
             elif transport == "nixl":
@@ -492,7 +492,8 @@ class BatchBuilder:
             else:
                 raise ValueError(f"Unsupported rollout data transport: {transport!r}")
         if transport == "straw":
-            if getattr(self, "batch_id", None):
+            self.replay_refs = [] if publish_batch else stored_ranks
+            if getattr(self, "batch_id", None) and publish_batch:
                 self._commit_ready(
                     stored_ranks,
                     {

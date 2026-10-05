@@ -305,6 +305,41 @@ def make_slime_validate_args(**overrides):
     return types.SimpleNamespace(**values)
 
 
+def test_trainer_fault_tolerance_saves_reshardable_optimizer(monkeypatch, tmp_path):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(
+        use_fault_tolerance=True,
+        save_debug_rollout_data=str(tmp_path / "rollout_{rollout_id}.pt"),
+        ckpt_format="torch_dist",
+        ckpt_fully_parallel_save=False,
+        dist_ckpt_optim_fully_reshardable=False,
+    )
+    module.slime_validate_args(args)
+    assert args.ckpt_fully_parallel_save
+    assert args.dist_ckpt_optim_fully_reshardable
+
+
+@pytest.mark.parametrize(
+    "options,match",
+    [
+        ({"no_save_optim": True}, "optimizer and RNG"),
+        ({"no_save_rng": True}, "optimizer and RNG"),
+        ({"ckpt_format": "torch"}, "torch_dist"),
+        ({"save_debug_rollout_data": "one-file.pt"}, "unique"),
+    ],
+)
+def test_trainer_fault_tolerance_rejects_unrecoverable_checkpoints(monkeypatch, tmp_path, options, match):
+    module = load_slime_arguments_module(monkeypatch)
+    values = dict(
+        use_fault_tolerance=True,
+        save_debug_rollout_data=str(tmp_path / "rollout_{rollout_id}.pt"),
+        ckpt_format="torch_dist",
+    )
+    values.update(options)
+    with pytest.raises(ValueError, match=match):
+        module.slime_validate_args(make_slime_validate_args(**values))
+
+
 @pytest.mark.parametrize(
     "rollout_path",
     [

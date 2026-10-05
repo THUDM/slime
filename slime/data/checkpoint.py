@@ -39,13 +39,16 @@ def save_checkpoint(args, rollout_id, actor_model, critic_model, rollout_manager
     """Save training and rollout state, publishing a joint boundary for straw."""
     import ray
 
+    from slime.ray.training_recovery import training_recovery_enabled
+
     straw_checkpoint = (
         args.rollout_data_transport == "straw"
         and actor_trains
         and not args.debug_train_only
         and not args.debug_rollout_only
     )
-    force_sync = straw_checkpoint or args.release_train or rollout_id == args.num_rollout - 1
+    recoverable = training_recovery_enabled(args)
+    force_sync = straw_checkpoint or recoverable or args.release_train or rollout_id == args.num_rollout - 1
     if straw_checkpoint and (Path(args.save) / "rollout" / f"committed_{rollout_id}.json").exists():
         raise FileExistsError("Refusing to overwrite a committed straw checkpoint")
     if actor_trains:
@@ -58,10 +61,15 @@ def save_checkpoint(args, rollout_id, actor_model, critic_model, rollout_manager
         model_args = [actor_model.args]
         if args.use_critic:
             model_args.append(critic_model.args)
-        commit_checkpoint(args, rollout_id, model_args=model_args, restore_plan=restore_plan)
+        weight_version = ray.get(rollout_manager.get_weight_version.remote())
+        commit_checkpoint(
+            args, rollout_id, model_args=model_args, restore_plan=restore_plan, weight_version=weight_version
+        )
+    if actor_trains and recoverable:
+        ray.get(rollout_manager.checkpoint_committed.remote(rollout_id))
 
 
-def commit_checkpoint(args, rollout_id, *, model_args, restore_plan=None):
+def commit_checkpoint(args, rollout_id, *, model_args, restore_plan=None, weight_version=None):
     """Publish the boundary after synchronous model saves and rollout snapshots.
 
     The driver waits for those calls; a save exception prevents this call.
@@ -115,9 +123,9 @@ def commit_checkpoint(args, rollout_id, *, model_args, restore_plan=None):
             "rollout_id": rollout_id,
             "files": files,
             "resumable": bool(resumable),
-            # train.py syncs once before rollout 0, then after each rollout.
-            # This save precedes the next sync, so version = rollout_id + 1.
-            "weight_version": rollout_id + 1,
+            # Manual restarts publish an extra initial sync, so the serving
+            # version can advance independently of the training rollout ID.
+            "weight_version": rollout_id + 1 if weight_version is None else weight_version,
             "rollout_data_dir": str(Path(args.rollout_data_dir).resolve()),
             "run_id": getattr(args, "rollout_queue_run_id", None) or "rollout",
         },
@@ -364,7 +372,7 @@ def resolve_checkpoint(args):
             )
         args.ckpt_step, args.start_rollout_id, args.load = step, step + 1, str(root)
         # Also seed the counter when an older model has no queue snapshot.
-        args.update_weight_start_version = step + 1
+        args.update_weight_start_version = value["weight_version"] if value is not None else step + 1
         branch["parent"] = {"directory": str(root), "step": step, "queue_snapshot": value is not None}
     args.save = str(destination)
     return RestorePlan(mode, str(save_root), expected_current, branch, branch["queue_id"], dataset_cursor)

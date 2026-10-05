@@ -7,6 +7,7 @@ import ray
 from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
+from slime.ray.training_recovery import configure_recovery_checkpoint, training_recovery_enabled
 from slime.ray.utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, add_default_ray_env_vars
 from slime.utils.weight_sync import should_flush_cache
 
@@ -128,6 +129,13 @@ class RayTrainGroup:
             if rank == 0:
                 master_addr, master_port = ray.get(actor.get_master_addr_and_port.remote())
             self._actor_handlers.append(actor)
+        if self._rollout_manager is not None and training_recovery_enabled(self.args):
+            configuration = ray.get(
+                self._rollout_manager.register_training_actors.remote(self.role, self._actor_handlers, self.args)
+            )
+            for name, value in configuration.items():
+                setattr(self.args, name, value)
+            self._disk_weight_version = configuration["update_weight_start_version"]
 
     def async_train(self, rollout_id, rollout_data_ref, external_data=None):
         """Do one rollout training. Returns a list of Ray refs (one per worker).
@@ -189,6 +197,9 @@ class RayTrainGroup:
     def create(self, rollout_manager=None):
         if self._actor_handlers:
             return None
+        if training_recovery_enabled(self.args):
+            # Role-specific YAML overrides are applied after CLI validation.
+            configure_recovery_checkpoint(self.args)
         if rollout_manager is not None:
             self._rollout_manager = rollout_manager
         self.args.update_weight_start_version = self._disk_weight_version

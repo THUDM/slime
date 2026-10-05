@@ -35,8 +35,23 @@ logger = logging.getLogger(__name__)
 class RolloutManager:
     """The class to run rollout and convert rollout data to training data."""
 
-    def __init__(self, args, pg, *, restore_plan=None):
+    def __init__(self, args, pg, *, restore_plan=None, persistent=False):
         configure_logger()
+
+        self.recovery = None
+        self.placement_groups = None
+        self._recovery_admission_was_paused = None
+        self._trainer_reconnect_pending = False
+        if persistent:
+            from slime.ray.placement_group import create_placement_groups
+            from slime.ray.training_recovery import TrainingRecovery, training_recovery_enabled
+
+            assert training_recovery_enabled(args)
+            self.recovery = TrainingRecovery(args, restore_plan)
+            # This detached actor owns the placement groups and all serving
+            # children. Their lifetimes therefore survive the training driver.
+            self.placement_groups = create_placement_groups(args, independent_rollout=True)
+            pg = self.placement_groups["rollout"]
 
         self.pg = pg
         self.args = args
@@ -135,6 +150,9 @@ class RolloutManager:
             self.data_source.consumers["fully_async"].resume()
 
     def dispose(self):
+        if self.recovery is not None:
+            self.recovery.release_trainers()
+            self.recovery.release_batches()
         for monitor in self._health_monitors:
             monitor.stop()
         if close := getattr(self.data_source, "close", None):
@@ -145,10 +163,120 @@ class RolloutManager:
             ray.kill(controller, no_restart=True)
             self.controller = None
             self._owns_controller = False
+        if self.recovery is not None:
+            from ray.util.placement_group import remove_placement_group
+
+            engines = [
+                engine for server in self.servers.values() for engine in server.all_engines if engine is not None
+            ]
+            for result in [engine.shutdown.remote() for engine in engines]:
+                try:
+                    ray.get(result)
+                except ray.exceptions.RayActorError:
+                    pass  # An unhealthy engine may already have exited.
+            for engine in engines:
+                ray.kill(engine, no_restart=True)
+            ray.kill(self.rollout_engine_lock, no_restart=True)
+            groups = {placement[0] for placement in self.placement_groups.values() if placement and placement[0]}
+            for group in groups:
+                remove_placement_group(group)
         from slime.data.transport import seal_rollout_store
 
         seal_rollout_store(self.args)
         logging_utils.finish_tracking(self.args)
+
+    def attach_training(self, args, job_id):
+        """Claim a stopped driver's session and prepare a new trainer topology."""
+        from ray.util.placement_group import remove_placement_group
+
+        from slime.ray.placement_group import _create_placement_group
+        from slime.ray.training_recovery import TrainingResume
+
+        recovery = self.recovery
+        assert recovery is not None
+        recovery.validate_attachment(args)
+        reused = recovery.attachments > 0
+        self.health_monitoring_pause()
+        was_paused = self.pause_rollout_admission()
+        if self._recovery_admission_was_paused is None:
+            self._recovery_admission_was_paused = was_paused
+        recovery.release_trainers()
+        num_train_gpus = args.actor_num_nodes * args.actor_num_gpus_per_node
+        actor_pg = self.placement_groups["actor"]
+        if args.colocate:
+            if num_train_gpus > len(actor_pg[1]):
+                raise ValueError(
+                    "Restarted colocated trainer exceeds the retained GPU placement; change parallelism within its GPU capacity"
+                )
+        elif num_train_gpus != len(actor_pg[1]):
+            if actor_pg[0] is not None:
+                remove_placement_group(actor_pg[0])
+            self.placement_groups["actor"] = _create_placement_group(num_train_gpus)
+            self.placement_groups["critic"] = self.placement_groups["actor"] if args.use_critic else None
+
+        if reused:
+            self._trainer_reconnect_pending = True
+            # Old NCCL peers have exited. Remove their serving-side groups before
+            # the new Megatron ranks reconnect, without restarting any engines.
+            engines = [engine for engine in self.rollout_engines if engine is not None]
+            ray.get([engine.reset_weights_update_groups.remote() for engine in engines])
+            ray.kill(self.rollout_engine_lock, no_restart=True)
+            self.rollout_engine_lock = Lock.options(num_cpus=0, num_gpus=0).remote()
+            server = self._get_updatable_server()
+            if server:
+                for group in server.server_groups:
+                    group.num_new_engines = len([engine for engine in group.engines if engine is not None])
+
+        configuration = dict(recovery.resume_configuration)
+        if reused:
+            server = self._get_updatable_server()
+            versions = ray.get([engine.get_weight_version.remote() for engine in server.engines]) if server else []
+            configuration["update_weight_start_version"] = max(
+                (int(version) for version in versions if str(version).isdigit()), default=0
+            )
+        for name in ("sglang_router_ip", "sglang_router_port", "sglang_model_routers"):
+            if hasattr(self.args, name):
+                setattr(args, name, getattr(self.args, name))
+        for name, value in configuration.items():
+            setattr(args, name, value)
+        self.args = args
+        self.batch_builder.args = args
+        self.data_source.args = args
+        recovery.args = args
+        recovery.driver_job_id = job_id
+        recovery.attachments += 1
+        return TrainingResume(self.placement_groups, recovery.restore_plan, configuration, reused)
+
+    def register_training_actors(self, role, actors, configuration):
+        return self.recovery.register_trainers(role, actors, configuration)
+
+    def detach_training(self, job_id):
+        if self.recovery is None or self.recovery.driver_job_id != job_id:
+            raise RuntimeError("Only the owning driver can detach its training session")
+        self.health_monitoring_pause()
+        self._recovery_admission_was_paused = self.pause_rollout_admission()
+        self.recovery.release_trainers()
+        self.recovery.driver_job_id = None
+        logger.warning("Training stopped; preserving rollout session and replay batches for manual restart")
+
+    def training_ready(self):
+        if self._recovery_admission_was_paused is not None:
+            self.resume_rollout_admission(self._recovery_admission_was_paused)
+            self._recovery_admission_was_paused = None
+
+    def checkpoint_committed(self, rollout_id):
+        if self.recovery is not None:
+            self.recovery.checkpoint_committed(rollout_id)
+
+    def get_weight_version(self):
+        server = self._get_updatable_server()
+        engines = [engine for engine in server.engines if engine is not None] if server else []
+        versions = ray.get([engine.get_weight_version.remote() for engine in engines])
+        if not versions:
+            return None
+        if len(set(versions)) != 1 or not str(versions[0]).isdigit():
+            raise RuntimeError(f"Cannot checkpoint inconsistent serving weight versions: {versions}")
+        return int(versions[0])
 
     @property
     def server(self) -> Any | None:
@@ -186,6 +314,8 @@ class RolloutManager:
         gpu_offsets = srv.engine_gpu_offsets if srv else []
         parallel_configs = srv.engine_parallel_configs if srv else []
         num_new = srv.num_new_engines if srv else 0
+        if self._trainer_reconnect_pending:
+            num_new = len(engines)
         return engines, self.rollout_engine_lock, num_new, gpu_counts, gpu_offsets, parallel_configs
 
     def get_num_rollout_per_epoch(self):
@@ -199,15 +329,35 @@ class RolloutManager:
         self.health_monitoring_resume()
         if self.args.ci_test and self.args.use_fault_tolerance and rollout_id >= 2:
             self._try_ci_fault_injection()
-        data, metrics = self._get_rollout_data(rollout_id=rollout_id)
-        save_debug_rollout_data(
-            self.args.save_debug_rollout_data,
-            data,
-            rollout_id=rollout_id,
-            evaluation=False,
-            args=self.args,
-            reference=self.batch_builder.raw_ref if self.args.rollout_data_transport == "straw" else None,
-        )
+        if self.recovery is not None and rollout_id in self.recovery.batches:
+            batch = self.recovery.batches[rollout_id]
+            logger.info("Replaying retained rollout %s with the current trainer parallelism", rollout_id)
+            if batch.converted is not None:
+                self.batch_builder.batch_id = batch.batch_id
+                refs = self.batch_builder.split_by_dp(self.recovery.load_converted(rollout_id), publish_batch=False)
+                if self.args.rollout_data_transport == "straw":
+                    self.recovery.retain_replay_shards(rollout_id, self.batch_builder.replay_refs)
+                return refs
+            data, metrics = self.recovery.load_raw(rollout_id), None
+        else:
+            data, metrics = self._get_rollout_data(rollout_id=rollout_id)
+            save_debug_rollout_data(
+                self.args.save_debug_rollout_data,
+                data,
+                rollout_id=rollout_id,
+                evaluation=False,
+                args=self.args,
+                reference=self.batch_builder.raw_ref if self.args.rollout_data_transport == "straw" else None,
+            )
+            if self.recovery is not None:
+                self.recovery.remember_raw(
+                    rollout_id,
+                    (
+                        self.batch_builder.raw_ref
+                        if self.args.rollout_data_transport == "straw"
+                        else self.args.save_debug_rollout_data
+                    ),
+                )
         log_rollout_data(
             rollout_id, self.args, data, metrics, time.time() - start_time, weight_version=self.weight_version
         )
@@ -218,6 +368,8 @@ class RolloutManager:
         if cached is not None:
             return cached
         data = self.batch_builder.convert(data)
+        if self.recovery is not None:
+            self.recovery.remember_converted(rollout_id, data, self.batch_builder.batch_id)
         return self.batch_builder.split_by_dp(data)
 
     def eval(self, rollout_id):
@@ -254,9 +406,14 @@ class RolloutManager:
 
     def training_completed(self, rollout_id):
         self.batch_builder.training_completed(rollout_id)
+        if self.recovery is not None:
+            self.recovery.release_replay_shards(rollout_id)
 
     def load(self, rollout_id=None):
         from slime.data.checkpoint import SourceRestore
+
+        if self.recovery is not None and self.recovery.loaded:
+            return
 
         source_restore = self.data_source.load(rollout_id)
         # Custom sources keep their existing load() contract; only the built-in
@@ -264,6 +421,8 @@ class RolloutManager:
         self.batch_builder.load(
             rollout_id, source_restore=source_restore if isinstance(source_restore, SourceRestore) else None
         )
+        if self.recovery is not None:
+            self.recovery.initial_load_completed(rollout_id + 1)
 
     def offload(self):
         self.health_monitoring_pause()
@@ -300,6 +459,7 @@ class RolloutManager:
         srv = self._get_updatable_server()
         if srv:
             srv.num_new_engines = 0
+        self._trainer_reconnect_pending = False
 
     def health_monitoring_pause(self) -> None:
         for monitor in self._health_monitors:

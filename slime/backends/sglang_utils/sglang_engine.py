@@ -101,6 +101,7 @@ class SGLangEngine(RayActor):
         self.base_gpu_id = base_gpu_id
         self.sglang_overrides = sglang_overrides or {}
         self.num_gpus_per_engine = num_gpus_per_engine
+        self._weight_update_groups = set()
 
     def init(
         self,
@@ -371,7 +372,7 @@ class SGLangEngine(RayActor):
         return self._make_request("update_weights_from_disk", payload)
 
     def init_weights_update_group(self, master_address, master_port, rank_offset, world_size, group_name, backend):
-        return self._make_request(
+        result = self._make_request(
             "init_weights_update_group",
             {
                 "master_address": master_address,
@@ -382,15 +383,25 @@ class SGLangEngine(RayActor):
                 "backend": backend,
             },
         )
+        self._weight_update_groups.add(group_name)
+        return result
+
+    def reset_weights_update_groups(self):
+        """Remove dead trainer peers while retaining the serving process."""
+        for group_name in list(self._weight_update_groups):
+            self._make_request("destroy_weights_update_group", {"group_name": group_name})
+            self._weight_update_groups.remove(group_name)
 
     def destroy_weights_update_group(self, group_name):
         try:
-            return self._make_request(
+            result = self._make_request(
                 "destroy_weights_update_group",
                 {
                     "group_name": group_name,
                 },
             )
+            self._weight_update_groups.discard(group_name)
+            return result
         except requests.exceptions.RequestException:
             # catch the case there the engine is just created and does not have the group.
             pass

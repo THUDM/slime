@@ -896,6 +896,7 @@ def test_training_commits_only_after_save_calls_return(tmp_path, monkeypatch, fa
 
     manager = Mock()
     manager.save.remote.side_effect = save_rollout
+    manager.get_weight_version.remote.side_effect = lambda: start + actor.update_weights.call_count
     monkeypatch.setattr(module.ray, "get", lambda value: value)
     monkeypatch.setattr(module, "configure_logger", lambda: None)
     monkeypatch.setattr(module, "init_tracking", lambda args: None)

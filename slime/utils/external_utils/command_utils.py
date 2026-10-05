@@ -2,10 +2,13 @@
 This file is not for slime framework itself, but as an optional utility to easily launch slime jobs and tests.
 """
 
+import argparse
 import datetime
 import json
 import os
 import random
+import shlex
+import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -106,29 +109,52 @@ def execute_train(
     external_ray = get_bool_env_var("SLIME_SCRIPT_EXTERNAL_RAY")
     master_addr = os.environ.get("MASTER_ADDR", "127.0.0.1")
 
-    exec_command(
-        "pkill -9 sglang; "
-        "sleep 3; "
-        f"{'' if external_ray else 'ray stop --force; '}"
-        f"{'' if external_ray else 'pkill -9 ray; '}"
-        # cannot be run in CI, o/w kill the parent script
-        # TODO: do we really need this kill? (or can we instead kill slime)
-        # "pkill -9 python; "
-        "pkill -9 slime; "
-        "sleep 3; "
-        f"{'' if external_ray else 'pkill -9 ray; '}"
-        # "pkill -9 python; "
-        "pkill -9 slime; "
-        "pkill -9 redis; "
-        "true; "
-    )
+    from slime.ray.training_recovery import training_recovery_enabled
+
+    recovery_parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    recovery_parser.add_argument("--use-fault-tolerance", action="store_true")
+    recovery_parser.add_argument("--rollout-data-transport", default="object-store")
+    recovery_parser.add_argument("--save-debug-rollout-data")
+    recovery_parser.add_argument("--load-debug-rollout-data")
+    recovery_parser.add_argument("--debug-train-only", action="store_true")
+    recovery_parser.add_argument("--debug-rollout-only", action="store_true")
+    recovery_args, _ = recovery_parser.parse_known_args(shlex.split(train_args))
+    recoverable = training_recovery_enabled(recovery_args)
+    if not recoverable:
+        exec_command(
+            "pkill -9 sglang; "
+            "sleep 3; "
+            f"{'' if external_ray else 'ray stop --force; '}"
+            f"{'' if external_ray else 'pkill -9 ray; '}"
+            # cannot be run in CI, o/w kill the parent script
+            # TODO: do we really need this kill? (or can we instead kill slime)
+            # "pkill -9 python; "
+            "pkill -9 slime; "
+            "sleep 3; "
+            f"{'' if external_ray else 'pkill -9 ray; '}"
+            # "pkill -9 python; "
+            "pkill -9 slime; "
+            "pkill -9 redis; "
+            "true; "
+        )
 
     if not external_ray:
-        exec_command(
-            # will prevent ray from buffering stdout/stderr
-            f"export PYTHONUNBUFFERED=1 && "
-            f"ray start --head --node-ip-address {master_addr} --num-gpus {num_gpus_per_node} --disable-usage-stats"
+        # A manual trainer restart must leave the Ray head and its detached
+        # rollout session alive. A stale address file alone is not proof of a
+        # running cluster, so query the head before deciding to start one.
+        ray_running = (
+            recoverable
+            and subprocess.run(
+                ["ray", "status"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30
+            ).returncode
+            == 0
         )
+        if not ray_running:
+            exec_command(
+                # will prevent ray from buffering stdout/stderr
+                f"export PYTHONUNBUFFERED=1 && "
+                f"ray start --head --node-ip-address {master_addr} --num-gpus {num_gpus_per_node} --disable-usage-stats"
+            )
 
     if (f := before_ray_job_submit) is not None:
         f()

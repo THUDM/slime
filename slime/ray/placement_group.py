@@ -117,8 +117,13 @@ def _get_placement_group_layout(args) -> tuple[int, int]:
     return actor_num_gpus + args.rollout_num_gpus, actor_num_gpus
 
 
-def create_placement_groups(args):
+def create_placement_groups(args, *, independent_rollout=False):
     """Create placement groups for actor, critic, and rollout engines."""
+
+    if independent_rollout and not args.colocate and not args.rollout_external:
+        actor_pg = _create_placement_group(args.actor_num_nodes * args.actor_num_gpus_per_node)
+        rollout_pg = _create_placement_group(args.rollout_num_gpus)
+        return {"actor": actor_pg, "critic": actor_pg if args.use_critic else None, "rollout": rollout_pg}
 
     num_gpus, rollout_offset = _get_placement_group_layout(args)
 

@@ -1,23 +1,49 @@
+import logging
+
 import ray
 
 from slime.data.checkpoint import save_checkpoint
 from slime.observability.logging_utils import configure_logger, finish_tracking, init_tracking
 from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_models
+from slime.ray.training_recovery import create_recoverable_rollout_manager, training_recovery_enabled
 from slime.utils.arguments import parse_args
 from slime.utils.misc import should_run_periodic_action
 
 
 def train(args, restore_plan=None):
     configure_logger()
-    release_train = args.release_train
-
-    # allocate the GPUs
-    pgs = create_placement_groups(args)
+    recoverable = training_recovery_enabled(args)
+    pgs = None if recoverable else create_placement_groups(args)
     init_tracking(args)
+    rollout_manager = None
+    try:
+        if recoverable:
+            rollout_manager, pgs, num_rollout_per_epoch, restore_plan = create_recoverable_rollout_manager(
+                args, restore_plan
+            )
+        else:
+            rollout_manager, num_rollout_per_epoch = create_rollout_manager(
+                args, pgs["rollout"], restore_plan=restore_plan
+            )
+        _train(args, pgs, rollout_manager, num_rollout_per_epoch, restore_plan)
+    except BaseException:
+        if recoverable and rollout_manager is not None:
+            try:
+                ray.get(rollout_manager.detach_training.remote(ray.get_runtime_context().get_job_id()))
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Failed to detach trainer; the detached rollout session remains available"
+                )
+        raise
+    else:
+        if recoverable:
+            ray.kill(rollout_manager, no_restart=True)
+    finally:
+        finish_tracking(args)
 
-    # create the rollout manager, with sglang engines inside.
-    # need to initialize rollout manager first to calculate num_rollout
-    rollout_manager, num_rollout_per_epoch = create_rollout_manager(args, pgs["rollout"], restore_plan=restore_plan)
+
+def _train(args, pgs, rollout_manager, num_rollout_per_epoch, restore_plan):
+    release_train = args.release_train
 
     actor_model, critic_model = create_training_models(args, pgs, rollout_manager)
 
@@ -26,6 +52,8 @@ def train(args, restore_plan=None):
 
     # Always push actor weights to rollout once weights are loaded.
     actor_model.update_weights()
+    if training_recovery_enabled(args):
+        ray.get(rollout_manager.training_ready.remote())
 
     if args.check_weight_update_equal:
         ray.get(rollout_manager.check_weights.remote(action="compare"))
@@ -103,7 +131,6 @@ def train(args, restore_plan=None):
             ray.get(rollout_manager.eval.remote(rollout_id))
 
     ray.get(rollout_manager.dispose.remote())
-    finish_tracking(args)
 
 
 if __name__ == "__main__":

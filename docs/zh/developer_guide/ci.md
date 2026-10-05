@@ -47,6 +47,15 @@ R3、SC 和 fully async 同时启用在线 GC。普通 straw 测试使用独立�
 `test_pipeline_rl.py` 在 CPU 上检查刷新周期和 SGLang 控制请求。这些测试验证
 功能，不衡量 PipelineRL 的学习效果或吞吐增益。
 
+`test_qwen2.5_0.5B_training_recovery.py` 使用 4 张 GPU，在同一个 Ray 集群中
+运行两次训练任务。第一次以 TP=1 触发真实 CUDA 分配 OOM，确认任务退出后
+serving 仍能响应，再以 TP=2 和新的 DP 大小重启。测试检查 serving 进程、router、
+placement、保留的 batch 内容、训练 scheduler 进度、非零梯度和最终 checkpoint。
+固定矩阵覆盖 debug dump、启用在线 GC 的 Straw 对已训练但未保存 batch 的重放，
+以及已有模型/optimizer checkpoint 和 Megatron YAML 配置时的 Straw 恢复。
+`test_training_recovery.py` 在 CPU 上检查 driver
+所有权、数据保留与重新分片、launcher 行为和 checkpoint 边界。
+
 ### Changed-Test Job
 
 `run-ci-changed` 会动态检测相对于 `origin/main` 新增或修改的 `tests/test_*.py` 和 `tests/plugin_contracts/test_*.py` 文件。

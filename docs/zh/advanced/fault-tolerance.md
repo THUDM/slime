@@ -10,15 +10,38 @@
 
 ## 当前覆盖范围
 
-slime 当前提供 rollout-engine fault tolerance：
+slime 提供 rollout-engine 容灾和 Megatron 手动重启恢复：
 
 - 对 SGLang rollout server 做 health check；
 - heartbeat timeout 后重启 rollout server；
 - 重启后正确更新参数；
 - 保存 debug rollout dump，用于不重新跑 rollout 的情况下 replay 训练侧问题；
 - trace/profiling hook，用于检查 long-tail rollout 行为。
+- 开启 Straw 传输或 debug rollout dump 时，Megatron 失败后保留 SGLang 集群，并重放训练数据。
 
-集群级抢占、trainer rank failure 和 full-job resume 仍应由集群调度器、Ray restart policy 和 slime checkpointing 共同处理。实际生产任务中，建议把 rollout fault tolerance、定期 checkpoint 和 debug dump 组合使用。
+集群级抢占和 Ray 集群丢失仍需集群调度器与 slime checkpointing 处理。保留的 serving 会话可以在同一个存活的 Ray 集群内跨训练 driver 失败继续使用。
+
+## Megatron 手动重启
+
+将 `--use-fault-tolerance` 与以下任意一种模式组合：
+
+```bash
+--rollout-data-transport straw --rollout-data-dir /shared/my-run/queue
+```
+
+或者：
+
+```bash
+--save-debug-rollout-data '/shared/my-run/rollout_{rollout_id}.pt'
+```
+
+Megatron OOM 后，等待失败的训练任务结束，调整训练配置，再向**同一个 Ray 集群**提交 `train.py`。可以修改 TP/CP/EP、microbatch 和 token 上限；colocate 模式下 trainer 需要保持在原 GPU placement 容量内，独立部署的 trainer 则可以单独重新分配训练 placement，不移动 rollout GPU。模型、rollout 配置、global batch size 和会话标识需要保持一致。Straw 用存储目录和 `--rollout-queue-run-id` 标识会话，debug 模式使用 dump 路径模板。独立的新训练任务应使用不同的会话标识。
+
+保留的 rollout manager 会暂停 producer 接收新任务、释放失败的 trainer ranks，同时保留 SGLang 进程、router 和 rollout GPU placement。新 trainer 重新连接这些 engine，加载最近一次成功保存的模型、optimizer 和 RNG 状态，并重放该 checkpoint 之后的数据，包括已经训练成功但尚未保存模型更新的 batch。没有 checkpoint 时，从最初的模型开始重放。reward 后处理结果和 token 数据在 DP 分片之前保留，因此修改并行配置会重新分片，不会重新生成 samples 或再次运行 reward 后处理。
+
+通过 `--save` 和 `--save-interval` 控制重放量及存储占用。恢复模式使用 `torch_dist` checkpoint，并自动开启可跨并行配置重新分片的 optimizer 保存格式。checkpoint 必须保存 optimizer 和 RNG 状态，因此不允许 `--no-save-optim` 和 `--no-save-rng`。Megatron 会在拓扑兼容时恢复 RNG，TP/PP 改变时则重新初始化 RNG，因此跨并行布局恢复不保证逐 bit 重现。debug dump 路径必须包含 `{rollout_id}`。恢复数据会保留到模型 checkpoint 提交成功或训练正常结束。serving 权重版本在 trainer 重启后继续递增。
+
+两次尝试之间不要停止 Ray、重建 serving container 或执行 `pkill sglang` 等清理命令。`slime.utils.external_utils.command_utils.execute_train` 会在这些恢复模式下保留 Ray 和 SGLang；含无条件清理的 shell 启动脚本需要在重启时跳过清理。训练正常结束会释放保留的会话。这是手动重启流程，不会自动重试 trainer，也不需要修改 SGLang 本身。
 
 ## Rollout Health Checks
 
@@ -66,7 +89,7 @@ rollout 过程中，slime 会定期向所有 SGLang server 发送 heartbeat 请�
 - 如果大 MoE 模型启动阶段 health check 失败，增大 `--rollout-health-check-first-wait`。
 - 如果短暂负载高峰导致误判，增大 `--rollout-health-check-timeout`。
 - 如果某个 server 在 weight sync 后反复重启，检查 SGLang log 和最近的 rollout debug dump。
-- 如果失败发生在 trainer 而非 rollout，从 checkpoint 恢复，并用 debug replay 确认保存的 rollout batch 是否有效。
+- 如果 trainer 失败，修正配置后向保留的会话重新提交；如果 Ray 集群已丢失，则从持久 checkpoint 恢复，并用 debug replay 检查失败的 batch。
 
 ## 相关文档
 
