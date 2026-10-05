@@ -236,6 +236,36 @@ def test_generation_workers_cannot_claim_manager_collection_tasks(source_factory
     assert collection.assignments[0].task.task_id == task_id
 
 
+def test_manager_replacement_fences_readers_and_recovers_only_unused_results(source_factory):
+    from straw.errors import StaleAttempt
+
+    from slime.data.transport import pack_rollout_group
+
+    args = source_factory.args
+    old = QueueDataSource(args, controller=_LocalHandle(source_factory.controller), reader_generation="old")
+    reader = old.reader_config("fully_async_0").open()
+    groups = reader.get_samples(3)
+    receipts = []
+    for group in groups[:2]:
+        for sample in iter_samples(group):
+            sample.tokens, sample.response_length = [1, 2], 1
+            sample.reward, sample.status = 1.0, Sample.Status.COMPLETED
+        receipts.append(pack_rollout_group(group, args, 0, controller=reader.controller).receipt)
+    state = old.manager_state()
+    rebuilt = QueueDataSource(args, controller=old.controller, reader_generation="new")
+    rebuilt.restore_manager(state, excluded=[receipts[0].position])
+    with pytest.raises(StaleAttempt):
+        source_factory.controller.take(reader.reader_id, 1)
+    recovered = rebuilt.get_samples(1)[0]
+    assert [sample.index for sample in iter_samples(recovered)] == [sample.index for sample in iter_samples(groups[1])]
+    assert all(sample.reward == 1.0 for sample in iter_samples(recovered))
+    assert rebuilt.reader_config("fully_async_0").reader_id == "new:fully_async_0"
+    assert source_factory.controller.status(groups[2][0]._queue_lease["task_id"])["state"] == "pending"
+    reader.close()
+    old.close()
+    rebuilt.close()
+
+
 def test_group_reply_loss_returns_original_receipt_and_detects_changed_content(
     source_factory,
 ):
@@ -1267,6 +1297,7 @@ def test_two_ray_nodes_generate_transfer_and_restore(tmp_path, fanout, transport
 
         cls = RolloutManager.__ray_metadata__.modified_class
         manager = cls.__new__(cls)
+        manager.serving = manager.recovery = None
         manager.args = args
         manager.controller = source.controller
         manager.weight_version = None

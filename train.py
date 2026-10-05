@@ -4,40 +4,36 @@ import ray
 
 from slime.data.checkpoint import save_checkpoint
 from slime.observability.logging_utils import configure_logger, finish_tracking, init_tracking
-from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_models
-from slime.ray.training_recovery import create_recoverable_rollout_manager, training_recovery_enabled
+from slime.ray.placement_group import create_rollout_manager, create_training_models
 from slime.utils.arguments import parse_args
 from slime.utils.misc import should_run_periodic_action
 
 
 def train(args, restore_plan=None):
     configure_logger()
-    recoverable = training_recovery_enabled(args)
-    pgs = None if recoverable else create_placement_groups(args)
     init_tracking(args)
-    rollout_manager = None
+    startup = None
     try:
-        if recoverable:
-            rollout_manager, pgs, num_rollout_per_epoch, restore_plan = create_recoverable_rollout_manager(
-                args, restore_plan
-            )
-        else:
-            rollout_manager, num_rollout_per_epoch = create_rollout_manager(
-                args, pgs["rollout"], restore_plan=restore_plan
-            )
-        _train(args, pgs, rollout_manager, num_rollout_per_epoch, restore_plan)
+        startup = create_rollout_manager(args, restore_plan=restore_plan)
+        _train(args, startup.placements, startup.manager, startup.num_rollout_per_epoch, startup.restore_plan)
     except BaseException:
-        if recoverable and rollout_manager is not None:
+        if startup is not None and startup.serving is not None:
+            job_id = ray.get_runtime_context().get_job_id()
             try:
-                ray.get(rollout_manager.detach_training.remote(ray.get_runtime_context().get_job_id()))
+                ray.get(startup.manager.detach_training.remote(job_id))
+            except ray.exceptions.RayActorError:
+                # The serving owner is independent even when the manager dies.
+                try:
+                    ray.get(startup.serving.detach_training.remote(job_id))
+                except Exception:
+                    logging.getLogger(__name__).exception("Failed to detach after rollout manager death")
             except Exception:
-                logging.getLogger(__name__).exception(
-                    "Failed to detach trainer; the detached rollout session remains available"
-                )
+                logging.getLogger(__name__).exception("Failed to detach trainer; serving remains available")
         raise
     else:
-        if recoverable:
-            ray.kill(rollout_manager, no_restart=True)
+        if startup.serving is not None:
+            ray.kill(startup.manager, no_restart=True)
+            ray.kill(startup.serving, no_restart=True)
     finally:
         finish_tracking(args)
 
@@ -52,8 +48,7 @@ def _train(args, pgs, rollout_manager, num_rollout_per_epoch, restore_plan):
 
     # Always push actor weights to rollout once weights are loaded.
     actor_model.update_weights()
-    if training_recovery_enabled(args):
-        ray.get(rollout_manager.training_ready.remote())
+    ray.get(rollout_manager.training_ready.remote())
 
     if args.check_weight_update_equal:
         ray.get(rollout_manager.check_weights.remote(action="compare"))

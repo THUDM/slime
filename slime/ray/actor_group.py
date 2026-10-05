@@ -129,9 +129,12 @@ class RayTrainGroup:
             if rank == 0:
                 master_addr, master_port = ray.get(actor.get_master_addr_and_port.remote())
             self._actor_handlers.append(actor)
-        if self._rollout_manager is not None and training_recovery_enabled(self.args):
+        if self._rollout_manager is not None:
             configuration = ray.get(
                 self._rollout_manager.register_training_actors.remote(self.role, self._actor_handlers, self.args)
+            )
+            configuration["update_weight_start_version"] = max(
+                configuration["update_weight_start_version"], self._disk_weight_version
             )
             for name, value in configuration.items():
                 setattr(self.args, name, value)

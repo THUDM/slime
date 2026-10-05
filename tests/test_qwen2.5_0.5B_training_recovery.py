@@ -11,6 +11,7 @@ from pathlib import Path
 from shlex import quote
 from types import SimpleNamespace
 
+import pytest
 import ray
 import requests
 from ray.job_submission import JobStatus, JobSubmissionClient
@@ -29,10 +30,10 @@ def prepare():
     U.hf_download_dataset("zhuzilin/gsm8k")
 
 
-def train_args(directory, mode, tp_size, model_path, dataset_path, save_interval):
+def train_args(directory, mode, tp_size, model_path, dataset_path, save_interval, fault_tolerance):
     arguments = (
         f"--hf-checkpoint {quote(model_path)} --ref-load {quote(model_path)} "
-        "--use-fault-tolerance --rollout-health-check-first-wait 600 "
+        "--rollout-health-check-first-wait 600 "
         f"--rollout-data-transport {'straw' if mode == 'straw' else 'object-store'} "
         f"--prompt-data {quote(dataset_path)} --input-key messages --label-key label --apply-chat-template "
         "--custom-rm-path training_recovery_test_helpers.reward "
@@ -50,6 +51,8 @@ def train_args(directory, mode, tp_size, model_path, dataset_path, save_interval
         "--custom-megatron-before-train-step-hook-path training_recovery_test_helpers.before_train_step "
         f"--save {quote(str(directory / 'checkpoint'))} --save-interval {save_interval} "
     )
+    if fault_tolerance:
+        arguments += "--use-fault-tolerance "
     if tp_size > 1:
         arguments += "--sequence-parallel "
     if mode == "straw":
@@ -74,14 +77,15 @@ def wait_job(client, submission_id, path):
     raise TimeoutError(f"Training job did not finish: {submission_id}")
 
 
-def verify(directory, mode, failure_rollout, save_interval):
+def verify(directory, mode, failure_rollout, save_interval, kill_manager):
     before = json.loads((directory / "before.json").read_text())
     after = json.loads((directory / "after.json").read_text())
     assert before["trainer"]["job_id"] != after["trainer"]["job_id"]
     assert before["trainer"]["pid"] != after["trainer"]["pid"]
     assert before["trainer"]["tp_size"] == 1 and after["trainer"]["tp_size"] == 2
     for name in (
-        "manager_pid",
+        "serving_pid",
+        "router_pids",
         "engines",
         "engine_actor_ids",
         "router",
@@ -91,6 +95,7 @@ def verify(directory, mode, failure_rollout, save_interval):
         "sample_indices",
     ):
         assert before[name] == after[name], (name, before[name], after[name])
+    assert (before["manager_pid"] != after["manager_pid"]) == kill_manager
     assert before["parallel"]["dp_size"] == 2 and after["parallel"]["dp_size"] == 1
     restore_start = failure_rollout if save_interval == 1 else 0
     assert after["start_rollout_id"] == restore_start
@@ -113,6 +118,13 @@ def verify(directory, mode, failure_rollout, save_interval):
         assert committed["weight_version"] == int(after["weight_versions"][0]) + 2 - failure_rollout
     else:
         assert (directory / "checkpoint/iter_0000002").exists()
+        continued = json.loads((directory / "continued_2.json").read_text())
+        previous_indices = {
+            index
+            for rollout_id in range(failure_rollout + 1)
+            for index in json.loads((directory / f"original_{rollout_id}.json").read_text())["sample_indices"]
+        }
+        assert previous_indices.isdisjoint(continued["sample_indices"])
     assert json.loads((directory / "serving_after_failure.json").read_text())["text"]
     assert not list(directory.glob("*.train-recovery.pt"))
     print("Trainer recovery verified: serving processes retained, data replayed with new DP, real training completed.")
@@ -126,6 +138,9 @@ def execute(
     dataset_path=None,
     role_config=False,
     save_interval=None,
+    kill_manager=False,
+    fault_tolerance=True,
+    manager_crash_phase="after-failure",
 ):
     directory = Path(directory or tempfile.mkdtemp(prefix="slime_training_recovery_"))
     directory.mkdir(parents=True, exist_ok=True)
@@ -151,6 +166,7 @@ def execute(
             "PYTHONPATH": f"{REPO}/tests:{REPO}:/root/Megatron-LM",
             "SLIME_RECOVERY_TEST_DIR": str(directory),
             "SLIME_RECOVERY_TEST_FAILURE_ROLLOUT": str(failure_rollout),
+            "SLIME_RECOVERY_TEST_KILL_MANAGER": str(int(kill_manager and manager_crash_phase == "training")),
             "CUDA_DEVICE_MAX_CONNECTIONS": "1",
             "RAY_USE_UVLOOP": "0",
             "PYTHONUNBUFFERED": "1",
@@ -174,8 +190,12 @@ def execute(
     manager = None
     try:
         for tp_size in (1, 2):
-            command = f'cd {quote(str(REPO))} && source scripts/models/{MODEL_TYPE}.sh && python train.py "${{MODEL_ARGS[@]}}" '
-            command += train_args(directory, mode, tp_size, model_path, dataset_path, save_interval)
+            cluster_address = os.environ.get("SLIME_TEST_RAY_ADDRESS", "127.0.0.1:6379")
+            command = (
+                f"cd {quote(str(REPO))} && source scripts/models/{MODEL_TYPE}.sh "
+                f'&& export RAY_ADDRESS={quote(cluster_address)} && python train.py "${{MODEL_ARGS[@]}}" '
+            )
+            command += train_args(directory, mode, tp_size, model_path, dataset_path, save_interval, fault_tolerance)
             if role_config:
                 path = directory / f"megatron_tp{tp_size}.json"
                 path.write_text(
@@ -208,11 +228,31 @@ def execute(
             expected = JobStatus.FAILED if tp_size == 1 else JobStatus.SUCCEEDED
             assert status == expected, (status, directory)
             if tp_size == 1:
-                ray.init(address="auto", namespace=RECOVERY_NAMESPACE, ignore_reinit_error=True)
-                manager = ray.get_actor(training_session_name(session_args), namespace=RECOVERY_NAMESPACE)
-                # Access succeeds after the original Ray driver has terminated.
-                assert ray.get(manager.get_updatable_engines_and_lock.remote())[0]
+                # Fail at the actual injection boundary, rather than accepting
+                # an unrelated initialization failure as the expected OOM.
+                assert (directory / "before.json").exists(), directory / "failed.log"
+                ray.init(
+                    address=os.environ.get("SLIME_TEST_RAY_ADDRESS", "127.0.0.1:6379"),
+                    namespace=RECOVERY_NAMESPACE,
+                    ignore_reinit_error=True,
+                )
+                serving = ray.get_actor(training_session_name(session_args) + ":serving", namespace=RECOVERY_NAMESPACE)
+                assert ray.get(serving.get_updatable_engines_and_lock.remote())[0]
+                if kill_manager and manager_crash_phase == "training":
+                    try:
+                        manager = ray.get_actor(training_session_name(session_args), namespace=RECOVERY_NAMESPACE)
+                    except ValueError:
+                        pass
+                    else:
+                        with pytest.raises(ray.exceptions.RayActorError):
+                            ray.get(manager.get_updatable_engines_and_lock.remote())
+                else:
+                    manager = ray.get_actor(training_session_name(session_args), namespace=RECOVERY_NAMESPACE)
+                    assert ray.get(manager.get_updatable_engines_and_lock.remote())[0]
                 before = json.loads((directory / "before.json").read_text())
+                if kill_manager and manager_crash_phase == "after-failure":
+                    ray.kill(manager, no_restart=True)
+                    assert ray.get(serving.get_updatable_engines_and_lock.remote())[0]
                 with requests.Session() as http:
                     http.trust_env = False
                     response = http.post(
@@ -240,15 +280,21 @@ def execute(
                                 break
                             assert time.monotonic() < deadline, engine
                             time.sleep(1)
-        verify(directory, mode, failure_rollout, save_interval)
+        verify(directory, mode, failure_rollout, save_interval, kill_manager)
     finally:
-        if manager is not None:
+        if not ray.is_initialized():
+            ray.init(address=os.environ.get("SLIME_TEST_RAY_ADDRESS", "127.0.0.1:6379"), namespace=RECOVERY_NAMESPACE)
+        for suffix in ("", ":serving"):
             try:
-                ray.get(manager.dispose.remote(), timeout=60)
+                retained = ray.get_actor(training_session_name(session_args) + suffix, namespace=RECOVERY_NAMESPACE)
+            except ValueError:
+                continue
+            try:
+                ray.get(retained.dispose.remote(), timeout=60)
             except ray.exceptions.RayActorError:
-                pass  # Successful training already disposed and killed it.
+                pass
             finally:
-                ray.kill(manager, no_restart=True)
+                ray.kill(retained, no_restart=True)
         ray.shutdown()
         if not external_ray:
             subprocess.run(["ray", "stop", "--force"], check=True)
@@ -264,6 +310,9 @@ if __name__ == "__main__":
     parser.add_argument("--no-prepare", action="store_true")
     parser.add_argument("--role-config", action="store_true")
     parser.add_argument("--save-interval", type=int, choices=[1, 3])
+    parser.add_argument("--kill-manager", action="store_true")
+    parser.add_argument("--no-fault-tolerance", action="store_true")
+    parser.add_argument("--manager-crash-phase", choices=["after-failure", "training"], default="after-failure")
     cli = parser.parse_args()
     if not cli.no_prepare:
         prepare()
@@ -275,4 +324,7 @@ if __name__ == "__main__":
         cli.dataset_path,
         cli.role_config,
         cli.save_interval,
+        cli.kill_manager,
+        not cli.no_fault_tolerance,
+        cli.manager_crash_phase,
     )

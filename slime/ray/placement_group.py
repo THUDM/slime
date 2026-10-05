@@ -1,6 +1,7 @@
 import copy
 import logging
 import socket
+from dataclasses import dataclass
 
 import ray
 from ray.util.placement_group import placement_group
@@ -117,10 +118,10 @@ def _get_placement_group_layout(args) -> tuple[int, int]:
     return actor_num_gpus + args.rollout_num_gpus, actor_num_gpus
 
 
-def create_placement_groups(args, *, independent_rollout=False):
+def create_placement_groups(args):
     """Create placement groups for actor, critic, and rollout engines."""
 
-    if independent_rollout and not args.colocate and not args.rollout_external:
+    if not args.colocate and not args.rollout_external and not args.debug_train_only and not args.debug_rollout_only:
         actor_pg = _create_placement_group(args.actor_num_nodes * args.actor_num_gpus_per_node)
         rollout_pg = _create_placement_group(args.rollout_num_gpus)
         return {"actor": actor_pg, "critic": actor_pg if args.use_critic else None, "rollout": rollout_pg}
@@ -228,30 +229,68 @@ def create_training_models(args, pgs, rollout_manager, actor_cls=None):
     return actor_model, critic_model
 
 
-def create_rollout_manager(args, pg, *, restore_plan=None):
-    from .rollout import RolloutManager
+@dataclass
+class RolloutStartup:
+    manager: object
+    serving: object
+    placements: dict
+    num_rollout_per_epoch: int | None
+    restore_plan: object
 
-    rollout_manager_options = {
+
+def create_rollout_manager(args, *, restore_plan=None):
+    from .rollout import RolloutManager
+    from .serving import ServingCluster
+    from .training_recovery import RECOVERY_NAMESPACE, training_session_name
+
+    options = {
         "num_cpus": 1,
         "num_gpus": 0,
         "runtime_env": {"env_vars": add_default_ray_env_vars()},
     }
-    if getattr(args, "rollout_data_transport", "object-store") == "nixl":
-        rollout_manager_options["enable_tensor_transport"] = True
-    rollout_manager = RolloutManager.options(**rollout_manager_options).remote(args, pg, restore_plan=restore_plan)
-
-    # calculate num_rollout from num_epoch
+    serving = None
+    deployment = None
+    if args.rollout_external:
+        # External serving retains its existing startup and ownership contract.
+        placements = create_placement_groups(args)
+    else:
+        name = training_session_name(args)
+        serving = ServingCluster.options(
+            **options,
+            name=name + ":serving",
+            namespace=RECOVERY_NAMESPACE,
+            lifetime="detached",
+            get_if_exists=True,
+        ).remote(args, restore_plan)
+        deployment = ray.get(serving.attach_training.remote(args, ray.get_runtime_context().get_job_id()))
+        placements, restore_plan = deployment.placements, deployment.restore_plan
+        for key, value in deployment.routers.items():
+            setattr(args, key, value)
+        options.update(name=name, namespace=RECOVERY_NAMESPACE, lifetime="detached", get_if_exists=True)
+    if args.rollout_data_transport == "nixl":
+        options["enable_tensor_transport"] = True
+    manager = RolloutManager.options(**options).remote(
+        args,
+        placements["rollout"],
+        restore_plan=restore_plan,
+        serving=serving,
+        deployment=deployment,
+    )
+    reused = False
+    if serving is not None:
+        resume = ray.get(manager.attach_training.remote(args, deployment))
+        restore_plan, reused = resume.restore_plan, resume.reused
+        for key, value in resume.configuration.items():
+            setattr(args, key, value)
+        logger.info("%s serving session %s", "Reusing" if reused else "Created", name)
     num_rollout_per_epoch = None
     if args.num_rollout is None:
-        num_rollout_per_epoch = ray.get(rollout_manager.get_num_rollout_per_epoch.remote())
+        num_rollout_per_epoch = ray.get(manager.get_num_rollout_per_epoch.remote())
         args.num_rollout = num_rollout_per_epoch * args.num_epoch
         assert args.num_rollout > 0
-
-    if args.check_weight_update_equal:
-        ray.get(rollout_manager.check_weights.remote(action="snapshot"))
-        ray.get(rollout_manager.check_weights.remote(action="reset_tensors"))
-
+    if args.check_weight_update_equal and not reused:
+        ray.get(manager.check_weights.remote(action="snapshot"))
+        ray.get(manager.check_weights.remote(action="reset_tensors"))
     if args.offload_rollout:
-        ray.get(rollout_manager.offload.remote())
-
-    return rollout_manager, num_rollout_per_epoch
+        ray.get(manager.offload.remote())
+    return RolloutStartup(manager, serving, placements, num_rollout_per_epoch, restore_plan)

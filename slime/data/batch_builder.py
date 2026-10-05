@@ -43,7 +43,7 @@ class BatchBuilder:
                 self.args.custom_convert_samples_to_train_data_path
             )
 
-    def begin(self, samples):
+    def begin(self, samples, *, replay=False):
         """Persist the selection and conversion configuration before invoking hooks."""
         if self.raw_ref is None:
             self.batch_id = None
@@ -85,8 +85,9 @@ class BatchBuilder:
         if existing:
             self._plan = DiskPayloadRef(RecordSetRef.from_dict(existing["plan_ref"]), self.args.rollout_data_dir)
             plan = self._plan.load()
-            if plan["digest"] != self.plan_digest:
+            if not replay and plan["digest"] != self.plan_digest:
                 raise ValueError("An existing batch ID cannot be reused with a different selection or conversion plan")
+            self.plan_digest = plan["digest"]
             if existing["ready"]:
                 refs = DiskPayloadRef(
                     RecordSetRef.from_dict(existing["ready_ref"]), self.args.rollout_data_dir
@@ -114,6 +115,22 @@ class BatchBuilder:
         ray.get(controller.plan_batch.remote(self.batch_id, plan["input_positions"], self._plan.manifest))
         self._positions = plan["input_positions"]
         return None
+
+    def replay_converted(self, data, batch_id):
+        """Reshard saved conversion, completing an interrupted ready publication."""
+        self.batch_id = batch_id
+        publish_batch = False
+        if self.args.rollout_data_transport == "straw" and batch_id is not None:
+            from straw.protocol import RecordSetRef
+
+            existing = ray.get(self.controller.batch.remote(batch_id))
+            if existing is None:
+                raise RuntimeError(f"Retained conversion has no queue plan: {batch_id}")
+            if not existing["ready"]:
+                self._plan = DiskPayloadRef(RecordSetRef.from_dict(existing["plan_ref"]), self.args.rollout_data_dir)
+                self.plan_digest = self._plan.load()["digest"]
+                publish_batch = True
+        return self.split_by_dp(data, publish_batch=publish_batch)
 
     def _commit_ready(self, ranks, schedule):
         controller = self.controller

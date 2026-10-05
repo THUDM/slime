@@ -60,7 +60,8 @@ def args(tmp_path):
 
 
 @pytest.mark.parametrize("queue_source", [False, True])
-def test_custom_source_constructor_keeps_args_only_contract(args, monkeypatch, queue_source):
+@pytest.mark.parametrize("serving_owned", [False, True])
+def test_custom_source_constructor_keeps_args_only_contract(args, monkeypatch, queue_source, serving_owned):
     from slime.data import queue_data_source, transport
     from slime.data.checkpoint import RestorePlan
     from slime.ray import rollout
@@ -98,7 +99,19 @@ def test_custom_source_constructor_keeps_args_only_contract(args, monkeypatch, q
     monkeypatch.setattr(rollout.ray, "get", lambda value: value)
     monkeypatch.setattr(rollout.ray, "kill", lambda *a, **kw: None)
     monkeypatch.setattr(transport, "seal_rollout_store", lambda _: None)
-    manager = rollout.RolloutManager.__ray_metadata__.modified_class(args, None, restore_plan=plan)
+    serving, deployment = None, None
+    if serving_owned:
+        from slime.ray.serving import ServingDeployment
+
+        serving = SimpleNamespace(
+            get_queue_controller=SimpleNamespace(remote=lambda: create_controller(args, restore_plan=plan)),
+            get_updatable_engines_and_lock=SimpleNamespace(remote=lambda: ([], None, 0, [], [], [])),
+            dispose=SimpleNamespace(remote=lambda: None if queue_source else calls.append("controller_close")),
+        )
+        deployment = ServingDeployment({"rollout": None}, {}, None, plan, {})
+    manager = rollout.RolloutManager.__ray_metadata__.modified_class(
+        args, None, restore_plan=plan, serving=serving, deployment=deployment
+    )
     assert manager.controller is manager.batch_builder.controller is handle
     assert vars(args) == original
     manager.dispose()
@@ -335,6 +348,7 @@ def test_manager_adapts_legacy_samples_and_validates_accepted_refs(args, monkeyp
     )
     monkeypatch.setattr(rollout.ray, "get", lambda value: value)
     manager = object.__new__(rollout.RolloutManager.__ray_metadata__.modified_class)
+    manager.serving = None
     manager.args = args
     manager.controller = handle
     args.load_debug_rollout_data = None
@@ -710,6 +724,7 @@ def test_debug_archive_replay_reuses_records_and_isolates_training(
                     }
                 )
                 manager = object.__new__(RolloutManager.__ray_metadata__.modified_class)
+                manager.serving = None
                 manager.args, manager.controller = replay_args, handle
                 builder = manager.batch_builder = BatchBuilder(replay_args, controller=handle)
                 builder.train_parallel_config = dict(
@@ -762,6 +777,7 @@ def test_debug_archive_replay_rejects_changing_storage(args, tmp_path, different
     args.start_rollout_id = 0
     resolve_rollout_data_dir(args)
     manager = object.__new__(RolloutManager.__ray_metadata__.modified_class)
+    manager.serving = None
     manager.args = args
     with pytest.raises(ValueError, match="same Straw storage pool and run"):
         manager._get_rollout_data(1)
@@ -901,8 +917,11 @@ def test_training_commits_only_after_save_calls_return(tmp_path, monkeypatch, fa
     monkeypatch.setattr(module, "configure_logger", lambda: None)
     monkeypatch.setattr(module, "init_tracking", lambda args: None)
     monkeypatch.setattr(module, "finish_tracking", lambda args: None)
-    monkeypatch.setattr(module, "create_placement_groups", lambda args: {"rollout": None})
-    monkeypatch.setattr(module, "create_rollout_manager", lambda *a, **kw: (manager, None))
+    from slime.ray.placement_group import RolloutStartup
+
+    monkeypatch.setattr(
+        module, "create_rollout_manager", lambda *a, **kw: RolloutStartup(manager, None, {}, None, None)
+    )
     monkeypatch.setattr(module, "create_training_models", lambda *a: (actor, critic))
     marker = tmp_path / "rollout" / f"committed_{start}.json"
     if fail_at:
@@ -998,7 +1017,7 @@ def test_checkpoint_helper_preserves_save_modes(tmp_path, monkeypatch, mode):
     save_checkpoint(args, 0, actor, critic, manager, actor_trains=mode != "critic-only")
     if mode == "critic-only":
         actor.save_model.assert_not_called()
-        critic.save_model.assert_called_once_with(0, force_sync=False)
+        critic.save_model.assert_called_once_with(0, force_sync=True)
     else:
         actor.save_model.assert_called_once_with(0, force_sync=False)
         critic.save_model.assert_not_called()

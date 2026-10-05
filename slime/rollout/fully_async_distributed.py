@@ -462,7 +462,7 @@ class DistributedRollout(RolloutScheduler):
         if self.args.rollout_data_transport != "straw":
             return
         delivered = pack_rollout_payload(sorted(self.delivered), self.args, self.rollout_id)
-        ref = ray.get(self.controller.recover_reader_results.remote(f"fully_async_{worker}", delivered.manifest))
+        ref = ray.get(self.controller.recover_reader_results.remote(self.reader_ids[worker], delivered.manifest))
         for value in DiskPayloadRef(ref, self.args.rollout_data_dir).load():
             receipt = CommitReceipt.from_dict(value)
             payload = DiskPayloadRef(receipt.result_ref, self.args.rollout_data_dir)
@@ -475,9 +475,14 @@ class DistributedRollout(RolloutScheduler):
         if args.rollout_all_samples_process_path is not None:
             raise ValueError("--rollout-all-samples-process-path is not supported by distributed fully-async rollout")
         recovered = []
-        if data_source.restore_plan.mode == "resume" and "fully_async" not in data_source._restored_consumers:
+        if (
+            not data_source.manager_restored
+            and data_source.restore_plan.mode == "resume"
+            and "fully_async" not in data_source._restored_consumers
+        ):
             ref = ray.get(data_source.controller.recover_pending_rollout.remote())
-            for value in DiskPayloadRef(ref, args.rollout_data_dir).load():
+            values = DiskPayloadRef(ref, args.rollout_data_dir).load()
+            for value in values:
                 receipt = CommitReceipt.from_dict(value)
                 payload = DiskPayloadRef(receipt.result_ref, args.rollout_data_dir)
                 index = next(iter_samples(payload.load())).index
@@ -499,12 +504,13 @@ class DistributedRollout(RolloutScheduler):
         if not nodes or total_concurrency < len(nodes) * args.n_samples_per_prompt:
             raise ValueError("Distributed rollout needs concurrency for at least one prompt group per node")
         groups_per_worker, remainder = divmod(total_concurrency // args.n_samples_per_prompt, len(nodes))
-        workers, capacities = [], []
+        workers, capacities, reader_ids = [], [], []
         try:
             for i, node in enumerate(nodes):
                 capacity = groups_per_worker + (i < remainder)
                 capacities.append(capacity)
                 reader = data_source.reader_config(f"fully_async_{i}")
+                reader_ids.append(reader.reader_id)
                 workers.append(
                     ray.remote(_GenerationActor)
                     .options(
@@ -525,6 +531,7 @@ class DistributedRollout(RolloutScheduler):
                 ray.kill(worker)
             raise
         super().__init__(args, workers, capacities, controller=data_source.controller)
+        self.reader_ids = reader_ids
         self.ready.extend(recovered)
         self.delivered.update(group.receipt.position for group, _ in recovered)
         logging.getLogger(__name__).info(

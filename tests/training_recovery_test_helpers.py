@@ -20,12 +20,17 @@ def _engine_identity(engine):
     return {"actor_pid": os.getpid(), "server_pid": engine.process.pid, "url": engine.get_url()}
 
 
+def _serving_identity(serving):
+    return {"serving_pid": os.getpid(), "router_pids": [process.pid for process in serving.router_processes]}
+
+
 def _session_snapshot(manager, rollout_id):
     data = manager.recovery.load_converted(rollout_id)
     serialized = json.dumps({name: data[name] for name in ("tokens", "sample_indices", "rewards")}, sort_keys=True)
     engines = [engine for engine in manager.rollout_engines if engine is not None]
     return {
         "manager_pid": os.getpid(),
+        **ray.get(manager.serving.__ray_call__.remote(_serving_identity)),
         "engines": ray.get([engine.__ray_call__.remote(_engine_identity) for engine in engines]),
         "engine_actor_ids": [engine._actor_id.hex() for engine in engines],
         "router": [manager.args.sglang_router_ip, manager.args.sglang_router_port],
@@ -45,6 +50,10 @@ def before_train_step(args, rollout_id, step_id, model, optimizer, opt_param_sch
     directory = Path(os.environ["SLIME_RECOVERY_TEST_DIR"])
     bad_configuration = args.tensor_model_parallel_size == 1
     if rollout_id > failure_rollout:
+        if not bad_configuration and args.rollout_data_transport == "object-store" and dist.get_rank() == 0:
+            manager = ray.get_actor(training_session_name(args), namespace=RECOVERY_NAMESPACE)
+            snapshot = ray.get(manager.__ray_call__.remote(_session_snapshot, rollout_id))
+            (directory / f"continued_{rollout_id}.json").write_text(json.dumps(snapshot))
         return
     if dist.get_rank() == 0:
         manager = ray.get_actor(training_session_name(args), namespace=RECOVERY_NAMESPACE)
@@ -60,6 +69,8 @@ def before_train_step(args, rollout_id, step_id, model, optimizer, opt_param_sch
         if rollout_id == failure_rollout:
             path = directory / ("before.json" if bad_configuration else "after.json")
             path.write_text(serialized)
+            if bad_configuration and os.environ.get("SLIME_RECOVERY_TEST_KILL_MANAGER") == "1":
+                ray.kill(manager, no_restart=True)
     dist.barrier()
     if bad_configuration and rollout_id == failure_rollout:
         # Exercise the real CUDA allocator's failure and Ray exception handling.

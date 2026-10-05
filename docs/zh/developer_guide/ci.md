@@ -53,6 +53,8 @@ serving 仍能响应，再以 TP=2 和新的 DP 大小重启。测试检查 serv
 placement、保留的 batch 内容、训练 scheduler 进度、非零梯度和最终 checkpoint。
 固定矩阵覆盖 debug dump、启用在线 GC 的 Straw 对已训练但未保存 batch 的重放，
 以及已有模型/optimizer checkpoint 和 Megatron YAML 配置时的 Straw 恢复。
+三个场景都会杀掉 rollout manager，并检查新进程接回原 serving owner。
+Straw 重放和 debug 重放关闭健康检查，checkpoint 恢复开启健康检查。
 `test_training_recovery.py` 在 CPU 上检查 driver
 所有权、数据保留与重新分片、launcher 行为和 checkpoint 边界。
 

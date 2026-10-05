@@ -216,6 +216,7 @@ def test_update_weight_disk_dir_required_for_disk_transport(monkeypatch):
 
 def make_slime_validate_args(**overrides):
     values = dict(
+        ckpt_format="torch_dist",
         flush_cache_interval=1,
         rollout_data_transport="object-store",
         rollout_data_dir=None,

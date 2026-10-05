@@ -2,7 +2,7 @@
 
 长时间 RL 任务的失败模式和短 SFT 任务很不一样：rollout engine 可能 hang，long-tail sample 可能拖住整个 round，serving state 也必须在权重更新后保持一致。slime 的容灾能力主要聚焦在 rollout 侧：让 rollout engine 可观测、可重启、可调试，同时不改变 training / rollout / Data Buffer 主路径。
 
-开启容灾：
+内部 serving 始终由独立的 detached owner 持有。以下开关控制健康检查和异常 engine 恢复：
 
 ```bash
 --use-fault-tolerance
@@ -19,11 +19,11 @@ slime 提供 rollout-engine 容灾和 Megatron 手动重启恢复：
 - trace/profiling hook，用于检查 long-tail rollout 行为。
 - 开启 Straw 传输或 debug rollout dump 时，Megatron 失败后保留 SGLang 集群，并重放训练数据。
 
-集群级抢占和 Ray 集群丢失仍需集群调度器与 slime checkpointing 处理。保留的 serving 会话可以在同一个存活的 Ray 集群内跨训练 driver 失败继续使用。
+集群级抢占和 Ray 集群丢失仍需集群调度器与 slime checkpointing 处理。同一个存活的 Ray 集群内，训练 driver 或 rollout manager 退出后，serving 会话仍可继续使用；开关健康检查不会改变这个生命周期。external cluster 路径保持原有行为。
 
 ## Megatron 手动重启
 
-将 `--use-fault-tolerance` 与以下任意一种模式组合：
+训练数据重放需要以下任意一种模式。这些模式始终启用恢复记录持久化；`--use-fault-tolerance` 仅控制 serving 健康检查。
 
 ```bash
 --rollout-data-transport straw --rollout-data-dir /shared/my-run/queue
@@ -35,13 +35,15 @@ slime 提供 rollout-engine 容灾和 Megatron 手动重启恢复：
 --save-debug-rollout-data '/shared/my-run/rollout_{rollout_id}.pt'
 ```
 
-Megatron OOM 后，等待失败的训练任务结束，调整训练配置，再向**同一个 Ray 集群**提交 `train.py`。可以修改 TP/CP/EP、microbatch 和 token 上限；colocate 模式下 trainer 需要保持在原 GPU placement 容量内，独立部署的 trainer 则可以单独重新分配训练 placement，不移动 rollout GPU。模型、rollout 配置、global batch size 和会话标识需要保持一致。Straw 用存储目录和 `--rollout-queue-run-id` 标识会话，debug 模式使用 dump 路径模板。独立的新训练任务应使用不同的会话标识。
+Megatron OOM 后，等待失败的训练任务结束，调整训练配置，再向**同一个 Ray 集群**提交 `train.py`。可以修改 TP/CP/EP、microbatch 和 token 上限；colocate 模式下 trainer 需要保持在原 GPU placement 容量内，独立部署的 trainer 则可以单独重新分配训练 placement，不移动 rollout GPU。模型、rollout 配置、global batch size 和会话标识需要保持一致。可以通过 `--rollout-session-id` 显式指定 serving 会话。未指定时，Straw 用存储目录和 `--rollout-queue-run-id` 标识会话，debug 模式使用 dump 路径模板，其他模式使用保存目录或模型与 rollout 配置。独立的新训练任务应使用不同的会话标识。
 
-保留的 rollout manager 会暂停 producer 接收新任务、释放失败的 trainer ranks，同时保留 SGLang 进程、router 和 rollout GPU placement。新 trainer 重新连接这些 engine，加载最近一次成功保存的模型、optimizer 和 RNG 状态，并重放该 checkpoint 之后的数据，包括已经训练成功但尚未保存模型更新的 batch。没有 checkpoint 时，从最初的模型开始重放。reward 后处理结果和 token 数据在 DP 分片之前保留，因此修改并行配置会重新分片，不会重新生成 samples 或再次运行 reward 后处理。
+独立的 serving owner 持有 SGLang 进程、router、rollout GPU placement 和 Straw controller。manager 存活时会暂停 producer 接收新任务；manager 被杀后，重新提交会创建新 manager、接回原 owner，并读取原子写入的恢复记录。内置数据源恢复游标和 metadata；存活的 Straw controller 会隔离旧 reader，并接回已完成但尚未交给训练的预取结果。trainer ranks 登记在 serving owner 中，因此 manager 退出后仍能释放旧训练进程。新 trainer 重新连接这些 engine，加载最近一次成功保存的模型、optimizer 和 RNG 状态，并重放该 checkpoint 之后的数据，包括已经训练成功但尚未保存模型更新的 batch。没有 checkpoint 时，从最初的模型开始重放。reward 后处理结果和 token 数据在 DP 分片之前保留，因此修改并行配置会重新分片，不会重新生成 samples 或再次运行 reward 后处理。
 
 通过 `--save` 和 `--save-interval` 控制重放量及存储占用。恢复模式使用 `torch_dist` checkpoint，并自动开启可跨并行配置重新分片的 optimizer 保存格式。checkpoint 必须保存 optimizer 和 RNG 状态，因此不允许 `--no-save-optim` 和 `--no-save-rng`。Megatron 会在拓扑兼容时恢复 RNG，TP/PP 改变时则重新初始化 RNG，因此跨并行布局恢复不保证逐 bit 重现。debug dump 路径必须包含 `{rollout_id}`。恢复数据会保留到模型 checkpoint 提交成功或训练正常结束。serving 权重版本在 trainer 重启后继续递增。
 
-两次尝试之间不要停止 Ray、重建 serving container 或执行 `pkill sglang` 等清理命令。`slime.utils.external_utils.command_utils.execute_train` 会在这些恢复模式下保留 Ray 和 SGLang；含无条件清理的 shell 启动脚本需要在重启时跳过清理。训练正常结束会释放保留的会话。这是手动重启流程，不会自动重试 trainer，也不需要修改 SGLang 本身。
+两次尝试之间不要停止 Ray、重建 serving container 或执行 `pkill sglang` 等清理命令。`slime.utils.external_utils.command_utils.execute_train` 每次启动都会保留运行中的 Ray head 和 SGLang；含无条件清理的 shell 启动脚本需要在重启时跳过清理。训练正常结束会释放保留的会话。这是手动重启流程，不会自动重试 trainer，也不需要修改 SGLang 本身。
+
+没有 Straw 或 debug dump 时仍可保留 serving，但无法重放未保存的训练 batch。自定义数据源的构造函数和 rollout hook 签名保持不变；manager 重建支持内置数据源，自定义数据源需要提供兼容的 `state_dict` / `load_state_dict`，并保证自有 controller 的生命周期独立于 manager。serving owner 或整个 Ray 集群丢失时，需要从 checkpoint 冷启动。
 
 ## Rollout Health Checks
 

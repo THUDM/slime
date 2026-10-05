@@ -147,6 +147,7 @@ class RolloutQueueController:
             self._producer_lock = threading.Lock()
             self._reader_tokens = {}
             self._retired_readers = set()
+            self._active_readers = set()
             self.branch_id = uuid.uuid4().hex
             self._training_token = None
             self._training_lock = threading.RLock()
@@ -494,6 +495,7 @@ class RolloutQueueController:
         counts prompt groups, each containing n_samples_per_prompt samples.
         """
         self._activate_fork()
+        self._active_readers.add(reader_id)
         if reader_id in self._retired_readers:
             raise StaleAttempt("Reader was retired by the scheduler")
         requested = count
@@ -626,6 +628,17 @@ class RolloutQueueController:
             ]
             with self._writer_lock:
                 return self.codec.publish(receipts, submission_id=f"recover-reader:{uuid.uuid4().hex}")
+
+    def recover_manager_readers(self, generation, excluded):
+        """Fence one dead manager's readers while keeping this queue authoritative."""
+        with self._writer_lock:
+            delivered = self.codec.publish(excluded, submission_id=f"recover-manager:{uuid.uuid4().hex}")
+        results = []
+        for reader_id in sorted(self._active_readers):
+            if reader_id.startswith(generation + ":"):
+                ref = self.recover_reader_results(reader_id, delivered)
+                results.extend(self.codec.load(ref))
+        return results
 
     def recover_pending_rollout(self):
         """Replay accepted groups after a whole-job failure before the first batch.
@@ -1258,20 +1271,44 @@ class QueueDataSource(QueueReader):
     workers open separate readers against the same controller.
     """
 
-    def __init__(self, args, *, controller=None, restore_plan=None):
+    def __init__(self, args, *, controller=None, restore_plan=None, reader_generation=""):
         self.restore_plan = restore_plan or RestorePlan()
         self.restored_source = SourceRestore(new_queue=self.restore_plan.mode == "empty")
         self._owns_controller = controller is None
         if controller is None:
             controller = create_queue_controller(args, restore_plan=self.restore_plan)
         self.data_config = ray.get(controller.configuration.remote())
-        super().__init__(args, controller, "owner", self.data_config["dataset_size"])
+        self.reader_generation = reader_generation
+        reader_id = f"{reader_generation}:owner" if reader_generation else "owner"
+        super().__init__(args, controller, reader_id, self.data_config["dataset_size"])
+        self.manager_restored = False
         self.consumers, self._restored_consumers = {}, {}
 
     def reader_config(self, reader_id):
         if reader_id == "owner":
             raise ValueError("Reader ID 'owner' is reserved")
+        if self.reader_generation:
+            reader_id = f"{self.reader_generation}:{reader_id}"
         return QueueReaderConfig(self.args, self.controller, reader_id, len(self), self.branch_id)
+
+    def manager_state(self):
+        # Pending tasks and the producer cursor remain in the live controller.
+        return {"reader_generation": self.reader_generation, "metadata": self.get_metadata()}
+
+    def restore_manager(self, state, *, excluded):
+        receipts = ray.get(self.controller.recover_manager_readers.remote(state["reader_generation"], excluded))
+        for value in receipts:
+            from straw.protocol import CommitReceipt
+
+            receipt = CommitReceipt.from_dict(value)
+            group = DiskPayloadRef(receipt.result_ref, self.args.rollout_data_dir).load()
+            for sample in iter_samples(group):
+                sample._queue_receipt = value
+            # Native deliveries preserve generation/reward and work for both
+            # synchronous and fully-async consumers after manager replacement.
+            self.add_samples([group])
+        self.update_metadata(state["metadata"])
+        self.manager_restored = True
 
     def register_consumer(self, name, consumer):
         if name in self.consumers:

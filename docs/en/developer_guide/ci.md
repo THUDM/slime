@@ -64,7 +64,10 @@ It checks serving process/router/placement identity, retained batch contents,
 training scheduler progress, nonzero gradients and the final checkpoint. The
 fixed matrix covers debug dumps, replay of completed but uncheckpointed Straw
 batches with online GC, and Straw recovery from a model/optimizer checkpoint
-with Megatron YAML overrides. `test_training_recovery.py` checks
+with Megatron YAML overrides. All three scenarios also kill the rollout manager
+and verify its new process reconnects to the original serving owner. Straw replay
+and debug replay run without health checking; checkpoint recovery enables it.
+`test_training_recovery.py` checks
 driver fencing, replay retention/resharding, launcher behavior and checkpoint
 boundaries on CPU.
 

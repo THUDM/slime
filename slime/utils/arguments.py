@@ -636,12 +636,18 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
 
         def add_fault_tolerance_arguments(parser):
             parser.add_argument(
+                "--rollout-session-id",
+                type=str,
+                default=None,
+                help="Identity for retained internal serving. Defaults to the Straw pool/run, debug dump, save directory, or model/rollout configuration.",
+            )
+            parser.add_argument(
                 "--use-fault-tolerance",
                 action="store_true",
                 default=False,
                 help=(
-                    "Enable rollout health checks. With straw transport or --save-debug-rollout-data, "
-                    "also preserve serving and replay batches across manual Megatron restarts on the same Ray cluster."
+                    "Enable rollout health checks and unhealthy-engine recovery. Internal serving always "
+                    "survives stopped trainers and rollout managers on the same Ray cluster."
                 ),
             )
             parser.add_argument(
