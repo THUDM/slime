@@ -387,6 +387,20 @@ def test_new_manager_restores_journal_without_health_checks(args, tmp_path, tran
     assert not TrainingRecovery(args, RestorePlan()).batches
 
 
+def test_manager_restart_before_initial_model_load(args):
+    args.start_rollout_id = None
+    recovery = TrainingRecovery(args, RestorePlan())
+    recovery.source_state = {"reader_generation": "old", "metadata": {}}
+    recovery.persist()
+
+    restarted = TrainingRecovery(args, RestorePlan())
+    restarted.reconcile_collection(None, "branch")
+    # The model checkpoint, loaded later, still determines where training starts.
+    restarted.initial_load_completed(7)
+    assert restarted.resume_configuration["start_rollout_id"] == 7
+    assert not restarted.batches
+
+
 def test_source_snapshot_restores_cursor_and_buffer(args):
     from slime.data.data_source import RolloutDataSourceWithBuffer
 

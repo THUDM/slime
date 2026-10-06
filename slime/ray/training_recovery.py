@@ -13,11 +13,12 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
+import ray
 import torch
 
 from slime.data.checkpoint import RestorePlan
 from slime.data.tensor import materialize_tensor_refs
-from slime.data.transport import DiskPayloadRef, pack_rollout_payload, rollout_store
+from slime.data.transport import DiskPayloadRef, RawRolloutRef, pack_rollout_payload, rollout_store
 from slime.observability.rollout_data_utils import load_debug_rollout_data
 
 RECOVERY_NAMESPACE = "slime-training-recovery"
@@ -221,6 +222,24 @@ class TrainingRecovery:
             step = max(steps)
             _read_checkpoint(root, step)
             self.checkpoint_committed(step)
+
+    def reconcile_collection(self, controller, branch_id):
+        """Recover a collection accepted just before the manager journal write."""
+        if not self.loaded:
+            # Model loading has not selected the first rollout yet, so this
+            # manager cannot have accepted any training data.
+            return
+        from straw.protocol import Lease
+
+        # Generation is sequential: at most the next rollout can have been
+        # accepted without reaching remember_raw(). The queue owns that fact;
+        # reuse its original receipt before fencing/replaying the old readers.
+        rollout_id = max(self.batches, default=self.resume_configuration["start_rollout_id"] - 1) + 1
+        task = ray.get(controller.status.remote(f"collection:{branch_id}:{rollout_id}"))
+        if task is None or task["state"] != "completed":
+            return
+        receipt = ray.get(controller.result.remote(Lease(**task["lease"])))
+        self.remember_raw(rollout_id, RawRolloutRef(receipt.result_ref, self.args.rollout_data_dir, receipt))
 
     def resume_role(self, role, configuration):
         if role not in self.role_configuration:

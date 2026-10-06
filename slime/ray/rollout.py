@@ -98,6 +98,7 @@ class RolloutManager:
                     reader_generation=uuid.uuid4().hex if serving is not None else "",
                 )
                 if self.recovery is not None and self.recovery.source_state is not None:
+                    self.recovery.reconcile_collection(self.controller, self.data_source.branch_id)
                     # A dead manager's readers may have delivered these samples
                     # already. Exclude retained batches before fencing/replaying
                     # its readers, so each accepted sample is delivered once.

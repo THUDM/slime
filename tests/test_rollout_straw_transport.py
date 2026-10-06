@@ -1004,23 +1004,15 @@ def test_training_commits_only_after_save_calls_return(tmp_path, monkeypatch, fa
     manager.save.remote.side_effect = save_rollout
     manager.get_weight_version.remote.side_effect = lambda: start + actor.update_weights.call_count
     monkeypatch.setattr(module.ray, "get", lambda value: value)
-    monkeypatch.setattr(module, "configure_logger", lambda: None)
-    monkeypatch.setattr(module, "init_tracking", lambda args: None)
-    monkeypatch.setattr(module, "finish_tracking", lambda args: None)
-    from slime.ray.placement_group import RolloutStartup
-
-    monkeypatch.setattr(
-        module, "create_rollout_manager", lambda *a, **kw: RolloutStartup(manager, None, {}, None, None)
-    )
     monkeypatch.setattr(module, "create_training_models", lambda *a: (actor, critic))
     marker = tmp_path / "rollout" / f"committed_{start}.json"
     if fail_at:
         with pytest.raises(OSError, match=f"{fail_at} save failed"):
-            module.train(args)
+            module.train(args, {}, manager, None, None)
         assert saved == ["actor", "critic", "rollout"][: ["actor", "critic", "rollout"].index(fail_at) + 1]
         assert not marker.exists()
     else:
-        module.train(args)
+        module.train(args, {}, manager, None, None)
         assert saved == ["actor", "critic", "rollout"] * 3
         assert actor.update_weights.call_count == 4  # Initial sync, then once per rollout.
         for step in range(start, start + 3):
