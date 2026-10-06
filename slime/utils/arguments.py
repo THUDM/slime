@@ -662,14 +662,20 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--rollout-health-check-timeout",
                 type=float,
-                default=30.0,
+                default=600.0,
                 help="Timeout in seconds to wait for a rollout engine /health_generate response before killing it.",
             )
             parser.add_argument(
                 "--rollout-health-check-first-wait",
                 type=float,
-                default=0,
+                default=600.0,
                 help="Initial grace period (in seconds) before starting health checks. This allows time for model compilation and initialization. Increase this value significantly when using deepgemm.",
+            )
+            parser.add_argument(
+                "--rollout-cleanup-timeout",
+                type=float,
+                default=60.0,
+                help="Total time budget in seconds for detaching or disposing a training attempt.",
             )
             return parser
 
@@ -1731,7 +1737,7 @@ def parse_args(add_custom_arguments=None, *, return_restore_plan=False):
         for key, value in vars(sglang_ns).items():
             setattr(args, key, value)
 
-    restore_plan = slime_validate_args(args)
+    args, restore_plan = slime_validate_args(args)
 
     if not args.debug_rollout_only:
         megatron_validate_args(args)
@@ -1867,6 +1873,9 @@ def slime_validate_args(args):
     from slime.utils.ppo_utils import get_pg_loss_type
     from slime.utils.score_centering import validate_score_centering_args
 
+    args = copy.deepcopy(args)
+    if getattr(args, "rollout_cleanup_timeout", 60) <= 0:
+        raise ValueError("--rollout-cleanup-timeout must be positive")
     get_pg_loss_type(args)
     validate_score_centering_args(args)
     args.eval_datasets = _resolve_eval_datasets(args)
@@ -1922,7 +1931,7 @@ def slime_validate_args(args):
     # HuggingFace/finetune fallback can replace --load or disable optimizer load.
     from slime.data.checkpoint import resolve_checkpoint
 
-    restore_plan = resolve_checkpoint(args)
+    args, restore_plan = resolve_checkpoint(args)
     load_is_megatron = (
         args.load is not None
         and os.path.exists(args.load)
@@ -2246,4 +2255,4 @@ def slime_validate_args(args):
                 "Trainer fault tolerance requires a unique --save-debug-rollout-data path containing {rollout_id}"
             )
 
-    return restore_plan
+    return args, restore_plan

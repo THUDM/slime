@@ -19,6 +19,7 @@ from slime.observability.rollout_data_utils import (
 from slime.observability.rollout_metrics import log_eval_rollout_data, log_rollout_data
 from slime.rollout.base_types import RolloutFnTrainOutput, call_rollout_fn
 from slime.rollout.sample_hooks import set_current_rollout_id
+from slime.utils.cleanup import Cleanup
 from slime.utils.http_utils import init_http_client
 from slime.utils.misc import load_function
 from slime.utils.staleness import fully_async_metrics_enabled
@@ -43,7 +44,7 @@ class RolloutManager:
     def __init__(self, args, pg, *, restore_plan=None, serving=None, deployment=None):
         configure_logger()
 
-        from slime.ray.training_recovery import TrainingRecovery, training_recovery_enabled
+        from slime.ray.training_recovery import TrainingRecovery, TrainingResume, training_recovery_enabled
 
         self.serving = serving
         self.recovery = (
@@ -51,12 +52,21 @@ class RolloutManager:
             if serving is not None and training_recovery_enabled(args)
             else None
         )
+        if self.recovery is not None:
+            args = TrainingResume(
+                self.recovery.restore_plan,
+                self.recovery.checkpoint,
+                getattr(args, "update_weight_start_version", 0),
+                deployment.reused,
+            ).apply(args)
+            restore_plan = self.recovery.restore_plan
         self._recovery_admission_was_paused = None
         self.pg = pg
         self.args = args
         self.controller = deployment.controller if deployment else None
         self._owns_controller = False
         self.weight_version = None
+        self.training_weight_version = getattr(args, "update_weight_start_version", 0)
         if args.rollout_data_transport == "straw":
             check_rollout_storage(args)
 
@@ -147,23 +157,25 @@ class RolloutManager:
         if not was_paused:
             self.data_source.consumers["fully_async"].resume()
 
-    def dispose(self):
-        # Normal completion releases replay history and the serving session.
-        # Failed attempts call detach_training and keep both for a restart.
-        if close := getattr(self.data_source, "close", None):
-            close()
-        if self.recovery is not None:
-            self.recovery.release_batches()
-            self.recovery.journal.unlink(missing_ok=True)
-        if self.serving is not None:
-            ray.get(self.serving.dispose.remote())
-        elif self._owns_controller:
-            ray.get(self.controller.close.remote())
-            ray.kill(self.controller, no_restart=True)
+    def dispose(self, timeout=None):
         from slime.data.transport import seal_rollout_store
 
-        seal_rollout_store(self.args)
-        logging_utils.finish_tracking(self.args)
+        # The driver disposes serving separately, even when a custom source
+        # fails here. Managers close only resources they own, never borrowed ones.
+        with Cleanup(getattr(self.args, "rollout_cleanup_timeout", 60) if timeout is None else timeout) as cleanup:
+            if close := getattr(self.data_source, "close", None):
+                cleanup.run("close rollout data source", close)
+            if self.recovery is not None:
+                cleanup.run("release replay history", self.recovery.release_batches)
+                cleanup.run("remove recovery journal", self.recovery.journal.unlink, missing_ok=True)
+            if self._owns_controller:
+                cleanup.run(
+                    "close queue controller",
+                    lambda: ray.get(self.controller.close.remote(), timeout=cleanup.remaining),
+                )
+                cleanup.run("terminate queue controller", ray.kill, self.controller, no_restart=True)
+            cleanup.run("seal rollout storage", seal_rollout_store, self.args)
+            cleanup.run("finish manager tracking", logging_utils.finish_tracking, self.args)
 
     def attach_training(self, args, deployment):
         """Bind a driver to the same serving owner, including after manager death."""
@@ -186,33 +198,33 @@ class RolloutManager:
                 self.recovery.reconcile_collection(self.controller, self.data_source.branch_id)
         # The saved load boundary wins over new CLI settings, while trainer
         # parallelism and memory limits still come from the new attempt.
-        configuration = dict(self.recovery.resume_configuration) if self.recovery is not None else {}
+        weight_version = getattr(args, "update_weight_start_version", 0)
         if deployment.reused:
-            configuration["update_weight_start_version"] = (
-                ray.get(self.serving.get_weight_version.remote(allow_inconsistent=True)) or 0
-            )
-        for name, value in configuration.items():
-            setattr(args, name, value)
-        self.args = self.batch_builder.args = self.data_source.args = args
-        if self.recovery is not None:
-            self.recovery.args = args
-        self.rollout_engine_lock = deployment.engine_lock
-        return TrainingResume(
+            weight_version = ray.get(self.serving.get_weight_version.remote(allow_inconsistent=True)) or 0
+        resume = TrainingResume(
             self.recovery.restore_plan if self.recovery is not None else deployment.restore_plan,
-            configuration,
+            self.recovery.checkpoint if self.recovery is not None else None,
+            weight_version,
             deployment.reused,
         )
+        self.args = resume.apply(args)
+        # Trainer layout affects batch splitting. Sources and their long-lived
+        # workers keep their original rollout configuration; recovery keeps its
+        # own storage configuration and checkpoint boundary.
+        self.batch_builder.args = self.args
+        self.rollout_engine_lock = deployment.engine_lock
+        self.training_weight_version = weight_version
+        return resume
 
     def register_training_actors(self, role, actors, configuration):
         if self.serving is not None:
             ray.get(self.serving.register_trainers.remote(role, actors))
-        if self.recovery is not None:
-            return self.recovery.resume_role(role, configuration)
-        return {"update_weight_start_version": getattr(self.args, "update_weight_start_version", 0)}
+        values = self.recovery.resume_role(role, configuration) if self.recovery is not None else {}
+        values["update_weight_start_version"] = self.training_weight_version
+        return values
 
-    def detach_training(self, job_id):
+    def detach_training(self):
         self._recovery_admission_was_paused = self.pause_rollout_admission()
-        ray.get(self.serving.detach_training.remote(job_id))
         logger.warning("Training stopped; preserving serving and available replay batches for manual restart")
 
     def _source_state(self):

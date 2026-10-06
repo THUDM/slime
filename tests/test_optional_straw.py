@@ -19,10 +19,10 @@ def test_missing_straw_startup_hint(monkeypatch, caplog, transport):
     args = make_slime_validate_args(rollout_data_transport=transport)
     if transport == "straw":
         with pytest.raises(ModuleNotFoundError, match="pip install straw-queue") as raised:
-            module.slime_validate_args(args)
+            args, _ = module.slime_validate_args(args)
         assert raised.value.name == "straw"
     else:
-        module.slime_validate_args(args)
+        args, _ = module.slime_validate_args(args)
         assert args.rollout_data_transport == transport
         assert args.data_source_path == "slime.data.data_source.RolloutDataSourceWithBuffer"
         assert args.rollout_data_dir is None
@@ -77,7 +77,9 @@ def _run_default_without_straw():
         return groups
 
     fully_async_rollout._generate_rollout_async = generate
-    assert fully_async_rollout.generate_rollout_fully_async(args, 0, object()) is groups
+    # The source owns its consumer; no distributed (Straw) imports are needed.
+    source = SimpleNamespace(consumers={"fully_async": object.__new__(fully_async_rollout.AsyncRolloutWorker)})
+    assert fully_async_rollout.generate_rollout_fully_async(args, 0, source) is groups
 
     ray.init(address="local", num_cpus=1, include_dashboard=False, object_store_memory=128 * 1024**2)
     try:

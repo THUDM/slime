@@ -59,29 +59,31 @@ class RolloutHealthMonitor:
         logger.info("RolloutHealthMonitor started (in paused state).")
         return True
 
-    def stop(self) -> None:
+    def stop(self, *, timeout=None) -> None:
         """Stop the health monitor thread completely. Called during dispose."""
         if not self._thread:
             return
 
         logger.info("Stopping RolloutHealthMonitor...")
         self._stop_event.set()
-        timeout = self._check_timeout + self._check_interval + 5
+        if timeout is None:
+            timeout = self._check_timeout + 5
         self._thread.join(timeout=timeout)
         if self._thread.is_alive():
-            logging.warning("Rollout health monitor thread did not terminate within %.1fs", timeout)
+            raise TimeoutError(f"Rollout health monitor did not terminate within {timeout:.1f}s")
         else:
             logger.info("RolloutHealthMonitor stopped.")
 
         self._thread = None
 
-    def pause(self) -> None:
+    def pause(self, *, timeout=None) -> None:
         """Pause health checking. Called when engines are offloaded."""
         logger.info("Pausing health monitor...")
         self._pause_event.set()
         # Finish an in-flight check before weights or memory ownership change.
-        with self._check_lock:
-            pass
+        if not self._check_lock.acquire(timeout=self._check_timeout if timeout is None else timeout):
+            raise TimeoutError("Health check did not finish before pause deadline")
+        self._check_lock.release()
 
     def resume(self) -> None:
         """Resume health checking. Called when engines are onloaded."""

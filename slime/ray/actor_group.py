@@ -1,3 +1,4 @@
+import copy
 import os
 import shutil
 import time
@@ -43,7 +44,9 @@ class RayTrainGroup:
         with_opd_teacher: bool = False,
         actor_cls=None,
     ) -> None:
-        self.args = args
+        # Role initialization/release cycles resolve their own checkpoint
+        # options; they must not rewrite the driver's attempt configuration.
+        self.args = copy.deepcopy(args)
         self._num_nodes = num_nodes
         self._num_gpus_per_node = num_gpus_per_node
         self._pg = pg

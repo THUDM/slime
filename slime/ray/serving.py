@@ -5,6 +5,8 @@ controller and the weight-update lock. Managers receive snapshots of engine
 handles; health checks and recovery mutate only this owner's topology.
 """
 
+import copy
+import logging
 import multiprocessing
 from dataclasses import dataclass
 
@@ -12,6 +14,7 @@ import ray
 
 from slime.ray.training_recovery import retained_rollout_configuration
 from slime.ray.utils import Lock
+from slime.utils.cleanup import Cleanup
 from slime.utils.health_monitor import RolloutHealthMonitor
 
 
@@ -41,24 +44,37 @@ class ServingCluster:
         self.args = args
         self.restore_plan = restore_plan
         self.configuration = retained_rollout_configuration(args)
-        # Create placements and router processes inside this detached actor so
-        # their lifetime follows serving, not a replaceable driver or manager.
-        self.placements = create_placement_groups(args)
-        existing_children = {process.pid for process in multiprocessing.active_children()}
-        self.servers, handles = (
-            ({}, []) if args.debug_train_only else start_rollout_servers(args, self.placements["rollout"])
-        )
-        self.router_processes = [
-            process for process in multiprocessing.active_children() if process.pid not in existing_children
-        ]
-        ray.get(handles)
+        self.placements = {}
+        self.servers = {}
+        self.router_processes = []
         self.controller = None
-        self.lock = Lock.options(num_cpus=0, num_gpus=0).remote()
+        self.lock = None
         self.driver_job_id = None
         self.training_actors = {}
         self.attachments = 0
         self._health_monitors = []
         self._ci_fault_injection_pending = args.ci_test
+        existing_children = {process.pid for process in multiprocessing.active_children()}
+        try:
+            # Constructor failure must release partial topology too. A detached
+            # actor can fail before any driver obtains a usable deployment.
+            self.placements = create_placement_groups(args)
+            try:
+                self.servers, handles = (
+                    ({}, []) if args.debug_train_only else start_rollout_servers(args, self.placements["rollout"])
+                )
+            finally:
+                self.router_processes = [
+                    process for process in multiprocessing.active_children() if process.pid not in existing_children
+                ]
+            ray.get(handles)
+            self.lock = Lock.options(num_cpus=0, num_gpus=0).remote()
+        except BaseException:
+            try:
+                self.dispose()
+            except Exception:
+                logging.getLogger(__name__).exception("Failed to dispose partial serving deployment")
+            raise
 
     def get_queue_controller(self):
         """Create only when the built-in source or batch builder needs a queue."""
@@ -109,9 +125,11 @@ class ServingCluster:
     def attach_training(self, args, job_id):
         from ray.util.placement_group import remove_placement_group
 
+        from slime.backends.sglang_utils.engine_group import reset_weights_update_groups
         from slime.ray.placement_group import _create_placement_group
 
         self.validate_attachment(args)
+        args = copy.deepcopy(args)
         # Only a validated successor may touch the old trainer's resources.
         # Stop health checks before replacing connections or GPU allocations.
         self.health_monitoring_pause()
@@ -131,9 +149,10 @@ class ServingCluster:
         if reused:
             # NCCL groups and a possibly held lock belong to the old trainer.
             # Engines survive; their next update reconnects to the new trainer.
-            for server in self.servers.values():
-                for group in server.server_groups:
-                    group.reset_weights_update_groups(timeout=args.rollout_health_check_timeout)
+            reset_weights_update_groups(
+                [group for server in self.servers.values() for group in server.server_groups],
+                timeout=args.rollout_health_check_timeout,
+            )
             ray.kill(self.lock, no_restart=True)
             self.lock = Lock.options(num_cpus=0, num_gpus=0).remote()
             server = self._updatable_server()
@@ -177,17 +196,25 @@ class ServingCluster:
         self.training_actors[role] = actors
 
     def release_trainers(self):
-        for actors in self.training_actors.values():
-            for actor in actors:
-                ray.kill(actor, no_restart=True)
-        self.training_actors.clear()
+        with Cleanup() as cleanup:
+            for actors in self.training_actors.values():
+                for actor in actors[:]:
+                    # Retain failed handles so a repeated detach can retry them.
+                    def release(actor=actor, actors=actors):
+                        ray.kill(actor, no_restart=True)
+                        actors.remove(actor)
 
-    def detach_training(self, job_id):
+                    cleanup.run("terminate training actor", release)
+
+    def detach_training(self, job_id, timeout=None):
         # A late cleanup from an old driver must not detach its successor.
+        if self.driver_job_id is None:
+            return  # A repeated cleanup after a lost RPC reply is harmless.
         if self.driver_job_id != job_id:
             raise RuntimeError("Only the owning driver can detach its serving session")
-        self.health_monitoring_pause()
-        self.release_trainers()
+        with Cleanup(getattr(self.args, "rollout_cleanup_timeout", 60) if timeout is None else timeout) as cleanup:
+            cleanup.run("pause serving health checks", self.health_monitoring_pause, timeout=cleanup.remaining)
+            cleanup.run("release trainers", self.release_trainers)
         # Keep engines, routers, placements and the queue for the next attempt.
         self.driver_job_id = None
 
@@ -243,9 +270,12 @@ class ServingCluster:
         if server:
             server.num_new_engines = 0
 
-    def health_monitoring_pause(self):
-        for monitor in self._health_monitors:
-            monitor.pause()
+    def health_monitoring_pause(self, timeout=None):
+        if not self._health_monitors:
+            return
+        with Cleanup(self.args.rollout_health_check_timeout if timeout is None else timeout) as cleanup:
+            for monitor in self._health_monitors:
+                cleanup.run("pause health monitor", monitor.pause, timeout=cleanup.remaining)
 
     def finish_rollout(self):
         """Remove failed engines before the trainer sends control requests."""
@@ -261,30 +291,44 @@ class ServingCluster:
             monitor.resume()
         return self.servers
 
-    def dispose(self):
+    def dispose(self, timeout=None):
         from ray.util.placement_group import remove_placement_group
 
         # Full teardown is for successful completion. Failure cleanup uses
         # detach_training instead, preserving the resources needed to resume.
-        self.release_trainers()
-        for monitor in self._health_monitors:
-            monitor.stop()
-        engines = [engine for server in self.servers.values() for engine in server.all_engines if engine is not None]
-        shutdowns = [engine.shutdown.remote() for engine in engines]
-        if shutdowns:
-            ray.wait(shutdowns, num_returns=len(shutdowns), timeout=self.args.rollout_health_check_timeout)
-        for engine in engines:
-            ray.kill(engine, no_restart=True)
-        for router in self.router_processes:
-            router.terminate()
-            router.join(timeout=10)
-            if router.is_alive():
-                router.kill()
-                router.join()
-        if self.controller is not None:
-            ray.get(self.controller.close.remote())
-            ray.kill(self.controller, no_restart=True)
-        ray.kill(self.lock, no_restart=True)
-        # Colocated actor/critic/rollout entries can share the same placement.
-        for group in {placement[0] for placement in self.placements.values() if placement and placement[0]}:
-            remove_placement_group(group)
+        with Cleanup(getattr(self.args, "rollout_cleanup_timeout", 60) if timeout is None else timeout) as cleanup:
+            cleanup.run("release trainers", self.release_trainers)
+            for monitor in self._health_monitors:
+                cleanup.run("stop health monitor", monitor.stop, timeout=cleanup.remaining)
+            engines = [
+                engine for server in self.servers.values() for engine in server.all_engines if engine is not None
+            ]
+            shutdowns = []
+            for engine in engines:
+                ref = cleanup.run("request engine shutdown", engine.shutdown.remote)
+                if ref is not None:
+                    shutdowns.append(ref)
+            if shutdowns:
+                cleanup.run(
+                    "wait for engines", ray.wait, shutdowns, num_returns=len(shutdowns), timeout=cleanup.remaining / 2
+                )
+            for engine in engines:
+                cleanup.run("terminate engine", ray.kill, engine, no_restart=True)
+            for router in self.router_processes:
+                if router.is_alive():
+                    cleanup.run("terminate router", router.terminate)
+                    cleanup.run("join router", router.join, timeout=min(10, cleanup.remaining / 2))
+                    if router.is_alive():
+                        cleanup.run("kill router", router.kill)
+                        cleanup.run("reap router", router.join, timeout=cleanup.remaining)
+            if self.controller is not None:
+                cleanup.run(
+                    "close queue controller",
+                    lambda: ray.get(self.controller.close.remote(), timeout=cleanup.remaining),
+                )
+                cleanup.run("terminate queue controller", ray.kill, self.controller, no_restart=True)
+            if self.lock is not None:
+                cleanup.run("terminate weight lock", ray.kill, self.lock, no_restart=True)
+            # Colocated actor/critic/rollout entries can share the same placement.
+            for group in {placement[0] for placement in self.placements.values() if placement and placement[0]}:
+                cleanup.run("remove serving placement", remove_placement_group, group)

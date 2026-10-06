@@ -12,7 +12,7 @@ import itertools
 import json
 import os
 import uuid
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 import ray
@@ -129,6 +129,7 @@ def retained_rollout_configuration(args):
         "rollout_health_check_interval",
         "rollout_health_check_timeout",
         "rollout_health_check_first_wait",
+        "rollout_cleanup_timeout",
         "train_env_vars",
         "actor_config",
         "critic_config",
@@ -164,11 +165,41 @@ def training_session_name(args):
     return "rollout:" + hashlib.sha256(identity.encode()).hexdigest()
 
 
-@dataclass
+@dataclass(frozen=True)
+class TrainingCheckpoint:
+    """The saved training boundary, independent of this attempt's CLI options."""
+
+    load: str | None
+    save: str | None
+    ckpt_step: int | None
+    start_rollout_id: int | None
+    finetune: bool
+    no_load_optim: bool
+    no_load_rng: bool
+
+    @classmethod
+    def from_args(cls, args):
+        return cls(**{name: getattr(args, name, None) for name in cls.__dataclass_fields__})
+
+
+@dataclass(frozen=True)
 class TrainingResume:
     restore_plan: RestorePlan
-    configuration: dict
+    checkpoint: TrainingCheckpoint | None
+    weight_version: int
     reused: bool
+
+    def apply(self, args):
+        """Build a fresh configuration for existing args-based custom hooks.
+
+        Only checkpoint fields override the requested trainer settings. Neither
+        the caller's configuration nor another component's snapshot is mutated.
+        """
+        args = copy.deepcopy(args)
+        if self.checkpoint is not None:
+            vars(args).update(asdict(self.checkpoint))
+        args.update_weight_start_version = self.weight_version
+        return args
 
 
 @dataclass
@@ -189,10 +220,7 @@ class TrainingRecovery:
         self.incarnation = uuid.uuid4().hex
         self.loaded = False
         self.checkpoint_step = None
-        self.resume_configuration = {
-            name: getattr(args, name, None)
-            for name in ("load", "save", "ckpt_step", "start_rollout_id", "finetune", "no_load_optim", "no_load_rng")
-        }
+        self.checkpoint = TrainingCheckpoint.from_args(args)
         self.configuration = retained_rollout_configuration(args)
         self.source_state = None
         # The journal path follows the session identity, not the manager PID,
@@ -216,6 +244,7 @@ class TrainingRecovery:
             if retained_serving:
                 # Reuse the journal only with its live serving/queue owner.
                 # Cold startup takes its progress from the checkpoint instead.
+                self.checkpoint = TrainingCheckpoint(**state.pop("resume_configuration"))
                 for name, value in state.items():
                     setattr(self, name, value)
             else:
@@ -231,7 +260,6 @@ class TrainingRecovery:
                 "configuration",
                 "restore_plan",
                 "role_configuration",
-                "resume_configuration",
                 "batches",
                 "incarnation",
                 "loaded",
@@ -239,6 +267,9 @@ class TrainingRecovery:
                 "source_state",
             )
         }
+        # Keep the durable record as plain fields; the typed boundary is an
+        # in-memory handoff, not a Python class dependency in the journal format.
+        state["resume_configuration"] = asdict(self.checkpoint)
         # Flush the complete new record before atomically replacing the old
         # one; a crash must not expose a half-written recovery journal.
         temporary = self.journal.with_suffix(".tmp")
@@ -256,11 +287,11 @@ class TrainingRecovery:
 
     def reconcile_checkpoint(self):
         """A joint commit may have succeeded just before its manager RPC was lost."""
-        if self.args.rollout_data_transport != "straw" or not self.resume_configuration["save"]:
+        if self.args.rollout_data_transport != "straw" or not self.checkpoint.save:
             return
         from slime.data.checkpoint import _read_checkpoint
 
-        root = Path(self.resume_configuration["save"])
+        root = Path(self.checkpoint.save)
         steps = [int(path.stem.removeprefix("committed_")) for path in (root / "rollout").glob("committed_*.json")]
         if steps and (self.checkpoint_step is None or max(steps) > self.checkpoint_step):
             step = max(steps)
@@ -278,7 +309,7 @@ class TrainingRecovery:
         # Generation is sequential: at most the next rollout can have been
         # accepted without reaching remember_raw(). The queue owns that fact;
         # reuse its original receipt before fencing/replaying the old readers.
-        rollout_id = max(self.batches, default=self.resume_configuration["start_rollout_id"] - 1) + 1
+        rollout_id = max(self.batches, default=self.checkpoint.start_rollout_id - 1) + 1
         task = ray.get(controller.status.remote(f"collection:{branch_id}:{rollout_id}"))
         if task is not None and task["state"] == "completed":
             receipt = ray.get(controller.result.remote(Lease(**task["lease"])))
@@ -315,8 +346,7 @@ class TrainingRecovery:
                 no_load_optim=values["use_stateless_adam"],
                 no_load_rng=False,
             )
-        values["start_rollout_id"] = self.resume_configuration["start_rollout_id"]
-        values["update_weight_start_version"] = getattr(self.args, "update_weight_start_version", 0)
+        values["start_rollout_id"] = self.checkpoint.start_rollout_id
         return values
 
     def remember_raw(self, rollout_id, reference, *, source_state=None):
@@ -380,7 +410,7 @@ class TrainingRecovery:
 
     def initial_load_completed(self, start_rollout_id):
         if not self.loaded:
-            self.resume_configuration["start_rollout_id"] = start_rollout_id
+            self.checkpoint = replace(self.checkpoint, start_rollout_id=start_rollout_id)
             self.loaded = True
             self.persist()
 
@@ -388,8 +418,9 @@ class TrainingRecovery:
         # Runtime training completion is insufficient: only a durable training
         # checkpoint lets us release batches needed for replay.
         self.checkpoint_step = rollout_id
-        self.resume_configuration.update(
-            load=self.resume_configuration["save"],
+        self.checkpoint = replace(
+            self.checkpoint,
+            load=self.checkpoint.save,
             ckpt_step=rollout_id,
             start_rollout_id=rollout_id + 1,
             finetune=False,

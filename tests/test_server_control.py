@@ -68,6 +68,7 @@ def test_boundary_health_check_bypasses_grace_and_cleans_dead_actor(monkeypatch,
     )
     monitor = health_monitor.RolloutHealthMonitor(group, args)
     serving = object.__new__(ServingCluster.__ray_metadata__.modified_class)
+    serving.args = args
     serving._health_monitors = [monitor]
     serving.servers = {"model": group}
 

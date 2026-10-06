@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import logging
@@ -234,19 +235,21 @@ def _initial_configuration(args):
 
 
 def resolve_checkpoint(args):
-    """Translate ordinary load/save arguments into an isolated checkpoint branch.
+    """Return a configuration copy and an isolated checkpoint branch plan.
 
     Each checkpoint restore gets fresh queue authority and output files. A small
     current pointer lets callers keep using the same logical save directory.
     Before the first checkpoint, the original run can instead recover its WAL.
+    Resolution never rewrites the caller's requested paths, even on failure.
     """
+    args = copy.deepcopy(args)
     mode, dataset_cursor = "new", None
     if getattr(args, "rollout_data_transport", None) != "straw":
-        return RestorePlan()
+        return args, RestorePlan()
     if any(getattr(args, key, False) for key in ("debug_train_only", "debug_rollout_only", "load_debug_rollout_data")):
-        return RestorePlan()
+        return args, RestorePlan()
     if not getattr(args, "save", None):
-        return RestorePlan()
+        return args, RestorePlan()
     save_root = Path(args.save).resolve()
     current_path = save_root / "rollout/current.json"
     expected_current = current_path.read_text() if current_path.exists() else None
@@ -317,7 +320,7 @@ def resolve_checkpoint(args):
                 raise ValueError("Interrupted run requires its original straw pool")
             args.load, args.save = branch["initial_load"], str(active)
             args.rollout_data_dir = branch["pool"]
-            return RestorePlan("resume", str(save_root), expected_current, branch, branch["queue_id"])
+            return args, RestorePlan("resume", str(save_root), expected_current, branch, branch["queue_id"])
         selected = (
             (root, step, _read_checkpoint(root, step))
             if direct_commit
@@ -388,4 +391,4 @@ def resolve_checkpoint(args):
         args.update_weight_start_version = value["weight_version"] if value is not None else step + 1
         branch["parent"] = {"directory": str(root), "step": step, "queue_snapshot": value is not None}
     args.save = str(destination)
-    return RestorePlan(mode, str(save_root), expected_current, branch, branch["queue_id"], dataset_cursor)
+    return args, RestorePlan(mode, str(save_root), expected_current, branch, branch["queue_id"], dataset_cursor)

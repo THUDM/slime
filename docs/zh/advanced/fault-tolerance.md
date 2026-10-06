@@ -75,6 +75,12 @@ slime 使用具名 Ray actor 管理推理集群。新任务根据会话名称找
 
 如果 `RolloutManager` 还活着，它会暂停接收新的生成任务。如果它已经退出，新实例会接回 `ServingCluster`，恢复数据源进度，并由队列控制器阻止旧读取进程继续取任务。已经完成、但尚未交给训练的预取结果仍可使用。训练进程也登记在 `ServingCluster` 中，因此 manager 退出后仍能清理旧训练进程。
 
+训练 driver 负责本次训练尝试的退出策略，也负责启动中途失败后的回滚。失败时，先限时等待 manager 暂停，再直接通知 serving 释放 trainer；无法暂停的 manager 会被终止，由下一次尝试重建。正常结束时分别清理 manager 和 serving，因此自定义 data source 的 `close()` 报错也不会跳过 serving 清理。清理失败会记录日志，保留原始训练异常。
+
+`--rollout-cleanup-timeout` 默认 **60 秒**，限制一次 detach 或 dispose 的等待时间，与健康检查超时和预热等待独立。某个步骤失败后仍会尝试释放其余资源；无法正常退出的 actor 会被终止。
+
+Checkpoint 选择会返回独立的配置与恢复计划。恢复边界通过不可变对象交接，每次训练尝试根据它和 serving 权重版本生成自己的配置副本；data source 和长驻 rollout worker 保留原来的配置。所有 custom function 仍使用原有的 args 接口。
+
 ## 推理引擎的健康检查与重启
 
 rollout 过程中，slime 定期请求 SGLang 的 `/health_generate` 接口，检查引擎是否正常响应。rollout 结束时还会立即检查一次，**不受后台检查间隔和首次等待时间限制**。
@@ -85,18 +91,20 @@ rollout 过程中，slime 定期请求 SGLang 的 `/health_generate` 接口，�
 
 重新接入时，清理旧训练连接也有超时限制。无法应答的 engine 会被注销，并连同其推理子进程一起终止；健康的其他 engine 保持运行。该机制同样适用于 prefill 和 decode 分组。
 
+重连时会先向所有 prefill/decode 组发起重置，再等待回复，避免共享 NCCL 通信组的两端因串行退出而互相等待。
+
 | 参数 | 默认值 | 说明 |
 |---|---|---|
-| `--rollout-health-check-first-wait` | `0` 秒 | 每次恢复后台检查后，先等待这段时间，给模型预热和算子编译留出时间。rollout 收尾检查不受影响。 |
+| `--rollout-health-check-first-wait` | `600` 秒 | 每次恢复后台检查后，先等待这段时间，给模型预热和算子编译留出时间。rollout 收尾检查不受影响。 |
 | `--rollout-health-check-interval` | `600` 秒 | 后台健康检查的间隔。 |
-| `--rollout-health-check-timeout` | `30` 秒 | 单次健康检查的超时，也限制等待 Ray 健康检查调用的时间。 |
+| `--rollout-health-check-timeout` | `600` 秒 | 单次健康检查的超时，也限制等待 Ray 健康检查调用的时间。 |
 
 例如，大 MoE 模型需要较长的预热时间时，可以设置：
 
 ```bash
 --rollout-health-check-first-wait 600 \
 --rollout-health-check-interval 10 \
---rollout-health-check-timeout 5
+--rollout-health-check-timeout 600
 ```
 
 如果负载高峰导致健康检查误判，可以增大超时。如果引擎在权重更新后反复失败，应检查 SGLang 日志和最近保存的 rollout 数据。

@@ -15,6 +15,32 @@ from slime.ray.utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, add_default_ray
 logger = logging.getLogger(__name__)
 
 
+def reset_weights_update_groups(groups, *, timeout):
+    """Reset every serving peer together, then retire only failed engines.
+
+    Prefill and decode may share one NCCL weight-update group. Destroying that
+    group can wait for its peers, so sending resets to one server group and
+    waiting before contacting the next group can deadlock healthy engines.
+    """
+    resets = {
+        engine.reset_weights_update_groups.remote(): (group_index, index // group.nodes_per_engine)
+        for group_index, group in enumerate(groups)
+        for index, engine in enumerate(group.all_engines)
+        if engine is not None
+    }
+    if resets:
+        ray.wait(list(resets), num_returns=len(resets), timeout=timeout)
+    failed = set()
+    for ref, engine in resets.items():
+        try:
+            ray.get(ref, timeout=0)
+        except Exception as error:
+            logger.warning("Retiring engine %s after trainer reset failed: %s", engine, error)
+            failed.add(engine)
+    for group_index, engine_id in sorted(failed):
+        groups[group_index].retire_engine(engine_id, timeout=timeout)
+
+
 @dataclasses.dataclass
 class ServerGroup:
     """A group of homogeneous SGLang engines with the same configuration.
@@ -68,25 +94,6 @@ class ServerGroup:
             if engine is not None:
                 ray.kill(engine, no_restart=True)
         self.all_engines[first : first + self.nodes_per_engine] = [None] * self.nodes_per_engine
-
-    def reset_weights_update_groups(self, *, timeout):
-        """Fence old trainer connections, retiring peers that cannot acknowledge."""
-        resets = {
-            engine.reset_weights_update_groups.remote(): index // self.nodes_per_engine
-            for index, engine in enumerate(self.all_engines)
-            if engine is not None
-        }
-        if resets:
-            ray.wait(list(resets), num_returns=len(resets), timeout=timeout)
-        failed = set()
-        for ref, engine_id in resets.items():
-            try:
-                ray.get(ref, timeout=0)
-            except Exception as error:
-                logger.warning("Retiring engine %s after trainer reset failed: %s", engine_id, error)
-                failed.add(engine_id)
-        for engine_id in sorted(failed):
-            self.retire_engine(engine_id, timeout=timeout)
 
     def parallel_config(self) -> dict[str, Any]:
         """Return the SGLang parallel args that affect rank-local expert routing."""

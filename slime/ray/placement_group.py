@@ -7,6 +7,8 @@ import ray
 from ray.util.placement_group import placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
+from slime.utils.cleanup import Cleanup
+
 from .actor_group import RayTrainGroup
 from .utils import add_default_ray_env_vars
 
@@ -125,7 +127,14 @@ def create_placement_groups(args):
         # Separate allocations let a restarted trainer resize without moving
         # the serving engines that still hold rollout state.
         actor_pg = _create_placement_group(args.actor_num_nodes * args.actor_num_gpus_per_node)
-        rollout_pg = _create_placement_group(args.rollout_num_gpus)
+        try:
+            rollout_pg = _create_placement_group(args.rollout_num_gpus)
+        except BaseException:
+            from ray.util.placement_group import remove_placement_group
+
+            if actor_pg[0] is not None:
+                Cleanup().run("remove partial training placement", remove_placement_group, actor_pg[0])
+            raise
         return {"actor": actor_pg, "critic": actor_pg if args.use_critic else None, "rollout": rollout_pg}
 
     num_gpus, rollout_offset = _get_placement_group_layout(args)
@@ -233,14 +242,72 @@ def create_training_models(args, pgs, rollout_manager, actor_cls=None):
 
 @dataclass
 class RolloutStartup:
-    manager: object
-    serving: object
-    placements: dict
-    num_rollout_per_epoch: int | None
-    restore_plan: object
+    """One driver's attempt, including resources acquired before startup ends."""
+
+    args: object
+    restore_plan: object = None
+    manager: object = None
+    serving: object = None
+    placements: dict | None = None
+    num_rollout_per_epoch: int | None = None
+
+    def close(self, *, failed):
+        timeout = getattr(self.args, "rollout_cleanup_timeout", 60)
+        with Cleanup(timeout) as cleanup:
+            if failed and self.serving is not None:
+                # A live but wedged manager must not prevent the independent
+                # serving owner from releasing this driver's training actors.
+                if self.manager is not None:
+                    try:
+                        ray.get(self.manager.detach_training.remote(), timeout=cleanup.remaining / 2)
+                    except Exception:
+                        logger.exception("Manager could not pause for restart; replacing it on the next attempt")
+                        cleanup.run("terminate unresponsive manager", ray.kill, self.manager, no_restart=True)
+                cleanup.run(
+                    "detach training from serving",
+                    lambda: ray.get(
+                        self.serving.detach_training.remote(ray.get_runtime_context().get_job_id(), cleanup.remaining),
+                        timeout=cleanup.remaining,
+                    ),
+                )
+                return
+
+            # Successful completion disposes both owners independently. A
+            # broken custom source/manager cannot skip engine or PG cleanup.
+            for name, actor, fraction in (("manager", self.manager, 0.5), ("serving", self.serving, 1)):
+                if actor is not None:
+                    timeout = cleanup.remaining * fraction
+                    cleanup.run(
+                        f"dispose {name}",
+                        lambda actor=actor, timeout=timeout: ray.get(actor.dispose.remote(timeout), timeout=timeout),
+                    )
+                    cleanup.run(f"terminate {name}", ray.kill, actor, no_restart=True)
+            if self.serving is None and self.placements:
+                from ray.util.placement_group import remove_placement_group
+
+                # External engines are not ours, but driver-created placements are.
+                for group in {value[0] for value in self.placements.values() if value and value[0]}:
+                    cleanup.run("remove training placement", remove_placement_group, group)
 
 
 def create_rollout_manager(args, *, restore_plan=None):
+    # Keep the caller's requested configuration intact. Runtime discovery and
+    # checkpoint selection produce an attempt-local Namespace for old hooks.
+    startup = RolloutStartup(copy.deepcopy(args), restore_plan)
+    try:
+        _attach_rollout_manager(startup)
+    except BaseException:
+        # Startup can fail after serving attaches but before the caller receives
+        # this object. Roll back that partial attempt at the acquisition boundary.
+        try:
+            startup.close(failed=True)
+        except Exception:
+            logger.exception("Failed to detach partially started training")
+        raise
+    return startup
+
+
+def _attach_rollout_manager(startup):
     from .rollout import RolloutManager
     from .serving import ServingCluster
     from .training_recovery import RECOVERY_NAMESPACE, training_session_name
@@ -250,17 +317,18 @@ def create_rollout_manager(args, *, restore_plan=None):
         "num_gpus": 0,
         "runtime_env": {"env_vars": add_default_ray_env_vars()},
     }
+    args, restore_plan = startup.args, startup.restore_plan
     serving = None
     deployment = None
     if args.rollout_external:
         # External serving retains its existing startup and ownership contract.
-        placements = create_placement_groups(args)
+        placements = startup.placements = create_placement_groups(args)
     else:
         # Ray resolves these stable names in one namespace. Reuse the detached
         # owner first, then recreate/attach the manager against its deployment;
         # manager death never requires discovering individual router processes.
         name = training_session_name(args)
-        serving = ServingCluster.options(
+        serving = startup.serving = ServingCluster.options(
             **options,
             name=name + ":serving",
             namespace=RECOVERY_NAMESPACE,
@@ -271,12 +339,13 @@ def create_rollout_manager(args, *, restore_plan=None):
         # Attachment checks ownership and applies the new training configuration.
         deployment = ray.get(serving.attach_training.remote(args, ray.get_runtime_context().get_job_id()))
         placements, restore_plan = deployment.placements, deployment.restore_plan
+        startup.placements = placements
         for key, value in deployment.routers.items():
             setattr(args, key, value)
         options.update(name=name, namespace=RECOVERY_NAMESPACE, lifetime="detached", get_if_exists=True)
     if args.rollout_data_transport == "nixl":
         options["enable_tensor_transport"] = True
-    manager = RolloutManager.options(**options).remote(
+    manager = startup.manager = RolloutManager.options(**options).remote(
         args,
         placements["rollout"],
         restore_plan=restore_plan,
@@ -289,8 +358,7 @@ def create_rollout_manager(args, *, restore_plan=None):
         # connections. Manager attachment restores the data/checkpoint boundary.
         resume = ray.get(manager.attach_training.remote(args, deployment))
         restore_plan, reused = resume.restore_plan, resume.reused
-        for key, value in resume.configuration.items():
-            setattr(args, key, value)
+        args = startup.args = resume.apply(args)
         logger.info("%s serving session %s", "Reusing" if reused else "Created", name)
     num_rollout_per_epoch = None
     if args.num_rollout is None:
@@ -304,4 +372,5 @@ def create_rollout_manager(args, *, restore_plan=None):
         ray.get(manager.check_weights.remote(action="reset_tensors"))
     if args.offload_rollout:
         ray.get(manager.offload.remote())
-    return RolloutStartup(manager, serving, placements, num_rollout_per_epoch, restore_plan)
+    startup.num_rollout_per_epoch = num_rollout_per_epoch
+    startup.restore_plan = restore_plan

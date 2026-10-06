@@ -144,8 +144,6 @@ def test_megatron_init_receives_retained_role_checkpoint(args, monkeypatch, role
     recovery.initial_load_completed(0)
     recovery.checkpoint_committed(2)
     expected_load = args.save
-    recovery.args = copy.copy(args)
-    recovery.args.update_weight_start_version = 12
     args.load = "initial-checkpoint-from-yaml"
     args.save = "new-path-from-yaml"
     args.update_weight_start_version = 0
@@ -155,9 +153,10 @@ def test_megatron_init_receives_retained_role_checkpoint(args, monkeypatch, role
     worker.init.remote.return_value = 3
     remote_class.options.return_value = remote_class
     remote_class.remote.return_value = worker
-    manager.register_training_actors.remote.side_effect = lambda role, actors, config: recovery.resume_role(
-        role, config
-    )
+    manager.register_training_actors.remote.side_effect = lambda role, actors, config: {
+        **recovery.resume_role(role, config),
+        "update_weight_start_version": 12,
+    }
     monkeypatch.setattr(actor_group.ray, "remote", lambda **kw: lambda cls: remote_class)
     monkeypatch.setattr(actor_group.ray, "get", lambda value: value)
     group = actor_group.RayTrainGroup(args, 1, 1, pg=(object(), [0], [0]), role=role, actor_cls=object)
@@ -183,10 +182,10 @@ def test_stateless_recovery_keeps_scheduler_and_rng_policy(args):
     recovery.initial_load_completed(0)
     recovery.checkpoint_committed(1)
     rebuilt = TrainingRecovery(args, RestorePlan())
-    assert rebuilt.resume_configuration["no_load_optim"]
+    assert rebuilt.checkpoint.no_load_optim
     assert rebuilt.resume_role("actor", args)["no_load_optim"]
     assert not rebuilt.resume_role("critic", critic)["no_load_optim"]
-    assert not rebuilt.resume_configuration["no_load_rng"]
+    assert not rebuilt.checkpoint.no_load_rng
     args.no_save_rng = True
     with pytest.raises(ValueError, match="RNG state"):
         configure_recovery_checkpoint(args)
@@ -299,7 +298,7 @@ def test_checkpoint_restores_serving_version_after_manual_restart(args, tmp_path
     args.load, args.save = str(root), str(tmp_path / "new")
     args.ckpt_step, args.start_rollout_id = 2, None
     args.finetune = args.no_load_optim = args.no_load_rng = False
-    resolve_checkpoint(args)
+    args, _ = resolve_checkpoint(args)
     assert args.start_rollout_id == 3
     assert args.update_weight_start_version == 7
 
@@ -369,14 +368,14 @@ def test_only_committed_model_boundary_releases_replay_batches(args):
         recovery.remember_raw(step, pack_rollout_payload([], args, step))
         recovery.remember_converted(step, global_train_data(), f"batch-{step}")
     # Runtime completion alone has no model/optimizer checkpoint to resume.
-    assert recovery.resume_configuration["start_rollout_id"] == 0
+    assert recovery.checkpoint.start_rollout_id == 0
     recovery.checkpoint_committed(1)
     assert set(recovery.batches) == {2}
-    assert recovery.resume_configuration["start_rollout_id"] == 2
-    assert recovery.resume_configuration["load"] == args.save
-    assert recovery.resume_configuration["ckpt_step"] == 1
-    assert not recovery.resume_configuration["no_load_optim"]
-    assert not recovery.resume_configuration["no_load_rng"]
+    assert recovery.checkpoint.start_rollout_id == 2
+    assert recovery.checkpoint.load == args.save
+    assert recovery.checkpoint.ckpt_step == 1
+    assert not recovery.checkpoint.no_load_optim
+    assert not recovery.checkpoint.no_load_rng
     recovery.release_batches()
 
 
@@ -408,7 +407,7 @@ def test_new_manager_restores_journal_without_health_checks(args, tmp_path, tran
     rebuilt = TrainingRecovery(args, RestorePlan())
     assert rebuilt.incarnation == recovery.incarnation
     assert rebuilt.loaded and rebuilt.checkpoint_step == 1
-    assert rebuilt.resume_configuration["start_rollout_id"] == 2
+    assert rebuilt.checkpoint.start_rollout_id == 2
     assert rebuilt.source_state == recovery.source_state
     assert rebuilt.load_converted(2) == global_train_data()
     assert rebuilt.resume_role("actor", args)["load"] == args.save
@@ -426,7 +425,7 @@ def test_manager_restart_before_initial_model_load(args):
     restarted.reconcile_collection(None, "branch")
     # The model checkpoint, loaded later, still determines where training starts.
     restarted.initial_load_completed(7)
-    assert restarted.resume_configuration["start_rollout_id"] == 7
+    assert restarted.checkpoint.start_rollout_id == 7
     assert not restarted.batches
 
 
@@ -493,7 +492,7 @@ def test_committed_checkpoint_survives_lost_manager_notification(args, tmp_path)
     assert rebuilt.checkpoint_step is None and 2 in rebuilt.batches
     rebuilt.reconcile_checkpoint()
     assert rebuilt.checkpoint_step == 2 and not rebuilt.batches
-    assert rebuilt.resume_configuration["start_rollout_id"] == 3
+    assert rebuilt.checkpoint.start_rollout_id == 3
 
 
 def test_replay_builds_new_layout_without_writing_payloads(args, monkeypatch):
@@ -554,6 +553,197 @@ def test_retained_session_rejects_removed_custom_option(args):
         serving.validate_attachment(args)
     with pytest.raises(ValueError, match="custom_reward_post_process_path"):
         TrainingRecovery(args, RestorePlan())
+
+
+@pytest.mark.parametrize("manager_error", [TimeoutError("wedged"), RuntimeError("pause failed")])
+def test_failed_attempt_releases_trainers_despite_manager_failure(args, monkeypatch, manager_error):
+    from unittest.mock import Mock
+
+    from slime.ray import placement_group
+
+    args.rollout_cleanup_timeout = 2
+    manager, serving = Mock(), Mock()
+    waits = []
+
+    def get(ref, *, timeout):
+        waits.append(timeout)
+        if ref is manager.detach_training.remote.return_value:
+            raise manager_error
+
+    monkeypatch.setattr(placement_group.ray, "get", get)
+    monkeypatch.setattr(placement_group.ray, "kill", Mock())
+    monkeypatch.setattr(
+        placement_group.ray, "get_runtime_context", lambda: SimpleNamespace(get_job_id=lambda: "driver")
+    )
+    startup = placement_group.RolloutStartup(args, manager=manager, serving=serving)
+    startup.close(failed=True)
+    assert serving.detach_training.remote.call_args.args[0] == "driver"
+    serving.dispose.remote.assert_not_called()
+    placement_group.ray.kill.assert_called_once_with(manager, no_restart=True)
+    assert len(waits) == 2 and all(0 < wait <= 2 for wait in waits)
+
+
+@pytest.mark.parametrize("broken_owner", ["manager", "serving"])
+def test_successful_attempt_cleans_both_owners_after_dispose_error(args, monkeypatch, broken_owner):
+    from unittest.mock import Mock
+
+    from slime.ray import placement_group
+
+    args.rollout_cleanup_timeout = 2
+    owners = {name: Mock() for name in ("manager", "serving")}
+
+    def get(ref, *, timeout):
+        assert 0 <= timeout <= 2
+        if ref is owners[broken_owner].dispose.remote.return_value:
+            raise RuntimeError("dispose failed")
+
+    monkeypatch.setattr(placement_group.ray, "get", get)
+    monkeypatch.setattr(placement_group.ray, "kill", Mock())
+    startup = placement_group.RolloutStartup(args, **owners)
+    with pytest.raises(RuntimeError, match="dispose failed"):
+        startup.close(failed=False)
+    for owner in owners.values():
+        owner.dispose.remote.assert_called_once()
+        placement_group.ray.kill.assert_any_call(owner, no_restart=True)
+
+
+def test_startup_failure_detaches_acquired_serving_without_mutating_request(args, monkeypatch):
+    from unittest.mock import Mock
+
+    from slime.ray import placement_group
+
+    before = copy.deepcopy(vars(args))
+    acquired = Mock()
+    closed = []
+
+    def attach(startup):
+        startup.serving = acquired
+        startup.args.load = "restored-model"
+        startup.args.custom_options = {"new": True}
+        raise ValueError("manager initialization failed")
+
+    def close(startup, *, failed):
+        closed.append((startup.serving, failed))
+        raise RuntimeError("cleanup also failed")
+
+    monkeypatch.setattr(placement_group, "_attach_rollout_manager", attach)
+    monkeypatch.setattr(placement_group.RolloutStartup, "close", close)
+    with pytest.raises(ValueError, match="manager initialization failed"):
+        placement_group.create_rollout_manager(args)
+    assert closed == [(acquired, True)]
+    assert vars(args) == before
+
+
+def test_training_resume_keeps_checkpoint_and_attempt_configuration_separate(args):
+    from slime.ray.training_recovery import TrainingCheckpoint, TrainingResume
+
+    saved = TrainingCheckpoint.from_args(args)
+    args.load = "new-cli-path"
+    args.tensor_model_parallel_size = 4
+    args.custom_options = {"nested": [1]}
+    before = copy.deepcopy(vars(args))
+    resume = TrainingResume(RestorePlan(), saved, 17, True)
+    resolved = resume.apply(args)
+    assert resolved.load == "initial-model"
+    assert resolved.tensor_model_parallel_size == 4
+    assert resolved.update_weight_start_version == 17
+    resolved.custom_options["nested"].append(2)
+    assert vars(args) == before
+    assert saved.load == "initial-model"
+
+
+def test_checkpoint_selection_does_not_rewrite_user_paths(args, tmp_path):
+    from slime.data.checkpoint import resolve_checkpoint
+
+    root = tmp_path / "checkpoint"
+    (root / "iter_0000002").mkdir(parents=True)
+    (root / "iter_0000002/weights.pt").write_bytes(b"model")
+    (root / "latest_checkpointed_iteration.txt").write_text("2")
+    args.load = args.save = str(root)
+    args.ckpt_step = 2
+    args.start_rollout_id = None
+    args.finetune = args.no_load_optim = args.no_load_rng = False
+    before = copy.deepcopy(vars(args))
+    resolved, plan = resolve_checkpoint(args)
+    assert plan.mode == "empty"
+    assert resolved.start_rollout_id == 3
+    assert resolved.save != args.save
+    assert vars(args) == before
+
+
+def test_manager_cleanup_closes_remaining_resources_after_custom_source_error(args, monkeypatch):
+    from unittest.mock import Mock
+
+    from slime.data import transport
+    from slime.ray import rollout
+
+    args.rollout_cleanup_timeout = 2
+    manager = object.__new__(rollout.RolloutManager.__ray_metadata__.modified_class)
+    manager.args = args
+    manager.data_source = Mock()
+    manager.data_source.close.side_effect = ValueError("custom close failed")
+    manager.recovery = Mock()
+    manager.serving = Mock()
+    manager._owns_controller = False
+    monkeypatch.setattr(transport, "seal_rollout_store", Mock())
+    monkeypatch.setattr(rollout.logging_utils, "finish_tracking", Mock())
+    with pytest.raises(ValueError, match="custom close failed"):
+        manager.dispose()
+    manager.recovery.release_batches.assert_called_once()
+    manager.recovery.journal.unlink.assert_called_once_with(missing_ok=True)
+    manager.serving.dispose.remote.assert_not_called()
+    transport.seal_rollout_store.assert_called_once_with(args)
+    rollout.logging_utils.finish_tracking.assert_called_once_with(args)
+
+
+def test_serving_cleanup_releases_lock_and_placements_after_controller_timeout(args, monkeypatch):
+    from unittest.mock import Mock
+
+    from slime.ray import serving as module
+
+    args.rollout_cleanup_timeout = 2
+    serving = object.__new__(ServingCluster.__ray_metadata__.modified_class)
+    serving.args = args
+    serving.training_actors = {}
+    serving._health_monitors = []
+    serving.servers = {}
+    serving.router_processes = []
+    serving.controller, serving.lock, pg = Mock(), Mock(), Mock()
+    serving.placements = {"actor": (pg, [], []), "rollout": (pg, [], [])}
+    monkeypatch.setattr(module.ray, "get", Mock(side_effect=TimeoutError("controller blocked")))
+    monkeypatch.setattr(module.ray, "kill", Mock())
+    remove = Mock()
+    import importlib
+
+    monkeypatch.setattr(importlib.import_module("ray.util.placement_group"), "remove_placement_group", remove)
+    with pytest.raises(TimeoutError, match="controller blocked"):
+        serving.dispose()
+    module.ray.kill.assert_any_call(serving.controller, no_restart=True)
+    module.ray.kill.assert_any_call(serving.lock, no_restart=True)
+    remove.assert_called_once_with(pg)
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_driver_preserves_training_or_cleanup_failure_and_finishes_tracking(args, monkeypatch, failed):
+    import runpy
+    import sys
+    from unittest.mock import Mock
+
+    monkeypatch.setitem(sys.modules, "slime.utils.arguments", SimpleNamespace(parse_args=None))
+    main = runpy.run_path(str(Path(__file__).resolve().parents[1] / "train.py"))["main"]
+    startup = Mock()
+    startup.close.side_effect = RuntimeError("cleanup failure")
+    finish = Mock(side_effect=ValueError("tracking failure"))
+    monkeypatch.setitem(main.__globals__, "init_tracking", Mock())
+    monkeypatch.setitem(main.__globals__, "finish_tracking", finish)
+    monkeypatch.setitem(main.__globals__, "create_rollout_manager", lambda *a, **kw: startup)
+    monkeypatch.setitem(main.__globals__, "train", Mock(side_effect=KeyError("training failure") if failed else None))
+    with pytest.raises(
+        KeyError if failed else RuntimeError, match="training failure" if failed else "cleanup failure"
+    ):
+        main(args, RestorePlan())
+    startup.close.assert_called_once_with(failed=failed)
+    finish.assert_called_once_with(args)
 
 
 if __name__ == "__main__":

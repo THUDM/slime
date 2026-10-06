@@ -22,7 +22,7 @@ from slime.data.checkpoint import RestorePlan
 from slime.data.queue_data_source import create_queue_controller
 from slime.data.transport import load_rollout_samples
 from slime.ray.rollout import RolloutManager
-from slime.ray.serving import ServingDeployment
+from slime.ray.serving import ServingCluster, ServingDeployment
 from slime.rollout.base_types import iter_samples
 from slime.utils.data import process_rollout_data
 
@@ -195,7 +195,7 @@ def test_manager_failure_replays_accepted_batch_with_new_dp(tmp_path, cluster, p
             manager = RolloutManager.options(num_cpus=1).remote(args, None, serving=serving, deployment=deployment)
             managers.append(manager)
         resumed = ray.get(manager.attach_training.remote(args, deployment), timeout=60)
-        assert resumed.configuration["start_rollout_id"] == 0
+        assert resumed.checkpoint.start_rollout_id == 0
         ray.get(manager.set_train_parallel_config.remote({**parallel, "dp_size": 2}), timeout=60)
         ray.get(manager.load.remote(-1), timeout=60)
         refs = ray.get(manager.generate.remote(0), timeout=90)
@@ -274,7 +274,7 @@ def test_serving_reset_retires_blocked_actor_and_keeps_healthy_peer(cluster, mon
     )
     try:
         start = time.monotonic()
-        group.reset_weights_update_groups(timeout=0.5)
+        engine_group.reset_weights_update_groups([group], timeout=0.5)
         assert time.monotonic() - start < 5
         assert group.all_engines == [None, healthy]
         assert removed == ["http://blocked"]
@@ -284,6 +284,119 @@ def test_serving_reset_retires_blocked_actor_and_keeps_healthy_peer(cluster, mon
     finally:
         ray.kill(blocked, no_restart=True)
         ray.kill(healthy, no_restart=True)
+
+
+@ray.remote(num_cpus=0)
+class _AttemptManager:
+    def __init__(self, blocked):
+        self.blocked = blocked
+
+    def ready(self):
+        return True
+
+    def detach_training(self):
+        if self.blocked:
+            import time
+
+            time.sleep(300)
+        raise RuntimeError("consumer pause failed")
+
+
+@ray.remote(num_cpus=0)
+class _ResetBarrier:
+    """Model NCCL group destruction: every peer must enter before any can leave."""
+
+    def __init__(self):
+        self.entered = set()
+
+    def enter(self, name):
+        self.entered.add(name)
+
+    def ready(self):
+        return len(self.entered) == 2
+
+
+@ray.remote(num_cpus=0)
+class _PDResetPeer:
+    def __init__(self, barrier, name):
+        self.barrier, self.name = barrier, name
+
+    def reset_weights_update_groups(self):
+        import time
+
+        ray.get(self.barrier.enter.remote(self.name))
+        while not ray.get(self.barrier.ready.remote()):
+            time.sleep(0.01)
+
+    def ready(self):
+        return True
+
+
+def test_prefill_and_decode_enter_group_reset_together(cluster):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from slime.backends.sglang_utils.engine_group import reset_weights_update_groups
+
+    barrier = _ResetBarrier.remote()
+    peers = [_PDResetPeer.remote(barrier, name) for name in ("prefill", "decode")]
+    try:
+        ray.get([peer.ready.remote() for peer in peers], timeout=30)
+        groups = [SimpleNamespace(all_engines=[peer], nodes_per_engine=1, retire_engine=Mock()) for peer in peers]
+        reset_weights_update_groups(groups, timeout=2)
+        for group in groups:
+            group.retire_engine.assert_not_called()
+        assert ray.get(barrier.ready.remote(), timeout=5)
+    finally:
+        for actor in [*peers, barrier]:
+            ray.kill(actor, no_restart=True)
+
+
+@ray.remote(num_cpus=0)
+class _AttemptServing(ServingCluster.__ray_metadata__.modified_class):
+    """Use production detach/fencing with a CPU trainer and no inference GPUs."""
+
+    def __init__(self, trainer, job_id):
+        from types import SimpleNamespace
+
+        self.args = SimpleNamespace(rollout_cleanup_timeout=2)
+        self.training_actors = {"actor": [trainer]}
+        self.driver_job_id = job_id
+        self._health_monitors = []
+
+    def state(self):
+        return os.getpid(), self.driver_job_id, self.training_actors
+
+
+@pytest.mark.parametrize("blocked", [False, True], ids=["pause-error", "wedged-manager"])
+def test_driver_detach_releases_real_trainer_when_manager_cannot_pause(cluster, blocked):
+    import time
+    from types import SimpleNamespace
+
+    from slime.ray.placement_group import RolloutStartup
+
+    job_id = ray.get_runtime_context().get_job_id()
+    trainer = _ResetPeer.remote(False)
+    manager = _AttemptManager.remote(blocked)
+    serving = _AttemptServing.remote(trainer, job_id)
+    try:
+        identity = ray.get(serving.state.remote(), timeout=30)[0]
+        ray.get([manager.ready.remote(), trainer.pid.remote()], timeout=30)
+        startup = RolloutStartup(SimpleNamespace(rollout_cleanup_timeout=2), manager=manager, serving=serving)
+        start = time.monotonic()
+        startup.close(failed=True)
+        assert time.monotonic() - start < 5
+        assert ray.get(serving.state.remote(), timeout=5) == (identity, None, {"actor": []})
+        with pytest.raises(ray.exceptions.RayActorError):
+            ray.get(trainer.pid.remote(), timeout=5)
+        # Repeat a lost-reply cleanup and reject a stale driver's later request.
+        ray.get(serving.detach_training.remote(job_id), timeout=5)
+        ray.get(serving.__ray_call__.remote(lambda self: setattr(self, "driver_job_id", "successor")), timeout=5)
+        with pytest.raises(ray.exceptions.RayTaskError, match="owning driver"):
+            ray.get(serving.detach_training.remote(job_id), timeout=5)
+    finally:
+        for actor in (manager, serving, trainer):
+            ray.kill(actor, no_restart=True)
 
 
 if __name__ == "__main__":

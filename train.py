@@ -6,6 +6,7 @@ from slime.data.checkpoint import save_checkpoint
 from slime.observability.logging_utils import configure_logger, finish_tracking, init_tracking
 from slime.ray.placement_group import create_rollout_manager, create_training_models
 from slime.utils.arguments import parse_args
+from slime.utils.cleanup import Cleanup
 from slime.utils.misc import should_run_periodic_action
 
 
@@ -98,44 +99,35 @@ def train(args, pgs, rollout_manager, num_rollout_per_epoch, restore_plan):
         if should_run_periodic_action(rollout_id, args.eval_interval, num_rollout_per_epoch):
             ray.get(rollout_manager.eval.remote(rollout_id))
 
-    ray.get(rollout_manager.dispose.remote())
+
+def main(args, restore_plan):
+    """Own the attempt's exit policy; actors only clean up their own resources."""
+    with Cleanup() as cleanup:
+        init_tracking(args)
+        startup = None
+        try:
+            # Create or reattach rollout resources, then run this training attempt.
+            startup = create_rollout_manager(args, restore_plan=restore_plan)
+            train(
+                startup.args, startup.placements, startup.manager, startup.num_rollout_per_epoch, startup.restore_plan
+            )
+        except BaseException:
+            # Failures and interruptions retain serving and replay data for a manual
+            # restart. Detach this driver's trainers instead of disposing the session.
+            if startup is not None:
+                try:
+                    startup.close(failed=True)
+                except Exception:
+                    logging.getLogger(__name__).exception("Failed to clean up training attempt")
+            raise
+        else:
+            startup.close(failed=False)
+        finally:
+            # Finish this driver's tracking on success, startup failure, or interruption.
+            cleanup.run("finish driver tracking", finish_tracking, args)
 
 
 if __name__ == "__main__":
     args, restore_plan = parse_args(return_restore_plan=True)
     configure_logger()
-    init_tracking(args)
-    startup = None
-    try:
-        # Create or reattach rollout resources, then run this training attempt.
-        startup = create_rollout_manager(args, restore_plan=restore_plan)
-        train(args, startup.placements, startup.manager, startup.num_rollout_per_epoch, startup.restore_plan)
-    except BaseException:
-        # Failures and interruptions retain serving and replay data for a manual
-        # restart. Detach this driver's trainers instead of disposing the session.
-        if startup is not None and startup.serving is not None:
-            job_id = ray.get_runtime_context().get_job_id()
-            try:
-                # Let the manager pause new rollout work and release the trainers.
-                ray.get(startup.manager.detach_training.remote(job_id))
-            except ray.exceptions.RayActorError:
-                # The manager may have died while the serving cluster is still alive.
-                try:
-                    # Release trainers directly through the independent serving owner.
-                    ray.get(startup.serving.detach_training.remote(job_id))
-                except Exception:
-                    # Report cleanup failure without replacing the original error.
-                    logging.getLogger(__name__).exception("Failed to detach after rollout manager death")
-            except Exception:
-                # A failed detach must not mask the original training failure.
-                logging.getLogger(__name__).exception("Failed to detach trainer; serving remains available")
-        raise
-    else:
-        # train has disposed resources after successful completion. Remove the
-        # detached actors so later jobs cannot attach to this completed session.
-        if startup.serving is not None:
-            ray.kill(startup.manager, no_restart=True)
-            ray.kill(startup.serving, no_restart=True)
-    finally:
-        # Finish this driver's tracking on success, startup failure, or interruption.
-        finish_tracking(args)
+    main(args, restore_plan)

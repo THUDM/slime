@@ -75,6 +75,12 @@ Three components handle recovery:
 
 If `RolloutManager` survives, it pauses admission of new generation tasks. If it exits, its replacement reconnects to `ServingCluster`, restores data-source progress, and uses the queue controller to prevent old readers from taking more tasks. Completed prefetch results that have not reached training remain available. Trainer processes are also registered with `ServingCluster`, so it can clean up old trainers even after the manager exits.
 
+The driver owns the lifetime of each training attempt, including rollback when startup fails after attaching to serving. On failure, it gives the manager a bounded opportunity to pause, then asks serving to release trainers directly. A manager that fails to pause is terminated and recreated on the next attempt. Successful completion disposes the manager and serving independently, so an error in a custom data source's `close()` does not skip serving cleanup. Cleanup errors are logged without replacing the original training failure.
+
+`--rollout-cleanup-timeout` defaults to **60 seconds** for detaching or disposing an attempt. It is independent of engine health-check and warmup timeouts. Cleanup attempts remaining resource releases even after a step fails; blocked actors are terminated when graceful disposal times out.
+
+Checkpoint resolution returns a separate configuration and restore plan. Retained checkpoint state is immutable between progress updates; each trainer attempt gets a fresh configuration containing the selected checkpoint and serving weight version. Data sources and long-lived rollout workers keep their original configuration. Existing custom functions still receive the same args-based interfaces.
+
 ## Engine Health Checks and Restarts
 
 During rollout, slime periodically requests SGLang's `/health_generate` endpoint to check whether each engine responds. It also checks immediately when rollout finishes, **regardless of the background interval or initial wait**.
@@ -83,20 +89,20 @@ Synchronous rollout removes failed services from the router before sending abort
 
 Missing engines restart before the next weight update and then load the trainer's weights. Background checks and rollout-completion checks use the same failure handling. Background checks pause while weights or memory allocation change.
 
-Reattachment also bounds the time spent resetting old trainer connections. An engine that cannot acknowledge is unregistered and terminated with its serving children; healthy peers remain running. This applies to prefill and decode groups as well as ordinary serving groups.
+Reattachment also bounds the time spent resetting old trainer connections. An engine that cannot acknowledge is unregistered and terminated with its serving children; healthy peers remain running. This applies to prefill and decode groups as well as ordinary serving groups. All groups receive reset requests before waiting for replies, so prefill and decode can leave their shared NCCL group together.
 
 | Argument | Default | Description |
 |---|---|---|
-| `--rollout-health-check-first-wait` | `0` seconds | Wait after each resumption of background checks to allow model warmup and kernel compilation. Rollout-completion checks bypass this wait. |
+| `--rollout-health-check-first-wait` | `600` seconds | Wait after each resumption of background checks to allow model warmup and kernel compilation. Rollout-completion checks bypass this wait. |
 | `--rollout-health-check-interval` | `600` seconds | Interval between background health checks. |
-| `--rollout-health-check-timeout` | `30` seconds | Timeout for each health check, including the wait for the Ray health-check call. |
+| `--rollout-health-check-timeout` | `600` seconds | Timeout for each health check, including the wait for the Ray health-check call. |
 
 For example, a large MoE model that needs more warmup time can use:
 
 ```bash
 --rollout-health-check-first-wait 600 \
 --rollout-health-check-interval 10 \
---rollout-health-check-timeout 5
+--rollout-health-check-timeout 600
 ```
 
 Increase the timeout if load spikes cause false failures. If engines repeatedly fail after weight updates, inspect the SGLang logs and recent rollout dumps.

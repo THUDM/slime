@@ -2255,7 +2255,7 @@ def test_automatic_empty_restore_reads_the_saved_dataset_offset(source_factory, 
     # An unrelated live queue in the same pool must not be reset or consumed.
     source_factory("parent").get_samples(1)
     parent_state = copy.deepcopy(source_factory.controller.queue.tasks)
-    plan_args = resolve_checkpoint(args)
+    args, plan_args = resolve_checkpoint(args)
     controller = RolloutQueueController(args, restore_plan=plan_args)
     try:
         assert controller.queue.tasks == {}
@@ -2283,7 +2283,7 @@ def test_automatic_restart_before_first_checkpoint_recovers_the_same_queue(
     args = copy.copy(source_factory.args)
     args.save, args.load = str(tmp_path / "initial-run"), None
     args.start_rollout_id = None
-    plan_args = resolve_checkpoint(args)
+    args, plan_args = resolve_checkpoint(args)
     if not started:
         # Fail after branch publication, before the native queue exists.
         from straw.coordinator import Coordinator
@@ -2310,7 +2310,7 @@ def test_automatic_restart_before_first_checkpoint_recovers_the_same_queue(
     resumed = copy.copy(source_factory.args)
     resumed.load = resumed.save = args.save
     resumed.start_rollout_id = None
-    plan_resumed = resolve_checkpoint(resumed)
+    resumed, plan_resumed = resolve_checkpoint(resumed)
     assert plan_resumed.mode == "resume" and plan_resumed.queue_id == plan_args.queue_id
     controller = RolloutQueueController(resumed, restore_plan=plan_resumed)
     try:
