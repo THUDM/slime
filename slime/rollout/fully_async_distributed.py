@@ -461,6 +461,8 @@ class DistributedRollout(RolloutScheduler):
     def _recover_worker_results(self, worker):
         if self.args.rollout_data_transport != "straw":
             return
+        # A worker can publish a result and die before its reply reaches us.
+        # Recover queue receipts, excluding positions already delivered locally.
         delivered = pack_rollout_payload(sorted(self.delivered), self.args, self.rollout_id)
         ref = ray.get(self.controller.recover_reader_results.remote(self.reader_ids[worker], delivered.manifest))
         for value in DiskPayloadRef(ref, self.args.rollout_data_dir).load():
@@ -475,6 +477,8 @@ class DistributedRollout(RolloutScheduler):
         if args.rollout_all_samples_process_path is not None:
             raise ValueError("--rollout-all-samples-process-path is not supported by distributed fully-async rollout")
         recovered = []
+        # A new queue restores whole-job progress. A replacement manager keeps
+        # the live queue and has already recovered old readers through the source.
         if (
             not data_source.manager_restored
             and data_source.restore_plan.mode == "resume"
@@ -527,6 +531,8 @@ class DistributedRollout(RolloutScheduler):
             if any(size != len(data_source) for size in sizes):
                 raise ValueError(f"Replicated datasets differ in size: owner={len(data_source)}, workers={sizes}")
         except Exception:
+            # A partially started worker set is not usable. Release its actors
+            # while leaving accepted data in the independently owned queue.
             for worker in workers:
                 ray.kill(worker)
             raise

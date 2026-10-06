@@ -29,6 +29,7 @@ class ServerGroup:
     pg: Any  # (placement_group, reordered_bundle_indices, reordered_gpu_ids)
     all_engines: list
     num_gpus_per_engine: int
+    # Also marks surviving engines that a replacement trainer must reconnect.
     num_new_engines: int
     worker_type: str = "regular"  # "regular", "prefill", "decode", or "placeholder"
     rank_offset: int = 0  # cumulative engine count before this group
@@ -108,6 +109,8 @@ class ServerGroup:
         rollout_engines = []
         for i in range(len(self.all_engines)):
             if self.all_engines[i] is not None:
+                # Startup and recovery share this slot map. Reuse live processes;
+                # only empty slots need new actors.
                 continue
 
             global_rank = self.rank_offset + i
@@ -173,6 +176,8 @@ class ServerGroup:
             base_port=base_port,
         )
 
+        # Cache URLs before init can fail. Deregistration must remain possible
+        # even if the actor dies before answering get_url().
         for rank, _engine in rollout_engines:
             address = addr_and_ports[rank]
             host = address["host"]
@@ -288,6 +293,8 @@ class RolloutServer:
             logger.info(f"Recovered {g.num_new_engines} dead rollout engines (worker_type={g.worker_type})")
             assert g.num_new_engines == len(dead_indices), "num_new_engines does not match dead_indices length"
             if g.needs_offload and dead_indices:
+                # Fresh engines allocate all memory at startup. Restore offload
+                # state before weight sync to avoid conflicts with colocated training.
                 new_engines = [g.all_engines[i] for i in dead_indices]
                 release_handles.extend(engine.release_memory_occupation.remote() for engine in new_engines)
                 if self.update_weights:

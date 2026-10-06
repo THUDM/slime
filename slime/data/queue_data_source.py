@@ -610,6 +610,8 @@ class RolloutQueueController:
         """Fence a stopped reader and recover accepted results whose reply was lost."""
         delivered = set(self.codec.load(delivered_ref))
         with self._producer_lock:
+            # Fence the reader before recovering its results. Late acquire or
+            # completion calls from that reader must not compete with its successor.
             self._retired_readers.add(reader_id)
             accepted = self.queue.retire_worker(reader_id)
             state = self._training_state()
@@ -1280,6 +1282,8 @@ class QueueDataSource(QueueReader):
         if controller is None:
             controller = create_queue_controller(args, restore_plan=self.restore_plan)
         self.data_config = ray.get(controller.configuration.remote())
+        # Give each manager incarnation distinct reader IDs. Reusing old IDs
+        # would let late worker calls interfere with the replacement manager.
         self.reader_generation = reader_generation
         reader_id = f"{reader_generation}:owner" if reader_generation else "owner"
         super().__init__(args, controller, reader_id, self.data_config["dataset_size"])
@@ -1295,9 +1299,12 @@ class QueueDataSource(QueueReader):
 
     def manager_state(self):
         # Pending tasks and the producer cursor remain in the live controller.
+        # Restoring a manager must not rewind that shared queue to an old snapshot.
         return {"reader_generation": self.reader_generation, "metadata": self.get_metadata()}
 
     def restore_manager(self, state, *, excluded):
+        # Exclude batches already journaled for trainer replay; recover only
+        # accepted results that the dead manager had not handed off durably.
         receipts = ray.get(self.controller.recover_manager_readers.remote(state["reader_generation"], excluded))
         for value in receipts:
             from straw.protocol import CommitReceipt
@@ -1310,6 +1317,8 @@ class QueueDataSource(QueueReader):
             # synchronous and fully-async consumers after manager replacement.
             self.add_samples([group])
         self.update_metadata(state["metadata"])
+        # The async scheduler must not also run whole-job queue recovery, which
+        # would deliver the same accepted results a second time.
         self.manager_restored = True
 
     def register_consumer(self, name, consumer):

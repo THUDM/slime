@@ -24,6 +24,8 @@ RECOVERY_NAMESPACE = "slime-training-recovery"
 
 
 def training_recovery_enabled(args):
+    # Serving is always retained internally. Trainer replay additionally needs
+    # durable batches, regardless of the legacy --use-fault-tolerance flag.
     replay_storage = (
         getattr(args, "rollout_data_transport", "object-store") == "straw"
         or getattr(args, "save_debug_rollout_data", None) is not None
@@ -154,6 +156,8 @@ class TrainingRecovery:
         }
         self.configuration = retained_rollout_configuration(args)
         self.source_state = None
+        # The journal path follows the session identity, not the manager PID,
+        # so a replacement manager can find the same checkpoint and batches.
         if args.rollout_data_transport == "straw":
             directory = Path(args.rollout_data_dir) / "training-recovery"
         else:
@@ -165,6 +169,8 @@ class TrainingRecovery:
             if changed:
                 raise ValueError("Retained rollout session requires unchanged configuration: " + ", ".join(changed))
             if retained_serving:
+                # Reuse the journal only with its live serving/queue owner.
+                # Cold startup takes its progress from the checkpoint instead.
                 for name, value in state.items():
                     setattr(self, name, value)
             else:
@@ -188,12 +194,15 @@ class TrainingRecovery:
                 "source_state",
             )
         }
+        # Flush the complete new record before atomically replacing the old
+        # one; a crash must not expose a half-written recovery journal.
         temporary = self.journal.with_suffix(".tmp")
         with temporary.open("wb") as stream:
             torch.save(state, stream)
             stream.flush()
             os.fsync(stream.fileno())
         temporary.replace(self.journal)
+        # Persist the rename as well as the file contents before acknowledging.
         descriptor = os.open(self.journal.parent, os.O_RDONLY | os.O_DIRECTORY)
         try:
             os.fsync(descriptor)
@@ -222,6 +231,8 @@ class TrainingRecovery:
         self.persist()
         values = dict(self.role_configuration[role])
         if self.checkpoint_step is not None:
+            # Actor/critic YAML may name different paths, but new overrides
+            # cannot move a role away from the retained checkpoint boundary.
             values.update(
                 load=values["save"],
                 ckpt_step=self.checkpoint_step,
@@ -267,6 +278,8 @@ class TrainingRecovery:
         self.persist()
 
     def _retain(self, rollout_id, reference):
+        # Pin raw and converted data independently of queue consumption. An
+        # acknowledged batch may still need replay until its model is saved.
         store, _, lock = rollout_store(self.args)
         raw = self.batches[rollout_id].raw
         roots = [reference.manifest]
@@ -276,6 +289,8 @@ class TrainingRecovery:
             store.retain(f"trainer-recovery:{self.incarnation}:{rollout_id}", roots)
 
     def retain_replay_shards(self, rollout_id, refs):
+        # These shards belong to the current trainer layout; the retained
+        # global batch remains the source for repartitioning on another restart.
         store, _, lock = rollout_store(self.args)
         roots = [ref.manifest for ref in refs]
         with lock:
@@ -329,6 +344,8 @@ class TrainingRecovery:
         }
         for rollout_id in released:
             del self.batches[rollout_id]
+        # Persist the new boundary before releasing storage. A crash may leave
+        # extra retained bytes, but must not leave a journal pointing to GC'd data.
         self.persist()
         self._release_batch_storage(released, self.incarnation)
 

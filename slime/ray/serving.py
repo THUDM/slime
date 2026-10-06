@@ -41,6 +41,8 @@ class ServingCluster:
         self.args = args
         self.restore_plan = restore_plan
         self.configuration = retained_rollout_configuration(args)
+        # Create placements and router processes inside this detached actor so
+        # their lifetime follows serving, not a replaceable driver or manager.
         self.placements = create_placement_groups(args)
         existing_children = {process.pid for process in multiprocessing.active_children()}
         self.servers, handles = (
@@ -63,6 +65,8 @@ class ServingCluster:
         if self.controller is None:
             from slime.data.queue_data_source import create_queue_controller
 
+            # Managers borrow this controller; recreating a manager must not
+            # create a second queue or lose accepted generation results.
             self.controller = create_queue_controller(self.args, restore_plan=self.restore_plan)
         return self.controller
 
@@ -102,12 +106,15 @@ class ServingCluster:
         from slime.ray.placement_group import _create_placement_group
 
         self.validate_attachment(args)
+        # Only a validated successor may touch the old trainer's resources.
+        # Stop health checks before replacing connections or GPU allocations.
         self.health_monitoring_pause()
         self.release_trainers()
         reused = self.attachments > 0
         count = args.actor_num_nodes * args.actor_num_gpus_per_node
         actor_pg = self.placements["actor"]
         if args.colocate:
+            # This placement is shared with live serving, so it cannot be resized.
             if count > len(actor_pg[1]):
                 raise ValueError("Restarted colocated trainer exceeds the retained GPU placement")
         elif not args.debug_rollout_only and count != len(actor_pg[1]):
@@ -124,9 +131,13 @@ class ServingCluster:
             self.lock = Lock.options(num_cpus=0, num_gpus=0).remote()
             server = self._updatable_server()
             if server:
+                # Healthy engines are also new peers from the trainer's point
+                # of view; mark them for connection on the next weight update.
                 for group in server.server_groups:
                     group.num_new_engines = len([engine for engine in group.engines if engine is not None])
         # Internal serving is always monitored, independently of the legacy flag.
+        # Rebuild paused monitors using this attempt's health-check settings. The
+        # manager resumes them only when generation can safely use the engines.
         for monitor in self._health_monitors:
             monitor.stop()
         self._health_monitors = []
@@ -155,6 +166,7 @@ class ServingCluster:
         return self.servers
 
     def register_trainers(self, role, actors):
+        # Keep cleanup handles outside the manager, which may itself crash.
         self.training_actors[role] = actors
 
     def release_trainers(self):
@@ -164,10 +176,12 @@ class ServingCluster:
         self.training_actors.clear()
 
     def detach_training(self, job_id):
+        # A late cleanup from an old driver must not detach its successor.
         if self.driver_job_id != job_id:
             raise RuntimeError("Only the owning driver can detach its serving session")
         self.health_monitoring_pause()
         self.release_trainers()
+        # Keep engines, routers, placements and the queue for the next attempt.
         self.driver_job_id = None
 
     def _updatable_server(self):
@@ -194,6 +208,8 @@ class ServingCluster:
             return None
         if allow_inconsistent:
             # A partial update or a replacement engine may have no version yet.
+            # Seed the restart from the highest installed version so publishing
+            # restored checkpoint weights does not move the version backwards.
             return max((int(version) for version in versions if str(version).isdigit()), default=0)
         if any(not str(version).isdigit() for version in versions):
             raise RuntimeError(f"Cannot resume nonnumeric serving weight versions: {versions}")
@@ -239,6 +255,8 @@ class ServingCluster:
     def dispose(self):
         from ray.util.placement_group import remove_placement_group
 
+        # Full teardown is for successful completion. Failure cleanup uses
+        # detach_training instead, preserving the resources needed to resume.
         self.release_trainers()
         for monitor in self._health_monitors:
             monitor.stop()
@@ -247,6 +265,7 @@ class ServingCluster:
             try:
                 ray.get(result)
             except ray.exceptions.RayActorError:
+                # An already-dead engine must not prevent cleanup of its peers.
                 pass
         for engine in engines:
             ray.kill(engine, no_restart=True)
@@ -260,5 +279,6 @@ class ServingCluster:
             ray.get(self.controller.close.remote())
             ray.kill(self.controller, no_restart=True)
         ray.kill(self.lock, no_restart=True)
+        # Colocated actor/critic/rollout entries can share the same placement.
         for group in {placement[0] for placement in self.placements.values() if placement and placement[0]}:
             remove_placement_group(group)

@@ -128,6 +128,8 @@ class RolloutHealthMonitor:
         self._run_health_checks(force=True)
 
     def _run_health_checks(self, *, force=False) -> None:
+        # The background thread and rollout-completion RPC share this lock, so
+        # they cannot retire the same engine while another check uses its handle.
         with self._check_lock:
             if self._stop_event.is_set():
                 return
@@ -146,6 +148,8 @@ class RolloutHealthMonitor:
                 try:
                     ray.get(handle, timeout=0)
                 except Exception as error:
+                    # Both HTTP failures and unresponsive/dead actor RPCs retire
+                    # the engine; HTTP timeout alone cannot detect a wedged actor.
                     logger.error("Health check failed for engine %s: %s", rollout_engine_id, error)
                     self._kill_engine(rollout_engine_id)
 
@@ -162,6 +166,7 @@ class RolloutHealthMonitor:
                 group.engine_urls[first],
                 timeout=self._check_timeout,
             )
+        # A multi-node engine is one serving unit: retire every node together.
         for i in range(first, first + group.nodes_per_engine):
             engine = group.all_engines[i]
             if engine:
@@ -171,5 +176,8 @@ class RolloutHealthMonitor:
                 except Exception as e:
                     logger.warning(f"Fail to kill engine at index {i} (e: {e})")
                 finally:
+                    # Shutdown RPCs are best-effort; stop the actor even if its
+                    # HTTP server has already died or the RPC timed out.
                     ray.kill(engine, no_restart=True)
+            # Leave a missing slot for recovery immediately before weight sync.
             group.all_engines[i] = None

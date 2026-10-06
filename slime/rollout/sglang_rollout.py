@@ -440,6 +440,8 @@ async def abort(args: Namespace, rollout_id: int) -> list[list[Sample]]:
         if args.rollout_external:
             workers = (await get(f"{router_url}/workers"))["workers"]
         else:
+            # The manager's final health check runs only after this function
+            # returns. Prune dead URLs now so abort/drain itself can finish.
             workers = await get_live_router_workers(router_url, timeout=args.rollout_health_check_timeout)
         urls = [worker["url"] for worker in workers]
         await abort_servers_until_idle(urls)

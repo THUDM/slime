@@ -120,6 +120,8 @@ class RolloutDataSource(DataSource):
         raise RuntimeError(f"Cannot add samples to {self.__class__.__name__}. This is a read-only data source.")
 
     def state_dict(self):
+        # Checkpoints and manager recovery share this snapshot. Copy mutable
+        # state so later generation cannot change the recorded restart point.
         state = {
             name: copy.deepcopy(getattr(self, name))
             for name in ("sample_offset", "epoch_id", "sample_group_index", "sample_index", "metadata")
@@ -132,6 +134,7 @@ class RolloutDataSource(DataSource):
         for name, value in state.items():
             setattr(self, name, value)
         if self.args.rollout_shuffle and self.dataset is not None:
+            # Rebuild the saved epoch's ordering before reading from its cursor.
             self.dataset.shuffle(self.epoch_id)
 
     def save(self, rollout_id):

@@ -614,6 +614,8 @@ class MegatronTrainRayActor(TrainRayActor):
         save(rollout_id, self.model, self.optimizer, self.opt_param_scheduler)
 
         if force_sync and self.args.async_save:
+            # Replay data can be released once this call returns, so the current
+            # save must be durable rather than merely queued in the background.
             maybe_finalize_async_save(blocking=True)
 
         if self.args.save_hf is not None and self.role == "actor":
@@ -628,6 +630,8 @@ class MegatronTrainRayActor(TrainRayActor):
             return
 
         if not self.args.rollout_external or self.args.use_fault_tolerance:
+            # Recover just before weights can be installed. One rank changes
+            # serving topology; the barrier lets all ranks see the same engines.
             if dist.get_rank() == 0:
                 ray.get(self.rollout_manager.recover_updatable_engines.remote())
             dist.barrier(group=get_gloo_group())
@@ -654,6 +658,8 @@ class MegatronTrainRayActor(TrainRayActor):
             reload_process_groups()
 
         if num_new_engines > 0 or reconnect_rollout_engines:
+            # A replacement trainer must reconnect even to surviving engines;
+            # their previous update groups belonged to the old trainer ranks.
             self.weight_updater.connect_rollout_engines(
                 rollout_engines,
                 rollout_engine_lock,
@@ -663,6 +669,7 @@ class MegatronTrainRayActor(TrainRayActor):
             )
             dist.barrier(group=get_gloo_group())
             if dist.get_rank() == 0:
+                # Clear connection markers only after every rank is connected.
                 ray.get(self.rollout_manager.clear_updatable_num_new_engines.remote())
 
         with torch_memory_saver.disable() if self.args.offload_train else nullcontext():

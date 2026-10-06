@@ -297,6 +297,7 @@ class SGLangEngine(RayActor):
 
     def shutdown(self):
         if self.args.rollout_external:
+            # The external cluster owns its processes; slime must not kill them.
             return
 
         logger.info(f"Shutdown engine {self.server_host}:{self.server_port}...")
@@ -309,6 +310,8 @@ class SGLangEngine(RayActor):
                     timeout=self.args.rollout_health_check_timeout,
                 )
             except Exception as e:
+                # Even if router cleanup fails, terminate the local process.
+                # Owner-side cleanup keeps the URL outside this actor for retry.
                 logger.warning(f"Failed to fetch workers list or remove worker: {e}")
         kill_process_tree(self.process.pid)
 
@@ -382,6 +385,8 @@ class SGLangEngine(RayActor):
 
     def reset_weights_update_groups(self):
         """Remove dead trainer peers while retaining the serving process."""
+        # Old NCCL groups refer to the previous trainer's ranks and cannot be
+        # reused, even when the new trainer has the same parallel layout.
         for group_name in list(self._weight_update_groups):
             self._make_request("destroy_weights_update_group", {"group_name": group_name})
             self._weight_update_groups.remove(group_name)

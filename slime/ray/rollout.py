@@ -62,6 +62,8 @@ class RolloutManager:
 
         rollout_init_handles: list[Any] = []
         if deployment is not None:
+            # This is a handle snapshot; the serving owner remains responsible
+            # for topology changes and survives replacement of this manager.
             self.servers = deployment.servers
             init_http_client(args)
         elif self.args.debug_train_only:
@@ -145,6 +147,8 @@ class RolloutManager:
             self.data_source.consumers["fully_async"].resume()
 
     def dispose(self):
+        # Normal completion releases replay history and the serving session.
+        # Failed attempts call detach_training and keep both for a restart.
         if close := getattr(self.data_source, "close", None):
             close()
         if self.recovery is not None:
@@ -166,11 +170,15 @@ class RolloutManager:
 
         was_paused = self.pause_rollout_admission()
         if self._recovery_admission_was_paused is None:
+            # Remember the original state across repeated attachments; a
+            # restart must not resume a producer that was already paused.
             self._recovery_admission_was_paused = was_paused
         self.pg = deployment.placements["rollout"]
         self.servers = deployment.servers
         if self.recovery is not None:
             self.recovery.reconcile_checkpoint()
+        # The saved load boundary wins over new CLI settings, while trainer
+        # parallelism and memory limits still come from the new attempt.
         configuration = dict(self.recovery.resume_configuration) if self.recovery is not None else {}
         if deployment.reused:
             configuration["update_weight_start_version"] = (
@@ -211,6 +219,8 @@ class RolloutManager:
         return None
 
     def training_ready(self):
+        # train.py calls this only after publishing restored weights. Starting
+        # producers earlier could generate with the failed attempt's weights.
         if self._recovery_admission_was_paused is not None:
             self.resume_rollout_admission(self._recovery_admission_was_paused)
             self._recovery_admission_was_paused = None
@@ -294,10 +304,13 @@ class RolloutManager:
             batch = self.recovery.batches[rollout_id]
             logger.info("Replaying retained rollout %s with the current trainer parallelism", rollout_id)
             if batch.converted is not None:
+                # Conversion already succeeded: reuse rewards and tokens and
+                # build only the partitions for this trainer's DP layout.
                 refs = self.batch_builder.replay_converted(self.recovery.load_converted(rollout_id), batch.batch_id)
                 if self.args.rollout_data_transport == "straw" and self.batch_builder.replay_refs:
                     self.recovery.retain_replay_shards(rollout_id, self.batch_builder.replay_refs)
                 return refs
+            # A crash before conversion still leaves the accepted raw batch.
             data, metrics = self.recovery.load_raw(rollout_id), None
             if self.args.rollout_data_transport == "straw":
                 self.batch_builder.raw_ref = batch.raw
@@ -346,6 +359,8 @@ class RolloutManager:
 
         result = call_rollout_fn(self.eval_generate_rollout, self.args, rollout_id, self.data_source, evaluation=True)
         if self.serving is not None:
+            # Evaluation shares the engines, so it needs the same cleanup before
+            # subsequent training controls can use the local handle snapshot.
             self.servers = ray.get(self.serving.finish_rollout.remote())
         data = result.data
         save_debug_rollout_data(
@@ -367,6 +382,8 @@ class RolloutManager:
             self.data_source.save(rollout_id)
             self.batch_builder.save(rollout_id)
         finally:
+            # Resume only consumers that this save paused, even if saving fails.
+            # Recovery may have deliberately left other consumers paused.
             for consumer, was_paused in paused:
                 if not was_paused:
                     consumer.resume()
@@ -374,12 +391,16 @@ class RolloutManager:
     def training_completed(self, rollout_id):
         self.batch_builder.training_completed(rollout_id)
         if self.recovery is not None:
+            # The trainer no longer needs these DP shards. Global replay data
+            # stays pinned until checkpoint_committed confirms a durable save.
             self.recovery.release_replay_shards(rollout_id)
 
     def load(self, rollout_id=None):
         from slime.data.checkpoint import SourceRestore
 
         if self.recovery is not None and self.recovery.loaded:
+            # The live source may be ahead of the model checkpoint. Keep that
+            # progress and replay retained batches rather than rereading prompts.
             return
 
         source_restore = self.data_source.load(rollout_id)

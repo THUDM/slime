@@ -85,6 +85,8 @@ class BatchBuilder:
         if existing:
             self._plan = DiskPayloadRef(RecordSetRef.from_dict(existing["plan_ref"]), self.args.rollout_data_dir)
             plan = self._plan.load()
+            # Normal retries must match the original plan. Trainer replay may
+            # change parallelism, but still uses the retained plan's identity.
             if not replay and plan["digest"] != self.plan_digest:
                 raise ValueError("An existing batch ID cannot be reused with a different selection or conversion plan")
             self.plan_digest = plan["digest"]
@@ -130,6 +132,8 @@ class BatchBuilder:
             if existing is None:
                 raise RuntimeError(f"Retained conversion has no queue plan: {batch_id}")
             if not existing["ready"]:
+                # Conversion was journaled before ready publication completed.
+                # Finish that publication without invoking conversion hooks again.
                 self._plan = DiskPayloadRef(RecordSetRef.from_dict(existing["plan_ref"]), self.args.rollout_data_dir)
                 self.plan_digest = self._plan.load()["digest"]
                 publish_batch = True

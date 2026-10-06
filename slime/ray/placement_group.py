@@ -122,6 +122,8 @@ def create_placement_groups(args):
     """Create placement groups for actor, critic, and rollout engines."""
 
     if not args.colocate and not args.rollout_external and not args.debug_train_only and not args.debug_rollout_only:
+        # Separate allocations let a restarted trainer resize without moving
+        # the serving engines that still hold rollout state.
         actor_pg = _create_placement_group(args.actor_num_nodes * args.actor_num_gpus_per_node)
         rollout_pg = _create_placement_group(args.rollout_num_gpus)
         return {"actor": actor_pg, "critic": actor_pg if args.use_critic else None, "rollout": rollout_pg}
@@ -265,6 +267,8 @@ def create_rollout_manager(args, *, restore_plan=None):
             lifetime="detached",
             get_if_exists=True,
         ).remote(args, restore_plan)
+        # get_if_exists may return an old actor without running its constructor.
+        # Attachment checks ownership and applies the new training configuration.
         deployment = ray.get(serving.attach_training.remote(args, ray.get_runtime_context().get_job_id()))
         placements, restore_plan = deployment.placements, deployment.restore_plan
         for key, value in deployment.routers.items():
@@ -294,6 +298,8 @@ def create_rollout_manager(args, *, restore_plan=None):
         args.num_rollout = num_rollout_per_epoch * args.num_epoch
         assert args.num_rollout > 0
     if args.check_weight_update_equal and not reused:
+        # This diagnostic resets initial weights. Reused engines must retain
+        # their current weights until the restarted trainer replaces them.
         ray.get(manager.check_weights.remote(action="snapshot"))
         ray.get(manager.check_weights.remote(action="reset_tensors"))
     if args.offload_rollout:

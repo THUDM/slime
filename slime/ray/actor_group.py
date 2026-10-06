@@ -130,6 +130,8 @@ class RayTrainGroup:
                 master_addr, master_port = ray.get(actor.get_master_addr_and_port.remote())
             self._actor_handlers.append(actor)
         if self._rollout_manager is not None:
+            # Register before model initialization can OOM. The serving owner
+            # can then release all ranks even if the manager also disappears.
             configuration = ray.get(
                 self._rollout_manager.register_training_actors.remote(self.role, self._actor_handlers, self.args)
             )
@@ -202,6 +204,7 @@ class RayTrainGroup:
             return None
         if training_recovery_enabled(self.args):
             # Role-specific YAML overrides are applied after CLI validation.
+            # Recheck here so they cannot disable optimizer/RNG recovery saves.
             configure_recovery_checkpoint(self.args)
         if rollout_manager is not None:
             self._rollout_manager = rollout_manager
