@@ -280,6 +280,75 @@ def test_launcher_preserves_serving_and_reuses_ray(monkeypatch, external_ray, li
     assert status.call_count == int(not external_ray)
 
 
+@pytest.mark.parametrize("external_ray", [False, True])
+@pytest.mark.parametrize(
+    "filename", ["test_qwen2.5_0.5B_training_recovery.py", "test_qwen3_30B_A3B_training_recovery.py"]
+)
+def test_recovery_e2e_contacts_dashboard_without_proxy(monkeypatch, tmp_path, external_ray, filename):
+    import importlib.util
+    import json
+    import os
+    import subprocess
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    import ray
+    from ray import job_submission
+
+    requests = []
+
+    class Dashboard(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requests.append(self.path)
+            # A proxy receives an absolute URL; direct dashboard requests use
+            # /api/version. Reproduce the CI proxy's 503 with real Ray HTTP calls.
+            self.send_response(200 if self.path == "/api/version" else 503)
+            body = json.dumps({"ray_version": ray.__version__}).encode()
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    class Connected(Exception):
+        pass
+
+    client = job_submission.JobSubmissionClient
+
+    def connect(address):
+        client(address)
+        raise Connected  # Stop after the real handshake, before GPU job submission.
+
+    started = []
+    monkeypatch.setattr(job_submission, "JobSubmissionClient", connect)
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: started.append(dict(os.environ)))
+    spec = importlib.util.spec_from_file_location("recovery_e2e_proxy_test", Path(__file__).with_name(filename))
+    recovery = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(recovery)
+    monkeypatch.setenv("SLIME_SCRIPT_EXTERNAL_RAY", str(int(external_ray)))
+    proxies = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
+    with ThreadingHTTPServer(("127.0.0.1", 0), Dashboard) as server:
+        url = f"http://127.0.0.1:{server.server_port}"
+        for name in proxies:
+            monkeypatch.setenv(name, url)
+        for name in ("NO_PROXY", "no_proxy"):
+            monkeypatch.setenv(name, "")
+        monkeypatch.setenv("SLIME_TEST_RAY_DASHBOARD", url)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with pytest.raises(Connected):
+                recovery.execute(directory=tmp_path)
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+    assert requests and all(path == "/api/version" for path in requests)
+    assert len(started) == int(not external_ray)
+    assert all(not env.get(name) for env in started for name in proxies)
+
+
 def test_checkpoint_restores_serving_version_after_manual_restart(args, tmp_path):
     import json
 

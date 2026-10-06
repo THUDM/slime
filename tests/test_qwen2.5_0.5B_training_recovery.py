@@ -160,6 +160,10 @@ def execute(
     directory = Path(directory or tempfile.mkdtemp(prefix="slime_training_recovery_"))
     directory.mkdir(parents=True, exist_ok=True)
     save_interval = save_interval or (1 if failure_rollout else 3)
+    # prepare() may need the download proxy; the driver and Ray head must then
+    # contact cluster services directly, before any job runtime_env is applied.
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        os.environ.pop(name, None)
     external_ray = os.environ.get("SLIME_SCRIPT_EXTERNAL_RAY") == "1"
     if not external_ray:
         subprocess.run(
