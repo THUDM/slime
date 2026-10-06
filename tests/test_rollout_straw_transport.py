@@ -18,6 +18,7 @@ from slime.data.transport import (
     pack_rollout_group,
     pack_rollout_payload,
     resolve_rollout_data_dir,
+    rollout_store,
     seal_rollout_store,
     unpack_rollout_payload,
 )
@@ -228,6 +229,22 @@ def test_local_test_launcher_does_not_invent_storage_paths(options, monkeypatch)
     command_utils.execute_train(options, num_gpus_per_node=1, megatron_model_type=None)
     assert commands[-1].count("--rollout-data-dir") == options.count("--rollout-data-dir")
     assert options in commands[-1]
+
+
+@pytest.mark.parametrize("segment_mib", [None, 1])
+def test_packs_are_readable_before_full_and_respect_size_override(args, segment_mib):
+    args.rollout_queue_segment_mib = segment_mib
+    store, _, _ = rollout_store(args)
+    assert store.segment_target_bytes == (1024**3 if segment_mib is None else 1024**2)
+    references = []
+    for index in range(4):
+        reference = pack_rollout_payload([Sample(index=index, response="x" * 400_000)], args, 0)
+        assert reference.load()[0].response == "x" * 400_000
+        references.append(reference)
+    packs = list(Path(args.rollout_data_dir).rglob("*.pack"))
+    assert len(packs) == 1 if segment_mib is None else len(packs) > 1
+    # Rotation must preserve every earlier publication, without sealing the writer.
+    assert [reference.load()[0].index for reference in references] == list(range(4))
 
 
 def test_payload_reference_is_small_and_readable_by_independent_process(args, tmp_path):

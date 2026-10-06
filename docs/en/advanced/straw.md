@@ -106,9 +106,14 @@ and ordinary fields still occupy manager memory.
 
 | Option | Default | Purpose |
 |---|---|---|
-| `--rollout-queue-segment-mib` | `256` | Pack rotation target in MiB |
+| `--rollout-queue-segment-mib` | Unset; uses Straw's default (currently `1024`) | Override the target pack rotation size in MiB; explicit values must be positive. |
 | `--rollout-io-concurrency` | `4` | Bound concurrent serialization and filesystem I/O submissions |
 | `--rollout-queue-lease-seconds` | `300` | Worker lease duration; active readers renew it |
+
+Packing is enabled whenever Straw transport is selected. The target size controls
+file rotation; readers can access each publication without waiting for the pack
+to fill. A publication larger than the target stays intact, and explicit sealing
+may leave smaller packs.
 
 ## Online GC
 
@@ -137,9 +142,14 @@ inputs, ready groups, and training progress. Payloads already in straw are
 referenced rather than copied into each checkpoint. Retaining a checkpoint
 keeps its referenced data available.
 
-Stop the entire previous job before restarting, including remote workers.
-The save-directory lock rejects concurrent coordinators, but does not stop
-orphaned readers. There is no automatic coordinator failover.
+This section covers restarting with a new serving cluster. Stop the entire
+previous job first, including remote workers. The save-directory lock rejects
+concurrent coordinators, but does not stop orphaned readers. There is no automatic
+coordinator failover.
+
+If only Megatron training failed and Ray and serving are still running, follow
+the [fault-tolerance guide](fault-tolerance.md) to resubmit training while retaining
+the serving cluster and queue controller.
 
 ### Resume or select a step
 

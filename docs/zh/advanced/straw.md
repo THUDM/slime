@@ -50,7 +50,11 @@ straw 不支持 `--buffer-filter-path`。`--buffer-sort-by-staleness` 适用于�
 
 ## 数据打包与支持类型
 
-每个 writer 向 pack 文件追加多条 sample 和 tensor，不会为每个 sample 或 tensor 单独创建文件，从而减少共享存储上的小文件元数据开销。不可变张量引用允许 rollout、训练 batch 和 checkpoint 共享数据；修改时写入新记录，保留的引用始终指向原有内容。
+选择 Straw 传输后，数据默认打包写入：每个写入进程将多个样本和张量追加到同一个文件（pack）中，减少共享存储上大量小文件的管理开销。slime 默认沿用 Straw 的包大小，当前为 **1 GiB**；可以通过 `--rollout-queue-segment-mib` 指定其他大小，单位为 MiB。
+
+包大小控制何时切换到新文件，不影响数据何时可读：每次发布的数据都可以立即读取，无需等待包写满。单次发布超过目标大小时会完整保留，不会为了满足包大小而拆开；显式封存也可能产生小于目标大小的包。
+
+已写入的张量通过不可变引用在 rollout、训练批次和 checkpoint 之间共享。修改数据时会写入新记录，已有引用仍指向原来的内容。
 
 Sample codec 支持嵌套 list、tuple、dict、标量、字节数据、NumPy 数组、PyTorch 张量、PIL 图像和 Sample 字段，包括受支持的自定义字段。R3 routes、SC top-k 和 ragged top-p 数据以 typed tensor 保存。不支持的 Python 对象和循环引用会在发布时报错。记录和张量读取都有校验和检查。
 
@@ -58,7 +62,7 @@ R3 使用 `--use-rollout-routing-replay`，SC 使用 `--use-score-centering`。�
 
 | 参数 | 默认值 | 用途 |
 |---|---|---|
-| `--rollout-queue-segment-mib` | `256` | Pack 轮转的目标大小，单位 MiB |
+| `--rollout-queue-segment-mib` | 不设置，沿用 Straw 默认值（当前为 `1024`） | 切换到新包的目标大小，单位 MiB；显式设置时必须为正数。 |
 | `--rollout-io-concurrency` | `4` | 限制并发序列化与文件系统 I/O 提交 |
 | `--rollout-queue-lease-seconds` | `300` | Worker 租期，活跃 reader 会续租 |
 
@@ -74,7 +78,9 @@ GC 失败会通过后续队列操作和关闭流程报告。容量耗尽时需�
 
 正常训练 checkpoint 同时保存模型和 rollout 状态，包括 dataset 游标、sample/group 编号、pending/partial 输入、ready group 和训练进度。已经保存在 straw 中的载荷通过引用保存，不会在每次 checkpoint 时重新复制。保留 checkpoint 会保留它依赖的数据。
 
-重启前需要停止整个原任务，包括远端 worker。Save 目录锁会拒绝并发 coordinator，但不会终止遗留 reader。目前没有 coordinator 自动故障转移。
+本节介绍推理集群也需要重新启动时的恢复方式。启动前需要停止整个原任务，包括远端生成进程；保存目录的锁会拒绝同时运行的队列控制器，但不会替你停止遗留的读取进程。目前不支持队列控制器自动故障转移。
+
+如果只是 Megatron 训练失败，Ray 和推理集群仍在运行，应按[容灾文档](fault-tolerance.md)重新提交训练任务，保留原来的推理服务和队列控制器。
 
 ### 续跑或选择 step
 

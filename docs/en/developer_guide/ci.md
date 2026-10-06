@@ -62,12 +62,13 @@ same cluster. It triggers a real CUDA allocation OOM with TP=1, verifies serving
 still responds after that job exits, then restarts with TP=2 and a new DP size.
 It checks serving process/router/placement identity, retained batch contents,
 training scheduler progress, nonzero gradients and the final checkpoint. The
-fixed matrix covers debug dumps, replay of completed but uncheckpointed Straw
-batches with online GC, and Straw recovery from a model/optimizer checkpoint
-with Megatron YAML overrides. All three scenarios also kill the rollout manager
-and verify its new process reconnects to the original serving owner. Straw replay
+fixed matrix covers four cases: Straw replay of completed but uncheckpointed
+batches with online GC, both with a retained manager and with a killed manager;
+Straw recovery from a model/optimizer checkpoint with Megatron YAML overrides
+and a manager killed during training; and debug replay with a killed manager.
+The replacement managers reconnect to the original serving owner. Straw replay
 and debug replay omit the legacy flag; checkpoint recovery passes it. Internal
-serving is monitored in all three scenarios.
+serving is monitored in all four cases.
 `test_training_recovery.py` checks
 driver fencing, replay retention/resharding, launcher behavior and checkpoint
 boundaries on CPU.

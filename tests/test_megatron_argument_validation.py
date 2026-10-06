@@ -221,7 +221,7 @@ def make_slime_validate_args(**overrides):
         rollout_data_transport="object-store",
         rollout_data_dir=None,
         rollout_queue_lease_seconds=300,
-        rollout_queue_segment_mib=256,
+        rollout_queue_segment_mib=None,
         rollout_io_concurrency=4,
         use_distributed_post=False,
         data_source_path=None,
@@ -424,6 +424,27 @@ def test_rollout_transport_selects_source_and_only_straw_needs_storage(monkeypat
         assert args.data_source_path == "slime.data.data_source.RolloutDataSourceWithBuffer"
         assert args.rollout_data_dir is None
     assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("segment_mib", [None, 1, 1024, 0, -1])
+def test_straw_pack_size_is_optional_but_explicit_values_must_be_positive(monkeypatch, tmp_path, segment_mib):
+    module = load_slime_arguments_module(monkeypatch)
+    parser = module.get_slime_extra_args_provider()(argparse.ArgumentParser())
+    options = ["--rollout-batch-size", "1"]
+    if segment_mib is not None:
+        options += ["--rollout-queue-segment-mib", str(segment_mib)]
+    parsed = parser.parse_args(options)
+    assert parsed.rollout_queue_segment_mib == segment_mib
+    args = make_slime_validate_args(
+        rollout_data_transport="straw",
+        rollout_data_dir=str(tmp_path),
+        rollout_queue_segment_mib=parsed.rollout_queue_segment_mib,
+    )
+    if segment_mib is not None and segment_mib <= 0:
+        with pytest.raises(ValueError, match="rollout-queue-segment-mib.*positive"):
+            module.slime_validate_args(args)
+    else:
+        module.slime_validate_args(args)
 
 
 @pytest.mark.parametrize(

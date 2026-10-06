@@ -85,20 +85,22 @@ def rollout_store(args):
     profile = getattr(args, "rollout_storage_profile", "local")
     declaration_path = getattr(args, "rollout_storage_declaration", None)
     declaration = json.loads(Path(declaration_path).read_text()) if declaration_path else None
-    segment_mib = getattr(args, "rollout_queue_segment_mib", 256)
+    segment_mib = getattr(args, "rollout_queue_segment_mib", None)
     online_gc = getattr(args, "rollout_queue_online_gc", False)
     key = (os.getpid(), root, run_id, profile, segment_mib, online_gc, json.dumps(declaration, sort_keys=True))
     with _writers_lock:
         if key not in _writers:
+            # Omit the override unless requested, so Straw owns its default.
+            pack_options = {} if segment_mib is None else {"segment_target_bytes": segment_mib * 1024**2}
             store = SharedFilesystemStore(
                 root,
                 run_id,
                 online_gc=online_gc,
                 codecs=CODECS,
-                segment_target_bytes=segment_mib * 1024**2,
                 max_record_bytes=MAX_TENSOR_BYTES,
                 max_buffer_bytes=MAX_PUBLICATION_BYTES,
                 backend=FilesystemBackend(root, profile=profile, declaration=declaration),
+                **pack_options,
             )
             _writers[key] = (store, threading.RLock())
         store, lock = _writers[key]

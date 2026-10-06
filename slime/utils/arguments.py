@@ -616,8 +616,11 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--rollout-queue-segment-mib",
                 type=int,
-                default=256,
-                help="Append queue publications to a pack file until this target size; a single larger publication is kept intact.",
+                default=None,
+                help=(
+                    "Override Straw's pack target size in MiB (Straw defaults to 1 GiB). "
+                    "A single larger publication is kept intact."
+                ),
             )
             parser.add_argument(
                 "--rollout-io-concurrency",
@@ -1975,7 +1978,10 @@ def slime_validate_args(args):
         "rollout_queue_segment_mib",
         "rollout_io_concurrency",
     ):
-        if getattr(args, name) <= 0:
+        value = getattr(args, name)
+        if name == "rollout_queue_segment_mib" and value is None:
+            continue
+        if value <= 0:
             raise ValueError(f"--{name.replace('_', '-')} must be positive")
 
     if args.rollout_data_transport == "straw":
