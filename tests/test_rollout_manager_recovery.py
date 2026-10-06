@@ -1,4 +1,4 @@
-"""Kill the real rollout manager at persistence boundaries and consume its replay.
+"""Lose a manager or RPC reply at persistence boundaries and consume its replay.
 
 Two local Ray nodes run the production manager, distributed generators and Straw
 controller. Inference and the optimizer use CPU fixtures; this does not exercise
@@ -88,6 +88,8 @@ def _install_crash(manager, phase):
                 ],
             },
         )
+        if phase == "conversion_reply_lost":
+            raise TimeoutError("Conversion committed but its RPC reply was lost")
         os.kill(os.getpid(), signal.SIGKILL)
 
     if phase == "raw_accepted":
@@ -98,6 +100,15 @@ def _install_crash(manager, phase):
             crash(manager.batch_builder.raw_ref)
 
         manager._get_rollout_data = accept
+    elif phase in {"conversion_accepted", "conversion_reply_lost"}:
+        original = manager.batch_builder.publish_converted
+
+        def publish(data):
+            original(data)
+            manager.batch_builder.publish_converted = original
+            crash(manager.batch_builder.raw_ref)
+
+        manager.batch_builder.publish_converted = publish
     else:
         original = manager.recovery.remember_converted
 
@@ -152,8 +163,8 @@ def cluster():
 
 
 @pytest.mark.parametrize("online_gc", [False, True], ids=["retain", "online-gc"])
-@pytest.mark.parametrize("phase", ["raw_accepted", "converted"])
-def test_manager_sigkill_replays_accepted_batch_with_new_dp(tmp_path, cluster, phase, online_gc):
+@pytest.mark.parametrize("phase", ["raw_accepted", "conversion_accepted", "converted", "conversion_reply_lost"])
+def test_manager_failure_replays_accepted_batch_with_new_dp(tmp_path, cluster, phase, online_gc):
     args = _rollout_args(tmp_path)
     args.rollout_queue_run_id = "manager-recovery"
     args.rollout_queue_online_gc = online_gc
@@ -173,14 +184,16 @@ def test_manager_sigkill_replays_accepted_batch_with_new_dp(tmp_path, cluster, p
         ray.get(manager.set_train_parallel_config.remote(parallel), timeout=60)
         ray.get(manager.load.remote(-1), timeout=60)
         ray.get(manager.__ray_call__.remote(_install_crash, phase), timeout=60)
-        with pytest.raises(ray.exceptions.RayActorError):
+        failure = ray.exceptions.RayTaskError if phase == "conversion_reply_lost" else ray.exceptions.RayActorError
+        with pytest.raises(failure):
             ray.get(manager.generate.remote(0), timeout=90)
         before = json.loads((tmp_path / "crash.json").read_text())
         assert len(before["samples"]) == args.global_batch_size
 
         deployment = ray.get(serving.deployment.remote(True), timeout=60)
-        manager = RolloutManager.options(num_cpus=1).remote(args, None, serving=serving, deployment=deployment)
-        managers.append(manager)
+        if phase != "conversion_reply_lost":
+            manager = RolloutManager.options(num_cpus=1).remote(args, None, serving=serving, deployment=deployment)
+            managers.append(manager)
         resumed = ray.get(manager.attach_training.remote(args, deployment), timeout=60)
         assert resumed.configuration["start_rollout_id"] == 0
         ray.get(manager.set_train_parallel_config.remote({**parallel, "dp_size": 2}), timeout=60)
@@ -203,7 +216,10 @@ def test_manager_sigkill_replays_accepted_batch_with_new_dp(tmp_path, cluster, p
             expected, key=lambda sample: sample["index"]
         )
         assert ray.get(serving.identity.remote(), timeout=30) == identity
-        assert ray.get(manager.__ray_call__.remote(lambda self: os.getpid()), timeout=30) != before["manager_pid"]
+        same_manager = (
+            ray.get(manager.__ray_call__.remote(lambda self: os.getpid()), timeout=30) == before["manager_pid"]
+        )
+        assert same_manager == (phase == "conversion_reply_lost")
         assert len(list(tmp_path.glob("converted_*.json"))) == 1
         ray.get(manager.training_completed.remote(0), timeout=60)
 
@@ -217,6 +233,57 @@ def test_manager_sigkill_replays_accepted_batch_with_new_dp(tmp_path, cluster, p
         for manager in managers:
             ray.kill(manager, no_restart=True)
         ray.kill(serving, no_restart=True)
+
+
+@ray.remote(num_cpus=0)
+class _ResetPeer:
+    def __init__(self, wedged):
+        self.wedged = wedged
+
+    def pid(self):
+        return os.getpid()
+
+    def reset_weights_update_groups(self):
+        if self.wedged:
+            import time
+
+            time.sleep(300)
+
+    def shutdown(self):
+        pass
+
+
+def test_serving_reset_retires_blocked_actor_and_keeps_healthy_peer(cluster, monkeypatch):
+    import time
+    from types import SimpleNamespace
+    from slime.backends.sglang_utils import engine_group
+
+    blocked, healthy = _ResetPeer.remote(True), _ResetPeer.remote(False)
+    pids = ray.get([blocked.pid.remote(), healthy.pid.remote()], timeout=30)
+    removed = []
+    monkeypatch.setattr(engine_group, "unregister_worker", lambda router, url, **kw: removed.append(url))
+    group = engine_group.ServerGroup(
+        args=SimpleNamespace(num_gpus_per_node=1),
+        pg=None,
+        all_engines=[blocked, healthy],
+        num_gpus_per_engine=1,
+        num_new_engines=0,
+        router_ip="router",
+        router_port=1,
+        engine_urls={0: "http://blocked", 1: "http://healthy"},
+    )
+    try:
+        start = time.monotonic()
+        group.reset_weights_update_groups(timeout=0.5)
+        assert time.monotonic() - start < 5
+        assert group.all_engines == [None, healthy]
+        assert removed == ["http://blocked"]
+        assert ray.get(healthy.pid.remote(), timeout=5) == pids[1]
+        with pytest.raises(ray.exceptions.RayActorError):
+            ray.get(blocked.pid.remote(), timeout=5)
+    finally:
+        ray.kill(blocked, no_restart=True)
+        ray.kill(healthy, no_restart=True)
 
 
 if __name__ == "__main__":

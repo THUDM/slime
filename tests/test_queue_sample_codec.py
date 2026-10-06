@@ -368,6 +368,42 @@ def test_unvalidated_capture_roundtrip_never_narrows_values(codec, status):
         torch.testing.assert_close(ref.load(), getattr(sample, key), rtol=0, atol=0)
 
 
+def test_training_projection_reads_only_selected_tensor_records(codec, monkeypatch):
+    from slime.data.transport import TrainBatchRef
+
+    ref = codec.publish(
+        {
+            "tokens": [torch.tensor([index, index + 1]) for index in range(8)],
+            "loss_masks": [torch.ones(2, dtype=torch.int) for _ in range(8)],
+            "total_lengths": [2] * 8,
+            "unused": torch.zeros(10000),
+        },
+        submission_id="conversion",
+    )
+    loaded = []
+    original = QueueTensorRef.load
+
+    def tracked(value, *args, **kwargs):
+        loaded.append(value)
+        return original(value, *args, **kwargs)
+
+    monkeypatch.setattr(QueueTensorRef, "load", tracked)
+    view = TrainBatchRef(
+        ref,
+        str(codec.store.backend.root),
+        "batch",
+        0,
+        "layout",
+        selection={"tokens": [7, 2], "loss_masks": [7, 2], "total_lengths": None},
+        schedule={"partition": [7, 2], "num_microbatches": [1]},
+    )
+    restored = codec.load(codec.publish(view, submission_id="view"))
+    data = restored.load()
+    assert [tensor.tolist() for tensor in data["tokens"]] == [[7, 8], [2, 3]]
+    assert len(loaded) == 4
+    assert data["partition"] == [7, 2] and data["total_lengths"] == [2] * 8
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
 

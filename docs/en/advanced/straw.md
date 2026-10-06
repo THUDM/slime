@@ -62,9 +62,12 @@ straw without the package fails at startup with the installation command.
    both the groups and its updated cursor to the queue.
 2. Workers generate and score samples. Returned partial groups are persisted
    for continuation; completed, accepted groups become available for training.
-3. The batch builder applies reward/conversion hooks and divides selected
-   samples among training ranks. After training finishes, slime acknowledges
-   consumption so storage can be reclaimed when no other references need it.
+3. The batch builder applies global reward/conversion hooks and accepts the
+   result as a queue control task. It writes the converted batch once; training
+   ranks receive indices and read their samples directly from that shared batch.
+   After training finishes, slime advances the consumer cursor and drops the
+   unfinished-batch reference. The model checkpoint separately controls how
+   long recovery retains the batch.
 
 Rollout and training data share the same storage pool. Large R3 and SC tensors
 can be reused across these stages without duplicating their bytes. Queue tasks

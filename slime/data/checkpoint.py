@@ -88,8 +88,13 @@ def commit_checkpoint(args, rollout_id, *, model_args, restore_plan=None, weight
     files = {}
     resumable = True
     for config in model_args:
-        resumable &= not getattr(config, "no_save_optim", False) and not getattr(config, "no_save_rng", False)
         model = Path(config.save).resolve() / f"iter_{rollout_id:07d}"
+        stateless = getattr(config, "use_stateless_adam", False)
+        if stateless and not (model / "opt_param_scheduler.pt").is_file():
+            raise ValueError(f"Missing stateless Adam scheduler checkpoint: {model}")
+        resumable &= (stateless or not getattr(config, "no_save_optim", False)) and not getattr(
+            config, "no_save_rng", False
+        )
         if not model.is_relative_to(root):
             raise ValueError("Model checkpoint must be inside --save")
         payloads = [p for p in model.rglob("*") if p.is_file()]
@@ -346,8 +351,12 @@ def resolve_checkpoint(args):
     }
     if selected is not None:
         root, step, value = selected
-        if any(getattr(args, key, False) for key in ("finetune", "no_load_optim", "no_load_rng")):
-            raise ValueError("Checkpoint restoration requires model, optimizer and RNG state")
+        if (
+            getattr(args, "finetune", False)
+            or getattr(args, "no_load_rng", False)
+            or (getattr(args, "no_load_optim", False) and not getattr(args, "use_stateless_adam", False))
+        ):
+            raise ValueError("Checkpoint restoration requires model, scheduler, RNG and any stateful optimizer state")
         if args.start_rollout_id is not None and args.start_rollout_id != step + 1:
             raise ValueError("--start-rollout-id differs from the checkpoint")
         if value is not None:

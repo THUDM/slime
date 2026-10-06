@@ -26,7 +26,11 @@ slime 会检查 SGLang 推理引擎是否正常工作，移除失效的引擎，
 
 通过 `--save` 和 `--save-interval` 定期保存模型 checkpoint。保存间隔越长，失败后需要重新训练的批次越多，也需要保留更多恢复数据。
 
-恢复模式要求使用 `torch_dist` checkpoint，并保存优化器和随机数状态，因此不能设置 `--no-save-optim` 或 `--no-save-rng`。slime 会自动启用支持跨并行配置重新分片的优化器保存格式。
+恢复模式要求使用 `torch_dist` checkpoint，保存随机数状态，并为有状态的优化器保存优化器状态。slime 会自动启用支持跨并行配置重新分片的优化器保存格式。不能设置 `--no-save-rng`。
+
+使用 `--use-stateless-adam --no-save-optim` 时，Adam 不在 optimizer step 之间保留动量，因此恢复时可以省略优化器张量。Slime 会在每个模型 checkpoint 目录中保存 `opt_param_scheduler.pt`，使学习率和 weight decay 的 scheduler 进度与模型一起恢复；缺少此文件时会拒绝恢复。FP32 主参数会从保存的模型精度重建，因此不保证重启后的更新逐比特一致。普通 Adam 仍必须保存优化器 checkpoint。
+
+如果保存大 MoE 的优化器时显存不足，可以使用 `--distrib-optim-fully-reshardable-mem-efficient`。Megatron 会通过 Gloo 在 CPU 上聚合 checkpoint 张量，仍支持重新分片，但会增加主机内存和保存时间的开销。`--overlap-grad-reduce --ddp-bucket-size 40000000` 可以限制每次聚合的临时缓冲区大小；还需为完整的优化器状态预留主机内存。
 
 ### 失败后重新提交
 
@@ -38,11 +42,13 @@ slime 会检查 SGLang 推理引擎是否正常工作，移除失效的引擎，
 
 重新提交时，模型、rollout 配置、global batch size 和会话标识要保持一致。训推共置（colocate）时，训练进程需要放得进原先分配的 GPU 资源；训推分离时，可以重新分配训练侧资源，推理侧 GPU 不会移动。
 
+保留的 worker 继续使用原配置。重新接入时会检查采样、过滤器、reward hook 和自定义参数；新增或删除参数也视为变更。只有明确支持的训练侧和运行控制参数可以调整。
+
 两次提交之间不要停止 Ray、重建推理服务容器，或执行 `pkill sglang` 等清理命令。`slime.utils.external_utils.command_utils.execute_train` 会保留正在运行的 Ray head 和 SGLang；如果使用的 shell 脚本每次启动都会清理进程，重启时需要跳过这一步。训练正常结束后，slime 会释放保留的会话及其资源。
 
 ### 从哪一步恢复
 
-新训练进程会加载最近一次成功保存的模型、优化器和随机数状态，并重新训练该 checkpoint 之后的批次。已经训练完成、但模型更新尚未保存的批次也会重放；如果还没有 checkpoint，则从最初的模型开始重放。
+新训练进程会加载最近一次成功保存的模型、scheduler、随机数状态，以及有状态优化器的状态，并重新训练该 checkpoint 之后的批次。已经训练完成、但模型更新尚未保存的批次也会重放；如果还没有 checkpoint，则从最初的模型开始重放。
 
 保留的数据包括生成结果、token 和 reward 后处理结果。修改训练并行配置后，slime 会重新分片这些数据，不会重新生成样本，也不会再次执行 reward 后处理。恢复数据会保留到对应的模型 checkpoint 提交成功，或训练正常结束。推理侧的权重版本号在重启后继续递增。
 
@@ -65,7 +71,7 @@ slime 使用具名 Ray actor 管理推理集群。新任务根据会话名称找
 
 - `ServingCluster` 管理路由器、SGLang 引擎、GPU 资源、Straw 队列控制器和权重更新锁。它是具名的 detached Ray actor，不会随创建它的训练任务退出。
 - `RolloutManager` 负责生成、读取数据、转换样本和划分训练数据。它可以继续使用，也可以在退出后重建；重建不会销毁 `ServingCluster` 持有的资源。
-- `TrainingRecovery` 保存恢复记录，包括 checkpoint 边界、数据源读取进度和训练批次。读取进度与已接收批次在同一次写入中保存，转换后的批次则在 DP 分片前保存，避免重启时跳过数据或受旧并行配置限制。
+- `TrainingRecovery` 管理模型 checkpoint 边界，并保留该边界之后需要重放的批次。原始批次和转换结果是否已接收，由 Straw 接收日志中的回执决定；manager 或 RPC 在更新恢复日志前失败时，会根据回执补齐记录。转换结果只存一份，各 DP rank 获取自己的索引视图，改变并行配置只需重建视图。
 
 如果 `RolloutManager` 还活着，它会暂停接收新的生成任务。如果它已经退出，新实例会接回 `ServingCluster`，恢复数据源进度，并由队列控制器阻止旧读取进程继续取任务。已经完成、但尚未交给训练的预取结果仍可使用。训练进程也登记在 `ServingCluster` 中，因此 manager 退出后仍能清理旧训练进程。
 
@@ -76,6 +82,8 @@ rollout 过程中，slime 定期请求 SGLang 的 `/health_generate` 接口，�
 同步 rollout 在发送中止生成和等待请求结束的控制命令前，会先从路由器中移除失效的服务。返回训练前，`ServingCluster` 会再次检查引擎，注销失效服务并清除对应的 Ray actor 引用，避免后续显存卸载或权重更新请求访问已经停止的引擎。HTTP 请求和 Ray 调用都有超时限制。
 
 缺失的引擎在下一次更新权重前重启，随后加载训练侧的权重。后台检查和 rollout 收尾检查使用同一套故障处理流程；更新权重或调整显存占用时会暂停后台检查。
+
+重新接入时，清理旧训练连接也有超时限制。无法应答的 engine 会被注销，并连同其推理子进程一起终止；健康的其他 engine 保持运行。该机制同样适用于 prefill 和 decode 分组。
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|

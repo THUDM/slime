@@ -7,10 +7,9 @@ from typing import Any
 
 import ray
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
-from sglang.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH, GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGHTS
 
+from slime.backends.sglang_utils.server_control import unregister_worker
 from slime.backends.sglang_utils.sglang_config import ServerGroupConfig
-from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.ray.utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, add_default_ray_env_vars
 
 logger = logging.getLogger(__name__)
@@ -51,6 +50,43 @@ class ServerGroup:
     def engines(self):
         """Node-0 engines only (for multi-node serving)."""
         return self.all_engines[:: self.nodes_per_engine]
+
+    def retire_engine(self, engine_id, *, timeout):
+        """Remove one serving unit from routing and terminate all of its nodes."""
+        first = engine_id * self.nodes_per_engine
+        if self.worker_type != "encoder":
+            unregister_worker(
+                f"http://{self.router_ip or self.args.sglang_router_ip}:{self.router_port or self.args.sglang_router_port}",
+                self.engine_urls[first],
+                timeout=timeout,
+            )
+        engines = self.all_engines[first : first + self.nodes_per_engine]
+        shutdowns = [engine.shutdown.remote() for engine in engines if engine is not None]
+        if shutdowns:
+            ray.wait(shutdowns, num_returns=len(shutdowns), timeout=timeout)
+        for engine in engines:
+            if engine is not None:
+                ray.kill(engine, no_restart=True)
+        self.all_engines[first : first + self.nodes_per_engine] = [None] * self.nodes_per_engine
+
+    def reset_weights_update_groups(self, *, timeout):
+        """Fence old trainer connections, retiring peers that cannot acknowledge."""
+        resets = {
+            engine.reset_weights_update_groups.remote(): index // self.nodes_per_engine
+            for index, engine in enumerate(self.all_engines)
+            if engine is not None
+        }
+        if resets:
+            ray.wait(list(resets), num_returns=len(resets), timeout=timeout)
+        failed = set()
+        for ref, engine_id in resets.items():
+            try:
+                ray.get(ref, timeout=0)
+            except Exception as error:
+                logger.warning("Retiring engine %s after trainer reset failed: %s", engine_id, error)
+                failed.add(engine_id)
+        for engine_id in sorted(failed):
+            self.retire_engine(engine_id, timeout=timeout)
 
     def parallel_config(self) -> dict[str, Any]:
         """Return the SGLang parallel args that affect rank-local expert routing."""
@@ -103,6 +139,8 @@ class ServerGroup:
                 "Please align --rollout-num-gpus, --rollout-num-gpus-per-engine, "
                 "and --sglang-config server_groups."
             )
+
+        from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 
         RolloutRayActor = ray.remote(SGLangEngine)
 
@@ -303,6 +341,8 @@ class RolloutServer:
                     non_updatable_groups_engines.append((g.model_path, new_engines))
 
         if release_handles:
+            from sglang.srt.constants import GPU_MEMORY_TYPE_WEIGHTS
+
             ray.get(release_handles)
             all_resume_engines = updatable_new_engines[:]
             for _model_path, engines in non_updatable_groups_engines:
@@ -331,6 +371,8 @@ class RolloutServer:
 
     def onload_weights(self):
         """Restore weights for offloaded groups."""
+        from sglang.srt.constants import GPU_MEMORY_TYPE_WEIGHTS
+
         handles = []
         for g in self.server_groups:
             if not g.needs_offload:
@@ -340,6 +382,8 @@ class RolloutServer:
 
     def onload_kv(self):
         """Resume KV cache and CUDA graphs for offloaded groups."""
+        from sglang.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH, GPU_MEMORY_TYPE_KV_CACHE
+
         handles = []
         for g in self.server_groups:
             handles.extend(g.onload(tags=[GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_CUDA_GRAPH]))

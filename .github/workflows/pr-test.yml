@@ -317,6 +317,23 @@ jobs:
             {
               "num_gpus": 4,
               "straw": true,
+              "test_args": "--mode straw --failure-rollout 1 --save-interval 1 --weight-sync disk-delta --kill-manager",
+              "test_file": "test_qwen2.5_0.5B_training_recovery.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
+              "test_args": "--mode straw --failure-rollout 1 --pd --wedge-engine --kill-manager",
+              "test_file": "test_qwen2.5_0.5B_training_recovery.py"
+            },
+            {
+              "num_gpus": 8,
+              "straw": true,
+              "test_file": "test_qwen3_30B_A3B_training_recovery.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
               "test_file": "test_straw_checkpoint_fork.py"
             },
             {
@@ -829,6 +846,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_disk_delta_recovery.py"
+            },
+            {
+              "num_gpus": 0,
               "straw": true,
               "test_file": "test_rollout_manager_recovery.py"
             },
@@ -1296,6 +1317,23 @@ jobs:
               "num_gpus": 4,
               "test_args": "--mode debug --failure-rollout 1 --save-interval 3 --kill-manager --no-fault-tolerance",
               "test_file": "test_qwen2.5_0.5B_training_recovery.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
+              "test_args": "--mode straw --failure-rollout 1 --save-interval 1 --weight-sync disk-delta --kill-manager",
+              "test_file": "test_qwen2.5_0.5B_training_recovery.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
+              "test_args": "--mode straw --failure-rollout 1 --pd --wedge-engine --kill-manager",
+              "test_file": "test_qwen2.5_0.5B_training_recovery.py"
+            },
+            {
+              "num_gpus": 8,
+              "straw": true,
+              "test_file": "test_qwen3_30B_A3B_training_recovery.py"
             },
             {
               "num_gpus": 4,

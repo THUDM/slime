@@ -97,7 +97,7 @@ PYTHONPATH=. python tests/test_straw_fully_async_recovery.py
 
 `test_qwen2.5_0.5B_training_recovery.py` 使用 4 张 GPU，在同一个 Ray 集群中先后运行两次训练任务。第一次使用 TP=1，故意触发真实的 CUDA OOM；确认训练任务退出后推理服务仍能响应，再改成 TP=2 重新提交，此时 DP 大小也会改变。
 
-测试检查是否复用了原来的 SGLang 进程、路由器和 GPU 资源，重放的批次内容是否一致，以及训练调度器进度、非零且有限的梯度和最终 checkpoint。固定测试列表覆盖四种情况：
+测试检查是否复用了健康的 SGLang 进程、路由器和 GPU 资源，重放的批次内容是否一致，以及训练调度器进度、非零且有限的梯度和最终 checkpoint。固定测试列表包括：
 
 | 数据保存方式 | RolloutManager 状态 | 检查内容 |
 |---|---|---|
@@ -105,8 +105,12 @@ PYTHONPATH=. python tests/test_straw_fully_async_recovery.py
 | Straw，开启在线 GC | 失败后被杀掉 | 新 manager 接回原推理集群，并重放同样的批次。 |
 | Straw，已有模型和优化器 checkpoint，使用 Megatron YAML 配置 | 训练过程中被杀掉 | 从 checkpoint 恢复，核对配置与恢复状态。 |
 | Rollout 调试文件 | 失败后被杀掉 | 从调试文件恢复数据，新 manager 接回原推理集群。 |
+| Straw，使用 disk-delta 同步权重 | 失败后被杀掉 | 以恢复后的权重发布新的完整基准，再继续 delta 更新。 |
+| Straw，使用 PD/Mooncake 推理 | 失败后被杀掉 | 卡住 prefill actor，在连接重置超时后替换它，并保留健康的 decode actor。 |
 
-第三种情况传入兼容参数 `--use-fault-tolerance`，其余三种不传；四种情况都启用内部推理服务的健康检查。CPU 测试 `test_training_recovery.py` 检查训练入口进程的资源归属、数据保留和重新分片、启动流程，以及 checkpoint 恢复边界。
+`test_qwen3_30B_A3B_training_recovery.py` 使用 8 张 GPU，在 MoE 模型、R3 和 stateless Adam 配置下覆盖 OOM、checkpoint 恢复及 manager 丢失。它不保存优化器张量，但会检查 scheduler 进度，比对 TP/DP 改变前后的持久化路由字节，并在恢复后完成训练。Dense 测试覆盖普通 Adam 的优化器 checkpoint 恢复。
+
+无论是否传入兼容参数 `--use-fault-tolerance`，内部推理健康检查都会启用。CPU 测试还包括：`test_training_recovery.py` 的配置与 checkpoint 边界检查，`test_disk_delta_recovery.py` 的权重更新应答丢失，以及 `test_rollout_manager_recovery.py` 中真实 Ray manager 的 SIGKILL 和转换应答丢失。
 
 ### Rollout 收尾时清理失效引擎
 

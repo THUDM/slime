@@ -26,7 +26,22 @@ def _serving_identity(serving):
 
 def _session_snapshot(manager, rollout_id):
     data = manager.recovery.load_converted(rollout_id)
-    serialized = json.dumps({name: data[name] for name in ("tokens", "sample_indices", "rewards")}, sort_keys=True)
+    serialized = json.dumps(
+        {name: data[name] for name in ("tokens", "sample_indices", "rewards")},
+        sort_keys=True,
+        default=lambda value: value.tolist(),
+    )
+    # R3 is part of the replay contract: compare the persisted routing bytes,
+    # independently of how the restarted trainer partitions samples or layers.
+    route_digest = hashlib.sha256()
+    route_elements = 0
+    for routes in data.get("rollout_routed_experts", []):
+        if hasattr(routes, "load"):
+            routes = routes.load()
+        route_elements += routes.numel()
+        route_digest.update(routes.to(dtype=torch.int32).contiguous().numpy().tobytes())
+    if getattr(manager.args, "use_rollout_routing_replay", False):
+        assert route_elements > 0, "R3 recovery must replay nonempty routing tensors"
     engines = [engine for engine in manager.rollout_engines if engine is not None]
     return {
         "manager_pid": os.getpid(),
@@ -38,6 +53,7 @@ def _session_snapshot(manager, rollout_id):
         "rollout_pg_id": manager.pg[0].id.hex(),
         "sample_digest": hashlib.sha256(serialized.encode()).hexdigest(),
         "sample_indices": data["sample_indices"],
+        "route_digest": route_digest.hexdigest(),
         "parallel": manager.batch_builder.train_parallel_config,
         "weight_versions": ray.get([engine.get_weight_version.remote() for engine in engines]),
         "start_rollout_id": manager.args.start_rollout_id,

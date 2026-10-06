@@ -167,6 +167,7 @@ class RolloutManager:
 
     def attach_training(self, args, deployment):
         """Bind a driver to the same serving owner, including after manager death."""
+        from slime.data.queue_data_source import QueueDataSource
         from slime.ray.training_recovery import TrainingResume
 
         was_paused = self.pause_rollout_admission()
@@ -178,6 +179,11 @@ class RolloutManager:
         self.servers = deployment.servers
         if self.recovery is not None:
             self.recovery.reconcile_checkpoint()
+            if isinstance(self.data_source, QueueDataSource):
+                # A queue commit can succeed while its RPC fails. Reconcile on
+                # live-manager retries too, before training can consume and GC
+                # a conversion missing from the checkpoint replay window.
+                self.recovery.reconcile_collection(self.controller, self.data_source.branch_id)
         # The saved load boundary wins over new CLI settings, while trainer
         # parallelism and memory limits still come from the new attempt.
         configuration = dict(self.recovery.resume_configuration) if self.recovery is not None else {}
@@ -307,10 +313,14 @@ class RolloutManager:
             if batch.converted is not None:
                 # Conversion already succeeded: reuse rewards and tokens and
                 # build only the partitions for this trainer's DP layout.
-                refs = self.batch_builder.replay_converted(self.recovery.load_converted(rollout_id), batch.batch_id)
-                if self.args.rollout_data_transport == "straw" and self.batch_builder.replay_refs:
-                    self.recovery.retain_replay_shards(rollout_id, self.batch_builder.replay_refs)
-                return refs
+                return self.batch_builder.replay_converted(
+                    (
+                        batch.converted
+                        if isinstance(batch.converted, DiskPayloadRef)
+                        else self.recovery.load_converted(rollout_id)
+                    ),
+                    batch.batch_id,
+                )
             # A crash before conversion still leaves the accepted raw batch.
             data, metrics = self.recovery.load_raw(rollout_id), None
             if self.args.rollout_data_transport == "straw":
@@ -347,6 +357,8 @@ class RolloutManager:
         if cached is not None:
             return cached
         data = self.batch_builder.convert(data)
+        if self.args.rollout_data_transport == "straw":
+            data = self.batch_builder.publish_converted(data)
         if self.recovery is not None:
             self.recovery.remember_converted(rollout_id, data, self.batch_builder.batch_id)
         return self.batch_builder.split_by_dp(data)
@@ -391,10 +403,6 @@ class RolloutManager:
 
     def training_completed(self, rollout_id):
         self.batch_builder.training_completed(rollout_id)
-        if self.recovery is not None:
-            # The trainer no longer needs these DP shards. Global replay data
-            # stays pinned until checkpoint_committed confirms a durable save.
-            self.recovery.release_replay_shards(rollout_id)
 
     def load(self, rollout_id=None):
         from slime.data.checkpoint import SourceRestore

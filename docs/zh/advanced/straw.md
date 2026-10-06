@@ -40,7 +40,7 @@ Fully async 在每个有 CPU 资源的 Ray 节点启动一个生成进程，分�
 
 1. Worker 请求 prompt group，数据源从 dataset 读取数据，将 group 和更新后的游标一起保存到队列。
 2. Worker 生成和打分。归还的 partial group 持久化后等待续跑；已接收的完整 group 可供训练使用。
-3. Batch builder 执行 reward/conversion hook，将选中的 sample 分配给各训练 rank。训练结束后，slime 确认数据已消费；没有其他引用需要它们时即可回收存储。
+3. Batch builder 执行全局 reward/conversion hook，并将结果作为队列控制任务接收。转换后的 batch 只写一次，各训练 rank 按索引直接读取自己的 sample。训练结束后推进消费游标，移除未完成批次引用；恢复所需数据的保留时间由模型 checkpoint 边界单独决定。
 
 Rollout 和训练数据共用存储池，R3、SC 等大张量可以跨阶段复用。队列通过可续租的 lease 将任务分配给 worker；worker 失联后，未完成任务在 lease 到期后可重新领取。
 

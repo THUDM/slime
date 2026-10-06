@@ -26,7 +26,11 @@ Or save rollout debug data. The path must include `{rollout_id}`:
 
 Use `--save` and `--save-interval` to save model checkpoints regularly. Longer intervals mean more batches to retrain after a failure and more recovery data to retain.
 
-Recovery requires `torch_dist` checkpoints with optimizer and RNG state, so `--no-save-optim` and `--no-save-rng` are rejected. slime automatically enables an optimizer checkpoint format that supports resharding across parallel configurations.
+Recovery requires `torch_dist` checkpoints with RNG state and, for a stateful optimizer, optimizer state. slime automatically enables an optimizer checkpoint format that supports resharding across parallel configurations. `--no-save-rng` is rejected.
+
+With `--use-stateless-adam --no-save-optim`, Adam keeps no moments between optimizer steps, so recovery can omit optimizer tensors. Slime saves the LR/WD scheduler in `opt_param_scheduler.pt` inside each model checkpoint and restores it at the same boundary; a missing scheduler file prevents resume. FP32 master parameters are rebuilt from the saved model precision, so this mode does not promise bitwise-identical updates after a restart. Ordinary Adam still requires its optimizer checkpoint.
+
+If saving a large MoE optimizer exhausts GPU memory, use `--distrib-optim-fully-reshardable-mem-efficient`. Megatron then gathers checkpoint tensors through Gloo on CPU, preserving resharding support while trading GPU temporary memory for host memory and save time. `--overlap-grad-reduce --ddp-bucket-size 40000000` bounds the temporary buffers used for each checkpoint gather; reserve host memory for the full optimizer state as well.
 
 ### Resubmit After the Failed Job Exits
 
@@ -38,11 +42,13 @@ For example, after a Megatron OOM:
 
 Keep the model, rollout configuration, global batch size, and session identity unchanged. With colocated training and rollout, the trainers must fit within the retained GPU allocation. With separate training and rollout, you can allocate training resources again without moving the rollout GPUs.
 
+Retained workers keep their original configuration. Sampling, filters, reward hooks, and custom arguments are checked on reattachment; adding or removing an argument also counts as a change. Only explicitly supported trainer and operational settings may change.
+
 Between attempts, do not stop Ray, recreate the serving container, or run cleanup commands such as `pkill sglang`. `slime.utils.external_utils.command_utils.execute_train` preserves a running Ray head and SGLang. If your shell launcher cleans up processes on every launch, skip that step when restarting. Once training finishes successfully, slime releases the retained session and its resources.
 
 ### Where Training Resumes
 
-The new trainer loads the last successfully saved model, optimizer, and RNG state, then retrains the batches after that checkpoint. This includes batches that finished training but whose model updates were not saved. If no checkpoint exists yet, replay starts from the original model.
+The new trainer loads the last successfully saved model, scheduler, RNG, and any stateful optimizer state, then retrains the batches after that checkpoint. This includes batches that finished training but whose model updates were not saved. If no checkpoint exists yet, replay starts from the original model.
 
 Retained data includes generated samples, tokens, and reward postprocessing results. When you change training parallelism, slime repartitions this data without regenerating samples or repeating reward postprocessing. Recovery data is kept until the corresponding model checkpoint commits or training finishes successfully. Serving weight versions continue to increase across restarts.
 
@@ -65,7 +71,7 @@ Three components handle recovery:
 
 - `ServingCluster` manages routers, SGLang engines, GPU resources, the Straw queue controller, and the weight-update lock. It is a named, detached Ray actor that survives the job that created it.
 - `RolloutManager` handles generation, data reading, sample conversion, and training-data partitioning. It can be reused or recreated after it exits; recreating it does not destroy resources held by `ServingCluster`.
-- `TrainingRecovery` persists checkpoint boundaries, data-source progress, and training batches. Source progress and accepted batches are written together. Converted batches are saved before DP partitioning, so a restart does not skip data or depend on the old parallel configuration.
+- `TrainingRecovery` owns the model checkpoint boundary and retains the batches needed after it. The Straw accepted log owns raw and converted batch receipts; recovery reconciles those receipts if a manager or RPC fails before the journal is updated. A converted batch is stored once, and each DP rank receives an index view that can be rebuilt for a new parallel configuration.
 
 If `RolloutManager` survives, it pauses admission of new generation tasks. If it exits, its replacement reconnects to `ServingCluster`, restores data-source progress, and uses the queue controller to prevent old readers from taking more tasks. Completed prefetch results that have not reached training remain available. Trainer processes are also registered with `ServingCluster`, so it can clean up old trainers even after the manager exits.
 
@@ -76,6 +82,8 @@ During rollout, slime periodically requests SGLang's `/health_generate` endpoint
 Synchronous rollout removes failed services from the router before sending abort and drain requests. Before returning to training, `ServingCluster` checks the engines again, unregisters failed services, and clears their Ray actor handles. This prevents later memory-offload or weight-update requests from reaching stopped engines. Both HTTP requests and Ray calls have timeouts.
 
 Missing engines restart before the next weight update and then load the trainer's weights. Background checks and rollout-completion checks use the same failure handling. Background checks pause while weights or memory allocation change.
+
+Reattachment also bounds the time spent resetting old trainer connections. An engine that cannot acknowledge is unregistered and terminated with its serving children; healthy peers remain running. This applies to prefill and decode groups as well as ordinary serving groups.
 
 | Argument | Default | Description |
 |---|---|---|

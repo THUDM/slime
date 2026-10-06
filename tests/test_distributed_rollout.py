@@ -1641,8 +1641,12 @@ def test_restore_source_handoff_releases_obsolete_snapshot_graphs(source_factory
     for index in range(2):
         batch = f"completed-{index}"
         plan = codec.publish({"batch_id": batch}, submission_id=f"plan-{index}")
-        controller.plan_batch(batch, [], plan)
-        ready = codec.publish({"batch_id": batch}, submission_id=f"ready-{index}")
+        lease = controller.plan_batch(batch, [], plan)["lease"]
+        ready = codec.publish(
+            {"batch_id": batch},
+            submission_id=f"ready-{index}",
+            metadata={"task_id": batch, "attempt_id": lease["attempt_id"]},
+        )
         controller.ready_batch(batch, ready)
         controller.finish_batch(batch)
     replacement = codec.publish({"buffer": []}, submission_id="empty-source")
@@ -1913,10 +1917,11 @@ def test_online_gc_waits_for_training_completion_and_checkpoint_release(source_f
     receipt = controller.complete(lease, raw)
     writer.seal()
     plan = controller.codec.publish({"raw": DiskPayloadRef(raw, str(writer.backend.root))}, submission_id="plan")
-    controller.plan_batch("batch", [receipt.position], plan)
+    batch_lease = controller.plan_batch("batch", [receipt.position], plan)["lease"]
     ready = controller.codec.publish(
         {"batch_id": "batch", "raw": DiskPayloadRef(raw, str(writer.backend.root))},
         submission_id="ready",
+        metadata={"task_id": "batch", "attempt_id": batch_lease["attempt_id"]},
     )
     controller.ready_batch("batch", ready)
     controller._collect_storage()
@@ -2316,6 +2321,33 @@ def test_automatic_restart_before_first_checkpoint_recovers_the_same_queue(
             assert controller.queue.producer_state("dataset") == cursor
     finally:
         controller.close()
+
+
+@pytest.mark.parametrize("source_factory", [False, True], indirect=True)
+def test_training_progress_keeps_only_unfinished_batches(source_factory):
+    from straw.protocol import RecordSetRef
+
+    controller = source_factory.controller
+    sizes = []
+    for step in range(200):
+        batch_id = f"batch:bounded:{step}"
+        plan = controller.codec.publish({"step": step}, submission_id=f"plan:{step}")
+        lease = controller.plan_batch(batch_id, [], plan)["lease"]
+        ready = controller.codec.publish(
+            {"step": step},
+            submission_id=f"ready:{step}",
+            metadata={"task_id": batch_id, "attempt_id": lease["attempt_id"]},
+        )
+        controller.ready_batch(batch_id, ready)
+        assert len(controller._training_state()["batches"]) == 1
+        controller.finish_batch(batch_id)
+        state = controller._training_state()
+        assert not state["batches"] and not state["processed_positions"]
+        assert "finished_batches" not in state
+        assert state["processed_cursor"] == step + 1
+        sizes.append(RecordSetRef.from_dict(controller.training_state()["state_ref"]).payload_bytes)
+    assert max(sizes) - min(sizes) < 32
+    assert not controller.queue.batches  # one accepted log, no second batch history
 
 
 if __name__ == "__main__":

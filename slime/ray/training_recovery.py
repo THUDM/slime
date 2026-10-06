@@ -1,7 +1,9 @@
 """Persist checkpoint boundaries and replay batches across trainer/manager restarts.
 
-Serving lifetime is owned by ServingCluster. This journal records only what a
-new trainer or rollout manager needs to replay work after its last checkpoint.
+ServingCluster owns engines and the live queue. Queue receipts are the authority
+for accepted raw/converted data; this journal owns the model/optimizer rollback
+boundary and pins its replay window. Training completion advances queue reads,
+but only a committed model checkpoint can release those replay pins.
 """
 
 import copy
@@ -44,8 +46,11 @@ def training_recovery_enabled(args):
 
 def configure_recovery_checkpoint(args):
     """Apply the same recovery policy before and after role-specific overrides."""
-    if getattr(args, "no_save_optim", False) or getattr(args, "no_save_rng", False):
-        raise ValueError("Trainer fault tolerance requires checkpoints with optimizer and RNG state")
+    stateless = getattr(args, "use_stateless_adam", False)
+    if getattr(args, "no_save_rng", False) or (getattr(args, "no_save_optim", False) and not stateless):
+        raise ValueError(
+            "Trainer fault tolerance requires optimizer and RNG state; only --use-stateless-adam may omit optimizer state"
+        )
     if args.ckpt_format != "torch_dist":
         raise ValueError("Trainer fault tolerance requires --ckpt-format torch_dist for parallelism changes")
     args.ckpt_fully_parallel_save = True
@@ -53,60 +58,93 @@ def configure_recovery_checkpoint(args):
 
 
 def retained_rollout_configuration(args):
-    """Snapshot what must remain compatible while reusing serving and batches.
+    """Freeze rollout and custom-hook inputs, allowing explicit trainer controls.
 
-    Trainer parallelism and memory limits may change on restart; rollout inputs,
-    conversion semantics and serving topology must still describe the same run.
-    Router addresses are discovered at startup and are not configuration identity.
+    Unknown/custom fields are immutable too: workers keep their original args.
+    Adding a new rollout option therefore cannot silently bypass this check.
     """
-    names = {
-        "hf_checkpoint",
-        "ref_load",
-        "prompt_data",
-        "data_source_path",
-        "rollout_function_path",
-        "custom_generate_function_path",
-        "custom_rm_path",
-        "custom_reward_post_process_path",
-        "custom_convert_samples_to_train_data_path",
-        "input_key",
-        "label_key",
-        "metadata_key",
-        "tool_key",
-        "apply_chat_template",
-        "rollout_seed",
-        "rollout_shuffle",
-        "rollout_batch_size",
-        "n_samples_per_prompt",
-        "global_batch_size",
-        "rollout_data_transport",
-        "rollout_data_dir",
-        "rollout_queue_run_id",
-        "save_debug_rollout_data",
-        "load_debug_rollout_data",
-        "debug_train_only",
-        "debug_rollout_only",
-        "rollout_external",
-        "rollout_external_engine_addrs",
-        "rollout_num_gpus",
-        "rollout_num_gpus_per_engine",
-        "num_gpus_per_node",
-        "colocate",
-        "offload_rollout",
-        "use_critic",
-        "train_backend",
-        "advantage_estimator",
-        "rewards_normalization",
-        "grpo_std_normalization",
-        "reward_key",
-        "use_score_centering",
-        "use_rollout_routing_replay",
-        "sglang_config",
-        "sglang_config_path",
+    mutable = {
+        "load",
+        "save",
+        "ckpt_step",
+        "start_rollout_id",
+        "finetune",
+        "no_load_optim",
+        "no_load_rng",
+        "save_interval",
+        "num_rollout",
+        "num_epoch",
+        "eval_interval",
+        "update_weight_start_version",
+        "tensor_model_parallel_size",
+        "pipeline_model_parallel_size",
+        "context_parallel_size",
+        "expert_model_parallel_size",
+        "expert_tensor_parallel_size",
+        "virtual_pipeline_model_parallel_size",
+        "num_layers_per_virtual_pipeline_stage",
+        "pipeline_model_parallel_layout",
+        "decoder_first_pipeline_num_layers",
+        "decoder_last_pipeline_num_layers",
+        "micro_batch_size",
+        "use_dynamic_batch_size",
+        "max_tokens_per_gpu",
+        "log_probs_max_tokens_per_gpu",
+        "balance_data",
+        "balance_by_flops",
+        "recompute_granularity",
+        "recompute_method",
+        "recompute_num_layers",
+        "recompute_modules",
+        "distribute_saved_activations",
+        "sequence_parallel",
+        "offload_train",
+        "use_distributed_optimizer",
+        "optimizer_cpu_offload",
+        "optimizer_offload_fraction",
+        "use_precision_aware_optimizer",
+        "overlap_cpu_optimizer_d2h_h2d",
+        "overlap_grad_reduce",
+        "overlap_param_gather",
+        "ddp_bucket_size",
+        "ddp_num_buckets",
+        "use_fault_tolerance",
+        "distributed_backend",
+        "distributed_timeout_minutes",
+        "rank",
+        "local_rank",
+        "world_size",
+        "data_parallel_size",
+        # Megatron pads the same tokenizer vocabulary to the current TP size.
+        "padded_vocab_size",
+        "num_layers_per_pipeline_rank",
+        "sglang_router_ip",
+        "sglang_router_port",
+        "sglang_model_routers",
+        "distributed_init_method",
+        "master_addr",
+        "master_port",
+        "megatron_config",
+        "megatron_config_path",
+        "rollout_health_check_interval",
+        "rollout_health_check_timeout",
+        "rollout_health_check_first_wait",
+        "train_env_vars",
+        "actor_config",
+        "critic_config",
+        "ckpt_fully_parallel_save",
+        "dist_ckpt_optim_fully_reshardable",
+        "distrib_optim_fully_reshardable_mem_efficient",
+        "enable_gloo_process_groups",
+        "exit_interval",
+        "exit_duration_in_mins",
     }
-    names.update(name for name in vars(args) if name.startswith("sglang_"))
-    names.difference_update({"sglang_router_ip", "sglang_router_port", "sglang_model_routers"})
-    return {name: copy.deepcopy(getattr(args, name, None)) for name in sorted(names)}
+    mutable_prefixes = ("actor_num_", "critic_num_", "wandb_", "tensorboard_", "profiling_", "profile_", "ci_")
+    return {
+        name: copy.deepcopy(value)
+        for name, value in sorted(vars(args).items())
+        if name not in mutable and not name.startswith(mutable_prefixes)
+    }
 
 
 def training_session_name(args):
@@ -166,7 +204,13 @@ class TrainingRecovery:
         self.journal = directory / (training_session_name(args).removeprefix("rollout:") + ".pt")
         if self.journal.exists():
             state = torch.load(self.journal, weights_only=False)
-            changed = [name for name, value in state["configuration"].items() if self.configuration.get(name) != value]
+            changed = [
+                name
+                for name in state["configuration"].keys() | self.configuration.keys()
+                if name not in state["configuration"]
+                or name not in self.configuration
+                or state["configuration"][name] != self.configuration[name]
+            ]
             if changed:
                 raise ValueError("Retained rollout session requires unchanged configuration: " + ", ".join(changed))
             if retained_serving:
@@ -229,17 +273,26 @@ class TrainingRecovery:
             # Model loading has not selected the first rollout yet, so this
             # manager cannot have accepted any training data.
             return
-        from straw.protocol import Lease
+        from straw.protocol import Lease, RecordSetRef
 
         # Generation is sequential: at most the next rollout can have been
         # accepted without reaching remember_raw(). The queue owns that fact;
         # reuse its original receipt before fencing/replaying the old readers.
         rollout_id = max(self.batches, default=self.resume_configuration["start_rollout_id"] - 1) + 1
         task = ray.get(controller.status.remote(f"collection:{branch_id}:{rollout_id}"))
-        if task is None or task["state"] != "completed":
-            return
-        receipt = ray.get(controller.result.remote(Lease(**task["lease"])))
-        self.remember_raw(rollout_id, RawRolloutRef(receipt.result_ref, self.args.rollout_data_dir, receipt))
+        if task is not None and task["state"] == "completed":
+            receipt = ray.get(controller.result.remote(Lease(**task["lease"])))
+            self.remember_raw(rollout_id, RawRolloutRef(receipt.result_ref, self.args.rollout_data_dir, receipt))
+        # Conversion acceptance is owned by the queue too. A manager can die
+        # after that commit and before updating its checkpoint replay window.
+        for rollout_id, retained in self.batches.items():
+            if retained.converted is not None:
+                continue
+            batch_id = f"batch:{retained.raw.receipt.commit_id}"
+            batch = ray.get(controller.batch.remote(batch_id))
+            if batch is not None and batch["ready"]:
+                reference = DiskPayloadRef(RecordSetRef.from_dict(batch["ready_ref"]), self.args.rollout_data_dir)
+                self.remember_converted(rollout_id, reference, batch_id)
 
     def resume_role(self, role, configuration):
         if role not in self.role_configuration:
@@ -247,6 +300,9 @@ class TrainingRecovery:
                 name: getattr(configuration, name, None)
                 for name in ("load", "save", "ckpt_step", "finetune", "no_load_optim", "no_load_rng")
             }
+            # Actor and critic may use different optimizers. Keep each role's
+            # checkpoint load policy even if a later YAML override changes it.
+            self.role_configuration[role]["use_stateless_adam"] = getattr(configuration, "use_stateless_adam", False)
         self.persist()
         values = dict(self.role_configuration[role])
         if self.checkpoint_step is not None:
@@ -256,7 +312,7 @@ class TrainingRecovery:
                 load=values["save"],
                 ckpt_step=self.checkpoint_step,
                 finetune=False,
-                no_load_optim=False,
+                no_load_optim=values["use_stateless_adam"],
                 no_load_rng=False,
             )
         values["start_rollout_id"] = self.resume_configuration["start_rollout_id"]
@@ -307,21 +363,6 @@ class TrainingRecovery:
         with lock:
             store.retain(f"trainer-recovery:{self.incarnation}:{rollout_id}", roots)
 
-    def retain_replay_shards(self, rollout_id, refs):
-        # These shards belong to the current trainer layout; the retained
-        # global batch remains the source for repartitioning on another restart.
-        store, _, lock = rollout_store(self.args)
-        roots = [ref.manifest for ref in refs]
-        with lock:
-            store.retain(f"trainer-recovery:{self.incarnation}:{rollout_id}:shards", roots)
-            store.release_publications(roots)
-
-    def release_replay_shards(self, rollout_id):
-        if self.args.rollout_data_transport == "straw":
-            store, _, lock = rollout_store(self.args)
-            with lock:
-                store.release(f"trainer-recovery:{self.incarnation}:{rollout_id}:shards")
-
     def load_raw(self, rollout_id):
         reference = self.batches[rollout_id].raw
         if isinstance(reference, DiskPayloadRef):
@@ -344,15 +385,15 @@ class TrainingRecovery:
             self.persist()
 
     def checkpoint_committed(self, rollout_id):
-        # Runtime training completion is insufficient: only a durable model +
-        # optimizer checkpoint lets us release batches needed for replay.
+        # Runtime training completion is insufficient: only a durable training
+        # checkpoint lets us release batches needed for replay.
         self.checkpoint_step = rollout_id
         self.resume_configuration.update(
             load=self.resume_configuration["save"],
             ckpt_step=rollout_id,
             start_rollout_id=rollout_id + 1,
             finetune=False,
-            no_load_optim=False,
+            no_load_optim=getattr(self.args, "use_stateless_adam", False),
             no_load_rng=False,
         )
         self.release_batches(through=rollout_id)
@@ -373,7 +414,6 @@ class TrainingRecovery:
             if self.args.rollout_data_transport == "straw":
                 store, _, lock = rollout_store(self.args)
                 with lock:
-                    store.release(f"trainer-recovery:{incarnation}:{rollout_id}:shards")
                     store.release(f"trainer-recovery:{incarnation}:{rollout_id}")
             elif batch.converted:
                 Path(batch.converted).unlink(missing_ok=True)

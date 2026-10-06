@@ -42,6 +42,7 @@ def test_rollout_boundary_prunes_failed_router_workers(monkeypatch, failure):
 
 @pytest.mark.parametrize("actor_failure", ["dead", "wedged"])
 def test_boundary_health_check_bypasses_grace_and_cleans_dead_actor(monkeypatch, actor_failure):
+    from slime.backends.sglang_utils import engine_group
     from slime.ray.serving import ServingCluster
     from slime.utils import health_monitor
 
@@ -51,10 +52,12 @@ def test_boundary_health_check_bypasses_grace_and_cleans_dead_actor(monkeypatch,
         shutdown=SimpleNamespace(remote=lambda: "shutdown"),
     )
     alive = SimpleNamespace(health_generate=SimpleNamespace(remote=lambda **kw: "alive"))
-    group = SimpleNamespace(
-        engines=[dead, alive],
+    group = engine_group.ServerGroup(
+        args=SimpleNamespace(num_gpus_per_node=1),
+        pg=None,
+        num_gpus_per_engine=1,
+        num_new_engines=0,
         all_engines=[dead, alive],
-        nodes_per_engine=1,
         worker_type="regular",
         engine_urls={0: "http://dead", 1: "http://alive"},
         router_ip="router",
@@ -69,7 +72,10 @@ def test_boundary_health_check_bypasses_grace_and_cleans_dead_actor(monkeypatch,
     serving.servers = {"model": group}
 
     def wait(refs, *, num_returns, timeout):
-        assert refs == ["dead", "alive"] and num_returns == 2 and timeout == 0.1
+        assert timeout == 0.1
+        if refs == ["shutdown"]:
+            return [], refs
+        assert refs == ["dead", "alive"] and num_returns == 2
         return (["alive"], ["dead"]) if actor_failure == "wedged" else (refs, [])
 
     def get(ref, *, timeout):
@@ -83,7 +89,7 @@ def test_boundary_health_check_bypasses_grace_and_cleans_dead_actor(monkeypatch,
     monkeypatch.setattr(health_monitor.ray, "wait", wait)
     monkeypatch.setattr(health_monitor.ray, "get", get)
     monkeypatch.setattr(health_monitor.ray, "kill", lambda engine, **kw: calls.append(("kill", engine)))
-    monkeypatch.setattr(health_monitor, "unregister_worker", unregister)
+    monkeypatch.setattr(engine_group, "unregister_worker", unregister)
     monitor.start()
     try:
         snapshot = serving.finish_rollout()

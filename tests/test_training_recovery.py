@@ -13,6 +13,7 @@ from slime.data.transport import pack_rollout_payload, rollout_store
 from slime.ray.serving import ServingCluster
 from slime.ray.training_recovery import (
     TrainingRecovery,
+    configure_recovery_checkpoint,
     retained_rollout_configuration,
     training_recovery_enabled,
     training_session_name,
@@ -92,6 +93,11 @@ def test_configuration_allows_trainer_parallelism_and_memory_changes(args):
     updated.context_parallel_size = 2
     updated.micro_batch_size = 2
     updated.max_tokens_per_gpu = 1024
+    updated.padded_vocab_size = 152064
+    updated.distrib_optim_fully_reshardable_mem_efficient = True
+    updated.overlap_grad_reduce = True
+    updated.ddp_bucket_size = 40000000
+    updated.ddp_num_buckets = None
     serving.validate_attachment(updated)
     updated.global_batch_size = 8
     with pytest.raises(ValueError, match="global_batch_size"):
@@ -122,7 +128,8 @@ def test_role_yaml_cannot_override_retained_resume_boundary(args):
 
 
 @pytest.mark.parametrize("role", ["actor", "critic"])
-def test_megatron_init_receives_retained_role_checkpoint(args, monkeypatch, role):
+@pytest.mark.parametrize("stateless", [False, True])
+def test_megatron_init_receives_retained_role_checkpoint(args, monkeypatch, role, stateless):
     from unittest.mock import Mock
 
     from slime.ray import actor_group
@@ -130,7 +137,8 @@ def test_megatron_init_receives_retained_role_checkpoint(args, monkeypatch, role
     args.train_env_vars = {}
     args.offload_train = args.use_routing_replay = False
     args.ckpt_format = "torch_dist"
-    args.no_save_optim = args.no_save_rng = False
+    args.no_save_optim = args.use_stateless_adam = stateless
+    args.no_save_rng = False
     recovery = TrainingRecovery(args, RestorePlan())
     recovery.resume_role(role, args)
     recovery.initial_load_completed(0)
@@ -159,7 +167,29 @@ def test_megatron_init_receives_retained_role_checkpoint(args, monkeypatch, role
     assert configuration.ckpt_step == 2 and configuration.start_rollout_id == 3
     assert configuration.update_weight_start_version == group._disk_weight_version == 12
     assert configuration.ckpt_fully_parallel_save and configuration.dist_ckpt_optim_fully_reshardable
-    assert not configuration.no_load_optim and not configuration.no_load_rng
+    assert configuration.no_load_optim == stateless and not configuration.no_load_rng
+
+
+def test_stateless_recovery_keeps_scheduler_and_rng_policy(args):
+    args.ckpt_format = "torch_dist"
+    args.no_save_optim = args.use_stateless_adam = True
+    args.no_save_rng = False
+    configure_recovery_checkpoint(args)
+    recovery = TrainingRecovery(args, RestorePlan())
+    recovery.resume_role("actor", args)
+    critic = copy.copy(args)
+    critic.use_stateless_adam = critic.no_save_optim = False
+    recovery.resume_role("critic", critic)
+    recovery.initial_load_completed(0)
+    recovery.checkpoint_committed(1)
+    rebuilt = TrainingRecovery(args, RestorePlan())
+    assert rebuilt.resume_configuration["no_load_optim"]
+    assert rebuilt.resume_role("actor", args)["no_load_optim"]
+    assert not rebuilt.resume_role("critic", critic)["no_load_optim"]
+    assert not rebuilt.resume_configuration["no_load_rng"]
+    args.no_save_rng = True
+    with pytest.raises(ValueError, match="RNG state"):
+        configure_recovery_checkpoint(args)
 
 
 @pytest.mark.parametrize("previous", [None, {"JobID": "old", "IsDead": False}])
@@ -294,25 +324,24 @@ def test_retained_straw_batch_reshards_without_reusing_old_plan(args, monkeypatc
     samples = [Sample(index=i, tokens=tokens) for i, tokens in enumerate(global_train_data()["tokens"])]
     raw = pack_rollout_payload(samples, args, 0)
     recovery.remember_raw(0, raw)
-    recovery.remember_converted(0, global_train_data(), "old-dp-batch")
+    recovery.remember_converted(0, BatchBuilder(args).publish_converted(global_train_data()), "old-dp-batch")
     store, _, lock = rollout_store(args)
     with lock:
         store.release_publications([raw.manifest])
     builder = BatchBuilder(args)
     builder.batch_id = "old-dp-batch"
-    builder._commit_ready = lambda *a: pytest.fail("Replay must not overwrite the existing immutable queue batch")
+    builder.publish_converted = lambda *a: pytest.fail("Resharding must not write another conversion")
     for dp_size in (2, 1, 4):
         builder.train_parallel_config = dict(
             dp_size=dp_size, cp_size=1, vpp_size=1, microbatch_group_size_per_vp_stage=1
         )
-        refs = builder.split_by_dp(recovery.load_converted(0), publish_batch=False)
-        recovery.retain_replay_shards(0, builder.replay_refs)
+        reference = recovery.batches[0].converted
+        refs = builder.split_by_dp(reference)
         assert len(refs) == dp_size
         shards = [ref.inner.load() for ref in refs]
         assert sorted(index for shard in shards for index in shard["sample_indices"]) == list(range(4))
         assert all(shard["global_batch_sizes"] == [4] for shard in shards)
         assert [sample.tokens for sample in recovery.load_raw(0)] == global_train_data()["tokens"]
-        recovery.release_replay_shards(0)
     recovery.release_batches()
 
 
@@ -406,6 +435,7 @@ def test_source_snapshot_restores_cursor_and_buffer(args):
 
     source = object.__new__(RolloutDataSourceWithBuffer)
     source.args, source.dataset = args, None
+    source.consumers, source._restored_consumers = {}, {}
     args.rollout_shuffle = False
     source.sample_offset, source.epoch_id = 12, 2
     source.sample_group_index, source.sample_index = 12, 48
@@ -466,25 +496,64 @@ def test_committed_checkpoint_survives_lost_manager_notification(args, tmp_path)
     assert rebuilt.resume_configuration["start_rollout_id"] == 3
 
 
-def test_replay_completes_interrupted_dp_publication(args, monkeypatch):
-    from dataclasses import asdict
+def test_replay_builds_new_layout_without_writing_payloads(args, monkeypatch):
     from unittest.mock import Mock
-
     from slime.data import batch_builder
 
     monkeypatch.setattr(batch_builder.ray, "put", lambda value: value)
-    monkeypatch.setattr(batch_builder.ray, "get", lambda value: value)
-    plan = pack_rollout_payload({"digest": "old-plan"}, args, 0)
-    controller = Mock()
-    controller.batch.remote.return_value = {"plan_ref": asdict(plan.manifest), "ready": False}
-    controller.ready_batch.remote.return_value = pack_rollout_payload({}, args, 0).manifest
-    builder = BatchBuilder(args, controller=controller)
+    builder = BatchBuilder(args)
+    reference = builder.publish_converted(global_train_data())
+    builder.controller = Mock()
+    builder.publish_converted = lambda *a: pytest.fail("Replay must share the accepted records")
     builder.train_parallel_config = dict(dp_size=1, cp_size=1, vpp_size=1, microbatch_group_size_per_vp_stage=1)
-    ranks = builder.replay_converted(global_train_data(), "batch-0")
-    assert ranks[0].inner.load()["sample_indices"] == [0, 1, 2, 3]
-    assert ranks[0].inner.plan_digest == "old-plan"
-    controller.ready_batch.remote.assert_called_once()
-    assert not builder.replay_refs
+    one = builder.replay_converted(reference, "batch-0")
+    builder.train_parallel_config["dp_size"] = 2
+    two = builder.replay_converted(reference, "batch-0")
+    assert one[0].inner.load()["sample_indices"] == [0, 1, 2, 3]
+    assert {ref.inner.manifest for ref in one + two} == {reference.manifest}
+    assert one[0].inner.plan_digest != two[0].inner.plan_digest
+    builder.controller.ready_batch.remote.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("rollout_temperature", 0.25),
+        ("rollout_top_p", 0.8),
+        ("rollout_top_k", 20),
+        ("rollout_max_response_len", 8192),
+        ("rollout_stop", ["STOP"]),
+        ("apply_chat_template_kwargs", {"enable_thinking": False}),
+        ("rm_type", "changed"),
+        ("dynamic_sampling_filter_path", "custom.filter"),
+        ("buffer_filter_path", "custom.buffer"),
+        ("custom_new_argument", {"value": 1}),
+        ("custom_new_argument", None),
+    ],
+)
+def test_retained_session_rejects_new_or_changed_rollout_options(args, field, value):
+    serving = object.__new__(ServingCluster.__ray_metadata__.modified_class)
+    serving.configuration = retained_rollout_configuration(args)
+    serving.driver_job_id = None
+    recovery = TrainingRecovery(args, RestorePlan())
+    recovery.persist()
+    setattr(args, field, value)
+    with pytest.raises(ValueError, match=field):
+        serving.validate_attachment(args)
+    with pytest.raises(ValueError, match=field):
+        TrainingRecovery(args, RestorePlan())
+
+
+def test_retained_session_rejects_removed_custom_option(args):
+    serving = object.__new__(ServingCluster.__ray_metadata__.modified_class)
+    serving.configuration = retained_rollout_configuration(args)
+    serving.driver_job_id = None
+    TrainingRecovery(args, RestorePlan()).persist()
+    del args.custom_reward_post_process_path
+    with pytest.raises(ValueError, match="custom_reward_post_process_path"):
+        serving.validate_attachment(args)
+    with pytest.raises(ValueError, match="custom_reward_post_process_path"):
+        TrainingRecovery(args, RestorePlan())
 
 
 if __name__ == "__main__":

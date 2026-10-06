@@ -35,6 +35,7 @@ def train_args(directory, mode, tp_size, model_path, dataset_path, save_interval
         f"--hf-checkpoint {quote(model_path)} --ref-load {quote(model_path)} "
         "--rollout-health-check-first-wait 600 "
         f"--rollout-data-transport {'straw' if mode == 'straw' else 'object-store'} "
+        "--rollout-function-path slime.rollout.fully_async_rollout.generate_rollout_fully_async "
         f"--prompt-data {quote(dataset_path)} --input-key messages --label-key label --apply-chat-template "
         "--custom-rm-path training_recovery_test_helpers.reward "
         "--num-rollout 3 --rollout-batch-size 4 --n-samples-per-prompt 4 --global-batch-size 16 "
@@ -56,17 +57,15 @@ def train_args(directory, mode, tp_size, model_path, dataset_path, save_interval
     if tp_size > 1:
         arguments += "--sequence-parallel "
     if mode == "straw":
-        arguments += (
-            f"--rollout-data-dir {quote(str(directory / 'queue'))} --rollout-queue-online-gc "
-            "--rollout-function-path slime.rollout.fully_async_rollout.generate_rollout_fully_async "
-        )
+        arguments += f"--rollout-data-dir {quote(str(directory / 'queue'))} --rollout-queue-online-gc "
     else:
         arguments += f"--save-debug-rollout-data {quote(str(directory / 'rollout_{rollout_id}.pt'))} "
     return arguments
 
 
 def wait_job(client, submission_id, path):
-    deadline = time.monotonic() + 1800
+    # Large models also save and reload checkpoints on shared storage.
+    deadline = time.monotonic() + 3600
     while time.monotonic() < deadline:
         status = client.get_job_status(submission_id)
         if status.is_terminal():
@@ -77,7 +76,7 @@ def wait_job(client, submission_id, path):
     raise TimeoutError(f"Training job did not finish: {submission_id}")
 
 
-def verify(directory, mode, failure_rollout, save_interval, kill_manager):
+def verify(directory, mode, failure_rollout, save_interval, kill_manager, wedge_engine=False, train_gpus=2):
     before = json.loads((directory / "before.json").read_text())
     after = json.loads((directory / "after.json").read_text())
     assert before["trainer"]["job_id"] != after["trainer"]["job_id"]
@@ -92,17 +91,24 @@ def verify(directory, mode, failure_rollout, save_interval, kill_manager):
         "controller_id",
         "rollout_pg_id",
         "sample_digest",
+        "route_digest",
         "sample_indices",
     ):
-        assert before[name] == after[name], (name, before[name], after[name])
+        if wedge_engine and name in {"engines", "engine_actor_ids"}:
+            # Reattachment retires only the peer that cannot fence its old RPCs.
+            assert before[name][0] != after[name][0]
+            assert before[name][1:] == after[name][1:]
+        else:
+            assert before[name] == after[name], (name, before[name], after[name])
     assert (before["manager_pid"] != after["manager_pid"]) == kill_manager
-    assert before["parallel"]["dp_size"] == 2 and after["parallel"]["dp_size"] == 1
+    assert before["parallel"]["dp_size"] == train_gpus and after["parallel"]["dp_size"] == train_gpus // 2
     restore_start = failure_rollout if save_interval == 1 else 0
     assert after["start_rollout_id"] == restore_start
     for rollout_id in range(restore_start, failure_rollout + 1):
         original = json.loads((directory / f"original_{rollout_id}.json").read_text())
         replayed = json.loads((directory / f"replayed_{rollout_id}.json").read_text())
         assert original["sample_digest"] == replayed["sample_digest"]
+        assert original["route_digest"] == replayed["route_digest"]
         assert original["sample_indices"] == replayed["sample_indices"]
     assert before["scheduler_num_steps"] == after["scheduler_num_steps"] == 16 * failure_rollout
     assert all(
@@ -111,8 +117,10 @@ def verify(directory, mode, failure_rollout, save_interval, kill_manager):
     failed_log = (directory / "failed.log").read_text()
     assert "CUDA out of memory" in failed_log or "torch.OutOfMemoryError" in failed_log
     resumed_log = (directory / "resumed.log").read_text()
-    gradients = [float(value) for value in re.findall(r"'train/grad_norm': ([0-9.eE+-]+)", resumed_log)]
-    assert gradients and all(0 < value < float("inf") for value in gradients), gradients
+    gradients = [float(value) for value in re.findall(r"'train/grad_norm': ([^,}]+)", resumed_log)]
+    # Include NaN/Inf in parsing and require every resumed step: a later failed
+    # update must not be hidden by an earlier finite gradient in the same log.
+    assert len(gradients) == 3 - restore_start and all(0 < value < float("inf") for value in gradients), gradients
     if mode == "straw":
         committed = json.loads((directory / "checkpoint/rollout/committed_2.json").read_text())
         assert committed["weight_version"] == int(after["weight_versions"][0]) + 2 - failure_rollout
@@ -141,6 +149,13 @@ def execute(
     kill_manager=False,
     fault_tolerance=True,
     manager_crash_phase="after-failure",
+    weight_sync="nccl",
+    wedge_engine=False,
+    pd=False,
+    model_type=MODEL_TYPE,
+    train_gpus=2,
+    rollout_gpus=2,
+    extra_args="",
 ):
     directory = Path(directory or tempfile.mkdtemp(prefix="slime_training_recovery_"))
     directory.mkdir(parents=True, exist_ok=True)
@@ -155,7 +170,7 @@ def execute(
                 "--node-ip-address",
                 "127.0.0.1",
                 "--num-gpus",
-                str(NUM_GPUS),
+                str(train_gpus + rollout_gpus),
                 "--disable-usage-stats",
             ],
             check=True,
@@ -173,6 +188,11 @@ def execute(
             "OMP_NUM_THREADS": "1",
             "NO_PROXY": "*",
             "no_proxy": "*",
+            **{
+                name: os.environ[name]
+                for name in ("NCCL_SOCKET_IFNAME", "GLOO_SOCKET_IFNAME", "NCCL_NVLS_ENABLE")
+                if name in os.environ
+            },
             **{
                 name: ""
                 for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
@@ -192,10 +212,43 @@ def execute(
         for tp_size in (1, 2):
             cluster_address = os.environ.get("SLIME_TEST_RAY_ADDRESS", "127.0.0.1:6379")
             command = (
-                f"cd {quote(str(REPO))} && source scripts/models/{MODEL_TYPE}.sh "
+                f"cd {quote(str(REPO))} && source scripts/models/{model_type}.sh "
                 f'&& export RAY_ADDRESS={quote(cluster_address)} && python train.py "${{MODEL_ARGS[@]}}" '
             )
             command += train_args(directory, mode, tp_size, model_path, dataset_path, save_interval, fault_tolerance)
+            command += f"--actor-num-gpus-per-node {train_gpus} --rollout-num-gpus {rollout_gpus} " + extra_args + " "
+            if pd:
+                config = directory / "serving.json"
+                config.write_text(
+                    json.dumps(
+                        {
+                            "sglang": [
+                                {
+                                    "name": "default",
+                                    "server_groups": [
+                                        {
+                                            "worker_type": side,
+                                            "num_gpus": rollout_gpus // 2,
+                                            "num_gpus_per_engine": rollout_gpus // 2,
+                                            "overrides": {"disaggregation_transfer_backend": "mooncake"},
+                                        }
+                                        for side in ("prefill", "decode")
+                                    ],
+                                }
+                            ]
+                        }
+                    )
+                )
+                command += f"--sglang-config {quote(str(config))} "
+
+            if weight_sync == "disk-delta":
+                command += (
+                    "--update-weight-mode delta --update-weight-transport disk "
+                    f"--update-weight-disk-dir {quote(str(directory / 'weights'))} "
+                    f"--update-weight-local-checkpoint-dir {quote('/tmp/slime-delta-' + directory.name)} "
+                )
+            if wedge_engine:
+                command += "--rollout-health-check-timeout 5 "
             if role_config:
                 path = directory / f"megatron_tp{tp_size}.json"
                 path.write_text(
@@ -265,6 +318,23 @@ def execute(
                     )
                     response.raise_for_status()
                     (directory / "serving_after_failure.json").write_text(json.dumps(response.json()))
+                if wedge_engine:
+                    # Queue an RPC that never reaches reset/shutdown. The next
+                    # attachment must time out, kill this actor and its SGLang
+                    # children, then allocate a healthy replacement on its GPUs.
+                    engine = ray.get(serving.get_updatable_engines_and_lock.remote())[0][0]
+                    started = directory / "wedged_engine.pid"
+
+                    def block(actor, started=started):
+                        started.write_text(str(os.getpid()))
+                        time.sleep(300)
+
+                    engine.__ray_call__.remote(block)
+                    deadline = time.monotonic() + 10
+                    while not started.exists():
+                        assert time.monotonic() < deadline
+                        time.sleep(0.1)
+
             else:
                 before = json.loads((directory / "before.json").read_text())
                 # Successful completion must release retained serving resources,
@@ -280,7 +350,7 @@ def execute(
                                 break
                             assert time.monotonic() < deadline, engine
                             time.sleep(1)
-        verify(directory, mode, failure_rollout, save_interval, kill_manager)
+        verify(directory, mode, failure_rollout, save_interval, kill_manager, wedge_engine, train_gpus)
     finally:
         if not ray.is_initialized():
             ray.init(address=os.environ.get("SLIME_TEST_RAY_ADDRESS", "127.0.0.1:6379"), namespace=RECOVERY_NAMESPACE)
@@ -313,6 +383,9 @@ if __name__ == "__main__":
     parser.add_argument("--kill-manager", action="store_true")
     parser.add_argument("--no-fault-tolerance", action="store_true")
     parser.add_argument("--manager-crash-phase", choices=["after-failure", "training"], default="after-failure")
+    parser.add_argument("--weight-sync", choices=["nccl", "disk-delta"], default="nccl")
+    parser.add_argument("--wedge-engine", action="store_true")
+    parser.add_argument("--pd", action="store_true")
     cli = parser.parse_args()
     if not cli.no_prepare:
         prepare()
@@ -327,4 +400,7 @@ if __name__ == "__main__":
         cli.kill_manager,
         not cli.no_fault_tolerance,
         cli.manager_crash_phase,
+        cli.weight_sync,
+        cli.wedge_engine,
+        cli.pd,
     )

@@ -14,6 +14,18 @@ logger = logging.getLogger(__name__)
 
 
 class DataSource(abc.ABC):
+    def register_consumer(self, name, consumer):
+        if name in self.consumers:
+            raise ValueError(f"Consumer {name!r} already registered")
+        restored = getattr(self, "_restored_consumers", {})
+        if name in restored:
+            consumer.load_state_dict(restored.pop(name))
+        self.consumers[name] = consumer
+
+    def close(self):
+        for consumer in getattr(self, "consumers", {}).values():
+            consumer.close()
+
     @abc.abstractmethod
     def get_samples(self, num_samples: int) -> list[list[Sample]]:
         """
@@ -49,6 +61,8 @@ class DataSource(abc.ABC):
 class RolloutDataSource(DataSource):
     def __init__(self, args):
         self.args = args
+        self.consumers = {}
+        self._restored_consumers = {}
 
         self.epoch_id = 0
         self.sample_group_index = 0
@@ -120,19 +134,35 @@ class RolloutDataSource(DataSource):
         raise RuntimeError(f"Cannot add samples to {self.__class__.__name__}. This is a read-only data source.")
 
     def state_dict(self):
-        # Checkpoints and manager recovery share this snapshot. Copy mutable
-        # state so later generation cannot change the recorded restart point.
-        state = {
-            name: copy.deepcopy(getattr(self, name))
-            for name in ("sample_offset", "epoch_id", "sample_group_index", "sample_index", "metadata")
-        }
-        if hasattr(self, "buffer"):
-            state["buffer"] = copy.deepcopy(self.buffer)
-        return state
+        # The cursor includes prompts already borrowed by background workers.
+        # Drain admission and snapshot their ready queues with that cursor so a
+        # checkpoint cannot skip prefetched samples when the source is restored.
+        paused = []
+        try:
+            for consumer in self.consumers.values():
+                paused.append((consumer, consumer.pause()))
+            state = {
+                name: copy.deepcopy(getattr(self, name))
+                for name in ("sample_offset", "epoch_id", "sample_group_index", "sample_index", "metadata")
+            }
+            if hasattr(self, "buffer"):
+                state["buffer"] = copy.deepcopy(self.buffer)
+            state["consumers"] = {
+                **self._restored_consumers,
+                **{name: consumer.state_dict() for name, consumer in self.consumers.items()},
+            }
+            return state
+        finally:
+            for consumer, was_paused in paused:
+                if not was_paused:
+                    consumer.resume()
 
     def load_state_dict(self, state):
         for name, value in state.items():
-            setattr(self, name, value)
+            if name == "consumers":
+                self._restored_consumers = value
+            else:
+                setattr(self, name, value)
         if self.args.rollout_shuffle and self.dataset is not None:
             # Rebuild the saved epoch's ordering before reading from its cursor.
             self.dataset.shuffle(self.epoch_id)

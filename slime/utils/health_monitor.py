@@ -4,8 +4,6 @@ import threading
 import ray
 import requests
 
-from slime.backends.sglang_utils.server_control import unregister_worker
-
 logger = logging.getLogger(__name__)
 
 
@@ -151,33 +149,4 @@ class RolloutHealthMonitor:
                     # Both HTTP failures and unresponsive/dead actor RPCs retire
                     # the engine; HTTP timeout alone cannot detect a wedged actor.
                     logger.error("Health check failed for engine %s: %s", rollout_engine_id, error)
-                    self._kill_engine(rollout_engine_id)
-
-    def _kill_engine(self, rollout_engine_id: int):
-        logger.info(f"Killing server group {rollout_engine_id}...")
-        group = self._server_group
-        first = rollout_engine_id * group.nodes_per_engine
-        if group.worker_type != "encoder":
-            # Remove routing first, independently of shutdown RPC success. If
-            # the router rejects removal, leave handles intact and surface the
-            # error; proceeding would send later controls to a stale worker.
-            unregister_worker(
-                f"http://{group.router_ip or group.args.sglang_router_ip}:{group.router_port or group.args.sglang_router_port}",
-                group.engine_urls[first],
-                timeout=self._check_timeout,
-            )
-        # A multi-node engine is one serving unit: retire every node together.
-        for i in range(first, first + group.nodes_per_engine):
-            engine = group.all_engines[i]
-            if engine:
-                logger.info(f"Shutting down and killing engine at index {i}")
-                try:
-                    ray.get(engine.shutdown.remote(), timeout=self._check_timeout)
-                except Exception as e:
-                    logger.warning(f"Fail to kill engine at index {i} (e: {e})")
-                finally:
-                    # Shutdown RPCs are best-effort; stop the actor even if its
-                    # HTTP server has already died or the RPC timed out.
-                    ray.kill(engine, no_restart=True)
-            # Leave a missing slot for recovery immediately before weight sync.
-            group.all_engines[i] = None
+                    self._server_group.retire_engine(rollout_engine_id, timeout=self._check_timeout)

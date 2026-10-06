@@ -46,11 +46,9 @@ def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
             wait_for_server=True,
         )
 
-    from sglang.srt.entrypoints.http_server import launch_server
-
     multiprocessing.set_start_method("spawn", force=True)
     server_args.host = server_args.host.strip("[]")
-    p = multiprocessing.Process(target=launch_server, args=(server_args,))
+    p = multiprocessing.Process(target=_launch_server, args=(server_args, os.getpid()))
     p.start()
 
     if getattr(server_args, "node_rank", 0) != 0:
@@ -65,6 +63,17 @@ def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
     return p
 
 
+def _launch_server(server_args, parent_pid):
+    from sglang.srt.entrypoints.http_server import launch_server
+    from sglang.srt.utils import kill_itself_when_parent_died
+
+    # A wedged actor cannot run shutdown(). Its server must still release GPUs
+    # when the owner kills that actor before creating a replacement engine.
+    kill_itself_when_parent_died()
+    if os.getppid() == parent_pid:
+        launch_server(server_args)
+
+
 def _wait_server_healthy(base_url, api_key, is_process_alive):
     headers = {
         "Content-Type": "application/json; charset=utf-8",
@@ -74,7 +83,7 @@ def _wait_server_healthy(base_url, api_key, is_process_alive):
     with requests.Session() as session:
         while True:
             try:
-                response = session.get(f"{base_url}/health_generate", headers=headers)
+                response = session.get(f"{base_url}/health_generate", headers=headers, timeout=5)
                 if response.status_code == 200:
                     break
             except requests.RequestException:
@@ -200,7 +209,7 @@ class SGLangEngine(RayActor):
             )
             response.raise_for_status()
 
-    def _make_request(self, endpoint: str, payload: dict | None = None):
+    def _make_request(self, endpoint: str, payload: dict | None = None, *, timeout=None):
         """Make a POST request to the specified endpoint with the given payload.
 
         Args:
@@ -214,7 +223,7 @@ class SGLangEngine(RayActor):
             return
 
         url = f"http://{self.server_host}:{self.server_port}/{endpoint}"
-        response = requests.post(url, json=payload or {})
+        response = requests.post(url, json=payload or {}, timeout=timeout)
         try:
             response.raise_for_status()
         except requests.exceptions.HTTPError as e:
@@ -319,7 +328,7 @@ class SGLangEngine(RayActor):
         if self.node_rank != 0:
             return
         url = f"http://{self.server_host}:{self.server_port}/get_weight_version"
-        response = requests.get(url)
+        response = requests.get(url, timeout=self.args.rollout_health_check_timeout)
         response.raise_for_status()
         return response.json()["weight_version"]
 
@@ -369,6 +378,9 @@ class SGLangEngine(RayActor):
         return self._make_request("update_weights_from_disk", payload)
 
     def init_weights_update_group(self, master_address, master_port, rank_offset, world_size, group_name, backend):
+        # A lost reply can leave a live NCCL group behind. Reset every attempted
+        # group on reattachment, including those whose creation never replied.
+        self._weight_update_groups.add(group_name)
         result = self._make_request(
             "init_weights_update_group",
             {
@@ -380,7 +392,6 @@ class SGLangEngine(RayActor):
                 "backend": backend,
             },
         )
-        self._weight_update_groups.add(group_name)
         return result
 
     def reset_weights_update_groups(self):
@@ -388,7 +399,11 @@ class SGLangEngine(RayActor):
         # Old NCCL groups refer to the previous trainer's ranks and cannot be
         # reused, even when the new trainer has the same parallel layout.
         for group_name in list(self._weight_update_groups):
-            self._make_request("destroy_weights_update_group", {"group_name": group_name})
+            self._make_request(
+                "destroy_weights_update_group",
+                {"group_name": group_name},
+                timeout=self.args.rollout_health_check_timeout,
+            )
             self._weight_update_groups.remove(group_name)
 
     def destroy_weights_update_group(self, group_name):

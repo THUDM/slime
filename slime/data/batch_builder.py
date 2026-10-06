@@ -1,7 +1,10 @@
-"""The single rollout-to-training conversion boundary, shared by all producers.
+"""Convert an accepted rollout once, then give each trainer rank a data view.
 
-Reward postprocessing, masks, rollout aggregation and DP packing stay in their
-established order. The manager retains model/server and data-source lifecycle.
+Global reward/conversion hooks still see the complete sample batch in their
+established order. The accepted conversion stores token/mask tensors once and
+shares workers' existing lazy R3/SC records. DP partitions and microbatches are
+small read selections over that conversion; a new trainer can rebuild them
+without calling hooks again or rewriting tensors.
 """
 
 import json
@@ -32,7 +35,6 @@ class BatchBuilder:
         self.rollout_id = -1
         self.raw_ref = None
         self.batch_id = None
-        self.consumer_state = None
         self._plan = None
         self.custom_reward_post_process_func = None
         if self.args.custom_reward_post_process_path is not None:
@@ -47,6 +49,7 @@ class BatchBuilder:
         """Persist the selection and conversion configuration before invoking hooks."""
         if self.raw_ref is None:
             self.batch_id = None
+            self._plan = None
             return None
         from straw.protocol import Lease, RecordSetRef, digest
 
@@ -80,21 +83,19 @@ class BatchBuilder:
             "configuration": configuration,
             "parallel": self.train_parallel_config,
         }
-        self.plan_digest = digest(identity)
+        plan_digest = digest(identity)
         existing = ray.get(controller.batch.remote(self.batch_id))
         if existing:
             self._plan = DiskPayloadRef(RecordSetRef.from_dict(existing["plan_ref"]), self.args.rollout_data_dir)
             plan = self._plan.load()
             # Normal retries must match the original plan. Trainer replay may
             # change parallelism, but still uses the retained plan's identity.
-            if not replay and plan["digest"] != self.plan_digest:
+            if not replay and plan["digest"] != plan_digest:
                 raise ValueError("An existing batch ID cannot be reused with a different selection or conversion plan")
-            self.plan_digest = plan["digest"]
             if existing["ready"]:
-                refs = DiskPayloadRef(
-                    RecordSetRef.from_dict(existing["ready_ref"]), self.args.rollout_data_dir
-                ).load()["ranks"]
-                return [Box(ray.put(ref)) for ref in refs]
+                return self.split_by_dp(
+                    DiskPayloadRef(RecordSetRef.from_dict(existing["ready_ref"]), self.args.rollout_data_dir)
+                )
         else:
             positions = {self.raw_ref.receipt.position}
             for sample in samples:
@@ -108,53 +109,37 @@ class BatchBuilder:
             # Samples already carry group receipts/positions; do not reread raw.
             plan = {
                 **identity,
-                "digest": self.plan_digest,
+                "digest": plan_digest,
                 "raw": self.raw_ref,
                 "input_positions": sorted(positions),
                 "producer_processing": "generation/reward/dynamic and batch filters already applied",
             }
             self._plan = pack_rollout_payload(plan, self.args, self.rollout_id)
-        ray.get(controller.plan_batch.remote(self.batch_id, plan["input_positions"], self._plan.manifest))
-        self._positions = plan["input_positions"]
+        batch = ray.get(controller.plan_batch.remote(self.batch_id, plan["input_positions"], self._plan.manifest))
+        self._lease = batch["lease"]
         return None
 
     def replay_converted(self, data, batch_id):
-        """Reshard saved conversion, completing an interrupted ready publication."""
+        """Rebuild only the trainer's schedule from the accepted conversion."""
         self.batch_id = batch_id
-        # A published batch plan is immutable and may describe the old DP size.
-        # Replay shards use the new trainer layout without overwriting that plan;
-        # only finish publication when the manager died before making it ready.
-        publish_batch = False
-        if self.args.rollout_data_transport == "straw" and batch_id is not None:
-            from straw.protocol import RecordSetRef
+        return self.split_by_dp(data)
 
-            existing = ray.get(self.controller.batch.remote(batch_id))
-            if existing is None:
-                raise RuntimeError(f"Retained conversion has no queue plan: {batch_id}")
-            if not existing["ready"]:
-                # Conversion was journaled before ready publication completed.
-                # Finish that publication without invoking conversion hooks again.
-                self._plan = DiskPayloadRef(RecordSetRef.from_dict(existing["plan_ref"]), self.args.rollout_data_dir)
-                self.plan_digest = self._plan.load()["digest"]
-                publish_batch = True
-        return self.split_by_dp(data, publish_batch=publish_batch)
-
-    def _commit_ready(self, ranks, schedule):
-        controller = self.controller
-        ready = pack_rollout_payload(
-            {
-                "version": 1,
-                "batch_id": self.batch_id,
-                "plan": self._plan,
-                "plan_digest": self.plan_digest,
-                "schedule": schedule,
-                "ranks": ranks,
-            },
-            self.args,
-            self.rollout_id,
+    def publish_converted(self, data):
+        """Write the global conversion once; every DP layout shares its records."""
+        data = dict(data)
+        data["total_lengths"] = [len(tokens) for tokens in data["tokens"]]
+        tensorize_rollout_data_for_training(data)
+        # Keep selection/raw dependencies alive with the conversion. This also
+        # makes a queue commit sufficient to recover a lost manager reply.
+        if self._plan is not None:
+            data["_plan"] = self._plan
+        metadata = (
+            {"task_id": self.batch_id, "attempt_id": self._lease["attempt_id"]} if self.batch_id is not None else None
         )
-        state_ref = ray.get(controller.ready_batch.remote(self.batch_id, ready.manifest))
-        self.consumer_state = DiskPayloadRef(state_ref, self.args.rollout_data_dir)
+        reference = pack_rollout_payload(data, self.args, self.rollout_id, metadata=metadata)
+        if self.batch_id is not None:
+            ray.get(self.controller.ready_batch.remote(self.batch_id, reference.manifest))
+        return reference
 
     def training_completed(self, rollout_id):
         if self.batch_id is not None:
@@ -200,7 +185,7 @@ class BatchBuilder:
             # A fork is taken after training completion. Saved pending/ready
             # groups were reintroduced with new receipts; old positions and
             # finished batches belong exclusively to the parent queue.
-            self.consumer_state = self.raw_ref = self.batch_id = self._plan = None
+            self.raw_ref = self.batch_id = self._plan = None
             return
         from straw.protocol import RecordSetRef
 
@@ -213,10 +198,9 @@ class BatchBuilder:
         ):
             raise ValueError("BatchBuilder checkpoint run/schema differs")
         state = snapshot["consumer"]
-        self.consumer_state = DiskPayloadRef(RecordSetRef.from_dict(state["state_ref"]), self.args.rollout_data_dir)
         ray.get(
             self.controller.restore_training_state.remote(
-                self.consumer_state.manifest,
+                RecordSetRef.from_dict(state["state_ref"]),
                 state["fetch_cursor"],
                 state["processed_cursor"],
                 source_restore.source_ref if source_restore is not None else None,
@@ -439,22 +423,18 @@ class BatchBuilder:
 
         return train_data
 
-    def split_by_dp(self, data, *, publish_batch=True):
-        """Compute the DP/mbs schedule and package each rank's rollout_data
-        into a Ray Box. The schedule itself is computed by
-        :func:`build_dp_schedule` so it stays unit-testable without Ray/sglang.
-
-        Step split is by rollout id (``samples[i].rollout_id``, falling back
-        to ``samples[i].index``); each step holds exactly
-        ``args.global_batch_size`` rollouts so the training-step count per
-        rollout is fixed at ``rollout_batch_size * n_samples_per_prompt //
-        global_batch_size`` regardless of how many training samples each
-        rollout produced.
-        """
-        dp_size = self.train_parallel_config["dp_size"]
-        total_lengths = [len(t) for t in data["tokens"]]
+    def split_by_dp(self, data):
+        """Build a schedule over one immutable conversion, without per-rank writes."""
+        transport = self.args.rollout_data_transport
+        if transport == "straw":
+            # Scheduling needs lengths and rollout identity only. In particular,
+            # replay must not read the full token or R3 payload on the manager.
+            reference = data if isinstance(data, DiskPayloadRef) else self.publish_converted(data)
+            data = reference.load(selection={"total_lengths": None, "rollout_ids": None})
+        total_lengths = data.get("total_lengths")
+        if total_lengths is None:
+            total_lengths = [len(tokens) for tokens in data["tokens"]]
         data["total_lengths"] = total_lengths
-
         partitions, micro_batch_indices, num_microbatches, global_batch_sizes = build_dp_schedule(
             self.args,
             self.train_parallel_config,
@@ -462,70 +442,70 @@ class BatchBuilder:
             global_batch_size=self.args.global_batch_size,
             rollout_indices=data["rollout_ids"],
         )
+        fields = [
+            "tokens",
+            "multimodal_train_inputs",
+            "response_lengths",
+            "rewards",
+            "truncated",
+            "loss_masks",
+            "round_number",
+            "sample_indices",
+            "rollout_ids",
+            "rollout_mask_sums",
+            "rollout_log_probs",
+            "rollout_topk_token_ids",
+            "rollout_topk_log_probs",
+            "rollout_top_p_token_ids",
+            "rollout_top_p_token_offsets",
+            "rollout_top_p_log_probs",
+            "rollout_routed_experts",
+            "source_names",
+            "prompt",
+            "teacher_log_probs",
+        ]
+        if transport == "straw":
+            from straw.protocol import digest
 
-        # Package per-rank rollout_data
-        rollout_data_refs = []
-        stored_ranks = []
-        for r in range(dp_size):
-            partition = partitions[r]
-            rollout_data = {"partition": partition}
-            for key in [
-                "tokens",
-                "multimodal_train_inputs",
-                "response_lengths",
-                "rewards",
-                "truncated",
-                "loss_masks",
-                "round_number",
-                "sample_indices",
-                "rollout_ids",
-                "rollout_mask_sums",
-                "rollout_log_probs",
-                "rollout_topk_token_ids",
-                "rollout_topk_log_probs",
-                "rollout_top_p_token_ids",
-                "rollout_top_p_token_offsets",
-                "rollout_top_p_log_probs",
-                "rollout_routed_experts",
-                "source_names",
-                "prompt",
-                "teacher_log_probs",
-            ]:
-                if key not in data:
-                    continue
-                rollout_data[key] = [data[key][j] for j in partition]
-            # keys that need to be splited at train side
-            for key in ["raw_reward", "total_lengths"]:
-                if key not in data:
-                    continue
-                rollout_data[key] = data[key]
-            rollout_data["global_batch_sizes"] = global_batch_sizes
-            rollout_data["num_microbatches"] = num_microbatches
-            rollout_data["micro_batch_indices"] = micro_batch_indices[r]
-            tensorize_rollout_data_for_training(rollout_data)
-            transport = self.args.rollout_data_transport
+            plan_digest = digest(
+                {
+                    "conversion": reference.manifest.digest,
+                    "partitions": partitions,
+                    "micro_batch_indices": micro_batch_indices,
+                    "global_batch_sizes": global_batch_sizes,
+                }
+            )
+        result = []
+        for rank, partition in enumerate(partitions):
+            schedule = {
+                "partition": partition,
+                "global_batch_sizes": global_batch_sizes,
+                "num_microbatches": num_microbatches,
+                "micro_batch_indices": micro_batch_indices[rank],
+            }
             if transport == "straw":
-                ref = pack_rollout_payload(rollout_data, self.args, self.rollout_id)
-                if getattr(self, "batch_id", None) and publish_batch:
-                    ref = TrainBatchRef(ref.manifest, ref.root, self.batch_id, r, self.plan_digest)
-                stored_ranks.append(ref)
-            elif transport == "nixl":
-                rollout_data_refs.append(Box(ray.put(rollout_data, _tensor_transport="nixl")))
-            elif transport == "object-store":
-                rollout_data_refs.append(Box(ray.put(rollout_data)))
+                selection = {key: partition for key in fields}
+                # Training's pass-rate and load metrics use the global arrays;
+                # all per-sample tensors are selected before storage reads.
+                selection.update(raw_reward=None, total_lengths=None)
+                value = TrainBatchRef(
+                    reference.manifest,
+                    reference.root,
+                    self.batch_id,
+                    rank,
+                    plan_digest,
+                    selection=selection,
+                    schedule=schedule,
+                )
+            else:
+                value = {key: [data[key][index] for index in partition] for key in fields if key in data}
+                value.update({key: data[key] for key in ("raw_reward", "total_lengths") if key in data})
+                value.update(schedule)
+                tensorize_rollout_data_for_training(value)
+            if transport == "nixl":
+                result.append(Box(ray.put(value, _tensor_transport="nixl")))
+            elif transport in {"straw", "object-store"}:
+                result.append(Box(ray.put(value)))
             else:
                 raise ValueError(f"Unsupported rollout data transport: {transport!r}")
-        if transport == "straw":
-            self.replay_refs = [] if publish_batch else stored_ranks
-            if getattr(self, "batch_id", None) and publish_batch:
-                self._commit_ready(
-                    stored_ranks,
-                    {
-                        "partitions": partitions,
-                        "micro_batch_indices": micro_batch_indices,
-                        "num_microbatches": num_microbatches,
-                        "global_batch_sizes": global_batch_sizes,
-                    },
-                )
-            rollout_data_refs = [Box(ray.put(ref)) for ref in stored_ranks]
-        return rollout_data_refs
+        return result

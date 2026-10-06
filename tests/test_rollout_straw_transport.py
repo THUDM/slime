@@ -344,8 +344,8 @@ def test_fully_async_stores_groups_while_collecting_the_batch(args, monkeypatch)
             assert saved[0].load()[0].index == 2
         return [(len(saved), [Sample(index=2 - len(saved), reward=1)])]
 
-    worker = SimpleNamespace(queue_size=lambda: 0, get_completed_groups=take)
-    monkeypatch.setattr(fa, "_get_global_worker", lambda *a: worker)
+    worker = SimpleNamespace(queue_size=lambda: 0, get_completed_groups=take, resume=lambda: None, error=None)
+    monkeypatch.setattr(fa, "_get_worker", lambda *a: worker)
     from slime.data import transport as rollout_transport
 
     monkeypatch.setattr(rollout_transport, "pack_rollout_group", pack)
@@ -472,6 +472,7 @@ def test_train_partitions_preserve_top_p_and_multimodal(args, monkeypatch, trans
     if transport != "straw":
         args.rollout_data_dir = None
     manager = object.__new__(rollout.BatchBuilder)
+    manager._plan = manager.batch_id = None
     manager.args = SimpleNamespace(**vars(args), global_batch_size=2)
     manager.rollout_id = 0
     manager.train_parallel_config = {"dp_size": 2}
@@ -481,7 +482,7 @@ def test_train_partitions_preserve_top_p_and_multimodal(args, monkeypatch, trans
     def put(value, **kwargs):
         if transport == "straw":
             assert isinstance(value, DiskPayloadRef)
-            assert len(pickle.dumps(value)) < 1024
+            assert len(pickle.dumps(value)) < 2048
         else:
             assert isinstance(value, dict)
             assert kwargs == ({"_tensor_transport": "nixl"} if transport == "nixl" else {})
@@ -575,18 +576,18 @@ def test_durable_batch_replays_one_plan_and_rejects_mixed_ranks(args, monkeypatc
             process_rollout_data(mixed, 0, 2)
         args.save = str(Path(args.rollout_data_dir) / "checkpoint")
         builder.save(0)
-        assert controller.queue._usage()["ready_bytes"] > 0
+        assert controller.queue._usage()["accepted_unprocessed"]["bytes"] > 0
         builder.training_completed(builder.rollout_id)
-        assert controller.queue._usage()["ready_bytes"] == 0
+        assert controller.queue._usage()["accepted_unprocessed"]["bytes"] == 0
         assert not controller.queue.checkpoints  # runtime completion is not a checkpoint
         # Later production facts survive restoring the earlier training view.
         later = accept_raw_rollout(RolloutFnTrainOutput(samples=samples), args, 1, controller=handle)
-        assert later.receipt.position == 1
+        assert later.receipt.position == 2  # raw collection and accepted conversion precede it
         args.load = args.save
         builder.load(0)
-        assert controller.queue._usage()["ready_bytes"] > 0  # earlier consumer view is restored
+        assert controller.queue._usage()["accepted_unprocessed"]["bytes"] > 0  # earlier consumer view is restored
         assert controller.training_state()["processed_cursor"] == 1
-        assert controller.queue.read_commits().cursor == 2
+        assert controller.queue.read_commits().cursor == 3
         args.global_batch_size = 4
         with pytest.raises(ValueError, match="different selection or conversion plan"):
             builder.begin(samples)
@@ -837,13 +838,13 @@ def test_debug_archive_replay_reuses_records_and_isolates_training(
                         assert [s.index for s in iter_samples(load_rollout_samples(builder.raw_ref))] == [0, 1]
                         assert store.metrics["payload_bytes"] - written < 10000
                         assert builder.begin(loaded) is None
-                        assert builder._positions == [step - 7]
+                        assert replay.batch(builder.batch_id)["input_positions"] == [2 * (step - 7)]
                         refs = builder.split_by_dp(builder.convert(loaded))
                     batch = process_rollout_data(refs, 0, 1)
                     assert [t.tolist() for t in batch["tokens"]] == [[1, 2, 3], [1, 2, 3]]
                     assert [box.inner for box in builder.begin(loaded)] == [box.inner for box in refs]
                     builder.training_completed(step)
-                assert replay.training_state()["processed_cursor"] == 2
+                assert replay.training_state()["processed_cursor"] == 4
             assert original.queue.tasks == source_tasks
     assert not (tmp_path / "unused-pool").exists()
 
@@ -1124,6 +1125,32 @@ def test_checkpoint_retains_critic_save_policy(tmp_path, omitted):
     assert not json.loads((root / "rollout/committed_0.json").read_text())["resumable"]
     with pytest.raises(ValueError, match="omitted optimizer/RNG"):
         resolve_checkpoint(_checkpoint_args(root, tmp_path / "child", step=0))
+
+
+def test_stateless_checkpoint_requires_scheduler_and_allows_optimizer_omission(tmp_path):
+    import json
+
+    from slime.data.checkpoint import commit_checkpoint, resolve_checkpoint
+
+    root, pool = tmp_path / "run", tmp_path / "pool"
+    _checkpoint_fixture(root, 0, pool, queue=False)
+    for name in ("queue_state", "builder_state"):
+        (root / "rollout" / f"{name}_0.json").write_text("{}")
+    args = SimpleNamespace(save=str(root), rollout_data_dir=str(pool), use_stateless_adam=True, no_save_optim=True)
+    with pytest.raises(ValueError, match="Missing stateless Adam scheduler"):
+        commit_checkpoint(args, 0, model_args=[args])
+    scheduler = root / "iter_0000000/opt_param_scheduler.pt"
+    torch.save({"num_steps": 16}, scheduler)
+    commit_checkpoint(args, 0, model_args=[args])
+    committed = json.loads((root / "rollout/committed_0.json").read_text())
+    assert committed["resumable"]
+    assert "iter_0000000/opt_param_scheduler.pt" in committed["files"]
+    restored = _checkpoint_args(root, tmp_path / "child", step=0)
+    restored.use_stateless_adam = restored.no_load_optim = True
+    assert resolve_checkpoint(restored).mode == "snapshot"
+    scheduler.unlink()
+    with pytest.raises((FileNotFoundError, ValueError), match="opt_param_scheduler"):
+        resolve_checkpoint(_checkpoint_args(root, tmp_path / "broken", step=0))
 
 
 def _checkpoint_fixture(root, step, pool, *, queue=True, restore_plan=None):

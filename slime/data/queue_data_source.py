@@ -165,9 +165,8 @@ class RolloutQueueController:
                     self.queue.release_task_reads(readers[offset : offset + 128])
             # Recovery invalidates leases; unfinished collections from the stopped
             # manager cannot produce a new branch's batch. Accepted facts stay intact.
-            for task_id, task in list(self.queue.tasks.items()):
-                if task_id.startswith("collection:") and task["state"] == "pending":
-                    self.queue.cancel_task(task_id, request_id=f"abandon:{self.branch_id}:{task_id}")
+            for task in self.queue.pending_tasks(task_prefix="collection:"):
+                self.queue.cancel_task(task.task_id, request_id=f"abandon:{self.branch_id}:{task.task_id}")
             # Joint restore can rewind the training cursor. Reconcile its durable
             # storage ownership before GC inspects restored live result roots.
             if not fork and not defer_gc:
@@ -655,7 +654,7 @@ class RolloutQueueController:
             raise RuntimeError("Whole-job replay requires automatic WAL recovery selection")
         with self._producer_lock, self._training_lock:
             state = self._training_state()
-            if self.queue.batches or state["processed_cursor"] or state["processed_positions"]:
+            if state.get("conversion_started") or state["processed_cursor"] or state["processed_positions"]:
                 raise RuntimeError(
                     "Queue-only recovery is limited to an interrupted first rollout; "
                     "restore matching model/optimizer and rollout checkpoints after batch conversion begins"
@@ -696,23 +695,42 @@ class RolloutQueueController:
         return actual
 
     def batch(self, batch_id):
-        return self.queue.get_batch(batch_id)
+        """Conversion is a control task in the same accepted log as generation."""
+        task = self.queue.task_status(batch_id)
+        if task is None:
+            return None
+        receipt = self.result(Lease(**task["lease"])) if task["state"] == "completed" else None
+        return {
+            "plan_ref": task["spec"]["input_ref"],
+            "input_positions": task["spec"]["metadata"]["source_positions"],
+            "lease": task.get("lease"),
+            "ready": receipt is not None,
+            "ready_ref": asdict(receipt.result_ref) if receipt else None,
+        }
 
     def plan_batch(self, batch_id, positions, plan_ref):
         with self._training_lock:
-            if self._training_token is None:
-                self._training_token = self.queue.open_consumer(
-                    "training", exclusive_owner="job owns one BatchBuilder"
-                )
-            return self.queue.plan_batch(
-                "training",
-                token=self._training_token,
-                batch_id=batch_id,
-                input_positions=positions,
-                plan_ref=plan_ref,
+            self.queue.submit_tasks(
+                batch_id,
+                [
+                    TaskSpec(
+                        batch_id, plan_ref, control=True, estimated_records=0, metadata={"source_positions": positions}
+                    )
+                ],
             )
+            task = self.queue.task_status(batch_id)
+            if task["state"] == "pending":
+                self.queue.acquire("manager", 1, task_ids=[batch_id], control=True)
+            state = self._training_state()
+            if not state.get("conversion_started"):
+                state["conversion_started"] = True
+                self._save_training_state(state)
+            return self.batch(batch_id)
 
     def _training_state(self):
+        # This is a consumer cursor and its unfinished reads, not a second
+        # history of batches. Queue control tasks own selection/conversion facts;
+        # TrainingRecovery separately pins the window after the model checkpoint.
         previous = self.queue.load_consumer_state("training")
         return (
             self.codec.load(RecordSetRef.from_dict(previous["state_ref"]))
@@ -723,7 +741,6 @@ class RolloutQueueController:
                 "fetch_cursor": 0,
                 "processed_positions": [],
                 "batches": [],
-                "finished_batches": [],
             }
         )
 
@@ -748,7 +765,7 @@ class RolloutQueueController:
             processed_positions=sorted(position for position in positions if position >= cursor),
         )
 
-    def _save_training_state(self, state, *, batch_id=None, ready_ref=None):
+    def _save_training_state(self, state):
         self._check_gc_error()
         if self._training_token is None:
             self._training_token = self.queue.open_consumer("training", exclusive_owner="job owns one BatchBuilder")
@@ -762,7 +779,9 @@ class RolloutQueueController:
                             {
                                 "version": 1,
                                 "processed_positions": state["processed_positions"],
-                                "finished_batches": state.get("finished_batches", []),
+                                # Native batch plans are unused: conversion is
+                                # an ordinary accepted control-task result.
+                                "finished_batches": [],
                             }
                         ),
                         codec="json.v1",
@@ -778,41 +797,49 @@ class RolloutQueueController:
             fetch_cursor=state["fetch_cursor"],
             processed_cursor=state["processed_cursor"],
         )
-        if batch_id is not None:
-            self.queue.batch_ready("training", batch_id=batch_id, ready_ref=ready_ref, **kwargs)
-        else:
-            self.queue.save_consumer_state(
-                "training",
-                request_id=f"state:{self.branch_id}:{state_ref.digest}",
-                **kwargs,
-            )
+        self.queue.save_consumer_state(
+            "training",
+            request_id=f"state:{self.branch_id}:{state_ref.digest}",
+            **kwargs,
+        )
         return state_ref
 
     def ready_batch(self, batch_id, ready_ref):
+        # Accept first, advance the consumer second. Death between these writes
+        # leaves an unprocessed result that a replacement manager can reconcile;
+        # reversing the order could let GC erase an uncommitted conversion.
         with self._training_lock:
-            batch = self.queue.get_batch(batch_id)
+            batch = self.batch(batch_id)
             if batch["ready"]:
                 if batch["ready_ref"] != asdict(ready_ref):
                     raise ValueError("Batch was already published with another ready reference")
-                return RecordSetRef.from_dict(self.training_state()["state_ref"])
+            else:
+                task = self.queue.task_status(batch_id)
+                if task["state"] == "leased":
+                    lease = Lease(**task["lease"])
+                else:
+                    page = self.queue.acquire("manager", 1, task_ids=[batch_id], control=True)
+                    lease = page.assignments[0].lease
+                self.complete(lease, ready_ref)
             state = self._training_state()
             self._advance(state, batch["input_positions"])
-            state["batches"].append(DiskPayloadRef(ready_ref, str(self.store.backend.root)))
-            return self._save_training_state(state, batch_id=batch_id, ready_ref=ready_ref)
+            reference = DiskPayloadRef(ready_ref, str(self.store.backend.root))
+            if reference not in state["batches"]:
+                state["batches"].append(reference)
+            return self._save_training_state(state)
 
     def finish_batch(self, batch_id):
-        """Acknowledge completed reads on every training rank; checkpoints retain their own roots."""
+        """Advance one accepted conversion, retaining only unfinished batches."""
         with self._training_lock:
-            batch = self.queue.get_batch(batch_id)
+            batch = self.batch(batch_id)
             if not batch or not batch["ready"]:
                 raise ValueError("Cannot finish an unknown or unready training batch")
+            task = self.queue.task_status(batch_id)
+            receipt = self.result(Lease(**task["lease"]))
             state = self._training_state()
-            finished = state.setdefault("finished_batches", [])
-            if batch_id not in finished:
-                finished.append(batch_id)
-                if getattr(self.args, "rollout_queue_online_gc", False):
-                    state["batches"] = [ref for ref in state["batches"] if asdict(ref.manifest) != batch["ready_ref"]]
-                self._save_training_state(state)
+            self._advance(state, [receipt.position])
+            state["batches"] = [ref for ref in state["batches"] if asdict(ref.manifest) != batch["ready_ref"]]
+            self._save_training_state(state)
             if getattr(self.args, "rollout_queue_online_gc", False):
                 self._collect_storage()
 
@@ -821,7 +848,9 @@ class RolloutQueueController:
         with self._training_lock:
             decision = self.codec.load(ref)
             positions = decision["positions"]
-            if not decision.get("reason") or any(not 0 <= p < len(self.queue.commits) for p in positions):
+            if not decision.get("reason") or any(
+                p < 0 or not self.queue.read_commits(p, 1).commits for p in positions
+            ):
                 raise ValueError("Invalid accepted-output disposition")
             state = self._training_state()
             self._advance(state, positions)
@@ -893,18 +922,11 @@ class RolloutQueueController:
                     for commit in self.queue.commits[processed_cursor:]
                     if commit["position"] not in retained | processed
                 ]
-                old_batches = {ref.load()["batch_id"] for ref in state["batches"]}
-                abandoned_batches = [
-                    batch_id
-                    for batch_id, batch in self.queue.batches.items()
-                    if batch["ready"] and batch_id not in old_batches
-                ]
                 with self._writer_lock:
                     decision = self.codec.publish(
                         {
                             "reason": "checkpoint branch excludes outputs absent from its saved source",
                             "positions": abandoned,
-                            "batch_ids": abandoned_batches,
                             "checkpoint_state": asdict(state_ref),
                             "retained_source": asdict(retained_ref),
                             "branch_id": self.branch_id,
@@ -912,7 +934,6 @@ class RolloutQueueController:
                         submission_id=f"restore-decision:{uuid.uuid4().hex}",
                     )
                 self._advance(state, abandoned)
-                state["finished_batches"] = sorted(set(state.get("finished_batches", [])) | set(abandoned_batches))
                 state["disposition"] = DiskPayloadRef(decision, str(self.store.backend.root))
                 # Filter dispositions may replace the audit record, but cannot
                 # release old reader prefixes before a complete snapshot exists.
@@ -1320,13 +1341,6 @@ class QueueDataSource(QueueReader):
         # The async scheduler must not also run whole-job queue recovery, which
         # would deliver the same accepted results a second time.
         self.manager_restored = True
-
-    def register_consumer(self, name, consumer):
-        if name in self.consumers:
-            raise ValueError(f"Consumer {name!r} already registered")
-        if name in self._restored_consumers:
-            consumer.load_state_dict(self._restored_consumers.pop(name))
-        self.consumers[name] = consumer
 
     def save(self, rollout_id):
         from straw.reporting import write_report

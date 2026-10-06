@@ -122,7 +122,7 @@ class DiskPayloadRef:
     path: tuple = field(default=(), kw_only=True)
     sample_metadata: list[dict] | None = field(default=None, kw_only=True)
 
-    def load(self, *, root=None):
+    def load(self, *, root=None, selection=None):
         from straw.store import SharedFilesystemStore
         from straw.tensor import MAX_PUBLICATION_BYTES, MAX_TENSOR_BYTES
 
@@ -135,7 +135,7 @@ class DiskPayloadRef:
             max_record_bytes=MAX_TENSOR_BYTES,
             max_buffer_bytes=MAX_PUBLICATION_BYTES,
         )
-        value = SampleCodec(store).load(self.manifest)
+        value = SampleCodec(store).load(self.manifest, selection=selection)
         for part in self.path:
             value = value[part] if isinstance(part, int) else getattr(value, part)
         if self.sample_metadata is not None:
@@ -172,9 +172,23 @@ class RawRolloutRef(DiskPayloadRef):
 
 @dataclass(frozen=True)
 class TrainBatchRef(DiskPayloadRef):
+    """One rank's view of shared conversion records, plus its trainer schedule.
+
+    ``plan_digest`` identifies this layout, so ranks from different DP/mbs
+    schedules cannot accidentally train together even when the data is shared.
+    """
+
     batch_id: str
     rank: int
     plan_digest: str
+    selection: dict | None = field(default=None, kw_only=True)
+    schedule: dict | None = field(default=None, kw_only=True)
+
+    def load(self, *, root=None):
+        value = super().load(root=root, selection=self.selection)
+        if self.schedule is not None:
+            value.update(self.schedule)
+        return value
 
 
 def group_lease(group):

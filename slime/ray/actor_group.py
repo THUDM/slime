@@ -204,7 +204,7 @@ class RayTrainGroup:
             return None
         if training_recovery_enabled(self.args):
             # Role-specific YAML overrides are applied after CLI validation.
-            # Recheck here so they cannot disable optimizer/RNG recovery saves.
+            # Recheck each role's optimizer/RNG checkpoint policy here.
             configure_recovery_checkpoint(self.args)
         if rollout_manager is not None:
             self._rollout_manager = rollout_manager

@@ -88,7 +88,13 @@ class ServingCluster:
 
     def validate_attachment(self, args):
         configuration = retained_rollout_configuration(args)
-        changed = [name for name, value in self.configuration.items() if configuration.get(name) != value]
+        changed = [
+            name
+            for name in self.configuration.keys() | configuration.keys()
+            if name not in self.configuration
+            or name not in configuration
+            or self.configuration[name] != configuration[name]
+        ]
         if changed:
             raise ValueError("Retained serving requires unchanged rollout/model configuration: " + ", ".join(changed))
         if self.driver_job_id is not None:
@@ -125,8 +131,9 @@ class ServingCluster:
         if reused:
             # NCCL groups and a possibly held lock belong to the old trainer.
             # Engines survive; their next update reconnects to the new trainer.
-            engines = [engine for server in self.servers.values() for engine in server.engines if engine is not None]
-            ray.get([engine.reset_weights_update_groups.remote() for engine in engines])
+            for server in self.servers.values():
+                for group in server.server_groups:
+                    group.reset_weights_update_groups(timeout=args.rollout_health_check_timeout)
             ray.kill(self.lock, no_restart=True)
             self.lock = Lock.options(num_cpus=0, num_gpus=0).remote()
             server = self._updatable_server()
@@ -203,7 +210,9 @@ class ServingCluster:
     def get_weight_version(self, *, allow_inconsistent=False):
         server = self._updatable_server()
         engines = [engine for engine in server.engines if engine is not None] if server else []
-        versions = ray.get([engine.get_weight_version.remote() for engine in engines])
+        versions = ray.get(
+            [engine.get_weight_version.remote() for engine in engines], timeout=self.args.rollout_health_check_timeout
+        )
         if not versions:
             return None
         if allow_inconsistent:
@@ -261,12 +270,9 @@ class ServingCluster:
         for monitor in self._health_monitors:
             monitor.stop()
         engines = [engine for server in self.servers.values() for engine in server.all_engines if engine is not None]
-        for result in [engine.shutdown.remote() for engine in engines]:
-            try:
-                ray.get(result)
-            except ray.exceptions.RayActorError:
-                # An already-dead engine must not prevent cleanup of its peers.
-                pass
+        shutdowns = [engine.shutdown.remote() for engine in engines]
+        if shutdowns:
+            ray.wait(shutdowns, num_returns=len(shutdowns), timeout=self.args.rollout_health_check_timeout)
         for engine in engines:
             ray.kill(engine, no_restart=True)
         for router in self.router_processes:
