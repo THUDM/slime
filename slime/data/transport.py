@@ -192,14 +192,15 @@ class TrainBatchRef(DiskPayloadRef):
 
 
 def group_lease(group):
-    from straw.protocol import Lease
-
     from slime.rollout.base_types import iter_samples
 
     samples = list(iter_samples(group))
     leases = [getattr(sample, "_queue_lease", None) for sample in samples]
     if not any(leases):
         return None
+    # Ordinary in-memory groups have no queue lease and do not require Straw.
+    from straw.protocol import Lease
+
     if not all(value == leases[0] for value in leases):
         raise ValueError("A queue group must preserve one task authorization across all trajectories")
     return Lease(**leases[0])
