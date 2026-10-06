@@ -86,11 +86,18 @@ for custom rollout functions and queue readers.
 
 ## Packed storage and supported data
 
-Each writer appends multiple samples and tensors to pack files. There is no
-file per sample or tensor, reducing small-file metadata overhead on shared
-storage. Immutable tensor references let rollouts, training batches and
-checkpoints share data; updates write new records while retained references
-continue to identify their original contents.
+Packing is enabled whenever Straw transport is selected. Each writer appends
+multiple samples and tensors to the same file (a pack), reducing small-file
+metadata overhead on shared storage. slime uses Straw's default target size,
+currently **1 GiB**. Use `--rollout-queue-segment-mib` to override it in MiB.
+
+The target size controls file rotation; readers can access each publication
+without waiting for the pack to fill. A publication larger than the target
+stays intact, and explicit sealing may leave smaller packs.
+
+Immutable tensor references let rollouts, training batches, and checkpoints
+share data. Updates write new records while retained references continue to
+identify their original contents.
 
 The sample codec supports nested lists, tuples and dictionaries; scalar and
 byte values; NumPy arrays; PyTorch tensors; PIL images; and Sample fields,
@@ -109,11 +116,6 @@ and ordinary fields still occupy manager memory.
 | `--rollout-queue-segment-mib` | Unset; uses Straw's default (currently `1024`) | Override the target pack rotation size in MiB; explicit values must be positive. |
 | `--rollout-io-concurrency` | `4` | Bound concurrent serialization and filesystem I/O submissions |
 | `--rollout-queue-lease-seconds` | `300` | Worker lease duration; active readers renew it |
-
-Packing is enabled whenever Straw transport is selected. The target size controls
-file rotation; readers can access each publication without waiting for the pack
-to fill. A publication larger than the target stays intact, and explicit sealing
-may leave smaller packs.
 
 ## Online GC
 
