@@ -42,6 +42,7 @@ def test_rollout_boundary_prunes_failed_router_workers(monkeypatch, failure):
 
 @pytest.mark.parametrize("actor_failure", ["dead", "wedged"])
 def test_boundary_health_check_bypasses_grace_and_cleans_dead_actor(monkeypatch, actor_failure):
+    from slime.ray.serving import ServingCluster
     from slime.utils import health_monitor
 
     calls = []
@@ -63,6 +64,9 @@ def test_boundary_health_check_bypasses_grace_and_cleans_dead_actor(monkeypatch,
         rollout_health_check_interval=600, rollout_health_check_first_wait=600, rollout_health_check_timeout=0.1
     )
     monitor = health_monitor.RolloutHealthMonitor(group, args)
+    serving = object.__new__(ServingCluster.__ray_metadata__.modified_class)
+    serving._health_monitors = [monitor]
+    serving.servers = {"model": group}
 
     def wait(refs, *, num_returns, timeout):
         assert refs == ["dead", "alive"] and num_returns == 2 and timeout == 0.1
@@ -82,9 +86,9 @@ def test_boundary_health_check_bypasses_grace_and_cleans_dead_actor(monkeypatch,
     monkeypatch.setattr(health_monitor, "unregister_worker", unregister)
     monitor.start()
     try:
-        monitor.check_once()
+        snapshot = serving.finish_rollout()
         assert calls == [("unregister", "http://router:8000", "http://dead"), ("kill", dead)]
-        assert group.all_engines == [None, alive]
+        assert snapshot["model"].all_engines == [None, alive]
     finally:
         monitor.stop()
 

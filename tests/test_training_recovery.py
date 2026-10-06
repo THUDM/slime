@@ -11,7 +11,12 @@ from slime.data.batch_builder import BatchBuilder
 from slime.data.checkpoint import RestorePlan
 from slime.data.transport import pack_rollout_payload, rollout_store
 from slime.ray.serving import ServingCluster
-from slime.ray.training_recovery import TrainingRecovery, training_recovery_enabled, training_session_name
+from slime.ray.training_recovery import (
+    TrainingRecovery,
+    retained_rollout_configuration,
+    training_recovery_enabled,
+    training_session_name,
+)
 from slime.utils.types import Sample
 
 NUM_GPUS = 0
@@ -80,7 +85,7 @@ def test_session_identity_survives_checkpoint_branch_and_parallelism_changes(arg
 
 def test_configuration_allows_trainer_parallelism_and_memory_changes(args):
     serving = object.__new__(ServingCluster.__ray_metadata__.modified_class)
-    serving.configuration = TrainingRecovery._configuration(args)
+    serving.configuration = retained_rollout_configuration(args)
     serving.driver_job_id = None
     updated = copy.copy(args)
     updated.tensor_model_parallel_size = 4
@@ -160,7 +165,7 @@ def test_megatron_init_receives_retained_role_checkpoint(args, monkeypatch, role
 @pytest.mark.parametrize("previous", [None, {"JobID": "old", "IsDead": False}])
 def test_live_or_unknown_previous_driver_cannot_be_replaced(args, monkeypatch, previous):
     serving = object.__new__(ServingCluster.__ray_metadata__.modified_class)
-    serving.configuration = TrainingRecovery._configuration(args)
+    serving.configuration = retained_rollout_configuration(args)
     serving.driver_job_id = "old"
     monkeypatch.setattr("ray._private.state.jobs", lambda: [] if previous is None else [previous])
     with pytest.raises(RuntimeError, match="still owned"):
@@ -169,7 +174,7 @@ def test_live_or_unknown_previous_driver_cannot_be_replaced(args, monkeypatch, p
 
 def test_dead_driver_can_be_replaced(args, monkeypatch):
     serving = object.__new__(ServingCluster.__ray_metadata__.modified_class)
-    serving.configuration = TrainingRecovery._configuration(args)
+    serving.configuration = retained_rollout_configuration(args)
     serving.driver_job_id = "old"
     monkeypatch.setattr("ray._private.state.jobs", lambda: [{"JobID": "old", "IsDead": True}])
     serving.validate_attachment(args)
@@ -313,10 +318,14 @@ def test_new_manager_restores_journal_without_health_checks(args, tmp_path, tran
     recovery.initial_load_completed(0)
     recovery.checkpoint_committed(1)
     raw = pack_rollout_payload([], args, 2) if transport == "straw" else args.save_debug_rollout_data
-    recovery.remember_raw(2, raw)
+    source_state = {"sample_offset": 12, "metadata": {"custom": 1}}
+    recovery.remember_raw(2, raw, source_state=source_state)
+    # Manager death immediately after raw acceptance must restore both the
+    # advanced source cursor and the batch that owns those consumed samples.
+    accepted = TrainingRecovery(args, RestorePlan())
+    assert accepted.source_state == source_state and 2 in accepted.batches
+    assert accepted.batches[2].converted is None
     recovery.remember_converted(2, global_train_data(), "batch-2")
-    recovery.source_state = {"sample_offset": 12, "metadata": {"custom": 1}}
-    recovery.persist()
     if transport == "straw":
         store, _, lock = rollout_store(args)
         with lock:

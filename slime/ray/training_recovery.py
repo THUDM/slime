@@ -1,4 +1,8 @@
-"""Retain serving and replayable batches across manual trainer restarts."""
+"""Persist checkpoint boundaries and replay batches across trainer/manager restarts.
+
+Serving lifetime is owned by ServingCluster. This journal records only what a
+new trainer or rollout manager needs to replay work after its last checkpoint.
+"""
 
 import copy
 import hashlib
@@ -20,11 +24,12 @@ RECOVERY_NAMESPACE = "slime-training-recovery"
 
 
 def training_recovery_enabled(args):
+    replay_storage = (
+        getattr(args, "rollout_data_transport", "object-store") == "straw"
+        or getattr(args, "save_debug_rollout_data", None) is not None
+    )
     return (
-        (
-            getattr(args, "rollout_data_transport", "object-store") == "straw"
-            or getattr(args, "save_debug_rollout_data", None) is not None
-        )
+        replay_storage
         and getattr(args, "train_backend", "megatron") == "megatron"
         and not getattr(args, "rollout_external", False)
         and not any(
@@ -44,7 +49,69 @@ def configure_recovery_checkpoint(args):
     args.dist_ckpt_optim_fully_reshardable = True
 
 
+def retained_rollout_configuration(args):
+    """Snapshot what must remain compatible while reusing serving and batches.
+
+    Trainer parallelism and memory limits may change on restart; rollout inputs,
+    conversion semantics and serving topology must still describe the same run.
+    Router addresses are discovered at startup and are not configuration identity.
+    """
+    names = {
+        "hf_checkpoint",
+        "ref_load",
+        "prompt_data",
+        "data_source_path",
+        "rollout_function_path",
+        "custom_generate_function_path",
+        "custom_rm_path",
+        "custom_reward_post_process_path",
+        "custom_convert_samples_to_train_data_path",
+        "input_key",
+        "label_key",
+        "metadata_key",
+        "tool_key",
+        "apply_chat_template",
+        "rollout_seed",
+        "rollout_shuffle",
+        "rollout_batch_size",
+        "n_samples_per_prompt",
+        "global_batch_size",
+        "rollout_data_transport",
+        "rollout_data_dir",
+        "rollout_queue_run_id",
+        "save_debug_rollout_data",
+        "load_debug_rollout_data",
+        "debug_train_only",
+        "debug_rollout_only",
+        "rollout_external",
+        "rollout_external_engine_addrs",
+        "rollout_num_gpus",
+        "rollout_num_gpus_per_engine",
+        "num_gpus_per_node",
+        "colocate",
+        "offload_rollout",
+        "use_critic",
+        "train_backend",
+        "advantage_estimator",
+        "rewards_normalization",
+        "grpo_std_normalization",
+        "reward_key",
+        "use_score_centering",
+        "use_rollout_routing_replay",
+        "sglang_config",
+        "sglang_config_path",
+    }
+    names.update(name for name in vars(args) if name.startswith("sglang_"))
+    names.difference_update({"sglang_router_ip", "sglang_router_port", "sglang_model_routers"})
+    return {name: copy.deepcopy(getattr(args, name, None)) for name in sorted(names)}
+
+
 def training_session_name(args):
+    """Find the same named actors across drivers without depending on trainer layout.
+
+    Prefer an explicit ID or persistent run path. The configuration fallback
+    lets runs without replay storage retain their serving cluster as well.
+    """
     if identity := getattr(args, "rollout_session_id", None):
         identity = "explicit:" + identity
     elif args.rollout_data_transport == "straw":
@@ -52,7 +119,7 @@ def training_session_name(args):
     elif path := getattr(args, "save_debug_rollout_data", None) or getattr(args, "save", None):
         identity = str(Path(path).expanduser().resolve())
     else:
-        identity = "configuration:" + json.dumps(TrainingRecovery._configuration(args), sort_keys=True, default=str)
+        identity = "configuration:" + json.dumps(retained_rollout_configuration(args), sort_keys=True, default=str)
     return "rollout:" + hashlib.sha256(identity.encode()).hexdigest()
 
 
@@ -85,7 +152,7 @@ class TrainingRecovery:
             name: getattr(args, name, None)
             for name in ("load", "save", "ckpt_step", "start_rollout_id", "finetune", "no_load_optim", "no_load_rng")
         }
-        self.configuration = self._configuration(args)
+        self.configuration = retained_rollout_configuration(args)
         self.source_state = None
         if args.rollout_data_transport == "straw":
             directory = Path(args.rollout_data_dir) / "training-recovery"
@@ -133,57 +200,6 @@ class TrainingRecovery:
         finally:
             os.close(descriptor)
 
-    @staticmethod
-    def _configuration(args):
-        names = {
-            "hf_checkpoint",
-            "ref_load",
-            "prompt_data",
-            "data_source_path",
-            "rollout_function_path",
-            "custom_generate_function_path",
-            "custom_rm_path",
-            "custom_reward_post_process_path",
-            "custom_convert_samples_to_train_data_path",
-            "input_key",
-            "label_key",
-            "metadata_key",
-            "tool_key",
-            "apply_chat_template",
-            "rollout_seed",
-            "rollout_shuffle",
-            "rollout_batch_size",
-            "n_samples_per_prompt",
-            "global_batch_size",
-            "rollout_data_transport",
-            "rollout_data_dir",
-            "rollout_queue_run_id",
-            "save_debug_rollout_data",
-            "load_debug_rollout_data",
-            "debug_train_only",
-            "debug_rollout_only",
-            "rollout_external",
-            "rollout_external_engine_addrs",
-            "rollout_num_gpus",
-            "rollout_num_gpus_per_engine",
-            "num_gpus_per_node",
-            "colocate",
-            "offload_rollout",
-            "use_critic",
-            "train_backend",
-            "advantage_estimator",
-            "rewards_normalization",
-            "grpo_std_normalization",
-            "reward_key",
-            "use_score_centering",
-            "use_rollout_routing_replay",
-            "sglang_config",
-            "sglang_config_path",
-        }
-        names.update(name for name in vars(args) if name.startswith("sglang_"))
-        names.difference_update({"sglang_router_ip", "sglang_router_port", "sglang_model_routers"})
-        return {name: copy.deepcopy(getattr(args, name, None)) for name in sorted(names)}
-
     def reconcile_checkpoint(self):
         """A joint commit may have succeeded just before its manager RPC was lost."""
         if self.args.rollout_data_transport != "straw" or not self.resume_configuration["save"]:
@@ -217,15 +233,23 @@ class TrainingRecovery:
         values["update_weight_start_version"] = getattr(self.args, "update_weight_start_version", 0)
         return values
 
-    def remember_raw(self, rollout_id, reference):
+    def remember_raw(self, rollout_id, reference, *, source_state=None):
+        # Retain accepted generation before conversion: hooks may fail or the
+        # manager may die before it can persist the converted batch.
         if rollout_id in self.batches:
             raise RuntimeError(f"Rollout {rollout_id} is already retained for training recovery")
         self.batches[rollout_id] = ReplayBatch(reference)
         if isinstance(reference, DiskPayloadRef):
             self._retain(rollout_id, reference)
+        if source_state is not None:
+            self.source_state = source_state
+        # Commit the advanced cursor and its accepted batch in one journal
+        # write. A cursor-only write could skip this batch after manager death.
         self.persist()
 
     def remember_converted(self, rollout_id, data, batch_id):
+        # Store the global batch, before DP sharding, so a restarted trainer can
+        # change parallelism without rerunning reward/conversion hooks.
         if self.args.rollout_data_transport == "straw":
             reference = pack_rollout_payload(data, self.args, rollout_id)
             self._retain(rollout_id, reference)
@@ -286,6 +310,8 @@ class TrainingRecovery:
             self.persist()
 
     def checkpoint_committed(self, rollout_id):
+        # Runtime training completion is insufficient: only a durable model +
+        # optimizer checkpoint lets us release batches needed for replay.
         self.checkpoint_step = rollout_id
         self.resume_configuration.update(
             load=self.resume_configuration["save"],

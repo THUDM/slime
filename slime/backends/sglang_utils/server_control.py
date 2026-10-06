@@ -28,7 +28,12 @@ def unregister_worker(router_url: str, worker_url: str, *, timeout: float) -> No
 
 
 async def get_live_router_workers(router_url: str, *, timeout: float) -> list[dict]:
-    """Prune failed workers before rollout drains requests through the router."""
+    """Prune failed workers before rollout drains requests through the router.
+
+    This precedes the manager's end-of-rollout check: the rollout function itself
+    must finish abort/drain before it can return to that manager. Probe HTTP
+    directly so cleanup never waits for a dead engine actor to answer an RPC.
+    """
     async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
         response = await client.get(f"{router_url}/workers")
         response.raise_for_status()

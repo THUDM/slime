@@ -26,8 +26,9 @@ class RolloutHealthMonitor:
         self._server_group = server_group
 
         self._thread = None
-        self._stop_event = None
-        self._pause_event = None  # When set, health checking is paused
+        self._stop_event = threading.Event()
+        self._pause_event = threading.Event()
+        self._pause_event.set()  # Engines may be offloaded before the first rollout.
         self._check_interval = args.rollout_health_check_interval
         self._check_timeout = args.rollout_health_check_timeout
         self._check_first_wait = args.rollout_health_check_first_wait
@@ -48,9 +49,9 @@ class RolloutHealthMonitor:
             return True
 
         logger.info("Starting RolloutHealthMonitor...")
-        self._stop_event = threading.Event()
-        self._pause_event = threading.Event()
-        self._pause_event.set()  # Start in paused state until resume() is called
+        self._stop_event.clear()
+        self._pause_event.set()
+        self._need_first_wait = True
         self._thread = threading.Thread(
             target=self._health_monitor_loop,
             name="RolloutHealthMonitor",
@@ -66,11 +67,7 @@ class RolloutHealthMonitor:
             return
 
         logger.info("Stopping RolloutHealthMonitor...")
-        assert self._stop_event is not None
         self._stop_event.set()
-        # Also clear pause to let the thread exit
-        if self._pause_event:
-            self._pause_event.clear()
         timeout = self._check_timeout + self._check_interval + 5
         self._thread.join(timeout=timeout)
         if self._thread.is_alive():
@@ -79,13 +76,9 @@ class RolloutHealthMonitor:
             logger.info("RolloutHealthMonitor stopped.")
 
         self._thread = None
-        self._stop_event = None
-        self._pause_event = None
 
     def pause(self) -> None:
         """Pause health checking. Called when engines are offloaded."""
-        if self._pause_event is None:
-            return
         logger.info("Pausing health monitor...")
         self._pause_event.set()
         # Finish an in-flight check before weights or memory ownership change.
@@ -94,16 +87,11 @@ class RolloutHealthMonitor:
 
     def resume(self) -> None:
         """Resume health checking. Called when engines are onloaded."""
-        if self._pause_event is None:
-            return
         logger.info("Resuming health monitor...")
         self._need_first_wait = True  # Need to wait after each resume
         self._pause_event.clear()
 
     def _health_monitor_loop(self) -> None:
-        assert self._stop_event is not None
-        assert self._pause_event is not None
-
         while not self._stop_event.is_set():
             # Wait while paused
             while self._pause_event.is_set() and not self._stop_event.is_set():
@@ -141,9 +129,9 @@ class RolloutHealthMonitor:
 
     def _run_health_checks(self, *, force=False) -> None:
         with self._check_lock:
-            if self._stop_event is not None and self._stop_event.is_set():
+            if self._stop_event.is_set():
                 return
-            if not force and self._pause_event is not None and self._pause_event.is_set():
+            if not force and self._pause_event.is_set():
                 return
             checks = {
                 engine.health_generate.remote(timeout=self._check_timeout): rollout_engine_id
@@ -166,25 +154,22 @@ class RolloutHealthMonitor:
         group = self._server_group
         first = rollout_engine_id * group.nodes_per_engine
         if group.worker_type != "encoder":
+            # Remove routing first, independently of shutdown RPC success. If
+            # the router rejects removal, leave handles intact and surface the
+            # error; proceeding would send later controls to a stale worker.
             unregister_worker(
                 f"http://{group.router_ip or group.args.sglang_router_ip}:{group.router_port or group.args.sglang_router_port}",
                 group.engine_urls[first],
                 timeout=self._check_timeout,
             )
-        for i in range(
-            rollout_engine_id * self._server_group.nodes_per_engine,
-            (rollout_engine_id + 1) * self._server_group.nodes_per_engine,
-        ):
-            engine = self._server_group.all_engines[i]
+        for i in range(first, first + group.nodes_per_engine):
+            engine = group.all_engines[i]
             if engine:
                 logger.info(f"Shutting down and killing engine at index {i}")
                 try:
                     ray.get(engine.shutdown.remote(), timeout=self._check_timeout)
-                    logger.info(f"Successfully killed engine at index {i}")
                 except Exception as e:
                     logger.warning(f"Fail to kill engine at index {i} (e: {e})")
                 finally:
                     ray.kill(engine, no_restart=True)
-            else:
-                logger.info(f"Engine at index {i} is already None")
-            self._server_group.all_engines[i] = None
+            group.all_engines[i] = None

@@ -27,23 +27,38 @@ NUM_GPUS = 0
 
 
 @pytest.mark.parametrize("missing_engine", [False, True])
-def test_first_weight_update_preserves_connections_or_recovers_missing_engine(monkeypatch, missing_engine):
+@pytest.mark.parametrize("previous_rollout", [-1, 7])
+def test_weight_update_preserves_connections_or_recovers_missing_engine(monkeypatch, missing_engine, previous_rollout):
     from slime.ray import rollout
+    from slime.ray.serving import ServingCluster
 
     manager = object.__new__(rollout.RolloutManager.__ray_metadata__.modified_class)
-    manager.rollout_id = -1
-    manager.servers = {"model": SimpleNamespace(update_weights=True, engines=[None if missing_engine else object()])}
+    manager.rollout_id = previous_rollout
+    manager.servers = {}
     calls = []
 
     def recover():
         calls.append("recover")
-        return SimpleNamespace(servers={"replacement": object()})
+        server.num_new_engines = 1
 
-    manager.serving = SimpleNamespace(recover_updatable_engines=SimpleNamespace(remote=recover))
+    # A fresh or reattached trainer needs these pending connection markers even
+    # when a retained manager still has the old driver's rollout ID.
+    server = SimpleNamespace(
+        update_weights=True,
+        all_engines=[None if missing_engine else object(), object()],
+        num_new_engines=2,
+        recover=recover,
+    )
+    serving = object.__new__(ServingCluster.__ray_metadata__.modified_class)
+    serving.servers = {"model": server}
+    serving._health_monitors = []
+    manager.serving = SimpleNamespace(
+        recover_updatable_engines=SimpleNamespace(remote=serving.recover_updatable_engines)
+    )
     monkeypatch.setattr(rollout.ray, "get", lambda value: value)
     manager.recover_updatable_engines()
     assert calls == (["recover"] if missing_engine else [])
-    assert set(manager.servers) == ({"replacement"} if missing_engine else {"model"})
+    assert manager.servers["model"].num_new_engines == (1 if missing_engine else 2)
 
 
 @pytest.mark.parametrize("evaluation", [False, True])
@@ -61,12 +76,11 @@ def test_rollout_boundary_checks_serving_before_returning_data(monkeypatch, eval
     manager.health_monitoring_resume = lambda: events.append("resume")
     manager._generate = lambda *a: events.append("generate") or "batch"
 
-    def check(*, check):
-        assert check
+    def finish():
         events.append("check")
-        return SimpleNamespace(servers={"live": object()})
+        return {"live": object()}
 
-    manager.serving = SimpleNamespace(health_monitoring_pause=SimpleNamespace(remote=check))
+    manager.serving = SimpleNamespace(finish_rollout=SimpleNamespace(remote=finish))
     monkeypatch.setattr(rollout.ray, "get", lambda value: value)
     monkeypatch.setattr(
         rollout,
@@ -162,10 +176,11 @@ def test_custom_source_constructor_keeps_args_only_contract(args, monkeypatch, q
 
         serving = SimpleNamespace(
             get_queue_controller=SimpleNamespace(remote=lambda: create_controller(args, restore_plan=plan)),
-            get_updatable_engines_and_lock=SimpleNamespace(remote=lambda: ([], None, 0, [], [], [])),
             dispose=SimpleNamespace(remote=lambda: None if queue_source else calls.append("controller_close")),
         )
-        deployment = ServingDeployment({"rollout": None}, {}, None, plan, {})
+        deployment = ServingDeployment(
+            placements={"rollout": None}, servers={}, controller=None, restore_plan=plan, routers={}, engine_lock=None
+        )
     manager = rollout.RolloutManager.__ray_metadata__.modified_class(
         args, None, restore_plan=plan, serving=serving, deployment=deployment
     )

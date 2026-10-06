@@ -294,6 +294,12 @@ jobs:
             {
               "num_gpus": 4,
               "straw": true,
+              "test_args": "--mode straw --failure-rollout 1 --save-interval 3 --no-fault-tolerance",
+              "test_file": "test_qwen2.5_0.5B_training_recovery.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
               "test_args": "--mode straw --failure-rollout 1 --save-interval 3 --kill-manager --no-fault-tolerance",
               "test_file": "test_qwen2.5_0.5B_training_recovery.py"
             },
@@ -1262,6 +1268,12 @@ jobs:
               "num_gpus": 4,
               "test_args": "--crash-mode actor",
               "test_file": "test_qwen2.5_0.5B_rollout_health.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
+              "test_args": "--mode straw --failure-rollout 1 --save-interval 3 --no-fault-tolerance",
+              "test_file": "test_qwen2.5_0.5B_training_recovery.py"
             },
             {
               "num_gpus": 4,

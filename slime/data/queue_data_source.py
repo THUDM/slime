@@ -631,6 +631,8 @@ class RolloutQueueController:
 
     def recover_manager_readers(self, generation, excluded):
         """Fence one dead manager's readers while keeping this queue authoritative."""
+        # Reader IDs are scoped to a manager incarnation. Fence only that
+        # incarnation, and avoid returning samples already retained for replay.
         with self._writer_lock:
             delivered = self.codec.publish(excluded, submission_id=f"recover-manager:{uuid.uuid4().hex}")
         results = []

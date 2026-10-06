@@ -119,6 +119,9 @@ class BatchBuilder:
     def replay_converted(self, data, batch_id):
         """Reshard saved conversion, completing an interrupted ready publication."""
         self.batch_id = batch_id
+        # A published batch plan is immutable and may describe the old DP size.
+        # Replay shards use the new trainer layout without overwriting that plan;
+        # only finish publication when the manager died before making it ready.
         publish_batch = False
         if self.args.rollout_data_transport == "straw" and batch_id is not None:
             from straw.protocol import RecordSetRef

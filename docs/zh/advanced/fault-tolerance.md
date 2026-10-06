@@ -23,6 +23,21 @@ slime 提供 rollout-engine 容灾和 Megatron 手动重启恢复：
 
 ## Megatron 手动重启
 
+重启流程分成三个职责：
+
+- `ServingCluster` 是具名、detached 的资源 owner，持有 router、引擎、GPU
+  placement、队列 controller 和权重更新锁。新 driver 根据稳定的会话名称找到
+  它，不需要扫描 router 进程。
+- `RolloutManager` 负责生成、数据 reader、转换和训练分片，使用 owner 返回的
+  引擎快照。manager 死亡不会带走 serving。
+- `TrainingRecovery` 在同一次 journal 写入中保存数据源游标和已接收批次。
+  转换后的批次在 DP 分片前保存，因此重启后可以改变训练并行度；只有 model
+  checkpoint 提交后才释放用于重放的批次。
+
+rollout 收尾先注销死 worker，再执行 abort/drain；返回训练前，owner 再检查一次，
+保证后续 offload、权重更新控制使用存活引擎。缺失引擎留到更新权重前重启，
+随后立即装载训练权重。后台定期检查和收尾检查共享同一个 owner 和故障处理流程。
+
 训练数据重放需要以下任意一种模式。这些模式始终启用恢复记录持久化，不依赖 `--use-fault-tolerance`。
 
 ```bash

@@ -1,22 +1,30 @@
-"""Own serving resources independently of trainers and rollout managers."""
+"""Keep serving alive independently of trainers and rollout managers.
+
+This actor owns persistent topology: placements, routers, engines, the queue
+controller and the weight-update lock. Managers receive snapshots of engine
+handles; health checks and recovery mutate only this owner's topology.
+"""
 
 import multiprocessing
 from dataclasses import dataclass
 
 import ray
 
-from slime.ray.training_recovery import TrainingRecovery
+from slime.ray.training_recovery import retained_rollout_configuration
 from slime.ray.utils import Lock
 from slime.utils.health_monitor import RolloutHealthMonitor
 
 
 @dataclass
 class ServingDeployment:
+    """Startup handoff; ordinary health checks return only the engine snapshot."""
+
     placements: dict
     servers: dict
     controller: object
     restore_plan: object
     routers: dict
+    engine_lock: object
     reused: bool = False
 
 
@@ -32,7 +40,7 @@ class ServingCluster:
         configure_logger()
         self.args = args
         self.restore_plan = restore_plan
-        self.configuration = TrainingRecovery._configuration(args)
+        self.configuration = retained_rollout_configuration(args)
         self.placements = create_placement_groups(args)
         existing_children = {process.pid for process in multiprocessing.active_children()}
         self.servers, handles = (
@@ -64,14 +72,24 @@ class ServingCluster:
             for name in ("sglang_router_ip", "sglang_router_port", "sglang_model_routers")
             if hasattr(self.args, name)
         }
-        return ServingDeployment(self.placements, self.servers, self.controller, self.restore_plan, routers, reused)
+        return ServingDeployment(
+            placements=self.placements,
+            servers=self.servers,
+            controller=self.controller,
+            restore_plan=self.restore_plan,
+            routers=routers,
+            engine_lock=self.lock,
+            reused=reused,
+        )
 
     def validate_attachment(self, args):
-        configuration = TrainingRecovery._configuration(args)
+        configuration = retained_rollout_configuration(args)
         changed = [name for name, value in self.configuration.items() if configuration.get(name) != value]
         if changed:
             raise ValueError("Retained serving requires unchanged rollout/model configuration: " + ", ".join(changed))
         if self.driver_job_id is not None:
+            # Actor existence identifies the session, not whether its previous
+            # trainer is dead. Fence live/unknown drivers before taking ownership.
             from ray._private.state import jobs
 
             previous = next((job for job in jobs() if job["JobID"] == self.driver_job_id), None)
@@ -98,6 +116,8 @@ class ServingCluster:
             self.placements["actor"] = _create_placement_group(count)
             self.placements["critic"] = self.placements["actor"] if args.use_critic else None
         if reused:
+            # NCCL groups and a possibly held lock belong to the old trainer.
+            # Engines survive; their next update reconnects to the new trainer.
             engines = [engine for server in self.servers.values() for engine in server.engines if engine is not None]
             ray.get([engine.reset_weights_update_groups.remote() for engine in engines])
             ray.kill(self.lock, no_restart=True)
@@ -114,7 +134,6 @@ class ServingCluster:
             for group in server.server_groups:
                 monitor = RolloutHealthMonitor(group, args)
                 monitor.start()
-                monitor.pause()
                 self._health_monitors.append(monitor)
         for name, value in self.deployment().routers.items():
             setattr(args, name, value)
@@ -126,14 +145,14 @@ class ServingCluster:
     def try_ci_fault_injection(self):
         server = self._updatable_server()
         if not self._ci_fault_injection_pending or server is None:
-            return self.deployment()
+            return self.servers
         self._ci_fault_injection_pending = False
         engines = [engine for engine in server.all_engines if engine is not None]
         if engines:
             ray.get(engines[0].simulate_crash.remote(), timeout=self.args.rollout_health_check_timeout)
             for monitor in self._health_monitors:
                 monitor.check_once()
-        return self.deployment()
+        return self.servers
 
     def register_trainers(self, role, actors):
         self.training_actors[role] = actors
@@ -183,50 +202,39 @@ class ServingCluster:
         return int(versions[0])
 
     def recover_updatable_engines(self):
+        # Recovery waits until the trainer can immediately install its weights.
+        # Rollout completion only prunes failed engines; it never starts them.
         self.health_monitoring_pause()
         server = self._updatable_server()
-        if server:
+        # Fresh and replacement trainers must connect to every retained engine.
+        # A no-op recover() would clear num_new_engines and lose those markers,
+        # regardless of whether the rollout manager was replaced or survived.
+        if server and any(engine is None for engine in server.all_engines):
             server.recover()
-        return self.deployment()
+        return self.servers
 
     def clear_updatable_num_new_engines(self):
         server = self._updatable_server()
         if server:
             server.num_new_engines = 0
 
-    def health_monitoring_pause(self, *, check=False):
+    def health_monitoring_pause(self):
         for monitor in self._health_monitors:
             monitor.pause()
-        if check:
-            for monitor in self._health_monitors:
-                monitor.check_once()
-            return self.deployment()
+
+    def finish_rollout(self):
+        """Remove failed engines before the trainer sends control requests."""
+        self.health_monitoring_pause()
+        # A short rollout may finish before any periodic check. Check once even
+        # during warmup grace, while weights/KV are still resident for probing.
+        for monitor in self._health_monitors:
+            monitor.check_once()
+        return self.servers
 
     def health_monitoring_resume(self):
         for monitor in self._health_monitors:
             monitor.resume()
-        return self.deployment()
-
-    def offload(self):
-        self.health_monitoring_pause()
-        for server in self.servers.values():
-            server.offload()
-
-    def onload(self, tags=None):
-        for server in self.servers.values():
-            server.onload(tags)
-
-    def onload_weights(self):
-        for server in self.servers.values():
-            server.onload_weights()
-
-    def onload_kv(self):
-        for server in self.servers.values():
-            server.onload_kv()
-
-    def check_weights(self, action):
-        engines = [engine for server in self.servers.values() for engine in server.engines]
-        return ray.get([engine.check_weights.remote(action=action) for engine in engines])
+        return self.servers
 
     def dispose(self):
         from ray.util.placement_group import remove_placement_group

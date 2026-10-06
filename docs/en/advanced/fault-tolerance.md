@@ -23,6 +23,22 @@ Cluster-level preemption and loss of the Ray cluster still require your cluster 
 
 ## Manual Megatron Restart
 
+The restart path has three responsibilities:
+
+- `ServingCluster` is the named, detached owner of routers, engines, placements,
+  the queue controller and the weight-update lock. A new driver finds it by the
+  stable session name, rather than scanning for router processes.
+- `RolloutManager` owns generation, data readers, conversion and trainer shards.
+  It uses engine snapshots from the owner; losing this manager leaves serving alive.
+- `TrainingRecovery` journals the source cursor and accepted batches together.
+  Converted batches are saved before DP sharding, so a restarted trainer may
+  change parallelism. Batches are retained until their model checkpoint commits.
+
+At rollout completion, dead workers are unregistered before abort/drain, and the
+owner checks once more before offload or weight-update controls. Recovery starts
+replacement engines just before the trainer installs their weights. Periodic
+health checks and this boundary check share the same owner and failure handling.
+
 For replayable training recovery, use either mode below. Persistence is always enabled for these modes, independently of `--use-fault-tolerance`.
 
 ```bash

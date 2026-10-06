@@ -254,6 +254,9 @@ def create_rollout_manager(args, *, restore_plan=None):
         # External serving retains its existing startup and ownership contract.
         placements = create_placement_groups(args)
     else:
+        # Ray resolves these stable names in one namespace. Reuse the detached
+        # owner first, then recreate/attach the manager against its deployment;
+        # manager death never requires discovering individual router processes.
         name = training_session_name(args)
         serving = ServingCluster.options(
             **options,
@@ -278,6 +281,8 @@ def create_rollout_manager(args, *, restore_plan=None):
     )
     reused = False
     if serving is not None:
+        # Serving attachment fences the previous driver and resets its NCCL
+        # connections. Manager attachment restores the data/checkpoint boundary.
         resume = ray.get(manager.attach_training.remote(args, deployment))
         restore_plan, reused = resume.restore_plan, resume.reused
         for key, value in resume.configuration.items():

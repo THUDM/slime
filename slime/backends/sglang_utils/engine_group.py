@@ -38,6 +38,8 @@ class ServerGroup:
     model_path: str | None = None  # checkpoint path for update_weights_from_disk
     router_ip: str | None = None
     router_port: int | None = None
+    # Retain addresses outside the actors: deregistration must still work when
+    # an actor dies or cannot answer get_url(). Keys index all_engines locally.
     engine_urls: dict[int, str] = dataclasses.field(default_factory=dict)
 
     @property
