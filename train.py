@@ -9,46 +9,7 @@ from slime.utils.arguments import parse_args
 from slime.utils.misc import should_run_periodic_action
 
 
-def train(args, restore_plan=None):
-    configure_logger()
-    init_tracking(args)
-    startup = None
-    try:
-        # Create or reattach rollout resources, then run this training attempt.
-        startup = create_rollout_manager(args, restore_plan=restore_plan)
-        _train(args, startup.placements, startup.manager, startup.num_rollout_per_epoch, startup.restore_plan)
-    except BaseException:
-        # Failures and interruptions retain serving and replay data for a manual
-        # restart. Detach this driver's trainers instead of disposing the session.
-        if startup is not None and startup.serving is not None:
-            job_id = ray.get_runtime_context().get_job_id()
-            try:
-                # Let the manager pause new rollout work and release the trainers.
-                ray.get(startup.manager.detach_training.remote(job_id))
-            except ray.exceptions.RayActorError:
-                # The manager may have died while the serving cluster is still alive.
-                try:
-                    # Release trainers directly through the independent serving owner.
-                    ray.get(startup.serving.detach_training.remote(job_id))
-                except Exception:
-                    # Report cleanup failure without replacing the original error.
-                    logging.getLogger(__name__).exception("Failed to detach after rollout manager death")
-            except Exception:
-                # A failed detach must not mask the original training failure.
-                logging.getLogger(__name__).exception("Failed to detach trainer; serving remains available")
-        raise
-    else:
-        # _train has disposed resources after successful completion. Remove the
-        # detached actors so later jobs cannot attach to this completed session.
-        if startup.serving is not None:
-            ray.kill(startup.manager, no_restart=True)
-            ray.kill(startup.serving, no_restart=True)
-    finally:
-        # Finish this driver's tracking on success, startup failure, or interruption.
-        finish_tracking(args)
-
-
-def _train(args, pgs, rollout_manager, num_rollout_per_epoch, restore_plan):
+def train(args, pgs, rollout_manager, num_rollout_per_epoch, restore_plan):
     release_train = args.release_train
 
     actor_model, critic_model = create_training_models(args, pgs, rollout_manager)
@@ -58,6 +19,8 @@ def _train(args, pgs, rollout_manager, num_rollout_per_epoch, restore_plan):
 
     # Always push actor weights to rollout once weights are loaded.
     actor_model.update_weights()
+    # Reattached async producers stay paused until restored weights are installed.
+    # This startup notification resumes them once, before entering the train loop.
     ray.get(rollout_manager.training_ready.remote())
 
     if args.check_weight_update_equal:
@@ -140,4 +103,39 @@ def _train(args, pgs, rollout_manager, num_rollout_per_epoch, restore_plan):
 
 if __name__ == "__main__":
     args, restore_plan = parse_args(return_restore_plan=True)
-    train(args, restore_plan)
+    configure_logger()
+    init_tracking(args)
+    startup = None
+    try:
+        # Create or reattach rollout resources, then run this training attempt.
+        startup = create_rollout_manager(args, restore_plan=restore_plan)
+        train(args, startup.placements, startup.manager, startup.num_rollout_per_epoch, startup.restore_plan)
+    except BaseException:
+        # Failures and interruptions retain serving and replay data for a manual
+        # restart. Detach this driver's trainers instead of disposing the session.
+        if startup is not None and startup.serving is not None:
+            job_id = ray.get_runtime_context().get_job_id()
+            try:
+                # Let the manager pause new rollout work and release the trainers.
+                ray.get(startup.manager.detach_training.remote(job_id))
+            except ray.exceptions.RayActorError:
+                # The manager may have died while the serving cluster is still alive.
+                try:
+                    # Release trainers directly through the independent serving owner.
+                    ray.get(startup.serving.detach_training.remote(job_id))
+                except Exception:
+                    # Report cleanup failure without replacing the original error.
+                    logging.getLogger(__name__).exception("Failed to detach after rollout manager death")
+            except Exception:
+                # A failed detach must not mask the original training failure.
+                logging.getLogger(__name__).exception("Failed to detach trainer; serving remains available")
+        raise
+    else:
+        # train has disposed resources after successful completion. Remove the
+        # detached actors so later jobs cannot attach to this completed session.
+        if startup.serving is not None:
+            ray.kill(startup.manager, no_restart=True)
+            ray.kill(startup.serving, no_restart=True)
+    finally:
+        # Finish this driver's tracking on success, startup failure, or interruption.
+        finish_tracking(args)

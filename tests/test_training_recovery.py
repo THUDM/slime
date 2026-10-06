@@ -180,6 +180,49 @@ def test_dead_driver_can_be_replaced(args, monkeypatch):
     serving.validate_attachment(args)
 
 
+@pytest.mark.parametrize("was_paused", [None, False, True])
+@pytest.mark.parametrize("weight_sync_fails", [False, True])
+def test_initial_weight_sync_controls_retained_producer_resume(args, monkeypatch, was_paused, weight_sync_fails):
+    import runpy
+    import sys
+    from unittest.mock import Mock
+
+    from slime.ray import rollout
+
+    # Argument parsing is outside this CPU test and imports SGLang server args.
+    monkeypatch.setitem(sys.modules, "slime.utils.arguments", SimpleNamespace(parse_args=None))
+    train = runpy.run_path(str(Path(__file__).resolve().parents[1] / "train.py"))["train"]
+    manager = object.__new__(rollout.RolloutManager.__ray_metadata__.modified_class)
+    manager._recovery_admission_was_paused = was_paused
+    producer = Mock()
+    manager.data_source = SimpleNamespace(consumers={"fully_async": producer})
+    endpoint, actor = Mock(), Mock()
+    endpoint.training_ready.remote.side_effect = manager.training_ready
+
+    def publish_weights():
+        producer.resume.assert_not_called()
+        if weight_sync_fails:
+            raise RuntimeError("weight sync failed")
+
+    actor.update_weights.side_effect = publish_weights
+    monkeypatch.setitem(train.__globals__, "create_training_models", lambda *a: (actor, None))
+    monkeypatch.setattr(rollout.ray, "get", lambda value: value)
+    args.release_train = args.offload_rollout = args.check_weight_update_equal = False
+    args.num_rollout, args.eval_interval = 0, None
+    if weight_sync_fails:
+        with pytest.raises(RuntimeError, match="weight sync failed"):
+            train(args, {}, endpoint, 1, RestorePlan())
+        endpoint.training_ready.remote.assert_not_called()
+        endpoint.dispose.remote.assert_not_called()
+        assert manager._recovery_admission_was_paused is was_paused
+    else:
+        train(args, {}, endpoint, 1, RestorePlan())
+        endpoint.training_ready.remote.assert_called_once_with()
+        assert manager._recovery_admission_was_paused is None
+        manager.training_ready()
+    assert producer.resume.call_count == int(not weight_sync_fails and was_paused is False)
+
+
 @pytest.mark.parametrize("external_ray,live_head", [(False, True), (False, False), (True, True)])
 @pytest.mark.parametrize(
     "options",
