@@ -56,6 +56,16 @@ jobs:
           BASE_DIR=/root bash build_conda.sh
         shell: bash
 
+      - name: Check rotary backport
+        run: |
+          source ~/.bashrc
+          micromamba activate slime
+          export CUDA_HOME="$CONDA_PREFIX"
+          cd /root/sglang
+          python test/registered/kernels/ops/attention/test_fused_qk_rmsnorm_rope_gate.py
+          python test/registered/rotary/test_mrope_axis_map.py
+        shell: bash
+
       - name: Download model and dataset
         run: |
           echo "🔗 Downloading up model and dataset..."

@@ -7,6 +7,11 @@ We will publish 2 kinds of docker images:
 current stable version is:
 - sglang v0.5.15.post1 (0b3bb0cbe31873994c9f989fddfe2f87ca839fdd), megatron dev 1dcf0dafa884ad52ffb243625717a3471643e087
 
+The stable and latest patch bundles include the
+[upstream Qwen3.5 rotary fix](https://github.com/sgl-project/sglang/commit/e635577431cbdfb8ce5fafb0fcd8a4ac074062c6).
+The fused kernel now uses the height and width position rows for image tokens.
+The conda release checks run its kernel and axis-map regressions.
+
 history versions:
 - sglang v0.5.13 (28b095c01005d4a3a2a5b637b7d028b07fba31b2), megatron dev 1dcf0dafa884ad52ffb243625717a3471643e087
 - sglang v0.5.12.post1 (5a15cde858ea09b77116212a39356f2fc51b8584), megatron dev 1dcf0dafa884ad52ffb243625717a3471643e087

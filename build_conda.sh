@@ -195,7 +195,7 @@ if [ ! -d "$patch_dir" ]; then
 fi
 
 cd $BASE_DIR/sglang
-for patch_name in sglang.patch sglang-top_p.patch sglang-release_hicache.patch sglang-pull_weights.patch sglang-deterministic.patch; do
+for patch_name in sglang.patch sglang-top_p.patch sglang-release_hicache.patch sglang-pull_weights.patch sglang-deterministic.patch sglang-mrope.patch; do
   patch_path="$patch_dir/${patch_name}"
   if [ ! -f "$patch_path" ]; then
     continue
