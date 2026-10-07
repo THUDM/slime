@@ -18,7 +18,7 @@ the Anthropic-compatible endpoint, and drains trainable `TokenSegment`s with
 
 The slime training stack itself follows the standard setup. On top of that you need:
 
-1. **An E2B-compatible sandbox cluster** (or any provider that speaks the E2B SDK). Configure via `E2B_API_KEY` (e.g. the standard `e2b_xxx` key from https://e2b.dev, or any internal endpoint that accepts the same SDK). The official SDK validates this value locally, so internal gateways that ignore auth still need a syntactically valid `e2b_` + 40 hex-character placeholder.
+1. **An E2B-compatible sandbox cluster** (or any provider that speaks the E2B SDK). Configure via `E2B_API_KEY` (e.g. the standard `e2b_xxx` key from https://e2b.dev, or any internal endpoint that accepts the same SDK). The official SDK validates this value locally, so internal gateways that ignore auth still need a syntactically valid `e2b_` + 40 hex-character placeholder. Other providers plug in without changing slime; see [Porting to a New Sandbox Backend](#porting-to-a-new-sandbox-backend).
 2. **Host-side tarballs** that get uploaded into each sandbox at boot:
    - Node 22 (`node-v22.x-linux-x64.tar.xz`) — exported as `SLIME_AGENT_NODE_TARBALL`.
    - Claude Code CLI npm tarball (`anthropic-ai-claude-code-local-linux-x64.tgz`) — exported as `SLIME_AGENT_CC_TARBALL`.
@@ -118,6 +118,7 @@ contract (read inside `slime/agent/`); `SWE_*` are this SWE example's task knobs
 | --- | --- | --- |
 | `ADAPTER_PUBLIC_HOST` | `${MASTER_ADDR}` | Public IP the sandbox uses to reach the Anthropic adapter. **Must be routable from inside the sandbox.** |
 | `ADAPTER_BIND_HOST` / `ADAPTER_PORT` | `0.0.0.0` / `18001` | Bind address of the Anthropic adapter on the host. |
+| `SLIME_AGENT_SANDBOX_BACKEND` | `e2b` | Sandbox backend: a registered name (`e2b`) or the dotted import path of a `Sandbox` class, e.g. `my_pkg.sandboxes.MySandbox`. |
 | `E2B_API_KEY` | — | E2B (or compatible) API key. |
 | `SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY` | — | **Required.** Which metadata key the E2B gateway routes images by (e.g. `image`); each sample's `metadata.image` is passed under it. (Legacy `SWE_SANDBOX_IMAGE_METADATA_KEY` still accepted.) |
 | `SLIME_AGENT_NODE_TARBALL` | — | Host path to Node 22 tarball uploaded into each sandbox. |
@@ -188,13 +189,21 @@ prompt-base restarts.
 ## Porting to a New Sandbox Backend
 
 `slime.agent.sandbox.Sandbox` exposes the shared sandbox contract, and
-`slime.agent.sandbox.E2BSandbox` is the E2B implementation:
+`slime.agent.sandbox.E2BSandbox` is the E2B implementation. The example builds
+every sandbox with `make_sandbox(image)`, which constructs the backend named by
+`SLIME_AGENT_SANDBOX_BACKEND`:
 
 ```python
 await sb.exec(cmd, user=..., check=..., timeout=...)
 await sb.write_file(sandbox_path, content_or_host_path, user=...)
 await sb.read_file(sandbox_path, user=...)
-async with E2BSandbox(...) as sb: ...
+async with make_sandbox(image) as sb: ...
 ```
 
-Reimplement those on Docker / Modal / a local VM and everything in `generate.py` keeps working unchanged.
+Reimplement those on Docker / Modal / a local VM, then point
+`SLIME_AGENT_SANDBOX_BACKEND` at the class by import path (it is constructed as
+`cls(image)`). No change to slime is needed and everything in `generate.py`
+keeps working unchanged. The module must be importable on the Ray workers, and
+any environment variables the backend reads must be added to the launcher's
+runtime env. `generate.py` resolves the backend at import, so a bad value fails
+the run at startup instead of aborting each sample.

@@ -208,6 +208,8 @@ export NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME:-${MLP_SOCKET_IFNAME:-eth0}}"
 
 export SWE_AGENT="${SWE_AGENT:-claude_code}"
 export SWE_TRAIN_PROTOCOL="${SWE_TRAIN_PROTOCOL:-scaleswe}"
+# Sandbox backend: e2b, or the import path of an out-of-tree Sandbox class (see README).
+export SLIME_AGENT_SANDBOX_BACKEND="${SLIME_AGENT_SANDBOX_BACKEND:-e2b}"
 export E2B_API_KEY="${E2B_API_KEY:-e2b_0000000000000000000000000000000000000000}"
 # Metadata key your gateway routes images by; `image` is the neutral default.
 export SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY="${SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY:-image}"
@@ -280,6 +282,7 @@ keys = (
     "SWE_CC_PROMPT",
     "SWE_TRAIN_PROTOCOL",
     "SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY",
+    "SLIME_AGENT_SANDBOX_BACKEND",
 )
 env = {k: os.environ[k] for k in keys if k in os.environ}
 env["MASTER_ADDR"] = os.environ["MASTER_ADDR"]
