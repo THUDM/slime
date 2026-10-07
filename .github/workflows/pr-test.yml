@@ -283,6 +283,56 @@ jobs:
             },
             {
               "num_gpus": 4,
+              "test_args": "--crash-mode server",
+              "test_file": "test_qwen2.5_0.5B_rollout_health.py"
+            },
+            {
+              "num_gpus": 4,
+              "test_args": "--crash-mode actor",
+              "test_file": "test_qwen2.5_0.5B_rollout_health.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
+              "test_args": "--mode straw --failure-rollout 1 --save-interval 3 --no-fault-tolerance",
+              "test_file": "test_qwen2.5_0.5B_training_recovery.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
+              "test_args": "--mode straw --failure-rollout 1 --save-interval 3 --kill-manager --no-fault-tolerance",
+              "test_file": "test_qwen2.5_0.5B_training_recovery.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
+              "test_args": "--mode straw --failure-rollout 1 --role-config --kill-manager --manager-crash-phase training",
+              "test_file": "test_qwen2.5_0.5B_training_recovery.py"
+            },
+            {
+              "num_gpus": 4,
+              "test_args": "--mode debug --failure-rollout 1 --save-interval 3 --kill-manager --no-fault-tolerance",
+              "test_file": "test_qwen2.5_0.5B_training_recovery.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
+              "test_args": "--mode straw --failure-rollout 1 --save-interval 1 --weight-sync disk-delta --kill-manager",
+              "test_file": "test_qwen2.5_0.5B_training_recovery.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
+              "test_args": "--mode straw --failure-rollout 1 --pd --wedge-engine --kill-manager",
+              "test_file": "test_qwen2.5_0.5B_training_recovery.py"
+            },
+            {
+              "num_gpus": 8,
+              "straw": true,
+              "test_file": "test_qwen3_30B_A3B_training_recovery.py"
+            },
+            {
+              "num_gpus": 4,
               "straw": true,
               "test_file": "test_straw_checkpoint_fork.py"
             },
@@ -792,6 +842,20 @@ jobs:
             {
               "num_gpus": 0,
               "straw": true,
+              "test_file": "test_training_recovery.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_disk_delta_recovery.py"
+            },
+            {
+              "num_gpus": 0,
+              "straw": true,
+              "test_file": "test_rollout_manager_recovery.py"
+            },
+            {
+              "num_gpus": 0,
+              "straw": true,
               "test_file": "test_distributed_rollout.py"
             },
             {
@@ -956,7 +1020,7 @@ jobs:
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install pytest numpy packaging pyyaml omegaconf tqdm httpx requests ray pybase64 pylatexenc sympy aiohttp pillow safetensors psutil
 
-          pip install transformers wandb
+          pip install transformers wandb zstandard
 
 
 
@@ -1224,6 +1288,56 @@ jobs:
               "straw": true,
               "test_args": "--transport nccl --flush-cache-interval 2",
               "test_file": "test_qwen2.5_0.5B_pipeline_rl.py"
+            },
+            {
+              "num_gpus": 4,
+              "test_args": "--crash-mode server",
+              "test_file": "test_qwen2.5_0.5B_rollout_health.py"
+            },
+            {
+              "num_gpus": 4,
+              "test_args": "--crash-mode actor",
+              "test_file": "test_qwen2.5_0.5B_rollout_health.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
+              "test_args": "--mode straw --failure-rollout 1 --save-interval 3 --no-fault-tolerance",
+              "test_file": "test_qwen2.5_0.5B_training_recovery.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
+              "test_args": "--mode straw --failure-rollout 1 --save-interval 3 --kill-manager --no-fault-tolerance",
+              "test_file": "test_qwen2.5_0.5B_training_recovery.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
+              "test_args": "--mode straw --failure-rollout 1 --role-config --kill-manager --manager-crash-phase training",
+              "test_file": "test_qwen2.5_0.5B_training_recovery.py"
+            },
+            {
+              "num_gpus": 4,
+              "test_args": "--mode debug --failure-rollout 1 --save-interval 3 --kill-manager --no-fault-tolerance",
+              "test_file": "test_qwen2.5_0.5B_training_recovery.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
+              "test_args": "--mode straw --failure-rollout 1 --save-interval 1 --weight-sync disk-delta --kill-manager",
+              "test_file": "test_qwen2.5_0.5B_training_recovery.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
+              "test_args": "--mode straw --failure-rollout 1 --pd --wedge-engine --kill-manager",
+              "test_file": "test_qwen2.5_0.5B_training_recovery.py"
+            },
+            {
+              "num_gpus": 8,
+              "straw": true,
+              "test_file": "test_qwen3_30B_A3B_training_recovery.py"
             },
             {
               "num_gpus": 4,

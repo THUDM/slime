@@ -29,10 +29,9 @@ def no_gpu_server_imports(monkeypatch):
 def manager(**overrides):
     from slime.data.batch_builder import BatchBuilder
 
-    cls = BatchBuilder
-    result = cls.__new__(cls)
-    result.args = args(**overrides)
-    result.custom_convert_samples_to_train_data_func = None
+    result = BatchBuilder(
+        args(custom_reward_post_process_path=None, custom_convert_samples_to_train_data_path=None, **overrides)
+    )
     result._post_process_rewards = lambda samples: ([1.0] * len(samples), [1.0] * len(samples))
     return result
 
@@ -488,12 +487,12 @@ def test_top_p_mask_reads_only_local_cp_support(tmp_path, monkeypatch, rank, all
     assert reads == expected_reads
 
 
-def test_top_p_validation_checks_shared_support_in_chunks(tmp_path, monkeypatch):
+def test_top_p_validation_checks_unvalidated_support_in_chunks(tmp_path, monkeypatch):
     from slime.data.tensor import TensorRef
     from slime.data.transport import pack_rollout_payload, seal_rollout_store
     from slime.utils.score_centering import validate_sampler_top_p
 
-    count = 1025
+    count = 4097
     a = args(rollout_top_p=0.95, rollout_data_transport="straw", rollout_data_dir=str(tmp_path))
     sample = Sample(
         tokens=[9] + [4] * count,
@@ -502,12 +501,14 @@ def test_top_p_validation_checks_shared_support_in_chunks(tmp_path, monkeypatch)
         rollout_top_p_token_ids=torch.full((count,), 4, dtype=torch.int32),
         rollout_top_p_token_offsets=torch.arange(count + 1, dtype=torch.int32),
         rollout_top_p_log_probs=torch.zeros(count),
-        status=Sample.Status.COMPLETED,
+        # Interrupted captures remain unvalidated until their continuation is
+        # ready for training; publishing a completed sample validates it first.
+        status=Sample.Status.ABORTED,
     )
     restored = pack_rollout_payload(sample, a, 0).load()
     seal_rollout_store(a)
     fields = (restored.rollout_top_p_token_ids, restored.rollout_top_p_token_offsets, restored.rollout_top_p_log_probs)
-    assert all(ref.validated for ref in fields)
+    assert all(not ref.validated for ref in fields)
     load, getitem = TensorRef.load, TensorRef.__getitem__
     reads = []
 
@@ -524,11 +525,10 @@ def test_top_p_validation_checks_shared_support_in_chunks(tmp_path, monkeypatch)
     validate_sampler_top_p(*fields, count, tokens=[4] * count, sampled_logps=[0.0] * count)
     assert reads == [
         (key, start, stop)
-        for start, stop in ((0, 1024), (1024, count))
+        for start, stop in ((0, 4096), (4096, count))
         for key in ("rollout_top_p_token_ids", "rollout_top_p_log_probs")
     ]
-    # A shared, validated distribution is not proof that new sample metadata
-    # agrees with it. In particular, do not skip the sampled-token check.
+    # Sharing an unvalidated capture must not skip the sampled-token check.
     with pytest.raises(ValueError, match="sampled token"):
         validate_sampler_top_p(*fields, count, tokens=[4] * (count - 1) + [5], sampled_logps=[0.0] * count)
 
@@ -561,10 +561,6 @@ def test_generate_requests_complete_top_p_probabilities(monkeypatch):
     sample = asyncio.run(rollout.generate(a, Sample(prompt="test"), {"max_new_tokens": 8}))
     np.testing.assert_allclose(np.exp(sample.rollout_top_p_log_probs), [0.3, 0.7, 1.0], rtol=1e-6)
     assert sample.rollout_top_p_token_ids.tolist() == [1, 4, 2]
-
-
-if __name__ == "__main__":
-    raise SystemExit(pytest.main([__file__]))
 
 
 def test_top_p_published_captures_need_only_metadata_checks(tmp_path, monkeypatch):
@@ -607,3 +603,7 @@ def test_top_p_published_captures_need_only_metadata_checks(tmp_path, monkeypatc
         validate_sampler_top_p(*fields, count, tokens=[4] * count, sampled_logps=[0.0] * count)
         with pytest.raises(ValueError, match="align"):
             validate_sampler_top_p(*fields, count, tokens=[4], sampled_logps=[0.0])
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

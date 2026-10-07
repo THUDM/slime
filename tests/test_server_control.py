@@ -1,13 +1,103 @@
 import asyncio
 import json
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
+import httpx
 import pytest
 
 from slime.backends.sglang_utils import server_control
 from slime.utils import http_utils
 
 NUM_GPUS = 0
+
+
+@pytest.mark.parametrize("failure", ["connection", "timeout", "status"])
+def test_rollout_boundary_prunes_failed_router_workers(monkeypatch, failure):
+    calls = []
+
+    async def respond(request):
+        calls.append((request.method, str(request.url)))
+        if request.url.path == "/workers":
+            return httpx.Response(
+                200, json={"workers": [{"id": "good", "url": "http://good"}, {"id": "bad", "url": "http://bad"}]}
+            )
+        if request.method == "DELETE":
+            return httpx.Response(200)
+        if request.url.host == "bad":
+            if failure == "connection":
+                raise httpx.ConnectError("server stopped", request=request)
+            if failure == "timeout":
+                raise httpx.ReadTimeout("server stuck", request=request)
+            return httpx.Response(503)
+        return httpx.Response(200)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    monkeypatch.setattr(server_control.httpx, "AsyncClient", lambda **kwargs: client)
+    workers = asyncio.run(server_control.get_live_router_workers("http://router", timeout=0.1))
+    assert workers == [{"id": "good", "url": "http://good"}]
+    assert ("DELETE", "http://router/workers/bad") in calls
+    assert ("DELETE", "http://router/workers/good") not in calls
+
+
+@pytest.mark.parametrize("actor_failure", ["dead", "wedged"])
+def test_boundary_health_check_bypasses_grace_and_cleans_dead_actor(monkeypatch, actor_failure):
+    from slime.backends.sglang_utils import engine_group
+    from slime.ray.serving import ServingCluster
+    from slime.utils import health_monitor
+
+    calls = []
+    dead = SimpleNamespace(
+        health_generate=SimpleNamespace(remote=lambda **kw: "dead"),
+        shutdown=SimpleNamespace(remote=lambda: "shutdown"),
+    )
+    alive = SimpleNamespace(health_generate=SimpleNamespace(remote=lambda **kw: "alive"))
+    group = engine_group.ServerGroup(
+        args=SimpleNamespace(num_gpus_per_node=1),
+        pg=None,
+        num_gpus_per_engine=1,
+        num_new_engines=0,
+        all_engines=[dead, alive],
+        worker_type="regular",
+        engine_urls={0: "http://dead", 1: "http://alive"},
+        router_ip="router",
+        router_port=8000,
+    )
+    args = SimpleNamespace(
+        rollout_health_check_interval=600, rollout_health_check_first_wait=600, rollout_health_check_timeout=0.1
+    )
+    monitor = health_monitor.RolloutHealthMonitor(group, args)
+    serving = object.__new__(ServingCluster.__ray_metadata__.modified_class)
+    serving.args = args
+    serving._health_monitors = [monitor]
+    serving.servers = {"model": group}
+
+    def wait(refs, *, num_returns, timeout):
+        assert timeout == 0.1
+        if refs == ["shutdown"]:
+            return [], refs
+        assert refs == ["dead", "alive"] and num_returns == 2
+        return (["alive"], ["dead"]) if actor_failure == "wedged" else (refs, [])
+
+    def get(ref, *, timeout):
+        if ref in {"dead", "shutdown"}:
+            raise TimeoutError(actor_failure)
+        return True
+
+    def unregister(router_url, worker_url, *, timeout):
+        calls.append(("unregister", router_url, worker_url))
+
+    monkeypatch.setattr(health_monitor.ray, "wait", wait)
+    monkeypatch.setattr(health_monitor.ray, "get", get)
+    monkeypatch.setattr(health_monitor.ray, "kill", lambda engine, **kw: calls.append(("kill", engine)))
+    monkeypatch.setattr(engine_group, "unregister_worker", unregister)
+    monitor.start()
+    try:
+        snapshot = serving.finish_rollout()
+        assert calls == [("unregister", "http://router:8000", "http://dead"), ("kill", dead)]
+        assert snapshot["model"].all_engines == [None, alive]
+    finally:
+        monitor.stop()
 
 
 @pytest.mark.unit
