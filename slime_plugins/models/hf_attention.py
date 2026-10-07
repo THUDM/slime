@@ -3,7 +3,7 @@ import os
 from abc import ABC, abstractmethod
 
 import torch
-import torch.distributed as dist
+import torch.distributed.nn.functional as dist_nn
 from megatron.core import mpu, tensor_parallel
 from megatron.core.inference.contexts import BaseInferenceContext
 from megatron.core.packed_seq_params import PackedSeqParams
@@ -35,29 +35,6 @@ def _load_hf_config(checkpoint_path):
             _fix_dtype(config_dict["text_config"])
             ns.text_config = type("TextConfig", (), config_dict["text_config"])()
         return ns
-
-
-class _AllGatherForDuplicatedComputation(torch.autograd.Function):
-    """All-gather whose backward just returns the local gradient slice (no reduce).
-
-    Use this instead of ``dist.nn.all_gather`` when the computation after the
-    gather is *duplicated* across ranks (same weights, same full input →
-    identical gradients).  The default ``all_gather`` backward performs a
-    reduce-scatter, which incorrectly sums ``world_size`` identical copies of
-    the gradient.
-    """
-
-    @staticmethod
-    def forward(ctx, x, group):
-        ctx.group = group
-        ctx.rank = dist.get_rank(group=group)
-        out = [torch.empty_like(x) for _ in range(dist.get_world_size(group=group))]
-        dist.all_gather(out, x.contiguous(), group=group)
-        return tuple(out)
-
-    @staticmethod
-    def backward(ctx, *grads):
-        return grads[ctx.rank], None
 
 
 class HuggingfaceAttention(MegatronModule, ABC):
@@ -116,11 +93,13 @@ class HuggingfaceAttention(MegatronModule, ABC):
 
         if mpu.get_context_parallel_world_size() > 1:
             cp_size = mpu.get_context_parallel_world_size()
-            # Use custom all-gather whose backward returns local gradient
-            # instead of reduce-scatter, since the computation is duplicated.
-            hidden_states_list = _AllGatherForDuplicatedComputation.apply(
+            # Unlike the SP gather above, the gradients here are not identical across ranks: every CP rank runs the
+            # layer on the whole sequence but keeps only its own output chunks (see the slicing after hf_forward),
+            # so each rank backpropagates a different part of the output gradient. The input gradient of a chunk is
+            # the sum over all CP ranks, which is what the reduce-scatter in all_gather's backward computes.
+            hidden_states_list = dist_nn.all_gather(
                 hidden_states,
-                mpu.get_context_parallel_group(),
+                group=mpu.get_context_parallel_group(),
             )
 
             # TODO: preprocess this for each batch to prevent tolist in the training step
