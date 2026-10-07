@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="Oct 02, 2026"/>
+    <meta name="docbuild:last-update" content="Oct 07, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -545,7 +545,7 @@ need nothing extra on the slime side.</p>
 <td><p>Shared filesystem directory the trainer publishes deltas to and the rollout hosts read from.</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--update-weight-local-checkpoint-dir</span></code></p></td>
-<td><p>Host-local (e.g. NVMe) full HF checkpoint that <code class="docutils literal notranslate"><span class="pre">/pull_weights</span></code> keeps in sync — deltas are applied into it in place; a published full checkpoint replaces it. Each host seeds it from the engine’s model path on the first <code class="docutils literal notranslate"><span class="pre">/pull_weights</span></code>.</p></td>
+<td><p>Host-local (e.g. NVMe) full HF checkpoint that <code class="docutils literal notranslate"><span class="pre">/pull_weights</span></code> keeps in sync. The initial full publication establishes its baseline; later deltas apply in place, and a new full publication replaces it.</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--update-weight-delta-encoding</span></code></p></td>
 <td><p>On-disk delta encoding: <code class="docutils literal notranslate"><span class="pre">xor</span></code> (default) or <code class="docutils literal notranslate"><span class="pre">overwrite</span></code>.</p></td>
@@ -561,11 +561,11 @@ need nothing extra on the slime side.</p>
 <section id="how-it-works">
 <h2>How it works<a class="headerlink" href="#how-it-works" title="Link to this heading">#</a></h2>
 <ol class="arabic">
-<li><p><strong>Seed.</strong> On the first sync the trainer captures a CPU snapshot of every parameter — seeded
-from <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code>, which is exactly what each rollout host materializes its local
-checkpoint from. Nothing is published; this snapshot is the base the next sync diffs against.
-The trainer also issues <code class="docutils literal notranslate"><span class="pre">/pull_weights</span></code> with <code class="docutils literal notranslate"><span class="pre">target_version=0</span></code> so every host materializes
-its local base now, overlapped with the snapshot capture.</p></li>
+<li><p><strong>Seed.</strong> The first sync, including after trainer recovery or an engine replacement,
+publishes a full HF checkpoint from the trainer’s current weights. It captures the CPU
+snapshot from those exact tensors and reloads every engine before generation resumes.
+The version exceeds every existing version directory, including an update whose reply
+was lost. Existing versions are retained; restarting does not delete the stream.</p></li>
 <li><p><strong>Publish.</strong> On every later sync the trainer diffs each gathered HF tensor against the
 snapshot, encodes and compresses the change, and writes a new version directory
 <code class="docutils literal notranslate"><span class="pre">weight_v{N:06d}/</span></code> under <code class="docutils literal notranslate"><span class="pre">--update-weight-disk-dir</span></code>. The directory is a canonical HF
@@ -587,9 +587,9 @@ full-mode disk sync uses exactly this when <code class="docutils literal notrans
 <li><p><strong>Reload.</strong> The engines reload the patched local checkpoint through the vanilla
 <code class="docutils literal notranslate"><span class="pre">update_weights_from_disk</span></code> path — the weight-loading code never sees the delta format.</p></li>
 </ol>
-<p>Because the snapshot is seeded from <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> (the engine’s actual base) rather than
-from the current GPU weights, the scheme is correct for any model even where the Megatron→HF
-round-trip is not byte-exact (e.g. trimmed vocab-padding rows in the embedding / LM head).</p>
+<p>The snapshot and the engines start from the same published HF bytes, including when the
+trainer restored a newer model than <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code>. Megatron→HF conversion differences
+(such as trimmed embedding / LM-head padding) therefore do not corrupt the next delta.</p>
 </section>
 <section id="encodings">
 <h2>Encodings<a class="headerlink" href="#encodings" title="Link to this heading">#</a></h2>
@@ -718,7 +718,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Oct 02, 2026.
+  Last updated on Oct 07, 2026.
   <br/>
 </p>
   </div>

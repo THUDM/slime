@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="2026 年 10 月 02 日"/>
+    <meta name="docbuild:last-update" content="2026 年 10 月 07 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -545,7 +545,7 @@
 <ol class="arabic simple">
 <li><p>Worker 请求 prompt group，数据源从 dataset 读取数据，将 group 和更新后的游标一起保存到队列。</p></li>
 <li><p>Worker 生成和打分。归还的 partial group 持久化后等待续跑；已接收的完整 group 可供训练使用。</p></li>
-<li><p>Batch builder 执行 reward/conversion hook，将选中的 sample 分配给各训练 rank。训练结束后，slime 确认数据已消费；没有其他引用需要它们时即可回收存储。</p></li>
+<li><p>Batch builder 执行全局 reward/conversion hook，并将结果作为队列控制任务接收。转换后的 batch 只写一次，各训练 rank 按索引直接读取自己的 sample。训练结束后推进消费游标，移除未完成批次引用；恢复所需数据的保留时间由模型 checkpoint 边界单独决定。</p></li>
 </ol>
 <p>Rollout 和训练数据共用存储池，R3、SC 等大张量可以跨阶段复用。队列通过可续租的 lease 将任务分配给 worker；worker 失联后，未完成任务在 lease 到期后可重新领取。</p>
 <p>调度优先级为 <strong>已完成 group → partial group → 新 prompt</strong>。同类中，生成 token 的权重版本越旧越先取用；版本相同时按 FIFO 顺序，没有数值型版本的排在同类末尾。Staleness 为当前 serving 版本减去最旧生成 token 版本，因此新鲜 sample 的 staleness 为 0。调度排序不会自动丢弃过旧 sample。</p>
@@ -553,7 +553,9 @@
 </section>
 <section id="id3">
 <h2>数据打包与支持类型<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h2>
-<p>每个 writer 向 pack 文件追加多条 sample 和 tensor，不会为每个 sample 或 tensor 单独创建文件，从而减少共享存储上的小文件元数据开销。不可变张量引用允许 rollout、训练 batch 和 checkpoint 共享数据；修改时写入新记录，保留的引用始终指向原有内容。</p>
+<p>选择 Straw 传输后，数据默认打包写入：每个写入进程将多个样本和张量追加到同一个文件（pack）中，减少共享存储上大量小文件的管理开销。slime 默认沿用 Straw 的包大小，当前为 <strong>1 GiB</strong>；可以通过 <code class="docutils literal notranslate"><span class="pre">--rollout-queue-segment-mib</span></code> 指定其他大小，单位为 MiB。</p>
+<p>包大小控制何时切换到新文件，不影响数据何时可读：每次发布的数据都可以立即读取，无需等待包写满。单次发布超过目标大小时会完整保留，不会为了满足包大小而拆开；显式封存也可能产生小于目标大小的包。</p>
+<p>已写入的张量通过不可变引用在 rollout、训练批次和 checkpoint 之间共享。修改数据时会写入新记录，已有引用仍指向原来的内容。</p>
 <p>Sample codec 支持嵌套 list、tuple、dict、标量、字节数据、NumPy 数组、PyTorch 张量、PIL 图像和 Sample 字段，包括受支持的自定义字段。R3 routes、SC top-k 和 ragged top-p 数据以 typed tensor 保存。不支持的 Python 对象和循环引用会在发布时报错。记录和张量读取都有校验和检查。</p>
 <p>R3 使用 <code class="docutils literal notranslate"><span class="pre">--use-rollout-routing-replay</span></code>，SC 使用 <code class="docutils literal notranslate"><span class="pre">--use-score-centering</span></code>。选择 straw 传输后，这些张量随 sample group 一起持久化。R3 训练只读取当前 CP/TP rank 分配到的行。大 replay 张量在 batch 转换时保持 lazy，但选中的 Sample 元数据和普通字段仍会占用 manager 内存。</p>
 <div class="pst-scrollable-table-container"><table class="table">
@@ -565,8 +567,8 @@
 </thead>
 <tbody>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--rollout-queue-segment-mib</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">256</span></code></p></td>
-<td><p>Pack 轮转的目标大小，单位 MiB</p></td>
+<td><p>不设置，沿用 Straw 默认值（当前为 <code class="docutils literal notranslate"><span class="pre">1024</span></code>）</p></td>
+<td><p>切换到新包的目标大小，单位 MiB；显式设置时必须为正数。</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--rollout-io-concurrency</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">4</span></code></p></td>
@@ -589,7 +591,8 @@
 <section id="checkpoint">
 <h2>恢复与 checkpoint<a class="headerlink" href="#checkpoint" title="链接到此标题。">#</a></h2>
 <p>正常训练 checkpoint 同时保存模型和 rollout 状态，包括 dataset 游标、sample/group 编号、pending/partial 输入、ready group 和训练进度。已经保存在 straw 中的载荷通过引用保存，不会在每次 checkpoint 时重新复制。保留 checkpoint 会保留它依赖的数据。</p>
-<p>重启前需要停止整个原任务，包括远端 worker。Save 目录锁会拒绝并发 coordinator，但不会终止遗留 reader。目前没有 coordinator 自动故障转移。</p>
+<p>本节介绍推理集群也需要重新启动时的恢复方式。启动前需要停止整个原任务，包括远端生成进程；保存目录的锁会拒绝同时运行的队列控制器，但不会替你停止遗留的读取进程。目前不支持队列控制器自动故障转移。</p>
+<p>如果只是 Megatron 训练失败，Ray 和推理集群仍在运行，应按<a class="reference internal" href="fault-tolerance.html"><span class="std std-doc">容灾文档</span></a>重新提交训练任务，保留原来的推理服务和队列控制器。</p>
 <section id="step">
 <h3>续跑或选择 step<a class="headerlink" href="#step" title="链接到此标题。">#</a></h3>
 <p>使用相同的逻辑目录恢复最近一次完整 checkpoint：</p>
@@ -772,7 +775,7 @@
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 10 月 02 日.
+  最后更新于 2026 年 10 月 07 日.
   <br/>
 </p>
   </div>

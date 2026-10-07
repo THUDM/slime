@@ -62,9 +62,12 @@ straw without the package fails at startup with the installation command.
    both the groups and its updated cursor to the queue.
 2. Workers generate and score samples. Returned partial groups are persisted
    for continuation; completed, accepted groups become available for training.
-3. The batch builder applies reward/conversion hooks and divides selected
-   samples among training ranks. After training finishes, slime acknowledges
-   consumption so storage can be reclaimed when no other references need it.
+3. The batch builder applies global reward/conversion hooks and accepts the
+   result as a queue control task. It writes the converted batch once; training
+   ranks receive indices and read their samples directly from that shared batch.
+   After training finishes, slime advances the consumer cursor and drops the
+   unfinished-batch reference. The model checkpoint separately controls how
+   long recovery retains the batch.
 
 Rollout and training data share the same storage pool. Large R3 and SC tensors
 can be reused across these stages without duplicating their bytes. Queue tasks
@@ -86,11 +89,18 @@ for custom rollout functions and queue readers.
 
 ## Packed storage and supported data
 
-Each writer appends multiple samples and tensors to pack files. There is no
-file per sample or tensor, reducing small-file metadata overhead on shared
-storage. Immutable tensor references let rollouts, training batches and
-checkpoints share data; updates write new records while retained references
-continue to identify their original contents.
+Packing is enabled whenever Straw transport is selected. Each writer appends
+multiple samples and tensors to the same file (a pack), reducing small-file
+metadata overhead on shared storage. slime uses Straw's default target size,
+currently **1 GiB**. Use `--rollout-queue-segment-mib` to override it in MiB.
+
+The target size controls file rotation; readers can access each publication
+without waiting for the pack to fill. A publication larger than the target
+stays intact, and explicit sealing may leave smaller packs.
+
+Immutable tensor references let rollouts, training batches, and checkpoints
+share data. Updates write new records while retained references continue to
+identify their original contents.
 
 The sample codec supports nested lists, tuples and dictionaries; scalar and
 byte values; NumPy arrays; PyTorch tensors; PIL images; and Sample fields,
@@ -106,7 +116,7 @@ and ordinary fields still occupy manager memory.
 
 | Option | Default | Purpose |
 |---|---|---|
-| `--rollout-queue-segment-mib` | `256` | Pack rotation target in MiB |
+| `--rollout-queue-segment-mib` | Unset; uses Straw's default (currently `1024`) | Override the target pack rotation size in MiB; explicit values must be positive. |
 | `--rollout-io-concurrency` | `4` | Bound concurrent serialization and filesystem I/O submissions |
 | `--rollout-queue-lease-seconds` | `300` | Worker lease duration; active readers renew it |
 
@@ -137,9 +147,14 @@ inputs, ready groups, and training progress. Payloads already in straw are
 referenced rather than copied into each checkpoint. Retaining a checkpoint
 keeps its referenced data available.
 
-Stop the entire previous job before restarting, including remote workers.
-The save-directory lock rejects concurrent coordinators, but does not stop
-orphaned readers. There is no automatic coordinator failover.
+This section covers restarting with a new serving cluster. Stop the entire
+previous job first, including remote workers. The save-directory lock rejects
+concurrent coordinators, but does not stop orphaned readers. There is no automatic
+coordinator failover.
+
+If only Megatron training failed and Ray and serving are still running, follow
+the [fault-tolerance guide](fault-tolerance.md) to resubmit training while retaining
+the serving cluster and queue controller.
 
 ### Resume or select a step
 

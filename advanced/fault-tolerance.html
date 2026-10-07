@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="Oct 02, 2026"/>
+    <meta name="docbuild:last-update" content="Oct 07, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -496,12 +496,16 @@
             </div>
             <nav aria-label="Page">
                 <ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#current-scope">Current Scope</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-health-checks">Rollout Health Checks</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#debug-and-replay-path">Debug and Replay Path</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#recommended-production-pattern">Recommended Production Pattern</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#what-to-watch">What to Watch</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#related-docs">Related Docs</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#resuming-after-a-megatron-failure">Resuming After a Megatron Failure</a><ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#retain-recovery-data-from-the-first-launch">Retain Recovery Data from the First Launch</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#resubmit-after-the-failed-job-exits">Resubmit After the Failed Job Exits</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#where-training-resumes">Where Training Resumes</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#finding-the-existing-serving-cluster">Finding the Existing Serving Cluster</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#engine-health-checks-and-restarts">Engine Health Checks and Restarts</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#debugging-rollout-and-training-separately">Debugging Rollout and Training Separately</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#recovery-scope-and-limitations">Recovery Scope and Limitations</a></li>
 </ul>
             </nav>
         </div>
@@ -515,80 +519,122 @@
                   
   <section class="tex2jax_ignore mathjax_ignore" id="fault-tolerance">
 <h1>Fault Tolerance<a class="headerlink" href="#fault-tolerance" title="Link to this heading">#</a></h1>
-<p>Long-running RL jobs fail in different ways from short supervised runs. Rollout engines can hang, long-tail samples can keep a round open, and serving state must be refreshed after weight updates. slime’s fault-tolerance support focuses on making the rollout side observable, restartable, and debuggable without changing the training / rollout / Data Buffer loop.</p>
-<p>Enable fault tolerance with:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--use-fault-tolerance
+<p>slime checks SGLang engines, removes failed engines from service, and restarts them before the next weight update. When you use Straw transport or save rollout debug data, you can also retain the serving cluster after a Megatron failure, adjust the training configuration, and resume training.</p>
+<p>These features are enabled by default for serving clusters started by slime. You do not need <code class="docutils literal notranslate"><span class="pre">--use-fault-tolerance</span></code>; the flag remains for compatibility with older commands. External serving clusters retain their existing policy.</p>
+<section id="resuming-after-a-megatron-failure">
+<h2>Resuming After a Megatron Failure<a class="headerlink" href="#resuming-after-a-megatron-failure" title="Link to this heading">#</a></h2>
+<p>This recovery workflow requires the <strong>Ray cluster to remain running</strong>. Losing the training driver or <code class="docutils literal notranslate"><span class="pre">RolloutManager</span></code> does not destroy the SGLang engines or routers. When you resubmit training, slime finds and reuses the existing serving cluster. This requires no changes to SGLang and does not automatically retry the training job.</p>
+<section id="retain-recovery-data-from-the-first-launch">
+<h3>Retain Recovery Data from the First Launch<a class="headerlink" href="#retain-recovery-data-from-the-first-launch" title="Link to this heading">#</a></h3>
+<p>Choose either option below. slime automatically persists recovery data in these modes, independently of <code class="docutils literal notranslate"><span class="pre">--use-fault-tolerance</span></code>.</p>
+<p>Use Straw to store rollout and training data:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--rollout-data-transport<span class="w"> </span>straw<span class="w"> </span>--rollout-data-dir<span class="w"> </span>/shared/my-run/queue
 </pre></div>
 </div>
-<section id="current-scope">
-<h2>Current Scope<a class="headerlink" href="#current-scope" title="Link to this heading">#</a></h2>
-<p>slime currently provides rollout-engine fault tolerance:</p>
-<ul class="simple">
-<li><p>health checks for SGLang rollout servers;</p></li>
-<li><p>timeout-based rollout server restart;</p></li>
-<li><p>correct parameter update after restart;</p></li>
-<li><p>debug rollout dumps for replaying training-side issues without rerunning rollout;</p></li>
-<li><p>trace/profiling hooks for inspecting long-tail rollout behavior.</p></li>
-</ul>
-<p>Cluster-level preemption, trainer-rank failure, and full-job resume should still be handled through your cluster scheduler, Ray restart policy, and slime checkpointing. In practice, production jobs combine rollout fault tolerance with frequent checkpoints and debug dumps.</p>
-</section>
-<section id="rollout-health-checks">
-<h2>Rollout Health Checks<a class="headerlink" href="#rollout-health-checks" title="Link to this heading">#</a></h2>
-<p>During rollout, slime periodically sends heartbeat requests (<code class="docutils literal notranslate"><span class="pre">/health_generate</span></code>) to all SGLang servers. If a heartbeat times out, the unhealthy SGLang server is stopped. After the current rollout round completes, slime restarts the server and updates it with the correct parameters before it serves future rollout requests.</p>
-<p>The main arguments are:</p>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">--rollout-health-check-first-wait</span></code>: wait before starting heartbeat checks for the first rollout. Large MoE models may compile kernels on first run. Default: <code class="docutils literal notranslate"><span class="pre">300</span></code> seconds.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">--rollout-health-check-interval</span></code>: interval between heartbeat checks. Default: <code class="docutils literal notranslate"><span class="pre">10</span></code> seconds.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">--rollout-health-check-timeout</span></code>: timeout for one heartbeat request. Default: <code class="docutils literal notranslate"><span class="pre">5</span></code> seconds.</p></li>
-</ul>
-<p>Example:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--use-fault-tolerance<span class="w"> </span><span class="se">\</span>
---rollout-health-check-first-wait<span class="w"> </span><span class="m">600</span><span class="w"> </span><span class="se">\</span>
---rollout-health-check-interval<span class="w"> </span><span class="m">10</span><span class="w"> </span><span class="se">\</span>
---rollout-health-check-timeout<span class="w"> </span><span class="m">5</span>
+<p>Or save rollout debug data. The path must include <code class="docutils literal notranslate"><span class="pre">{rollout_id}</span></code>:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--save-debug-rollout-data<span class="w"> </span><span class="s1">'/shared/my-run/rollout_{rollout_id}.pt'</span>
 </pre></div>
 </div>
+<p>Use <code class="docutils literal notranslate"><span class="pre">--save</span></code> and <code class="docutils literal notranslate"><span class="pre">--save-interval</span></code> to save model checkpoints regularly. Longer intervals mean more batches to retrain after a failure and more recovery data to retain.</p>
+<p>Recovery requires <code class="docutils literal notranslate"><span class="pre">torch_dist</span></code> checkpoints with RNG state and, for a stateful optimizer, optimizer state. slime automatically enables an optimizer checkpoint format that supports resharding across parallel configurations. <code class="docutils literal notranslate"><span class="pre">--no-save-rng</span></code> is rejected.</p>
+<p>With <code class="docutils literal notranslate"><span class="pre">--use-stateless-adam</span> <span class="pre">--no-save-optim</span></code>, Adam keeps no moments between optimizer steps, so recovery can omit optimizer tensors. Slime saves the LR/WD scheduler in <code class="docutils literal notranslate"><span class="pre">opt_param_scheduler.pt</span></code> inside each model checkpoint and restores it at the same boundary; a missing scheduler file prevents resume. FP32 master parameters are rebuilt from the saved model precision, so this mode does not promise bitwise-identical updates after a restart. Ordinary Adam still requires its optimizer checkpoint.</p>
+<p>If saving a large MoE optimizer exhausts GPU memory, use <code class="docutils literal notranslate"><span class="pre">--distrib-optim-fully-reshardable-mem-efficient</span></code>. Megatron then gathers checkpoint tensors through Gloo on CPU, preserving resharding support while trading GPU temporary memory for host memory and save time. <code class="docutils literal notranslate"><span class="pre">--overlap-grad-reduce</span> <span class="pre">--ddp-bucket-size</span> <span class="pre">40000000</span></code> bounds the temporary buffers used for each checkpoint gather; reserve host memory for the full optimizer state as well.</p>
 </section>
-<section id="debug-and-replay-path">
-<h2>Debug and Replay Path<a class="headerlink" href="#debug-and-replay-path" title="Link to this heading">#</a></h2>
-<p>Fault tolerance is more useful when failures are reproducible. slime provides separate rollout-only and train-only debugging paths:</p>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">--debug-rollout-only</span></code>: run rollout and save generated data without training;</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">--save-debug-rollout-data</span> <span class="pre">/path/to/rollout_{rollout_id}.pt</span></code>: save rollout samples for later inspection or replay;</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">--load-debug-rollout-data</span> <span class="pre">/path/to/rollout_{rollout_id}.pt</span></code>: replay saved rollout data and skip SGLang initialization;</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">--debug-train-only</span></code>: run training-side logic without rollout.</p></li>
-</ul>
-<p>This lets you isolate whether a failure belongs to serving/rollout, data conversion, reward/verifier logic, or Megatron training.</p>
-</section>
-<section id="recommended-production-pattern">
-<h2>Recommended Production Pattern<a class="headerlink" href="#recommended-production-pattern" title="Link to this heading">#</a></h2>
-<p>For long-running jobs:</p>
+<section id="resubmit-after-the-failed-job-exits">
+<h3>Resubmit After the Failed Job Exits<a class="headerlink" href="#resubmit-after-the-failed-job-exits" title="Link to this heading">#</a></h3>
+<p>For example, after a Megatron OOM:</p>
 <ol class="arabic simple">
-<li><p>Enable <code class="docutils literal notranslate"><span class="pre">--use-fault-tolerance</span></code>.</p></li>
-<li><p>Save checkpoints regularly with <code class="docutils literal notranslate"><span class="pre">--save-interval</span></code>.</p></li>
-<li><p>Save rollout debug dumps for new agentic or verifier-heavy workloads.</p></li>
-<li><p>Use <a class="reference internal" href="../developer_guide/trace.html"><span class="std std-doc">Trace Viewer</span></a> to inspect long-tail samples and reward/model-call spans.</p></li>
-<li><p>Use <a class="reference internal" href="../developer_guide/profiling.html"><span class="std std-doc">Profiling</span></a> to separate rollout bottlenecks from training bottlenecks.</p></li>
-<li><p>Keep SGLang deployment explicit with <a class="reference internal" href="sglang-config.html"><span class="std std-doc">SGLang Config</span></a> for complex multi-model or PD topologies.</p></li>
+<li><p>Wait for the failed training job to exit.</p></li>
+<li><p>Adjust TP/CP/EP, microbatch size, or the token limit per GPU.</p></li>
+<li><p>Submit <code class="docutils literal notranslate"><span class="pre">train.py</span></code> again to the <strong>same Ray cluster</strong>.</p></li>
 </ol>
+<p>Keep the model, rollout configuration, global batch size, and session identity unchanged. With colocated training and rollout, the trainers must fit within the retained GPU allocation. With separate training and rollout, you can allocate training resources again without moving the rollout GPUs.</p>
+<p>Retained workers keep their original configuration. Sampling, filters, reward hooks, and custom arguments are checked on reattachment; adding or removing an argument also counts as a change. Only explicitly supported trainer and operational settings may change.</p>
+<p>Between attempts, do not stop Ray, recreate the serving container, or run cleanup commands such as <code class="docutils literal notranslate"><span class="pre">pkill</span> <span class="pre">sglang</span></code>. <code class="docutils literal notranslate"><span class="pre">slime.utils.external_utils.command_utils.execute_train</span></code> preserves a running Ray head and SGLang. If your shell launcher cleans up processes on every launch, skip that step when restarting. Once training finishes successfully, slime releases the retained session and its resources.</p>
 </section>
-<section id="what-to-watch">
-<h2>What to Watch<a class="headerlink" href="#what-to-watch" title="Link to this heading">#</a></h2>
-<ul class="simple">
-<li><p>If startup health checks fail on large MoE models, increase <code class="docutils literal notranslate"><span class="pre">--rollout-health-check-first-wait</span></code>.</p></li>
-<li><p>If transient load spikes cause false positives, increase <code class="docutils literal notranslate"><span class="pre">--rollout-health-check-timeout</span></code>.</p></li>
-<li><p>If a server repeatedly restarts after weight sync, inspect the SGLang logs and the latest rollout debug dump.</p></li>
-<li><p>If the trainer fails rather than rollout, resume from checkpoint and use debug replay to isolate whether the saved rollout batch is valid.</p></li>
-</ul>
+<section id="where-training-resumes">
+<h3>Where Training Resumes<a class="headerlink" href="#where-training-resumes" title="Link to this heading">#</a></h3>
+<p>The new trainer loads the last successfully saved model, scheduler, RNG, and any stateful optimizer state, then retrains the batches after that checkpoint. This includes batches that finished training but whose model updates were not saved. If no checkpoint exists yet, replay starts from the original model.</p>
+<p>Retained data includes generated samples, tokens, and reward postprocessing results. When you change training parallelism, slime repartitions this data without regenerating samples or repeating reward postprocessing. Recovery data is kept until the corresponding model checkpoint commits or training finishes successfully. Serving weight versions continue to increase across restarts.</p>
+<p>Megatron restores RNG state when the parallel layout is compatible and reinitializes it when TP/PP changes. You can therefore resume with a different layout, but the results are not guaranteed to be bitwise identical.</p>
 </section>
-<section id="related-docs">
-<h2>Related Docs<a class="headerlink" href="#related-docs" title="Link to this heading">#</a></h2>
+</section>
+<section id="finding-the-existing-serving-cluster">
+<h2>Finding the Existing Serving Cluster<a class="headerlink" href="#finding-the-existing-serving-cluster" title="Link to this heading">#</a></h2>
+<p>slime manages the serving cluster through a named Ray actor. A new job looks up that actor by its session name and gets the existing router and engine information from it. It does not scan for router processes.</p>
+<p>Set <code class="docutils literal notranslate"><span class="pre">--rollout-session-id</span></code> to choose a session identity explicitly. Otherwise, slime selects an identity in the following order and hashes it to produce a stable name:</p>
+<ol class="arabic simple">
+<li><p>With Straw, use the absolute storage directory path and <code class="docutils literal notranslate"><span class="pre">--rollout-queue-run-id</span></code>.</p></li>
+<li><p>Otherwise, use the absolute path template from <code class="docutils literal notranslate"><span class="pre">--save-debug-rollout-data</span></code>.</p></li>
+<li><p>If debug data is not saved, use the absolute <code class="docutils literal notranslate"><span class="pre">--save</span></code> directory path.</p></li>
+<li><p>If none of these is configured, use the model and rollout configuration.</p></li>
+</ol>
+<p>Use the same identity for both attempts of a training run. Independent runs should use different identities to avoid connecting to the same serving cluster.</p>
+<p>Three components handle recovery:</p>
 <ul class="simple">
-<li><p><a class="reference internal" href="../developer_guide/debug.html"><span class="std std-doc">Debugging</span></a></p></li>
-<li><p><a class="reference internal" href="../developer_guide/trace.html"><span class="std std-doc">Trace Viewer</span></a></p></li>
-<li><p><a class="reference internal" href="../developer_guide/profiling.html"><span class="std std-doc">Profiling</span></a></p></li>
-<li><p><a class="reference internal" href="../developer_guide/ci.html"><span class="std std-doc">CI</span></a></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">ServingCluster</span></code> manages routers, SGLang engines, GPU resources, the Straw queue controller, and the weight-update lock. It is a named, detached Ray actor that survives the job that created it.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">RolloutManager</span></code> handles generation, data reading, sample conversion, and training-data partitioning. It can be reused or recreated after it exits; recreating it does not destroy resources held by <code class="docutils literal notranslate"><span class="pre">ServingCluster</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">TrainingRecovery</span></code> owns the model checkpoint boundary and retains the batches needed after it. The Straw accepted log owns raw and converted batch receipts; recovery reconciles those receipts if a manager or RPC fails before the journal is updated. A converted batch is stored once, and each DP rank receives an index view that can be rebuilt for a new parallel configuration.</p></li>
 </ul>
+<p>If <code class="docutils literal notranslate"><span class="pre">RolloutManager</span></code> survives, it pauses admission of new generation tasks. If it exits, its replacement reconnects to <code class="docutils literal notranslate"><span class="pre">ServingCluster</span></code>, restores data-source progress, and uses the queue controller to prevent old readers from taking more tasks. Completed prefetch results that have not reached training remain available. Trainer processes are also registered with <code class="docutils literal notranslate"><span class="pre">ServingCluster</span></code>, so it can clean up old trainers even after the manager exits.</p>
+<p>The driver owns the lifetime of each training attempt, including rollback when startup fails after attaching to serving. On failure, it gives the manager a bounded opportunity to pause, then asks serving to release trainers directly. A manager that fails to pause is terminated and recreated on the next attempt. Successful completion disposes the manager and serving independently, so an error in a custom data source’s <code class="docutils literal notranslate"><span class="pre">close()</span></code> does not skip serving cleanup. Cleanup errors are logged without replacing the original training failure.</p>
+<p><code class="docutils literal notranslate"><span class="pre">--rollout-cleanup-timeout</span></code> defaults to <strong>60 seconds</strong> for detaching or disposing an attempt. It is independent of engine health-check and warmup timeouts. Cleanup attempts remaining resource releases even after a step fails; blocked actors are terminated when graceful disposal times out.</p>
+<p>Checkpoint resolution returns a separate configuration and restore plan. Retained checkpoint state is immutable between progress updates; each trainer attempt gets a fresh configuration containing the selected checkpoint and serving weight version. Data sources and long-lived rollout workers keep their original configuration. Existing custom functions still receive the same args-based interfaces.</p>
+</section>
+<section id="engine-health-checks-and-restarts">
+<h2>Engine Health Checks and Restarts<a class="headerlink" href="#engine-health-checks-and-restarts" title="Link to this heading">#</a></h2>
+<p>During rollout, slime periodically requests SGLang’s <code class="docutils literal notranslate"><span class="pre">/health_generate</span></code> endpoint to check whether each engine responds. It also checks immediately when rollout finishes, <strong>regardless of the background interval or initial wait</strong>.</p>
+<p>Synchronous rollout removes failed services from the router before sending abort and drain requests. Before returning to training, <code class="docutils literal notranslate"><span class="pre">ServingCluster</span></code> checks the engines again, unregisters failed services, and clears their Ray actor handles. This prevents later memory-offload or weight-update requests from reaching stopped engines. Both HTTP requests and Ray calls have timeouts.</p>
+<p>Missing engines restart before the next weight update and then load the trainer’s weights. Background checks and rollout-completion checks use the same failure handling. Background checks pause while weights or memory allocation change.</p>
+<p>Reattachment also bounds the time spent resetting old trainer connections. An engine that cannot acknowledge is unregistered and terminated with its serving children; healthy peers remain running. This applies to prefill and decode groups as well as ordinary serving groups. All groups receive reset requests before waiting for replies, so prefill and decode can leave their shared NCCL group together.</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Argument</p></th>
+<th class="head"><p>Default</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--rollout-health-check-first-wait</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">600</span></code> seconds</p></td>
+<td><p>Wait after each resumption of background checks to allow model warmup and kernel compilation. Rollout-completion checks bypass this wait.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--rollout-health-check-interval</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">600</span></code> seconds</p></td>
+<td><p>Interval between background health checks.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--rollout-health-check-timeout</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">600</span></code> seconds</p></td>
+<td><p>Timeout for each health check, including the wait for the Ray health-check call.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>For example, a large MoE model that needs more warmup time can use:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--rollout-health-check-first-wait<span class="w"> </span><span class="m">600</span><span class="w"> </span><span class="se">\</span>
+--rollout-health-check-interval<span class="w"> </span><span class="m">10</span><span class="w"> </span><span class="se">\</span>
+--rollout-health-check-timeout<span class="w"> </span><span class="m">600</span>
+</pre></div>
+</div>
+<p>Increase the timeout if load spikes cause false failures. If engines repeatedly fail after weight updates, inspect the SGLang logs and recent rollout dumps.</p>
+</section>
+<section id="debugging-rollout-and-training-separately">
+<h2>Debugging Rollout and Training Separately<a class="headerlink" href="#debugging-rollout-and-training-separately" title="Link to this heading">#</a></h2>
+<p>Saving rollout data lets you hold training inputs fixed while investigating training failures:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">--debug-rollout-only</span></code>: initialize only rollout, without training. Combine it with the save option to inspect generation and reward results.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--save-debug-rollout-data</span> <span class="pre">/path/to/rollout_{rollout_id}.pt</span></code>: save samples from each rollout.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--load-debug-rollout-data</span> <span class="pre">/path/to/rollout_{rollout_id}.pt</span></code>: train on saved samples and skip SGLang initialization.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--debug-train-only</span></code>: initialize only training, without starting SGLang.</p></li>
+</ul>
+<p>For slow generation requests, use <a class="reference internal" href="../developer_guide/trace.html"><span class="std std-doc">Trace Viewer</span></a> to inspect time spent on generation, rewards, and model calls, then use <a class="reference internal" href="../developer_guide/profiling.html"><span class="std std-doc">Profiling</span></a> to locate bottlenecks. See <a class="reference internal" href="sglang-config.html"><span class="std std-doc">SGLang Config</span></a> for multi-model or PD-separated deployments.</p>
+</section>
+<section id="recovery-scope-and-limitations">
+<h2>Recovery Scope and Limitations<a class="headerlink" href="#recovery-scope-and-limitations" title="Link to this heading">#</a></h2>
+<p>Without Straw or rollout debug dumps, you can still retain the serving cluster, but you cannot replay training batches after the last checkpoint.</p>
+<p>Recreating <code class="docutils literal notranslate"><span class="pre">RolloutManager</span></code> supports the built-in data sources. Custom sources need compatible <code class="docutils literal notranslate"><span class="pre">state_dict</span></code> / <code class="docutils literal notranslate"><span class="pre">load_state_dict</span></code> methods and queue controllers that survive independently of the manager. Data-source constructors and rollout hook signatures are unchanged.</p>
+<p>If <code class="docutils literal notranslate"><span class="pre">ServingCluster</span></code> or the entire Ray cluster is lost, you must start serving again and recover from a checkpoint. Cluster preemption and node loss still require coordination between your scheduler and checkpoint recovery.</p>
+<p>See <a class="reference internal" href="../developer_guide/debug.html"><span class="std std-doc">Debugging</span></a> for more debugging options and <a class="reference internal" href="../developer_guide/ci.html"><span class="std std-doc">CI</span></a> for recovery-test coverage.</p>
 </section>
 </section>
 
@@ -639,12 +685,16 @@
   </div>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#current-scope">Current Scope</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-health-checks">Rollout Health Checks</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#debug-and-replay-path">Debug and Replay Path</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#recommended-production-pattern">Recommended Production Pattern</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#what-to-watch">What to Watch</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#related-docs">Related Docs</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#resuming-after-a-megatron-failure">Resuming After a Megatron Failure</a><ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#retain-recovery-data-from-the-first-launch">Retain Recovery Data from the First Launch</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#resubmit-after-the-failed-job-exits">Resubmit After the Failed Job Exits</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#where-training-resumes">Where Training Resumes</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#finding-the-existing-serving-cluster">Finding the Existing Serving Cluster</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#engine-health-checks-and-restarts">Engine Health Checks and Restarts</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#debugging-rollout-and-training-separately">Debugging Rollout and Training Separately</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#recovery-scope-and-limitations">Recovery Scope and Limitations</a></li>
 </ul>
   </nav></div>
 
@@ -678,7 +728,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Oct 02, 2026.
+  Last updated on Oct 07, 2026.
   <br/>
 </p>
   </div>

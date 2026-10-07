@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="Oct 02, 2026"/>
+    <meta name="docbuild:last-update" content="Oct 07, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -571,9 +571,12 @@ straw without the package fails at startup with the installation command.</p>
 both the groups and its updated cursor to the queue.</p></li>
 <li><p>Workers generate and score samples. Returned partial groups are persisted
 for continuation; completed, accepted groups become available for training.</p></li>
-<li><p>The batch builder applies reward/conversion hooks and divides selected
-samples among training ranks. After training finishes, slime acknowledges
-consumption so storage can be reclaimed when no other references need it.</p></li>
+<li><p>The batch builder applies global reward/conversion hooks and accepts the
+result as a queue control task. It writes the converted batch once; training
+ranks receive indices and read their samples directly from that shared batch.
+After training finishes, slime advances the consumer cursor and drops the
+unfinished-batch reference. The model checkpoint separately controls how
+long recovery retains the batch.</p></li>
 </ol>
 <p>Rollout and training data share the same storage pool. Large R3 and SC tensors
 can be reused across these stages without duplicating their bytes. Queue tasks
@@ -593,11 +596,16 @@ for custom rollout functions and queue readers.</p>
 </section>
 <section id="packed-storage-and-supported-data">
 <h2>Packed storage and supported data<a class="headerlink" href="#packed-storage-and-supported-data" title="Link to this heading">#</a></h2>
-<p>Each writer appends multiple samples and tensors to pack files. There is no
-file per sample or tensor, reducing small-file metadata overhead on shared
-storage. Immutable tensor references let rollouts, training batches and
-checkpoints share data; updates write new records while retained references
-continue to identify their original contents.</p>
+<p>Packing is enabled whenever Straw transport is selected. Each writer appends
+multiple samples and tensors to the same file (a pack), reducing small-file
+metadata overhead on shared storage. slime uses Straw’s default target size,
+currently <strong>1 GiB</strong>. Use <code class="docutils literal notranslate"><span class="pre">--rollout-queue-segment-mib</span></code> to override it in MiB.</p>
+<p>The target size controls file rotation; readers can access each publication
+without waiting for the pack to fill. A publication larger than the target
+stays intact, and explicit sealing may leave smaller packs.</p>
+<p>Immutable tensor references let rollouts, training batches, and checkpoints
+share data. Updates write new records while retained references continue to
+identify their original contents.</p>
 <p>The sample codec supports nested lists, tuples and dictionaries; scalar and
 byte values; NumPy arrays; PyTorch tensors; PIL images; and Sample fields,
 including supported custom fields. R3 routes and SC top-k/ragged top-p data
@@ -617,8 +625,8 @@ and ordinary fields still occupy manager memory.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--rollout-queue-segment-mib</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">256</span></code></p></td>
-<td><p>Pack rotation target in MiB</p></td>
+<td><p>Unset; uses Straw’s default (currently <code class="docutils literal notranslate"><span class="pre">1024</span></code>)</p></td>
+<td><p>Override the target pack rotation size in MiB; explicit values must be positive.</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--rollout-io-concurrency</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">4</span></code></p></td>
@@ -656,9 +664,13 @@ They contain the dataset cursor, sample/group counters, pending and partial
 inputs, ready groups, and training progress. Payloads already in straw are
 referenced rather than copied into each checkpoint. Retaining a checkpoint
 keeps its referenced data available.</p>
-<p>Stop the entire previous job before restarting, including remote workers.
-The save-directory lock rejects concurrent coordinators, but does not stop
-orphaned readers. There is no automatic coordinator failover.</p>
+<p>This section covers restarting with a new serving cluster. Stop the entire
+previous job first, including remote workers. The save-directory lock rejects
+concurrent coordinators, but does not stop orphaned readers. There is no automatic
+coordinator failover.</p>
+<p>If only Megatron training failed and Ray and serving are still running, follow
+the <a class="reference internal" href="fault-tolerance.html"><span class="std std-doc">fault-tolerance guide</span></a> to resubmit training while retaining
+the serving cluster and queue controller.</p>
 <section id="resume-or-select-a-step">
 <h3>Resume or select a step<a class="headerlink" href="#resume-or-select-a-step" title="Link to this heading">#</a></h3>
 <p>To resume the latest completed checkpoint, use the same logical directories:</p>
@@ -887,7 +899,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Oct 02, 2026.
+  Last updated on Oct 07, 2026.
   <br/>
 </p>
   </div>
