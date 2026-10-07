@@ -1,0 +1,35 @@
+# ROCm 7.2 regression: the CPU-agent branch below leaks the imported dma-buf, so
+# torch_memory_saver.pause() frees no VRAM. See ROCm/ROCm#6021 for the bug and
+# ROCm/rocm-systems#4363 for the upstream fix, rebased here onto ROCr 7.2.0.
+# Rebase taken from fzyzcjy/torch_memory_saver#83 (issuecomment-4983403888).
+#
+# Target: ROCm/rocm-systems rocm-7.2.0, projects/rocr-runtime
+# Target commit: fc0010cf6a5a972d42b276df946510f30343d493
+diff --git a/projects/rocr-runtime/runtime/hsa-runtime/core/runtime/runtime.cpp b/projects/rocr-runtime/runtime/hsa-runtime/core/runtime/runtime.cpp
+--- a/projects/rocr-runtime/runtime/hsa-runtime/core/runtime/runtime.cpp
++++ b/projects/rocr-runtime/runtime/hsa-runtime/core/runtime/runtime.cpp
+@@ -3787,11 +3787,19 @@ Runtime::MappedHandleAllowedAgent::MappedHandleAllowedAgent(
+ }
+ 
+ Runtime::MappedHandleAllowedAgent::~MappedHandleAllowedAgent() {
+-  if (targetAgent->device_type() == core::Agent::DeviceType::kAmdCpuDevice) return;
+-
+-  hsa_status_t status =
+-      targetAgent->driver().ReleaseShareableHandle(shareable_handle);
+-  assert(status == HSA_STATUS_SUCCESS);
++  if (targetAgent->device_type() == core::Agent::DeviceType::kAmdCpuDevice) {
++#if defined(__linux__)
++    if (core::Runtime::runtime_singleton_->thunkLoader()->IsDXG()) assert(!"Unimplemented");
++#endif
++    /* Remap the CPU mapping back to anonymous, freeing the DRM FD while retaining VA reservation */
++    bool result = rocr::os::UncommitMemory(va, size);
++    assert(result && "Failed to remap VA to anonymous");
++  }
++  else {
++    hsa_status_t status =
++        targetAgent->driver().ReleaseShareableHandle(shareable_handle);
++    assert(status == HSA_STATUS_SUCCESS);
++  }
+ }
+ 
+ hsa_status_t Runtime::MappedHandleAllowedAgent::EnableAccess(hsa_access_permission_t perms) {

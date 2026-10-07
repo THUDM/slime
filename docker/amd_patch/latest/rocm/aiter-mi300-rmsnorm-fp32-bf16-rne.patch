@@ -1,0 +1,104 @@
+# Use round-to-nearest-even for fused add+RMSNorm BF16 stores on gfx942.
+#
+# Target: ROCm/aiter 9127c94a18e4398e1eba91f6639e910f0994ad02
+# Issue: https://github.com/ROCm/aiter/issues/5151
+#
+# Opus mode 2 truncates FP32 to BF16 on gfx942. The residual_out bias compounds
+# across transformer layers, and truncating the BF16 RMSNorm output diverges
+# from the PyTorch/Megatron path feeding the next GEMM.
+#
+# Use explicit Opus mode 0 only for fused add+RMSNorm BF16 stores. No-add RMSNorm
+# remains unchanged, and the process-wide OPUS_FP32_to_BF16_DEFAULT remains 2.
+# This confines the known gfx942 performance cost to the numerically affected
+# paths.
+diff --git a/csrc/kernels/rmsnorm_quant_kernels.cu b/csrc/kernels/rmsnorm_quant_kernels.cu
+index ef88ec855..3549b3fdc 100644
+--- a/csrc/kernels/rmsnorm_quant_kernels.cu
++++ b/csrc/kernels/rmsnorm_quant_kernels.cu
+@@ -12,6 +12,31 @@
+ 
+ namespace aiter {
+ 
++// gfx942 Opus defaults FP32 -> BF16 to truncation, which biases the residual
++// stream across layers (ROCm/aiter#5151). Keep RNE local to fused add+RMSNorm
++// instead of changing the process-wide Opus default and slowing other kernels.
++// https://github.com/ROCm/aiter/issues/5151
++template <int vec_size,
++          int aux,
++          bool interleave,
++          int interleave_thread_size,
++          int num_repeat>
++__device__ void store_bf16_rne(opus::gmem<opus::bf16_t>& buffer,
++                               const opus::vector_t<float, vec_size>& vec,
++                               int row_offset)
++{
++    const auto rounded = opus::cast<opus::bf16_t>(vec, opus::number<0>{});
++    store_vector<opus::bf16_t,
++                 opus::bf16_t,
++                 vec_size,
++                 aux,
++                 interleave,
++                 interleave_thread_size,
++                 num_repeat>(buffer, rounded, row_offset);
++    // Match store_vector_nbytes' post-conversion buffer_store WAR workaround.
++    asm volatile("s_nop 0");
++}
++
+ template <typename DTYPE_I, typename DTYPE_O, int BlockSize, int thread_data_size, bool ADD_RESIDUAL=true, bool FUSE_QUANT=true, bool interleave = false, int num_row = 1>
+ __global__ void add_rmsnorm_quant_kernel(
+     DTYPE_O* out,
+@@ -105,7 +130,26 @@ __global__ void add_rmsnorm_quant_kernel(
+                     thread_data_i = load_vector_nbytes<DTYPE_I, thread_data_size, load_chunk_bytes, load_aux, interleave, interleave_size>(buffer_input, row_offset);
+                 }
+ 
+-                store_vector<DTYPE_I, float, thread_data_size, load_aux, interleave, interleave_size, num_load_inst, DTYPE_I>(buffer_residual_out, thread_data_float, row_offset);
++                if constexpr(std::is_same_v<DTYPE_I, opus::bf16_t>)
++                {
++                    store_bf16_rne<thread_data_size,
++                                   load_aux,
++                                   interleave,
++                                   interleave_size,
++                                   num_load_inst>(
++                        buffer_residual_out, thread_data_float, row_offset);
++                }
++                else
++                {
++                    store_vector<DTYPE_I,
++                                 float,
++                                 thread_data_size,
++                                 load_aux,
++                                 interleave,
++                                 interleave_size,
++                                 num_load_inst,
++                                 DTYPE_I>(buffer_residual_out, thread_data_float, row_offset);
++                }
+                 
+                 if constexpr(use_prefetch)
+                 {
+@@ -280,7 +324,25 @@ __global__ void add_rmsnorm_quant_kernel(
+             }
+             else
+             {
+-                store_vector<DTYPE_O_STORE, float, thread_data_size, RT, interleave, interleave_size, num_load_inst, DTYPE_O>(buffer_out, thread_data_float, row_offset);
++                if constexpr(ADD_RESIDUAL && std::is_same_v<DTYPE_O, opus::bf16_t>)
++                {
++                    store_bf16_rne<thread_data_size,
++                                   RT,
++                                   interleave,
++                                   interleave_size,
++                                   num_load_inst>(buffer_out, thread_data_float, row_offset);
++                }
++                else
++                {
++                    store_vector<DTYPE_O_STORE,
++                                 float,
++                                 thread_data_size,
++                                 RT,
++                                 interleave,
++                                 interleave_size,
++                                 num_load_inst,
++                                 DTYPE_O>(buffer_out, thread_data_float, row_offset);
++                }
+             }
+         };
+         #pragma nounroll
