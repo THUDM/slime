@@ -13,6 +13,7 @@ from megatron.core.models.gpt.gpt_layer_specs import (
     get_gpt_layer_local_spec,
     get_gpt_layer_with_transformer_engine_spec,
 )
+from megatron.core.transformer.multi_latent_attention import MLASelfAttention as MegatronMLASelfAttention
 from megatron.core.transformer.spec_utils import import_module
 from megatron.core.transformer.transformer_config import TransformerConfig
 from megatron.training.arguments import core_transformer_config_from_args
@@ -29,6 +30,16 @@ _INDEXER_DIRECT_SUBMODULE_NAMES = frozenset(
         "index_kpool_compress_gate",
     }
 )
+
+
+class MLASelfAttention(MegatronMLASelfAttention):
+    def _resolve_qk_norm_config(self, submodules):
+        modules = super()._resolve_qk_norm_config(submodules)
+        # Without Q-LoRA, HF MLA models (e.g. Moonlight) have no Q norm.
+        # Megatron 0.19 otherwise introduces a norm before the Q projection.
+        if self.config.q_lora_rank is None:
+            modules["linear_q_proj"] = submodules.linear_q_proj
+        return modules
 
 
 def _is_indexer_parameter(name: str) -> bool:
@@ -184,6 +195,17 @@ def _get_model_provider_func(
                         multi_latent_attention=args.multi_latent_attention,
                         moe_use_legacy_grouped_gemm=args.moe_use_legacy_grouped_gemm,
                     )
+
+        if (
+            args.multi_latent_attention
+            and config.q_lora_rank is None
+            and config.qk_layernorm
+            and hasattr(MegatronMLASelfAttention, "_resolve_qk_norm_config")
+        ):
+            for layer_spec in getattr(transformer_layer_spec, "layer_specs", [transformer_layer_spec]):
+                attention_spec = layer_spec.submodules.self_attention
+                if attention_spec.module is MegatronMLASelfAttention:
+                    attention_spec.module = MLASelfAttention
 
         build_model_context = nullcontext
         build_model_context_args = {}

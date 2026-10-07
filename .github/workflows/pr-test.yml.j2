@@ -85,6 +85,8 @@
       'extra_pip_deps': 'transformers wandb zstandard',
       'tests': [
         {'test_file': 'test_megatron_argument_validation.py', 'num_gpus': 0, 'straw': True},
+        {'test_file': 'test_megatron_checkpoint.py', 'num_gpus': 0},
+        {'test_file': 'test_reference_top_p_replay.py', 'num_gpus': 0},
         {'test_file': 'utils/test_megatron_role_config.py', 'num_gpus': 0},
         {'test_file': 'test_deep_ep_tms_patch.py', 'num_gpus': 0},
         {'test_file': 'test_stateless_adam.py', 'num_gpus': 0},
@@ -259,7 +261,7 @@ jobs:
       - name: Install straw for queue tests
         if: matrix.info.straw == true
         shell: bash
-        run: python -m pip install --upgrade --only-binary=straw-queue straw-queue
+        run: python -m pip install --upgrade --no-deps --only-binary=straw-queue straw-queue
 <% endif %>
 
       - name: Install
@@ -321,7 +323,7 @@ jobs:
             << config.image if config.image else 'slimerl/slime:latest' >> \
             bash -lc '
               set -euo pipefail
-              python -m pip install --upgrade --only-binary=straw-queue --break-system-packages straw-queue
+              python -m pip install --upgrade --no-deps --only-binary=straw-queue --break-system-packages straw-queue
               pip install -e . --no-deps --break-system-packages
               TEST_PATH="$TEST_FILE"
               if [[ "$TEST_PATH" != tests/* ]]; then
@@ -438,7 +440,7 @@ jobs:
             slimerl/slime:latest \
             bash -lc '
               set -euo pipefail
-              python -m pip install --upgrade --only-binary=straw-queue --break-system-packages straw-queue
+              python -m pip install --upgrade --no-deps --only-binary=straw-queue --break-system-packages straw-queue
               pip install -e . --no-deps --break-system-packages
               TEST_PATH="$TEST_FILE"
               if [[ "$TEST_PATH" != tests/* ]]; then

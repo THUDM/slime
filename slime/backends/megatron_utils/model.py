@@ -315,6 +315,10 @@ def setup_model_and_optimizer(
             model_chunks=model,
             use_gloo_process_groups=args.enable_gloo_process_groups,
         )
+    if config.use_precision_aware_optimizer:
+        from .transformer_engine import patch_precision_aware_optimizer_checkpointing
+
+        patch_precision_aware_optimizer_checkpointing(optimizer)
     if args.use_stateless_adam:
         _disable_distributed_optimizer_state_initialization(optimizer)
     opt_param_scheduler = get_optimizer_param_scheduler(args, optimizer)
@@ -688,6 +692,9 @@ def train_one_step(
         assert update_successful
         opt_param_scheduler.step(increment=step_global_batch_size)
 
+    if isinstance(grad_norm, torch.Tensor):
+        grad_norm = grad_norm.item()
+
     # release grad
     for model_chunk in model:
         model_chunk.zero_grad_buffer()
@@ -914,12 +921,14 @@ def train(
                 if step_id == 0 and "train/ppo_kl" in log_dict and "train/pg_clipfrac" in log_dict:
                     # TODO: figure out why KL is not exactly zero when using PPO loss with KL clipping, and whether this is expected behavior or a bug.
                     assert log_dict["train/ppo_kl"] < 1e-8, f"{log_dict=}"
-                # R3 replays rollout routing for the actor path, while ref
-                # log-probs are computed with normal routing. The initial
-                # actor/ref KL is therefore not expected to be exactly zero.
+                # R3 uses replayed routing only for the actor. Top-p replay
+                # also normalizes the actor over the sampled support, while
+                # the reference uses the full vocabulary. Neither comparison
+                # has zero initial KL, even with identical model weights.
                 if (
                     accumulated_step_id == 0
                     and not getattr(args, "use_rollout_routing_replay", False)
+                    and args.rollout_top_p == 1.0
                     and "train/kl_loss" in log_dict
                 ):
                     assert log_dict["train/kl_loss"] < 1e-8, f"{log_dict=}"

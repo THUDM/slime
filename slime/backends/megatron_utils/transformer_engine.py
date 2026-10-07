@@ -7,6 +7,47 @@ from functools import wraps
 import torch
 
 
+def patch_precision_aware_optimizer_checkpointing(optimizer):
+    from transformer_engine.pytorch.optimizers import FusedAdam
+
+    for distributed_optimizer in getattr(optimizer, "chained_optimizers", [optimizer]):
+        adam = distributed_optimizer.optimizer
+        if not isinstance(adam, FusedAdam) or not getattr(adam, "store_param_remainders", False):
+            continue
+        get_states = distributed_optimizer._get_main_param_and_optimizer_states
+        set_states = distributed_optimizer._set_main_param_and_optimizer_states
+
+        def get_checkpoint_states(model_param, get_states=get_states, distributed_optimizer=distributed_optimizer):
+            states = get_states(model_param)
+            master = states["param"]
+            if master.dtype == torch.int16:
+                group, index = distributed_optimizer.model_param_group_index_map[model_param]
+                param = distributed_optimizer.optimizer.param_groups[group]["params"][index]
+                # TE stores the low FP32 bits separately from rounded BF16
+                # weights. Megatron's reshardable checkpoint expects full FP32.
+                bits = (param.detach().view(torch.int16).to(torch.int32) << 16) + master.to(torch.int32)
+                states["param"] = bits.view(torch.float32)
+            return states
+
+        def set_checkpoint_states(
+            model_param, states, set_states=set_states, distributed_optimizer=distributed_optimizer
+        ):
+            group, index = distributed_optimizer.model_param_group_index_map[model_param]
+            param = distributed_optimizer.optimizer.param_groups[group]["params"][index]
+            master = states["param"]
+            if param.dtype == torch.bfloat16 and master.dtype == torch.float32:
+                bits = master.contiguous().view(torch.int32)
+                # Match TE's rounding, including the signed low-bit remainder.
+                rounded = ((bits >> 16) + ((bits & 0x8000) != 0)).to(torch.int16).view(torch.bfloat16)
+                with torch.no_grad():
+                    param.copy_(rounded)
+                states = {**states, "param": bits.to(torch.int16)}
+            set_states(model_param, states)
+
+        distributed_optimizer._get_main_param_and_optimizer_states = get_checkpoint_states
+        distributed_optimizer._set_main_param_and_optimizer_states = set_checkpoint_states
+
+
 class _FakeInt4QuantizationSTE(torch.autograd.Function):
     @staticmethod
     def forward(ctx, weight, group_size):
