@@ -482,7 +482,7 @@ def custom_hook(args, rollout_id, step_id, model, optimizer, opt_param_scheduler
 
 ---
 
-### 18. MoE Routing Replay
+### MoE Routing Replay
 
 Stabilize MoE RL training by recording and replaying expert routing decisions to ensure consistency.
 
@@ -493,7 +493,7 @@ Stabilize MoE RL training by recording and replaying expert routing decisions to
 
 ---
 
-### 19. Disk Weight-Sync Post-Write Hook (`--custom-update-weight-post-write-path`)
+### Disk Weight-Sync Post-Write Hook (`--custom-update-weight-post-write-path`)
 
 **Signature**:
 ```python

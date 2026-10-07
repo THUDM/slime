@@ -4,23 +4,20 @@
 
 ## 基础环境搭建
 
-由于 slime 可能会包含针对 sglang/megatron 的临时补丁（patch）。为避免潜在的环境配置问题，强烈建议**用户使用我们提供的最新 Docker 镜像**，它已预置好所有依赖。
+建议使用预置的 Docker 镜像，获得相互兼容的 SGLang、Megatron 和补丁环境。
 
-### 硬件支持说明
+### 硬件与镜像选择
 
-**slime** 支持多种 NVIDIA GPU 硬件平台：
+| 硬件 | 镜像 | CUDA |
+| --- | --- | --- |
+| H100/H200 | `slimerl/slime:latest` 或 `slimerl/slime:latest-cu129` | 12.9 |
+| B200/B300（Blackwell，x86） | `slimerl/slime:latest-cu130` | 13.0 |
 
-- **B200 系列**：完全支持，运行步骤与 H 系列完全相同
-- **H 系列 (H100/H200)**：官方支持，具有完整的 CI 测试保护，运行稳定可靠
+默认 `latest` 标签对应 CUDA 12 镜像。使用 Blackwell 时，请将下方命令中的镜像替换为 `slimerl/slime:latest-cu130`。两种镜像使用不同的 kernel 和 Transformer Engine 构建方式；依赖版本和构建选项见 [Docker 指南](https://github.com/THUDM/slime/blob/main/docker/README.md)。
 
-**重要说明**：
-- 最新的 Docker 镜像对 B 卡和 H 卡通用，无需额外配置
-- Megatron 后端在 H 卡上具有 CI 保护，经过充分测试验证，推荐生产环境使用
-- B 卡基本功能稳定，可作为开发和测试参考，但暂无 CI 保护
-- 两种硬件平台使用完全相同的安装和启动流程
+GPU CI 主要覆盖 H100/H200。使用其他平台时，请先核对具体训练配方的硬件和并行配置要求。
 
-- 对于不方便使用 docker 的场景，请参考 [build_conda.sh](https://github.com/THUDM/slime/blob/main/build_conda.sh)；
-- 对于 AMD 支持，请参考 [AMD 使用教程](../../en/platform_support/amd_tutorial.md)。
+不方便使用 Docker 时，可运行 [build_conda.sh](https://github.com/THUDM/slime/blob/main/build_conda.sh)，搭建 CUDA 12.9 环境。AMD 支持见 [AMD 使用教程](../platform_support/amd_tutorial.md)。
 
 ### 拉取并启动 Docker 容器
 
@@ -70,7 +67,7 @@ hf download --repo-type dataset zhuzilin/aime-2024 \
 
 当使用 Megatron 作为训练后端时，需要先将 Hugging Face 格式的模型权重转换为 Megatron `torch_dist` 格式。
 
-首先，加载目标模型的配置文件。`slime/scripts/models` 目录下包含了支持模型的配置文件。需要 `source` 对应模型的脚本，将配置参数加载到当前环境中。此处我们以 GLM4-9B 模型为例子，对于 Qwen3-4B、Qwen3.5、Qwen3.6、GLM-4.7-Flash、Qwen3-30B-A3B，是类似的。
+首先，加载目标模型的配置文件。`scripts/models` 目录下包含了支持模型的配置文件。需要 `source` 对应模型的脚本，将配置参数加载到当前环境中。此处我们以 GLM4-9B 模型为例子，对于 Qwen3-4B、Qwen3.5、Qwen3.6、GLM-4.7-Flash、Qwen3-30B-A3B，是类似的。
 
 ```bash
 cd /root/slime

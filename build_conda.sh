@@ -21,22 +21,26 @@ fi
 micromamba create -n slime python=3.12 pip -c conda-forge -y
 micromamba activate slime
 export CUDA_HOME="$CONDA_PREFIX"
+export MAX_JOBS="${MAX_JOBS:-16}"
+export CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-$MAX_JOBS}"
 
 # Keep these in sync with docker/Dockerfile:
 #   - SGLANG_IMAGE_TAG (ARG)            -> SGLANG_VERSION below
 #   - MEGATRON_COMMIT (ARG)             -> MEGATRON_COMMIT below
-#   - PATCH_VERSION (ARG, default "latest") -> PATCH_VERSION below
+#   - PATCH_VERSION (ARG)               -> PATCH_VERSION below
 #   - TMS_COMMIT (ARG)                   -> TMS_COMMIT below
 #   - FLASH_QLA_COMMIT (ARG)             -> FLASH_QLA_COMMIT below
 export SGLANG_VERSION="v0.5.15.post1"
 export SGLANG_COMMIT="0b3bb0cbe31873994c9f989fddfe2f87ca839fdd"
-export MEGATRON_COMMIT="1dcf0dafa884ad52ffb243625717a3471643e087"
+export MEGATRON_COMMIT="4b4acac9a1d28ea6829c8d4f566d75698a21249d"
 export PATCH_VERSION="v0.5.15.post1"
-export TMS_COMMIT="8d30c59ca12a68d9deccbc9c6599076a1218cbc5"
+export TMS_COMMIT="4d525cf378fdbfe7eb044909b8e66e112a508624"
 export FLASH_QLA_COMMIT="821fd9d37ede18fdc2a4e707fefe3770bfc32e58"
+export TRANSFORMER_ENGINE_VERSION="2.18.0"
+export NCCL_VERSION="2.30.7"
 
 export BASE_DIR=${BASE_DIR:-"/root"}
-cd $BASE_DIR
+cd "$BASE_DIR"
 
 # install cuda 12.9 as it's the default cuda version for torch
 micromamba install -n slime \
@@ -63,10 +67,10 @@ micromamba install -n slime -c conda-forge rust -y
 #      reinstall the cu12 equivalents to repair the `site-packages/nvidia/*`
 #      shared dirs (pip uninstall stomps libs co-owned across cu12/cu13).
 if [ ! -d "$BASE_DIR/sglang" ]; then
-  cd $BASE_DIR
+  cd "$BASE_DIR"
   git clone https://github.com/sgl-project/sglang.git
 fi
-cd $BASE_DIR/sglang
+cd "$BASE_DIR/sglang"
 git checkout ${SGLANG_COMMIT}
 pip install -e "python[all]" --extra-index-url https://download.pytorch.org/whl/cu129
 pip install --force-reinstall "cuda-python==12.9"
@@ -113,30 +117,47 @@ pip install --force-reinstall --no-deps \
   --index-url https://download.pytorch.org/whl/cu129 \
   --extra-index-url https://pypi.org/simple
 
-
 pip install cmake ninja
 
-# The SGLang dependency set includes FA4, while the validated TE 2.16 CP stack
-# uses FA2 2.7.4 through 2.8.3. This wheel targets Python 3.12, PyTorch 2.11,
-# CUDA 12, and the CXX11 ABI used by the conda environment. Upstream does not
-# publish that combination, so pin the community build linked from upstream
-# issue #2425 by its SHA256 digest.
+# Match Docker's FA2/FA3 wheels without compiling or resolving PyTorch again.
+# FA2 uses the community build linked from upstream issue #2425; FA3 uses
+# the official PyTorch CUDA 12 index. Both downloads use fixed versions.
 pip uninstall -y flash-attn-4 flash_attn_4 || true
-pip install --no-deps \
-  "https://github.com/lesj0610/flash-attention/releases/download/v2.8.3-cu12-torch2.11/flash_attn-2.8.3%2Bcu12torch2.11cxx11abiTRUE-cp312-cp312-linux_x86_64.whl#sha256=3d0c8e60f820321eedd7166e79c33cb816263d8be6e35c3f5ba8fe2df6fea697"
+pip install --no-deps --force-reinstall \
+  "https://github.com/lesj0610/flash-attention/releases/download/v2.8.3-cu12-torch2.11/flash_attn-2.8.3%2Bcu12torch2.11cxx11abiTRUE-cp312-cp312-linux_x86_64.whl" \
+  "https://download.pytorch.org/whl/cu129/flash_attn_3-3.0.0-cp39-abi3-manylinux_2_28_x86_64.whl"
 
-pip install flash-linear-attention==0.4.2
+pip install flash-linear-attention==0.5.2
 # FlashQLA: optional GDN backend for Qwen3.5/Qwen3-Next (--qwen-gdn-backend flashqla; requires SM90+)
 pip install git+https://github.com/QwenLM/FlashQLA.git@${FLASH_QLA_COMMIT} --no-build-isolation
 # tilelang (matches Dockerfile)
-pip install tilelang -f https://tile-ai.github.io/whl/nightly/cu128/
+pip install tilelang==0.1.9 -f https://tile-ai.github.io/whl/nightly/cu128/
 
-pip install --no-build-isolation "transformer_engine[pytorch]==2.16.1"
+# Match Docker's official TE core wheel and compile only the PyTorch bindings.
+# Use the pip NCCL library consistently instead of an older system copy.
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib/python3.12/site-packages/nvidia/nccl/lib:${LD_LIBRARY_PATH:-}"
+mkdir -p "$CONDA_PREFIX/etc/conda/activate.d" "$CONDA_PREFIX/etc/conda/deactivate.d"
+cat > "$CONDA_PREFIX/etc/conda/activate.d/slime-nccl.sh" <<'SH'
+export _SLIME_OLD_LD_LIBRARY_PATH="${LD_LIBRARY_PATH-}"
+export _SLIME_LD_LIBRARY_PATH_WAS_SET="${LD_LIBRARY_PATH+x}"
+export LD_LIBRARY_PATH="$CONDA_PREFIX/lib/python3.12/site-packages/nvidia/nccl/lib:${LD_LIBRARY_PATH:-}"
+SH
+cat > "$CONDA_PREFIX/etc/conda/deactivate.d/slime-nccl.sh" <<'SH'
+if [ -n "${_SLIME_LD_LIBRARY_PATH_WAS_SET:-}" ]; then
+  export LD_LIBRARY_PATH="${_SLIME_OLD_LD_LIBRARY_PATH}"
+else
+  unset LD_LIBRARY_PATH
+fi
+unset _SLIME_OLD_LD_LIBRARY_PATH _SLIME_LD_LIBRARY_PATH_WAS_SET
+SH
+pip uninstall -y transformer-engine transformer-engine-cu12 transformer-engine-cu13 transformer-engine-torch
+NVTE_WITH_NCCL_EP=0 MAX_JOBS=64 \
+  pip install --no-build-isolation "transformer_engine[pytorch,core_cu12]==${TRANSFORMER_ENGINE_VERSION}"
 
-NVCC_APPEND_FLAGS="--threads 4" \
+NVCC_APPEND_FLAGS="--threads 1" \
   pip -v install --disable-pip-version-check --no-cache-dir \
   --no-build-isolation \
-  --config-settings "--build-option=--cpp_ext --cuda_ext --parallel 8" git+https://github.com/NVIDIA/apex.git@10417aceddd7d5d05d7cbf7b0fc2daad1105f8b4
+  --config-settings "--build-option=--cpp_ext --cuda_ext --parallel ${MAX_JOBS}" git+https://github.com/NVIDIA/apex.git@10417aceddd7d5d05d7cbf7b0fc2daad1105f8b4
 
 TMS_CUDA_MAJOR="${TMS_CUDA_MAJOR:-$(python -c 'import torch; print(torch.version.cuda.split(".")[0])')}"
 export TMS_CUDA_MAJOR
@@ -148,35 +169,30 @@ export TMS_CUDA_MAJOR
 pip install -v git+https://github.com/zhuzilin/torch_memory_saver.git@${TMS_COMMIT} \
   --no-cache-dir --force-reinstall --no-build-isolation
 pip install "nvidia-modelopt[torch]>=0.37.0" --no-build-isolation
-pip install https://github.com/zhuzilin/sgl-router/releases/download/v0.3.2-9daabcd/sglang_router-0.3.2-cp38-abi3-manylinux_2_28_x86_64.whl --force-reinstall
-python -c "import sglang_router; assert 'slime' in sglang_router.__version__"
 
 # megatron
-cd $BASE_DIR
+cd "$BASE_DIR"
 if [ ! -d "$BASE_DIR/Megatron-LM" ]; then
   git clone https://github.com/NVIDIA/Megatron-LM.git --recursive
 fi
-# pre-install Megatron's build deps explicitly since we use --no-build-isolation
-pip install "setuptools<80.0.0" pybind11 "packaging>=24.2"
-# --no-build-isolation: setup.py builds a C++ extension (megatron.core.datasets.helpers_cpp)
-# that subprocess-shells `python3 -m pybind11`; without isolation pip uses the
-# current env's python which already has pybind11 installed. Otherwise the ext
-# is marked optional and silently skipped, which breaks GPT dataset loading.
-cd $BASE_DIR/Megatron-LM && git checkout ${MEGATRON_COMMIT} && pip install -e . --no-build-isolation
+# Install Megatron's build dependencies for its editable build without isolation.
+# The pybind11 extension provides megatron.core.datasets.helpers_cpp.
+pip install "setuptools>=80.0.0" pybind11 "packaging>=24.2"
+cd "$BASE_DIR/Megatron-LM" && git checkout ${MEGATRON_COMMIT} && pip install -e . --no-build-isolation
 
-# install slime and apply patches
+# Install runtime dependencies before reasserting the compatibility pins.
 
-cd $SLIME_DIR
+cd "$SLIME_DIR"
 # Install slime's pure-python runtime deps first (wandb, ray, accelerate,
 # transformers, etc.) from its requirements.txt, then install slime itself
 # with --no-deps so pip doesn't re-resolve and stomp our pinned native libs
 # (torch+cu129, sglang-kernel+cu129, ...). The Dockerfile does the same thing
-# in two RUN layers (line ~71 + line ~124).
+# before the editable package installation.
 pip install -r requirements.txt
 pip install -e . --no-deps
 
 # int4_qat kernel (matches Dockerfile)
-cd $SLIME_DIR/slime/backends/megatron_utils/kernels/int4_qat
+cd "$SLIME_DIR/slime/backends/megatron_utils/kernels/int4_qat"
 pip install . --no-build-isolation
 
 # https://github.com/pytorch/pytorch/issues/168167
@@ -187,17 +203,34 @@ pip install "numpy==1.26.4" "scipy==1.17.1"
 # so `import sglang` works at runtime.
 pip install "kernels<0.15.0"
 
-# apply patches in the same order as Dockerfile
+# Resolving installs above can replace native libraries. Restore the CUDA 12
+# wheels and the router fork after all dependency resolution has finished.
+pip install "cuda-python==12.9"
+pip install --force-reinstall --no-deps \
+  torch==2.11.0+cu129 torchvision==0.26.0+cu129 torchaudio==2.11.0+cu129 \
+  --index-url https://download.pytorch.org/whl/cu129
+pip install --force-reinstall --no-deps \
+  sglang-kernel==0.4.4 sgl-deep-gemm==0.1.4 \
+  --index-url https://docs.sglang.ai/whl/cu129/
+pip install --no-deps https://github.com/zhuzilin/sgl-router/releases/download/v0.3.2-9daabcd/sglang_router-0.3.2-cp38-abi3-manylinux_2_28_x86_64.whl --force-reinstall
+pip install --no-deps --force-reinstall "nvidia-nccl-cu12==${NCCL_VERSION}"
+python -c "import sglang_router; assert 'slime' in sglang_router.__version__"
+
+# Apply patches in the same order as Dockerfile.
 patch_dir="$SLIME_DIR/docker/patch/${PATCH_VERSION}"
 if [ ! -d "$patch_dir" ]; then
   echo "Patch directory does not exist: $patch_dir" >&2
   exit 1
 fi
 
-cd $BASE_DIR/sglang
+cd "$BASE_DIR/sglang"
 for patch_name in sglang.patch sglang-top_p.patch sglang-release_hicache.patch sglang-pull_weights.patch sglang-deterministic.patch; do
   patch_path="$patch_dir/${patch_name}"
   if [ ! -f "$patch_path" ]; then
+    if [ "$patch_name" = "sglang.patch" ]; then
+      echo "Required patch is missing: $patch_path" >&2
+      exit 1
+    fi
     continue
   fi
   if git apply --check "$patch_path"; then
@@ -209,7 +242,7 @@ for patch_name in sglang.patch sglang-top_p.patch sglang-release_hicache.patch s
     exit 1
   fi
 done
-cd $BASE_DIR/Megatron-LM
+cd "$BASE_DIR/Megatron-LM"
 for patch_name in megatron.patch megatron-sglang-aligned.patch; do
   patch_path="$patch_dir/${patch_name}"
   if [ ! -f "$patch_path" ]; then
@@ -236,13 +269,36 @@ for patch_name in megatron.patch megatron-sglang-aligned.patch; do
 done
 
 python - <<'PY'
+from importlib.metadata import version
+import ctypes
+
 import sglang
 import torch
 import torchaudio
 import torchvision
+import transformer_engine.pytorch
+from megatron.core import parallel_state
 
 assert torch.__version__ == "2.11.0+cu129"
 assert torchaudio.__version__ == "2.11.0+cu129"
 assert torchvision.__version__ == "0.26.0+cu129"
+assert torch.version.cuda == "12.9"
+nccl_version = ctypes.c_int()
+assert ctypes.CDLL("libnccl.so.2").ncclGetVersion(ctypes.byref(nccl_version)) == 0
+assert nccl_version.value == 23007
+assert version("nvidia-nccl-cu12") == "2.30.7"
+assert version("sglang") == "0.5.15.post1"
+assert version("sglang-kernel").split("+")[0] == "0.4.4"
+assert version("sgl-deep-gemm").split("+")[0] == "0.1.4"
+assert version("cuda-python") == "12.9.0"
+assert version("numpy") == "1.26.4"
+assert version("scipy") == "1.17.1"
+assert version("tilelang") == "0.1.9"
+assert version("megatron-core").split("+")[0] == "0.19.2"
+assert version("transformer-engine") == "2.18.0"
+assert version("flash-attn").split("+")[0] == "2.8.3"
+assert version("flash-attn-3") == "3.0.0"
+assert version("flash-linear-attention") == "0.5.2"
+assert version("fla-core") == "0.5.2"
 assert hasattr(torch.ops.torchvision, "nms")
 PY

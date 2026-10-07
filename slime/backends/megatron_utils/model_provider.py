@@ -164,13 +164,18 @@ def _get_model_provider_func(
             else:
                 # Define the decoder layer spec
                 if use_te:
-                    transformer_layer_spec = get_gpt_layer_with_transformer_engine_spec(
-                        num_experts=args.num_experts,
-                        moe_grouped_gemm=args.moe_grouped_gemm,
-                        qk_layernorm=args.qk_layernorm,
-                        multi_latent_attention=args.multi_latent_attention,
-                        moe_use_legacy_grouped_gemm=args.moe_use_legacy_grouped_gemm,
-                    )
+                    spec_kwargs = {
+                        "num_experts": args.num_experts,
+                        "moe_grouped_gemm": args.moe_grouped_gemm,
+                        "qk_layernorm": args.qk_layernorm,
+                        "multi_latent_attention": args.multi_latent_attention,
+                    }
+                    if (
+                        "moe_use_legacy_grouped_gemm"
+                        in inspect.signature(get_gpt_layer_with_transformer_engine_spec).parameters
+                    ):
+                        spec_kwargs["moe_use_legacy_grouped_gemm"] = args.moe_use_legacy_grouped_gemm
+                    transformer_layer_spec = get_gpt_layer_with_transformer_engine_spec(**spec_kwargs)
                 else:
                     transformer_layer_spec = get_gpt_layer_local_spec(
                         num_experts=args.num_experts,
@@ -196,6 +201,11 @@ def _get_model_provider_func(
                 raise RuntimeError(
                     "--fp8-param-gather requires `fp8_model_init` from TransformerEngine, but not found."
                 ) from e
+
+        if getattr(args, "post_self_attn_layernorm", False) or getattr(args, "post_mlp_layernorm", False):
+            from slime_plugins.models.glm4 import add_post_layernorms
+
+            add_post_layernorms(transformer_layer_spec, args)
 
         kwargs = {
             "config": config,
@@ -255,6 +265,11 @@ def wrap_model_provider_with_freeze(original_provider, args):
                 provider_kwargs[key] = kwargs.get(key, None)
 
         model = original_provider(**provider_kwargs)
+        from slime.utils.routing_replay import register_routing_replay
+
+        for module in model.modules():
+            if hasattr(module, "router_replay"):
+                register_routing_replay(module)
         freeze_model_params(model, args)
 
         return model
@@ -263,6 +278,13 @@ def wrap_model_provider_with_freeze(original_provider, args):
 
 
 def get_model_provider_func(args, role="actor"):
+    from .memory import configure_buffer_allocation
+
+    configure_buffer_allocation(args)
+    if args.transformer_impl == "transformer_engine":
+        from .transformer_engine import install_transformer_engine_extensions
+
+        install_transformer_engine_extensions()
     return wrap_model_provider_with_freeze(_get_model_provider_func(args, role), args)
 
 

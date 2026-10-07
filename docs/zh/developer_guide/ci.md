@@ -120,7 +120,7 @@ PYTHONPATH=. python tests/test_straw_fully_async_recovery.py
 
 ## 添加测试
 
-### CPU 测试
+### 添加 CPU 测试
 
 参考相邻文件，将测试放在 `tests/test_*.py`、`tests/utils/test_*.py` 或 `tests/plugin_contracts/test_*.py` 下。如果文件会被 `run-ci-changed` 运行，需要声明顶层 `NUM_GPUS = 0`。
 
@@ -133,7 +133,7 @@ if __name__ == "__main__":
 
 需要自动运行的测试，还应注册到 `.github/workflows/pr-test.yml.j2` 的 `cpu-unittest` 或 `agent-adapter-test` 列表中，再重新生成工作流。
 
-### GPU 端到端测试
+### 添加 GPU 端到端测试
 
 1. 创建 `tests/test_<your_test_name>.py`，沿用现有的 `prepare()` / `execute()` 结构。
 2. 用顶层 `NUM_GPUS = <N>` 声明所需 GPU 数量。

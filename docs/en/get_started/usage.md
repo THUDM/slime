@@ -20,7 +20,7 @@ There are four main parameters for cluster resource allocation:
   - `--actor-num-gpus-per-node`: The number of GPUs per node for RL actor training.
   - `--rollout-num-gpus`: The total number of GPUs required for rollout (inference). Set it to `0` to still parse SGLang arguments and launch the router without launching local SGLang servers.
   - `--rollout-num-gpus-per-engine`: The number of GPUs per inference engine. This parameter is similar to SGLang's `tp_size`. When performing multi-node serving, this value should be the total number of GPUs. For example, if serving one model with 2 nodes and 16 GPUs, this value should be 16.
-    The reason for not using a parameter like `--sglang-tp-size` is that we might consider supporting SGLang's `dp_size` parameter in the future, which means an engine could contain multiple SGLang servers (currently, only `--sglang-dp-size` under the `--sglang-enable-dp-attention` condition is supported).
+    SGLang receives `--sglang-dp-size` separately. By default, its TP size is the engine GPU count divided by the PP size; an SGLang config can override the parallel settings for a server group.
 
 With the default configuration, we use these parameters to allocate `actor_num_nodes * actor_num_gpus_per_node` GPUs for training and `rollout_num_gpus` GPUs for inference via Ray, thus achieving a separation of training and inference resources.
 
@@ -74,7 +74,7 @@ MODEL_ARGS=(
 )
 ```
 
-We provide configurations for common models in [scripts/models](../../../scripts/models), which you can reuse directly. If you are also using Megatron for pre-training/SFT, you can directly reuse the model configurations from your pre-training/SFT setup.
+We provide configurations for common models in [scripts/models](https://github.com/THUDM/slime/tree/main/scripts/models), which you can reuse directly. If you are also using Megatron for pre-training/SFT, you can directly reuse the model configurations from your pre-training/SFT setup.
 
 Note:
 
@@ -106,7 +106,7 @@ Megatron supports several of its custom checkpoint formats. Here are two of the 
 
 The `torch` format is Megatron's older storage format. Its structure consists of directories like `mp_rank_xxx`, where each directory corresponds to the checkpoint stored by each rank under a specific parallel partitioning. Because of this, when loading a `torch` format checkpoint, you must ensure that the checkpoint's parallelism strategy matches that of the training task.
 
-We recommend using the `torch_dist` format because it supports automatic parallel sharding, meaning that training tasks with different parallelism settings can share the same checkpoint, which is much more convenient. `torch_dist` is also the default format in the open-source Megatron. A `torch_dist` format checkpoint typically contains a set of `.distcp` files. When using `torch_dist`, you can convert from Hugging Face to `torch_dist` and vice versa using the checkpoint conversion method described in the [README](../../../README.md).
+We recommend using the `torch_dist` format because it supports automatic parallel sharding, meaning that training tasks with different parallelism settings can share the same checkpoint, which is much more convenient. `torch_dist` is also the default format in the open-source Megatron. A `torch_dist` format checkpoint typically contains a set of `.distcp` files. When using `torch_dist`, you can convert from Hugging Face to `torch_dist` and vice versa using the checkpoint conversion method described in the [README](https://github.com/THUDM/slime/blob/main/README.md).
 
 In terms of storage structure, a Megatron checkpoint typically looks like this, assuming the storage path is `/ckpt/`:
 
@@ -462,7 +462,7 @@ without introducing weight-version cache namespaces.
 
 slime implements a server-based engine using SGLang via the `HttpServerEngineAdapter` as an intermediary.
 
-### Parameter Configuration
+### SGLang Arguments
 
 slime incorporates almost all SGLang parameters by using SGLang's `ServerArgs.add_cli_args`. When setting an SGLang parameter, you need to add the `--sglang-` prefix. For example:
 
@@ -519,7 +519,7 @@ Each model gets its own router. The per-model router info is accessible via `arg
 
 slime supports different and lightly modified versions of Megatron by reusing common functions from the `megatron.training` directory, such as `parse_args`, `save_checkpoint`, and `load_checkpoint`. Therefore, when using it, you must ensure that Megatron is accessible in the `PYTHONPATH`, for example, by adding `export PYTHONPATH=/root/Megatron-LM` at runtime.
 
-### Parameter Configuration
+### Megatron Arguments
 
 slime directly imports all parameters of the Megatron in the current environment by using `from megatron.training.arguments import parse_args`. If the version of Megatron you are using has parameters defined outside of `parse_args`, you can configure them by passing them in, similar to how it's done in [train.py](https://github.com/THUDM/slime/blob/main/train.py), for example:
 

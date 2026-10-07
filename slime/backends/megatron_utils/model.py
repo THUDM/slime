@@ -859,15 +859,19 @@ def train(
 
             mtp_loss_scale = 1 / num_microbatches[step_id]
             tracker = MTPLossLoggingHelper.tracker
-            if "values" in tracker:
-                values = tracker["values"]
+            loss_key = "loss_values" if "loss_values" in tracker else "values"
+            if loss_key in tracker:
+                values = tracker[loss_key]
                 if tracker.get("reduce_group") is not None:
                     torch.distributed.all_reduce(values, group=tracker.get("reduce_group"))
                 if tracker.get("avg_group") is not None:
                     torch.distributed.all_reduce(values, group=tracker["avg_group"], op=torch.distributed.ReduceOp.AVG)
-                # Multi-head MTP: tracker["values"] is [num_mtp_layers]; aggregate below.
-                mtp_losses = tracker["values"] * mtp_loss_scale
-                MTPLossLoggingHelper.clean_loss_in_tracker()
+                # Multi-head MTP losses have shape [num_mtp_layers]; aggregate below.
+                mtp_losses = values * mtp_loss_scale
+                if hasattr(MTPLossLoggingHelper, "clean_metrics_in_tracker"):
+                    MTPLossLoggingHelper.clean_metrics_in_tracker()
+                else:
+                    MTPLossLoggingHelper.clean_loss_in_tracker()
 
                 # CI check: verify MTP loss is within expected bounds
                 if args.ci_test:

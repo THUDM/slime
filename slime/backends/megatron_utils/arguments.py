@@ -151,6 +151,10 @@ def _hf_validate_args(args, hf_config):
 def _set_default_megatron_args(args):
     # always use zero optimizer
     args.use_distributed_optimizer = True
+    if hasattr(args, "mtp_detach_heads"):
+        args.mtp_detach_heads = True
+    if hasattr(args, "trust_remote_code"):
+        args.trust_remote_code = True
     if not hasattr(args, "enable_gloo_process_groups"):
         args.enable_gloo_process_groups = True
     # TODO: maybe change this after megatron has good fp8 support

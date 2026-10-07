@@ -4,7 +4,7 @@ ipywidgets
 jupyter_client
 markdown>=3.4.0
 matplotlib
-myst-parser
+myst-parser[linkify]
 nbconvert
 nbsphinx
 nbstripout

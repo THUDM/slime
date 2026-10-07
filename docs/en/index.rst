@@ -1,33 +1,20 @@
 slime Documentation
-====================
+===================
 
-slime is an LLM post-training framework for RL scaling, providing two core capabilities:
+slime is an LLM post-training framework for RL scaling. It combines Megatron training with SGLang rollout and provides custom interfaces for data generation and rewards.
 
-- High-Performance Training: Supports efficient training in various modes by connecting Megatron with SGLang;
-- Flexible Data Generation: Enables arbitrary training data generation workflows through custom data generation interfaces and server-based engines.
+Training, rollout, the data buffer, and environment feedback share one dataflow, supporting math, code, tools, sandboxes, and long-horizon agent workflows.
 
-slime's design goal is to make these two capabilities reinforce each other without turning the system into a heavy stack of disconnected trainers, rollout services, and agent frameworks. Megatron training, SGLang rollout, custom data generation, reward computation, verifier feedback, and environment interaction all flow through the same training / rollout / Data Buffer path.
+Design and Production Experience
+--------------------------------
 
-This makes slime one of the most battle-tested open RL post-training frameworks: small enough to understand and extend, but validated through complete training loops behind SOTA-level model releases.
+- slime is the RL framework behind `GLM-5.3-Flash <https://z.ai/blog/glm-5.3-flash>`_, `GLM-5.3 <https://z.ai/blog/glm-5.3>`_, `GLM-5.2 <https://z.ai/blog/glm-5.2>`_, `GLM-5.1 <https://z.ai/blog/glm-5.1>`_, `GLM-5 <https://z.ai/blog/glm-5>`_, `GLM-4.7 <https://z.ai/blog/glm-4.7>`_, `GLM-4.6 <https://z.ai/blog/glm-4.6>`_, `GLM-4.5 <https://z.ai/blog/glm-4.5>`_.
+- Megatron arguments are available directly; installed SGLang arguments use the ``--sglang-`` prefix.
+- Generation functions, reward functions, verifiers, and environments connect through documented customization interfaces.
+- CPU correctness tests and GPU end-to-end tests cover training, rollout, checkpointing, precision, asynchronous generation, and debug replay. See :doc:`developer_guide/ci`.
+- Large MoE recipes combine BF16 training with FP8 rollout; ``--sglang-kv-cache-dtype fp8_e4m3`` can increase effective KV cache capacity.
 
-Why This Design Matters
------------------------
-
-- **Battle-tested by frontier model training**: slime is the RL framework behind `GLM-5.2 <https://z.ai/blog/glm-5.2>`_, `GLM-5.1 <https://z.ai/blog/glm-5.1>`_, `GLM-5 <https://z.ai/blog/glm-5>`_, `GLM-4.7 <https://z.ai/blog/glm-4.7>`_, `GLM-4.6 <https://z.ai/blog/glm-4.6>`_, and `GLM-4.5 <https://z.ai/blog/glm-4.5>`_.
-- **Native by design**: slime passes Megatron arguments through directly and exposes installed SGLang arguments with a ``--sglang-`` prefix, so upstream training and serving optimizations remain available without adding another wrapper layer.
-- **SGLang-focused rollout**: slime chooses one rollout backend intentionally. This avoids flattening multiple inference engines into a lowest-common-denominator abstraction and lets RL workloads use SGLang-specific serving, routing, caching, disaggregation, and weight-sync behavior directly.
-- **Agentic workflows as data generation**: tool use, sandbox interaction, verifier rewards, environment feedback, multi-agent loops, and long-horizon agentic workflows plug into the same training / rollout / Data Buffer path instead of forking the training kernel.
-- **BF16 training with FP8 rollout**: large MoE recipes use Megatron BF16 training state with SGLang FP8 rollout/inference; long-context rollout can also use ``--sglang-kv-cache-dtype fp8_e4m3`` to increase effective KV cache capacity.
-- **Tested as RL infrastructure**: CPU correctness tests run automatically, while GPU e2e tests cover real Megatron + SGLang training/rollout paths, including dense/MoE recipes, fully-async rollout, SGLang config, checkpointing, precision, and debug replay. See :doc:`developer_guide/ci`.
-
-Production Validation
----------------------
-
-Beyond the GLM family, slime also supports:
-
-- Qwen series (Qwen3.6, Qwen3.5, Qwen3Next, Qwen3MoE, Qwen3, Qwen2.5);
-- DeepSeek V3 series (DeepSeek V3, V3.1, DeepSeek R1);
-- Llama 3.
+Alongside GLM, supported model families include Qwen (Qwen3.6, Qwen3.5, Qwen3-Next, Qwen3 MoE, Qwen3, Qwen2.5), DeepSeek (V3, V3.1, R1), and Llama 3. Start with the recipes below and the model configurations in ``scripts/models/``.
 
 Start by Use Case
 -----------------
@@ -68,6 +55,7 @@ Start by Use Case
 
    examples/glm4.7-30B-A3B.md
    examples/qwen3-30B-A3B.md
+   examples/qwen3-next-80B-A3B.md
    examples/glm5.2-744B-A40B.md
    examples/glm4.7-355B-A32B.md
    examples/deepseek-r1.md
@@ -100,6 +88,14 @@ Start by Use Case
    _examples_synced/retool/README.md
    _examples_synced/multi_agent/README.md
    _examples_synced/coding_agent_rl/README.md
+   _examples_synced/delta_weight_sync/README.md
+   _examples_synced/eval_multi_task/README.md
+   _examples_synced/geo3k_vlm/README.md
+   _examples_synced/geo3k_vlm_multi_turn/README.md
+   _examples_synced/on_policy_distillation/README.md
+   _examples_synced/strands_sglang/README.md
+   _examples_synced/tau-bench/README.md
+   _examples_synced/train_infer_mismatch_helper/README.md
 
 .. toctree::
    :maxdepth: 1
@@ -109,6 +105,7 @@ Start by Use Case
    developer_guide/debug.md
    developer_guide/trace.md
    developer_guide/profiling.md
+   developer_guide/install_flashqla.md
 
 .. toctree::
    :maxdepth: 1

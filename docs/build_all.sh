@@ -4,9 +4,9 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 cd "$SCRIPT_DIR"
 
 echo "[slime-docs] Building EN..."
-./build.sh en
+SLIME_DOC_LAYOUT=prefix ./build.sh en
 echo "[slime-docs] Building ZH..."
-./build.sh zh
+SLIME_DOC_LAYOUT=prefix ./build.sh zh
 
 # Create a lightweight root index with auto redirect based on localStorage (done client side)
 ROOT_INDEX=build/index.html

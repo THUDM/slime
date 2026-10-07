@@ -195,6 +195,11 @@ def map_requests_to_train_sequences(dump_files: list[Path], train_sequences: lis
         mapping[rid] = candidates[0]
     if not mapping:
         raise RuntimeError("SGLang dumps contained no request observations")
+    expected_sequences = {tuple(sequence.tokens.tolist()) for sequence in train_sequences}
+    observed_sequences = {tuple(train_sequences[index].tokens.tolist()) for index in mapping.values()}
+    missing_sequences = expected_sequences - observed_sequences
+    if missing_sequences:
+        raise RuntimeError(f"SGLang dumps are missing {len(missing_sequences)} Megatron token sequences")
     return mapping
 
 
@@ -251,6 +256,8 @@ def compare_layer_outputs(
                         raise IndexError(f"SGLang request {rid} contains positions outside its " "Megatron sequence")
                     rollout_value = rollout_rows[layer_id][token_slice][keep]
                     train_value = train_sequence.layers[layer_id][kept_positions]
+                    if not torch.isfinite(rollout_value).all() or not torch.isfinite(train_value).all():
+                        raise ValueError(f"Non-finite hidden states for request {rid}, layer {layer_id}")
                     difference = (rollout_value.float() - train_value.float()).abs()
                     layer_stats = stats[layer_id]
                     layer_stats["max_abs"] = max(layer_stats["max_abs"], float(difference.max().item()))
@@ -259,6 +266,16 @@ def compare_layer_outputs(
                     layer_stats["tokens"] += kept_positions.numel()
                     for position in kept_positions.tolist():
                         compared.add((rid, int(position), layer_id))
+
+    for rid, sequence_id in request_mapping.items():
+        expected_positions = set(range(train_sequences[sequence_id].tokens.numel() - 1))
+        for layer_id in selected_layers:
+            observed_positions = {
+                position for request, position, layer in compared if request == rid and layer == layer_id
+            }
+            missing = expected_positions - observed_positions
+            if missing:
+                raise ValueError(f"Missing hidden states for request {rid}, layer {layer_id}: {sorted(missing)}")
 
     for layer_stats in stats.values():
         layer_stats["mean_abs"] = (

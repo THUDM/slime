@@ -1,0 +1,16 @@
+.git
+.env
+.venv*
+.cache
+.pytest_cache
+.ruff_cache
+**/__pycache__
+**/*.py[cod]
+**/*.egg-info
+**/_examples_synced
+build
+dist
+docs/build
+docs/_build
+outputs
+wandb

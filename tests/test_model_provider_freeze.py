@@ -123,5 +123,56 @@ def test_freeze_indexer_rejects_unrecognized_attention(monkeypatch):
         model_provider.freeze_model_params(model, args)
 
 
+@pytest.mark.parametrize("legacy_spec", [False, True])
+def test_dense_provider_supports_old_and_new_te_spec_signatures(monkeypatch, legacy_spec):
+    from types import SimpleNamespace
+
+    module = _load_model_provider(monkeypatch)
+    config = SimpleNamespace()
+    monkeypatch.setattr(module, "core_transformer_config_from_args", lambda args: config)
+    calls = []
+
+    if legacy_spec:
+
+        def build_spec(
+            num_experts, moe_grouped_gemm, qk_layernorm, multi_latent_attention, moe_use_legacy_grouped_gemm
+        ):
+            assert moe_use_legacy_grouped_gemm is True
+            calls.append((num_experts, moe_grouped_gemm, qk_layernorm, multi_latent_attention))
+            return "dense_spec"
+
+    else:
+
+        def build_spec(num_experts, moe_grouped_gemm, qk_layernorm, multi_latent_attention):
+            calls.append((num_experts, moe_grouped_gemm, qk_layernorm, multi_latent_attention))
+            return "dense_spec"
+
+    monkeypatch.setattr(module, "get_gpt_layer_with_transformer_engine_spec", build_spec)
+    monkeypatch.setattr(module, "GPTModel", lambda **kwargs: SimpleNamespace(**kwargs))
+    args = SimpleNamespace(
+        transformer_impl="transformer_engine",
+        spec=None,
+        num_experts=None,
+        moe_grouped_gemm=False,
+        qk_layernorm=False,
+        multi_latent_attention=False,
+        moe_use_legacy_grouped_gemm=True,
+        fp8_param_gather=False,
+        padded_vocab_size=128,
+        max_position_embeddings=64,
+        fp16_lm_cross_entropy=False,
+        untie_embeddings_and_output_weights=True,
+        position_embedding_type="rope",
+        rotary_percent=1.0,
+        rotary_base=10000,
+        use_rope_scaling=False,
+        mtp_num_layers=None,
+    )
+    model = module._get_model_provider_func(args)()
+    assert model.transformer_layer_spec == "dense_spec"
+    assert model.config is config
+    assert calls == [(None, False, False, False)]
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))

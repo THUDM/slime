@@ -176,7 +176,7 @@ CUSTOM_ARGS=(
 
 也就是 `generate_with_search.py` 中的 `generate` 和 `reward_func` 两个函数。
 
-## 附录：配置本地检索器
+## 附录配置本地检索器
 
 本节提供详细的本地密集检索器设置说明，用于本地搜索后端。
 
