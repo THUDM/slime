@@ -12,7 +12,7 @@ from typing import Any
 import numpy as np
 from tqdm import tqdm
 
-from slime.backends.sglang_utils.server_control import abort_servers_until_idle
+from slime.backends.sglang_utils.server_control import abort_servers_until_idle, get_live_router_workers
 from slime.data.transport import discard_rollout_group, publish_rollout_async
 from slime.observability.trace_utils import build_sglang_meta_trace_attrs, trace_function, trace_span
 from slime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput, finalize_rollout_groups
@@ -436,8 +436,14 @@ async def abort(args: Namespace, rollout_id: int) -> list[list[Sample]]:
         task.cancel()
 
     if state.active_server_generations:
-        response = await get(f"http://{args.sglang_router_ip}:{args.sglang_router_port}/workers")
-        urls = [worker["url"] for worker in response["workers"]]
+        router_url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}"
+        if args.rollout_external:
+            workers = (await get(f"{router_url}/workers"))["workers"]
+        else:
+            # The manager's final health check runs only after this function
+            # returns. Prune dead URLs now so abort/drain itself can finish.
+            workers = await get_live_router_workers(router_url, timeout=args.rollout_health_check_timeout)
+        urls = [worker["url"] for worker in workers]
         await abort_servers_until_idle(urls)
 
     await asyncio.gather(*cancellable_tasks, return_exceptions=True)

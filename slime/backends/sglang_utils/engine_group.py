@@ -7,13 +7,38 @@ from typing import Any
 
 import ray
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
-from sglang.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH, GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGHTS
 
+from slime.backends.sglang_utils.server_control import unregister_worker
 from slime.backends.sglang_utils.sglang_config import ServerGroupConfig
-from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.ray.utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, add_default_ray_env_vars
 
 logger = logging.getLogger(__name__)
+
+
+def reset_weights_update_groups(groups, *, timeout):
+    """Reset every serving peer together, then retire only failed engines.
+
+    Prefill and decode may share one NCCL weight-update group. Destroying that
+    group can wait for its peers, so sending resets to one server group and
+    waiting before contacting the next group can deadlock healthy engines.
+    """
+    resets = {
+        engine.reset_weights_update_groups.remote(): (group_index, index // group.nodes_per_engine)
+        for group_index, group in enumerate(groups)
+        for index, engine in enumerate(group.all_engines)
+        if engine is not None
+    }
+    if resets:
+        ray.wait(list(resets), num_returns=len(resets), timeout=timeout)
+    failed = set()
+    for ref, engine in resets.items():
+        try:
+            ray.get(ref, timeout=0)
+        except Exception as error:
+            logger.warning("Retiring engine %s after trainer reset failed: %s", engine, error)
+            failed.add(engine)
+    for group_index, engine_id in sorted(failed):
+        groups[group_index].retire_engine(engine_id, timeout=timeout)
 
 
 @dataclasses.dataclass
@@ -29,6 +54,7 @@ class ServerGroup:
     pg: Any  # (placement_group, reordered_bundle_indices, reordered_gpu_ids)
     all_engines: list
     num_gpus_per_engine: int
+    # Also marks surviving engines that a replacement trainer must reconnect.
     num_new_engines: int
     worker_type: str = "regular"  # "regular", "prefill", "decode", or "placeholder"
     rank_offset: int = 0  # cumulative engine count before this group
@@ -38,6 +64,9 @@ class ServerGroup:
     model_path: str | None = None  # checkpoint path for update_weights_from_disk
     router_ip: str | None = None
     router_port: int | None = None
+    # Retain addresses outside the actors: deregistration must still work when
+    # an actor dies or cannot answer get_url(). Keys index all_engines locally.
+    engine_urls: dict[int, str] = dataclasses.field(default_factory=dict)
 
     @property
     def nodes_per_engine(self):
@@ -47,6 +76,24 @@ class ServerGroup:
     def engines(self):
         """Node-0 engines only (for multi-node serving)."""
         return self.all_engines[:: self.nodes_per_engine]
+
+    def retire_engine(self, engine_id, *, timeout):
+        """Remove one serving unit from routing and terminate all of its nodes."""
+        first = engine_id * self.nodes_per_engine
+        if self.worker_type != "encoder":
+            unregister_worker(
+                f"http://{self.router_ip or self.args.sglang_router_ip}:{self.router_port or self.args.sglang_router_port}",
+                self.engine_urls[first],
+                timeout=timeout,
+            )
+        engines = self.all_engines[first : first + self.nodes_per_engine]
+        shutdowns = [engine.shutdown.remote() for engine in engines if engine is not None]
+        if shutdowns:
+            ray.wait(shutdowns, num_returns=len(shutdowns), timeout=timeout)
+        for engine in engines:
+            if engine is not None:
+                ray.kill(engine, no_restart=True)
+        self.all_engines[first : first + self.nodes_per_engine] = [None] * self.nodes_per_engine
 
     def parallel_config(self) -> dict[str, Any]:
         """Return the SGLang parallel args that affect rank-local expert routing."""
@@ -100,11 +147,15 @@ class ServerGroup:
                 "and --sglang-config server_groups."
             )
 
+        from slime.backends.sglang_utils.sglang_engine import SGLangEngine
+
         RolloutRayActor = ray.remote(SGLangEngine)
 
         rollout_engines = []
         for i in range(len(self.all_engines)):
             if self.all_engines[i] is not None:
+                # Startup and recovery share this slot map. Reuse live processes;
+                # only empty slots need new actors.
                 continue
 
             global_rank = self.rank_offset + i
@@ -170,6 +221,14 @@ class ServerGroup:
             base_port=base_port,
         )
 
+        # Cache URLs before init can fail. Deregistration must remain possible
+        # even if the actor dies before answering get_url().
+        for rank, _engine in rollout_engines:
+            address = addr_and_ports[rank]
+            host = address["host"]
+            if ":" in host and not host.startswith("["):
+                host = f"[{host}]"
+            self.engine_urls[rank - self.rank_offset] = f"http://{host}:{address['port']}"
         init_handles = [
             engine.init.remote(
                 **(addr_and_ports[rank]),
@@ -279,6 +338,8 @@ class RolloutServer:
             logger.info(f"Recovered {g.num_new_engines} dead rollout engines (worker_type={g.worker_type})")
             assert g.num_new_engines == len(dead_indices), "num_new_engines does not match dead_indices length"
             if g.needs_offload and dead_indices:
+                # Fresh engines allocate all memory at startup. Restore offload
+                # state before weight sync to avoid conflicts with colocated training.
                 new_engines = [g.all_engines[i] for i in dead_indices]
                 release_handles.extend(engine.release_memory_occupation.remote() for engine in new_engines)
                 if self.update_weights:
@@ -287,6 +348,8 @@ class RolloutServer:
                     non_updatable_groups_engines.append((g.model_path, new_engines))
 
         if release_handles:
+            from sglang.srt.constants import GPU_MEMORY_TYPE_WEIGHTS
+
             ray.get(release_handles)
             all_resume_engines = updatable_new_engines[:]
             for _model_path, engines in non_updatable_groups_engines:
@@ -315,6 +378,8 @@ class RolloutServer:
 
     def onload_weights(self):
         """Restore weights for offloaded groups."""
+        from sglang.srt.constants import GPU_MEMORY_TYPE_WEIGHTS
+
         handles = []
         for g in self.server_groups:
             if not g.needs_offload:
@@ -324,6 +389,8 @@ class RolloutServer:
 
     def onload_kv(self):
         """Resume KV cache and CUDA graphs for offloaded groups."""
+        from sglang.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH, GPU_MEMORY_TYPE_KV_CACHE
+
         handles = []
         for g in self.server_groups:
             handles.extend(g.onload(tags=[GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_CUDA_GRAPH]))

@@ -1,76 +1,131 @@
 # 容灾
 
-长时间 RL 任务的失败模式和短 SFT 任务很不一样：rollout engine 可能 hang，long-tail sample 可能拖住整个 round，serving state 也必须在权重更新后保持一致。slime 的容灾能力主要聚焦在 rollout 侧：让 rollout engine 可观测、可重启、可调试，同时不改变 training / rollout / Data Buffer 主路径。
+slime 会检查 SGLang 推理引擎是否正常工作，移除失效的引擎，并在下次更新权重前重启它们。使用 Straw 传输或保存 rollout 调试数据时，还支持在 Megatron 训练失败后保留推理集群，调整训练配置，再继续训练。
 
-开启容灾：
+这些能力默认对 slime 启动的推理集群生效，不需要传入 `--use-fault-tolerance`。该参数保留用于兼容旧命令；使用外部推理集群时，仍按原来的策略处理。
+
+## Megatron 失败后如何继续训练
+
+这个恢复流程要求 **Ray 集群仍在运行**。训练入口进程或 `RolloutManager` 退出，不会销毁 SGLang 引擎和路由器；重新提交训练任务后，slime 会找到原来的推理集群并继续使用。整个流程不需要修改 SGLang，也不会自动重试训练任务。
+
+### 首次启动时保留恢复数据
+
+以下两种方式任选其一。选择后，slime 会自动保存恢复所需的数据，不依赖 `--use-fault-tolerance`。
+
+使用 Straw 保存 rollout 和训练数据：
 
 ```bash
---use-fault-tolerance
+--rollout-data-transport straw --rollout-data-dir /shared/my-run/queue
 ```
 
-## 当前覆盖范围
-
-slime 当前提供 rollout-engine fault tolerance：
-
-- 对 SGLang rollout server 做 health check；
-- heartbeat timeout 后重启 rollout server；
-- 重启后正确更新参数；
-- 保存 debug rollout dump，用于不重新跑 rollout 的情况下 replay 训练侧问题；
-- trace/profiling hook，用于检查 long-tail rollout 行为。
-
-集群级抢占、trainer rank failure 和 full-job resume 仍应由集群调度器、Ray restart policy 和 slime checkpointing 共同处理。实际生产任务中，建议把 rollout fault tolerance、定期 checkpoint 和 debug dump 组合使用。
-
-## Rollout Health Checks
-
-rollout 过程中，slime 会定期向所有 SGLang server 发送 heartbeat 请求（`/health_generate`）。如果 heartbeat timeout，异常 SGLang server 会被停止。当前 rollout round 完成后，slime 会重启 server，并在其继续服务后续 rollout 请求前更新到正确参数。
-
-主要参数：
-
-- `--rollout-health-check-first-wait`：第一次 rollout 前等待多久再开始 heartbeat。大 MoE 模型首次运行可能需要 kernel compilation。默认 `300` 秒。
-- `--rollout-health-check-interval`：heartbeat 间隔。默认 `10` 秒。
-- `--rollout-health-check-timeout`：单次 heartbeat timeout。默认 `5` 秒。
-
-示例：
+或者保存 rollout 调试数据，路径中必须包含 `{rollout_id}`：
 
 ```bash
---use-fault-tolerance \
+--save-debug-rollout-data '/shared/my-run/rollout_{rollout_id}.pt'
+```
+
+通过 `--save` 和 `--save-interval` 定期保存模型 checkpoint。保存间隔越长，失败后需要重新训练的批次越多，也需要保留更多恢复数据。
+
+恢复模式要求使用 `torch_dist` checkpoint，保存随机数状态，并为有状态的优化器保存优化器状态。slime 会自动启用支持跨并行配置重新分片的优化器保存格式。不能设置 `--no-save-rng`。
+
+使用 `--use-stateless-adam --no-save-optim` 时，Adam 不在 optimizer step 之间保留动量，因此恢复时可以省略优化器张量。Slime 会在每个模型 checkpoint 目录中保存 `opt_param_scheduler.pt`，使学习率和 weight decay 的 scheduler 进度与模型一起恢复；缺少此文件时会拒绝恢复。FP32 主参数会从保存的模型精度重建，因此不保证重启后的更新逐比特一致。普通 Adam 仍必须保存优化器 checkpoint。
+
+如果保存大 MoE 的优化器时显存不足，可以使用 `--distrib-optim-fully-reshardable-mem-efficient`。Megatron 会通过 Gloo 在 CPU 上聚合 checkpoint 张量，仍支持重新分片，但会增加主机内存和保存时间的开销。`--overlap-grad-reduce --ddp-bucket-size 40000000` 可以限制每次聚合的临时缓冲区大小；还需为完整的优化器状态预留主机内存。
+
+### 失败后重新提交
+
+例如，Megatron 因 OOM 退出后：
+
+1. 等待失败的训练任务结束。
+2. 调整 TP/CP/EP、microbatch 大小或每张卡的 token 上限。
+3. 向**同一个 Ray 集群**重新提交 `train.py`。
+
+重新提交时，模型、rollout 配置、global batch size 和会话标识要保持一致。训推共置（colocate）时，训练进程需要放得进原先分配的 GPU 资源；训推分离时，可以重新分配训练侧资源，推理侧 GPU 不会移动。
+
+保留的 worker 继续使用原配置。重新接入时会检查采样、过滤器、reward hook 和自定义参数；新增或删除参数也视为变更。只有明确支持的训练侧和运行控制参数可以调整。
+
+两次提交之间不要停止 Ray、重建推理服务容器，或执行 `pkill sglang` 等清理命令。`slime.utils.external_utils.command_utils.execute_train` 会保留正在运行的 Ray head 和 SGLang；如果使用的 shell 脚本每次启动都会清理进程，重启时需要跳过这一步。训练正常结束后，slime 会释放保留的会话及其资源。
+
+### 从哪一步恢复
+
+新训练进程会加载最近一次成功保存的模型、scheduler、随机数状态，以及有状态优化器的状态，并重新训练该 checkpoint 之后的批次。已经训练完成、但模型更新尚未保存的批次也会重放；如果还没有 checkpoint，则从最初的模型开始重放。
+
+保留的数据包括生成结果、token 和 reward 后处理结果。修改训练并行配置后，slime 会重新分片这些数据，不会重新生成样本，也不会再次执行 reward 后处理。恢复数据会保留到对应的模型 checkpoint 提交成功，或训练正常结束。推理侧的权重版本号在重启后继续递增。
+
+Megatron 会在并行布局兼容时恢复随机数状态；TP/PP 改变时会重新初始化。因此，改变并行布局后可以继续训练，但不保证结果逐比特一致。
+
+## 如何找到原来的推理集群
+
+slime 使用具名 Ray actor 管理推理集群。新任务根据会话名称找到该 actor，由它返回已有的路由器和引擎信息，不需要扫描路由器进程。
+
+可以用 `--rollout-session-id` 显式指定会话标识。未指定时，按以下顺序选择标识来源，再计算哈希得到稳定的名称：
+
+1. 使用 Straw 时，取存储目录的绝对路径和 `--rollout-queue-run-id`。
+2. 否则，取 `--save-debug-rollout-data` 路径模板的绝对路径。
+3. 未保存调试数据时，取 `--save` 目录的绝对路径。
+4. 以上都没有时，取模型和 rollout 配置。
+
+同一任务的两次提交需要使用相同标识；独立任务应使用不同标识，避免接入同一个推理集群。
+
+代码中有三个组件负责恢复：
+
+- `ServingCluster` 管理路由器、SGLang 引擎、GPU 资源、Straw 队列控制器和权重更新锁。它是具名的 detached Ray actor，不会随创建它的训练任务退出。
+- `RolloutManager` 负责生成、读取数据、转换样本和划分训练数据。它可以继续使用，也可以在退出后重建；重建不会销毁 `ServingCluster` 持有的资源。
+- `TrainingRecovery` 管理模型 checkpoint 边界，并保留该边界之后需要重放的批次。原始批次和转换结果是否已接收，由 Straw 接收日志中的回执决定；manager 或 RPC 在更新恢复日志前失败时，会根据回执补齐记录。转换结果只存一份，各 DP rank 获取自己的索引视图，改变并行配置只需重建视图。
+
+如果 `RolloutManager` 还活着，它会暂停接收新的生成任务。如果它已经退出，新实例会接回 `ServingCluster`，恢复数据源进度，并由队列控制器阻止旧读取进程继续取任务。已经完成、但尚未交给训练的预取结果仍可使用。训练进程也登记在 `ServingCluster` 中，因此 manager 退出后仍能清理旧训练进程。
+
+训练 driver 负责本次训练尝试的退出策略，也负责启动中途失败后的回滚。失败时，先限时等待 manager 暂停，再直接通知 serving 释放 trainer；无法暂停的 manager 会被终止，由下一次尝试重建。正常结束时分别清理 manager 和 serving，因此自定义 data source 的 `close()` 报错也不会跳过 serving 清理。清理失败会记录日志，保留原始训练异常。
+
+`--rollout-cleanup-timeout` 默认 **60 秒**，限制一次 detach 或 dispose 的等待时间，与健康检查超时和预热等待独立。某个步骤失败后仍会尝试释放其余资源；无法正常退出的 actor 会被终止。
+
+Checkpoint 选择会返回独立的配置与恢复计划。恢复边界通过不可变对象交接，每次训练尝试根据它和 serving 权重版本生成自己的配置副本；data source 和长驻 rollout worker 保留原来的配置。所有 custom function 仍使用原有的 args 接口。
+
+## 推理引擎的健康检查与重启
+
+rollout 过程中，slime 定期请求 SGLang 的 `/health_generate` 接口，检查引擎是否正常响应。rollout 结束时还会立即检查一次，**不受后台检查间隔和首次等待时间限制**。
+
+同步 rollout 在发送中止生成和等待请求结束的控制命令前，会先从路由器中移除失效的服务。返回训练前，`ServingCluster` 会再次检查引擎，注销失效服务并清除对应的 Ray actor 引用，避免后续显存卸载或权重更新请求访问已经停止的引擎。HTTP 请求和 Ray 调用都有超时限制。
+
+缺失的引擎在下一次更新权重前重启，随后加载训练侧的权重。后台检查和 rollout 收尾检查使用同一套故障处理流程；更新权重或调整显存占用时会暂停后台检查。
+
+重新接入时，清理旧训练连接也有超时限制。无法应答的 engine 会被注销，并连同其推理子进程一起终止；健康的其他 engine 保持运行。该机制同样适用于 prefill 和 decode 分组。
+
+重连时会先向所有 prefill/decode 组发起重置，再等待回复，避免共享 NCCL 通信组的两端因串行退出而互相等待。
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| `--rollout-health-check-first-wait` | `600` 秒 | 每次恢复后台检查后，先等待这段时间，给模型预热和算子编译留出时间。rollout 收尾检查不受影响。 |
+| `--rollout-health-check-interval` | `600` 秒 | 后台健康检查的间隔。 |
+| `--rollout-health-check-timeout` | `600` 秒 | 单次健康检查的超时，也限制等待 Ray 健康检查调用的时间。 |
+
+例如，大 MoE 模型需要较长的预热时间时，可以设置：
+
+```bash
 --rollout-health-check-first-wait 600 \
 --rollout-health-check-interval 10 \
---rollout-health-check-timeout 5
+--rollout-health-check-timeout 600
 ```
 
-## Debug 与 Replay 路径
+如果负载高峰导致健康检查误判，可以增大超时。如果引擎在权重更新后反复失败，应检查 SGLang 日志和最近保存的 rollout 数据。
 
-容灾只有在问题可复现时才真正有用。slime 提供 rollout-only 和 train-only 分离调试路径：
+## 分开调试推理和训练
 
-- `--debug-rollout-only`：只跑 rollout 并保存生成数据，不训练；
-- `--save-debug-rollout-data /path/to/rollout_{rollout_id}.pt`：保存 rollout samples，后续可以检查或 replay；
-- `--load-debug-rollout-data /path/to/rollout_{rollout_id}.pt`：加载已保存 rollout data，并跳过 SGLang 初始化；
-- `--debug-train-only`：只跑训练侧逻辑，不跑 rollout。
+保存 rollout 数据后，可以固定训练输入，单独排查训练问题：
 
-这可以帮助定位问题属于 serving/rollout、data conversion、reward/verifier 逻辑，还是 Megatron training。
+- `--debug-rollout-only`：只初始化推理侧，不训练；可配合保存参数检查生成和打分结果。
+- `--save-debug-rollout-data /path/to/rollout_{rollout_id}.pt`：保存每轮 rollout 的样本。
+- `--load-debug-rollout-data /path/to/rollout_{rollout_id}.pt`：加载已保存的样本用于训练，跳过 SGLang 初始化。
+- `--debug-train-only`：只初始化训练侧，不启动 SGLang。
 
-## 推荐生产模式
+对于耗时较长的生成请求，可以用[请求追踪](../developer_guide/trace.md)查看生成、打分和模型调用各自的耗时，再用[性能分析](../developer_guide/profiling.md)定位瓶颈。多模型或 PD 分离部署的配置见 [SGLang 配置](sglang-config.md)。
 
-对于长时间任务：
+## 恢复范围与限制
 
-1. 开启 `--use-fault-tolerance`。
-2. 通过 `--save-interval` 定期保存 checkpoint。
-3. 对新的 agentic 或 verifier-heavy workload 保存 rollout debug dump。
-4. 使用 [Trace Viewer](../developer_guide/trace.md) 检查 long-tail samples 和 reward/model-call spans。
-5. 使用 [Profiling](../developer_guide/profiling.md) 区分 rollout bottleneck 和 training bottleneck。
-6. 对复杂 multi-model 或 PD topology，使用 [SGLang Config](sglang-config.md) 显式管理 SGLang 部署。
+未使用 Straw、也未保存 rollout 调试数据时，仍可保留推理集群，但无法重放未保存到 checkpoint 的训练批次。
 
-## 需要关注的信号
+`RolloutManager` 重建支持内置数据源。自定义数据源需要提供兼容的 `state_dict` / `load_state_dict`，并让自己的队列控制器独立于 manager 存活；数据源构造函数和 rollout hook 的签名不变。
 
-- 如果大 MoE 模型启动阶段 health check 失败，增大 `--rollout-health-check-first-wait`。
-- 如果短暂负载高峰导致误判，增大 `--rollout-health-check-timeout`。
-- 如果某个 server 在 weight sync 后反复重启，检查 SGLang log 和最近的 rollout debug dump。
-- 如果失败发生在 trainer 而非 rollout，从 checkpoint 恢复，并用 debug replay 确认保存的 rollout batch 是否有效。
+如果 `ServingCluster` 或整个 Ray 集群已经丢失，需要重新启动推理服务并从 checkpoint 恢复。集群抢占和节点丢失仍需要调度系统与 checkpoint 配合处理。
 
-## 相关文档
-
-- [Debugging](../developer_guide/debug.md)
-- [Trace Viewer](../developer_guide/trace.md)
-- [Profiling](../developer_guide/profiling.md)
-- [CI](../developer_guide/ci.md)
+更多调试方式见[调试指南](../developer_guide/debug.md)，恢复测试的覆盖范围见[持续集成](../developer_guide/ci.md)。

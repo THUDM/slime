@@ -85,20 +85,22 @@ def rollout_store(args):
     profile = getattr(args, "rollout_storage_profile", "local")
     declaration_path = getattr(args, "rollout_storage_declaration", None)
     declaration = json.loads(Path(declaration_path).read_text()) if declaration_path else None
-    segment_mib = getattr(args, "rollout_queue_segment_mib", 256)
+    segment_mib = getattr(args, "rollout_queue_segment_mib", None)
     online_gc = getattr(args, "rollout_queue_online_gc", False)
     key = (os.getpid(), root, run_id, profile, segment_mib, online_gc, json.dumps(declaration, sort_keys=True))
     with _writers_lock:
         if key not in _writers:
+            # Omit the override unless requested, so Straw owns its default.
+            pack_options = {} if segment_mib is None else {"segment_target_bytes": segment_mib * 1024**2}
             store = SharedFilesystemStore(
                 root,
                 run_id,
                 online_gc=online_gc,
                 codecs=CODECS,
-                segment_target_bytes=segment_mib * 1024**2,
                 max_record_bytes=MAX_TENSOR_BYTES,
                 max_buffer_bytes=MAX_PUBLICATION_BYTES,
                 backend=FilesystemBackend(root, profile=profile, declaration=declaration),
+                **pack_options,
             )
             _writers[key] = (store, threading.RLock())
         store, lock = _writers[key]
@@ -120,7 +122,7 @@ class DiskPayloadRef:
     path: tuple = field(default=(), kw_only=True)
     sample_metadata: list[dict] | None = field(default=None, kw_only=True)
 
-    def load(self, *, root=None):
+    def load(self, *, root=None, selection=None):
         from straw.store import SharedFilesystemStore
         from straw.tensor import MAX_PUBLICATION_BYTES, MAX_TENSOR_BYTES
 
@@ -133,7 +135,7 @@ class DiskPayloadRef:
             max_record_bytes=MAX_TENSOR_BYTES,
             max_buffer_bytes=MAX_PUBLICATION_BYTES,
         )
-        value = SampleCodec(store).load(self.manifest)
+        value = SampleCodec(store).load(self.manifest, selection=selection)
         for part in self.path:
             value = value[part] if isinstance(part, int) else getattr(value, part)
         if self.sample_metadata is not None:
@@ -170,20 +172,35 @@ class RawRolloutRef(DiskPayloadRef):
 
 @dataclass(frozen=True)
 class TrainBatchRef(DiskPayloadRef):
+    """One rank's view of shared conversion records, plus its trainer schedule.
+
+    ``plan_digest`` identifies this layout, so ranks from different DP/mbs
+    schedules cannot accidentally train together even when the data is shared.
+    """
+
     batch_id: str
     rank: int
     plan_digest: str
+    selection: dict | None = field(default=None, kw_only=True)
+    schedule: dict | None = field(default=None, kw_only=True)
+
+    def load(self, *, root=None):
+        value = super().load(root=root, selection=self.selection)
+        if self.schedule is not None:
+            value.update(self.schedule)
+        return value
 
 
 def group_lease(group):
-    from straw.protocol import Lease
-
     from slime.rollout.base_types import iter_samples
 
     samples = list(iter_samples(group))
     leases = [getattr(sample, "_queue_lease", None) for sample in samples]
     if not any(leases):
         return None
+    # Ordinary in-memory groups have no queue lease and do not require Straw.
+    from straw.protocol import Lease
+
     if not all(value == leases[0] for value in leases):
         raise ValueError("A queue group must preserve one task authorization across all trajectories")
     return Lease(**leases[0])

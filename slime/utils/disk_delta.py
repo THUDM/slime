@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import glob
-import json
 import os
-import struct
 import zlib
 
 import numpy as np
@@ -56,41 +53,3 @@ def checksum(algorithm: str, buf) -> str:
     hasher = _new_hasher(algorithm)
     hasher.update(buf)
     return hasher.hexdigest()
-
-
-def _tensor_locations(ckpt_dir: str) -> dict[str, tuple[str, int, int]]:
-    """Map each tensor to (file, byte offset, nbytes), honoring the HF shard index."""
-    index_path = os.path.join(ckpt_dir, "model.safetensors.index.json")
-    if os.path.isfile(index_path):
-        with open(index_path) as f:
-            weight_map = json.load(f)["weight_map"]
-        # Match the model loader: unreferenced files may contain stale copies of
-        # the same tensors. Open indexed shards directly so missing files fail.
-        paths = [os.path.join(ckpt_dir, name) for name in sorted(set(weight_map.values()))]
-    else:
-        paths = glob.glob(os.path.join(ckpt_dir, "*.safetensors"))
-    locations: dict[str, tuple[str, int, int]] = {}
-    for path in paths:
-        with open(path, "rb") as f:
-            (header_len,) = struct.unpack("<Q", f.read(8))
-            header = json.loads(f.read(header_len))
-        for name, info in header.items():
-            if name == "__metadata__":
-                continue
-            begin, end = info["data_offsets"]
-            locations[name] = (path, 8 + header_len + begin, end - begin)
-    return locations
-
-
-def make_tensor_reader(ckpt_dir: str):
-    """Index the headers once, then return ``read(name) -> uint8 bytes`` that seeks straight to the
-    tensor — for reading many tensors without rescanning every header. KeyError if absent."""
-    locations = _tensor_locations(ckpt_dir)
-
-    def read(name: str) -> np.ndarray:
-        path, offset, nbytes = locations[name]
-        with open(path, "rb") as f:
-            f.seek(offset)
-            return np.frombuffer(f.read(nbytes), dtype=np.uint8)
-
-    return read

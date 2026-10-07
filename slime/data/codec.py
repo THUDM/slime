@@ -214,6 +214,8 @@ class SampleCodec:
                         "batch_id": value.batch_id,
                         "rank": value.rank,
                         "plan_digest": value.plan_digest,
+                        "selection": value.selection,
+                        "schedule": value.schedule,
                     }
                 if value.path:
                     extra["path"] = value.path
@@ -347,10 +349,10 @@ class SampleCodec:
         )
         return publications
 
-    def load(self, ref, *, reader=None):
+    def load(self, ref, *, reader=None, selection=None):
         if reader is None:
             with self.store.read_session() as reader:
-                return self.load(ref, reader=reader)
+                return self.load(ref, reader=reader, selection=selection)
         if reader.run_id != self.store.run_id or reader.backend.root != self.store.backend.root:
             raise InvalidReference("Sample reader belongs to a different storage root or run")
         records = list(reader.read(ref))
@@ -456,4 +458,22 @@ class SampleCodec:
                 return image
             raise UnsupportedSchema(f"Unknown Sample codec tag: {tag!r}")
 
-        return visit(payload["tree"])
+        tree = payload["tree"]
+        if selection is None:
+            return visit(tree)
+        if tree[0] != "dict":
+            raise ValueError("A column selection requires a dictionary payload")
+        result = {}
+        for key, node in tree[1]:
+            if key not in selection:
+                continue
+            indices = selection[key]
+            if indices is None:
+                result[key] = visit(node)
+            elif node[0] in {"list", "tuple"}:
+                # Select descriptors before opening tensor records. Other DP
+                # ranks' token/mask/R3 payloads are never read or materialized.
+                result[key] = [visit(node[1][index]) for index in indices]
+            else:
+                result[key] = visit(node)[indices]
+        return result

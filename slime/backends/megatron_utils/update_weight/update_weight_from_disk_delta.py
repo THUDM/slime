@@ -4,11 +4,11 @@ import json
 import logging
 import os
 import queue
-import shutil
 from argparse import Namespace
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import numpy as np
 import ray
@@ -20,10 +20,11 @@ from megatron.core import mpu
 from ray.actor import ActorHandle
 
 from slime.utils import accelerator
-from slime.utils.disk_delta import NUM_WORKERS, checksum, make_tensor_reader, overwrite_encode
+from slime.utils.disk_delta import NUM_WORKERS, checksum, overwrite_encode
 from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.weight_sync import should_flush_cache
 
+from ..hf_checkpoint_saver import _copy_hf_assets, _finalize_distributed_shards, _SafetensorShardWriter
 from .update_weight_from_distributed import UpdateWeightFromDistributed
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,8 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
     each engine's /pull_weights fans the apply out to every host it spans, then the engine reloads
     the patched local checkpoint via the ordinary update_weights_from_disk path. slime only ever
     talks to one endpoint per engine, so multi-node serving and external engines need nothing extra.
+    Each new trainer or engine topology first publishes its current full weights, establishing
+    the exact shared baseline before incremental updates begin.
     """
 
     def __init__(
@@ -53,7 +56,7 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
         self.delta_encoding = args.update_weight_delta_encoding
         self.checksum_algorithm = args.update_weight_delta_checksum
         self._snapshot: dict[str, np.ndarray] = {}
-        self._baseline_captured = False
+        self._needs_full_sync = True
         # Post-write hook: object-store-backed shared filesystems lack cross-host
         # read-after-write consistency, so written files need an explicit step
         # (e.g. uploading them to the backing object store) before the engines can see them.
@@ -73,6 +76,8 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
     ) -> None:
         # The rollout_engine_lock the NCCL path uses isn't needed — the engine-side apply is
         # serialized by a per-host flock.
+        if list(rollout_engines) != list(getattr(self, "rollout_engines", [])):
+            self._needs_full_sync = True
         self.rollout_engines = rollout_engines
         self._is_pp_src_rank = (
             mpu.get_data_parallel_rank(with_context_parallel=True) == 0 and mpu.get_tensor_model_parallel_rank() == 0
@@ -83,48 +88,52 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
 
     @torch.no_grad()
     def update_weights(self) -> None:
-        # The first call only captures the baseline snapshot the next sync diffs against.
-        if not self._baseline_captured:
-            self._capture_baseline()
-            self._baseline_captured = True
-            return
-
+        if self._needs_full_sync:
+            # A failed update may have reached host-local checkpoints without
+            # reaching GPU weights. Publish above every attempted disk version,
+            # so pull() cannot mistake that stale local checkpoint for this one.
+            version = [self.weight_version]
+            if dist.get_rank() == 0:
+                version[0] = max(
+                    [self.weight_version]
+                    + [
+                        int(path.name[8:])
+                        for path in Path(self.delta_dir).glob("weight_v*")
+                        if path.name[8:].isdigit()
+                    ]
+                )
+            dist.broadcast_object_list(version, src=0, group=get_gloo_group())
+            self.weight_version = version[0]
         self.weight_version += 1
-        self._publish()
+        self._version_dir = os.path.join(self.delta_dir, f"weight_v{self.weight_version:06d}")
+        if self._is_pp_src_rank:
+            os.makedirs(self._version_dir, exist_ok=True)
+        if self._needs_full_sync:
+            self._publish_full()
+        else:
+            self._publish()
         self._reload_engines()
+        self._needs_full_sync = False
         self._record_metrics()
 
-    def _capture_baseline(self) -> None:
-        """Capture the baseline snapshot the first delta diffs against (no publish), and clear any
-        stale stream from a prior run. Seeds from hf_checkpoint — what each host materializes its
-        base from — so the invariant ``snapshot == engine base`` holds even where the megatron->HF
-        round-trip trims vocab-padding rows (embed/lm_head). A tensor absent there (rare) falls back
-        to the gathered value. pull_weights(0) makes each host materialize its local base now,
-        overlapped with the snapshot gather, so the first real sync only pays the delta apply."""
-        # a prior run's versions would apply against the wrong base; start the dir clean
-        pulls = []
+    def _publish_full(self) -> None:
+        """Publish restored weights and seed deltas from those exact HF tensors."""
+        path = Path(self._version_dir)
         if dist.get_rank() == 0:
-            shutil.rmtree(self.delta_dir, ignore_errors=True)
-            os.makedirs(self.delta_dir, exist_ok=True)
-            if self._post_write_hook is not None:
-                self._post_write_hook(self.args, self.delta_dir, list(self.rollout_engines))
-            pulls = [engine.pull_weights.remote(target_version=0) for engine in self.rollout_engines]
-        dist.barrier(group=get_gloo_group())
-
-        read_hf = make_tensor_reader(self.args.hf_checkpoint)  # index the HF headers once
-        for name, tensor in self._iter_hf_tensors():
-            try:
-                self._snapshot[name] = read_hf(name)
-            except KeyError:
-                self._snapshot[name] = tensor.detach().cpu().contiguous().view(torch.uint8).numpy().reshape(-1)
-                logger.warning("seed: %s absent from hf_checkpoint; seeding from current weights", name)
-        if dist.get_rank() == 0:
-            ray.get(pulls)
-            logger.info(
-                "[disk delta] captured baseline snapshot of %d tensors from %s",
-                len(self._snapshot),
-                self.args.hf_checkpoint,
-            )
+            _copy_hf_assets(self.args.hf_checkpoint, path)
+        self._snapshot.clear()
+        writer = _SafetensorShardWriter(path, enabled=self._is_pp_src_rank)
+        chunk_index = dist.get_rank()
+        for chunks in (self._iter_non_expert_chunks(), self._iter_expert_chunks()):
+            for chunk in chunks:
+                tensors = [(name, tensor.detach().to(device="cpu", copy=True).contiguous()) for name, tensor in chunk]
+                for name, tensor in tensors:
+                    self._snapshot[name] = tensor.view(torch.uint8).numpy().reshape(-1)
+                writer.write(tensors, chunk_index)
+                chunk_index += dist.get_world_size()
+            dist.barrier(group=get_gloo_group())
+        _finalize_distributed_shards(path, writer.state())
+        self.total_bytes = self.changed_bytes = self.wire_bytes = writer.total_size
 
     def _publish(self) -> None:
         """Encode this version's changed tensors (PP-src ranks), then write it as a canonical HF dir."""
@@ -215,9 +224,6 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
         in self._delta with their checksums. The GPU->CPU gather is pipelined into a compute pool:
         the main loop copies one tensor to a pinned buffer and submits it; pool workers diff and
         compress in parallel (each is a few big GIL-releasing numpy/zstd calls)."""
-        self._version_dir = os.path.join(self.delta_dir, f"weight_v{self.weight_version:06d}")
-        if self._is_pp_src_rank:
-            os.makedirs(self._version_dir, exist_ok=True)
         snapshot = self._snapshot
         self._delta: dict[str, np.ndarray] = {}  # changed tensor name -> compressed diff
         self._checksums: dict[str, str] = {}  # changed tensor name -> new-state checksum
