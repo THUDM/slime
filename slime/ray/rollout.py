@@ -1,6 +1,7 @@
 import itertools
 import logging
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +19,7 @@ from slime.observability.rollout_data_utils import (
 from slime.observability.rollout_metrics import log_eval_rollout_data, log_rollout_data
 from slime.rollout.base_types import RolloutFnTrainOutput, call_rollout_fn
 from slime.rollout.sample_hooks import set_current_rollout_id
-from slime.utils.health_monitor import RolloutHealthMonitor
+from slime.utils.cleanup import Cleanup
 from slime.utils.http_utils import init_http_client
 from slime.utils.misc import load_function
 from slime.utils.staleness import fully_async_metrics_enabled
@@ -33,21 +34,49 @@ logger = logging.getLogger(__name__)
 
 @ray.remote
 class RolloutManager:
-    """The class to run rollout and convert rollout data to training data."""
+    """Generate and convert batches, borrowing internal engines from serving.
 
-    def __init__(self, args, pg, *, restore_plan=None):
+    The serving owner retains engines and queue state across manager death.
+    Recovery retains raw/global converted batches across trainer death. This
+    manager owns transient readers, conversion and the current trainer's shards.
+    """
+
+    def __init__(self, args, pg, *, restore_plan=None, serving=None, deployment=None):
         configure_logger()
 
+        from slime.ray.training_recovery import TrainingRecovery, TrainingResume, training_recovery_enabled
+
+        self.serving = serving
+        self.recovery = (
+            TrainingRecovery(args, restore_plan, retained_serving=deployment.reused)
+            if serving is not None and training_recovery_enabled(args)
+            else None
+        )
+        if self.recovery is not None:
+            args = TrainingResume(
+                self.recovery.restore_plan,
+                self.recovery.checkpoint,
+                getattr(args, "update_weight_start_version", 0),
+                deployment.reused,
+            ).apply(args)
+            restore_plan = self.recovery.restore_plan
+        self._recovery_admission_was_paused = None
         self.pg = pg
         self.args = args
-        self.controller = None
+        self.controller = deployment.controller if deployment else None
         self._owns_controller = False
         self.weight_version = None
+        self.training_weight_version = getattr(args, "update_weight_start_version", 0)
         if args.rollout_data_transport == "straw":
             check_rollout_storage(args)
 
         rollout_init_handles: list[Any] = []
-        if self.args.debug_train_only:
+        if deployment is not None:
+            # This is a handle snapshot; the serving owner remains responsible
+            # for topology changes and survives replacement of this manager.
+            self.servers = deployment.servers
+            init_http_client(args)
+        elif self.args.debug_train_only:
             self.servers: dict[str, Any] = {}
         else:
             from slime.backends.sglang_utils.deployment import start_rollout_servers
@@ -59,19 +88,41 @@ class RolloutManager:
         if args.rollout_data_transport == "straw":
             from slime.data.queue_data_source import QueueDataSource, QueueReader, create_queue_controller
 
-            if data_source_cls is QueueDataSource:
-                self.controller = create_queue_controller(args, restore_plan=restore_plan)
-                self._owns_controller = True
-                self.data_source = data_source_cls(args, controller=self.controller, restore_plan=restore_plan)
-            else:
+            # Custom sources keep their args-only constructor and may already
+            # own a controller. Construct them before creating a default one.
+            if data_source_cls is not QueueDataSource:
                 self.data_source = data_source_cls(args)
                 if isinstance(self.data_source, QueueReader):
                     self.controller = self.data_source.controller
+            if self.controller is None:
+                if serving is not None:
+                    self.controller = ray.get(serving.get_queue_controller.remote())
                 else:
                     self.controller = create_queue_controller(args, restore_plan=restore_plan)
                     self._owns_controller = True
+            if data_source_cls is QueueDataSource:
+                self.data_source = data_source_cls(
+                    args,
+                    controller=self.controller,
+                    restore_plan=restore_plan,
+                    reader_generation=uuid.uuid4().hex if serving is not None else "",
+                )
+                if self.recovery is not None and self.recovery.source_state is not None:
+                    self.recovery.reconcile_collection(self.controller, self.data_source.branch_id)
+                    # A dead manager's readers may have delivered these samples
+                    # already. Exclude retained batches before fencing/replaying
+                    # its readers, so each accepted sample is delivered once.
+                    excluded = set()
+                    for rollout_id in self.recovery.batches:
+                        for sample in self.recovery.load_raw(rollout_id):
+                            excluded.update(getattr(sample, "_queue_source_positions", []))
+                            if receipt := getattr(sample, "_queue_receipt", None):
+                                excluded.add(receipt["position"])
+                    self.data_source.restore_manager(self.recovery.source_state, excluded=sorted(excluded))
         else:
             self.data_source = data_source_cls(args)
+            if self.recovery is not None and self.recovery.source_state is not None:
+                self.data_source.load_state_dict(self.recovery.source_state)
 
         self.generate_rollout = load_function(self.args.rollout_function_path)
         self.eval_generate_rollout = load_function(self.args.eval_function_path)
@@ -83,47 +134,19 @@ class RolloutManager:
             ray.get(rollout_init_handles)
 
         init_tracking(args, primary=False)
-        self.rollout_engine_lock = Lock.options(
-            num_cpus=1,
-            num_gpus=0,
-            runtime_env={"env_vars": add_default_ray_env_vars()},
-        ).remote()
+        self.rollout_engine_lock = (
+            deployment.engine_lock
+            if deployment is not None
+            else Lock.options(
+                num_cpus=1,
+                num_gpus=0,
+                runtime_env={"env_vars": add_default_ray_env_vars()},
+            ).remote()
+        )
         self.rollout_id = -1
-
-        self._health_monitors = []
-        if not self.args.debug_train_only and self.args.use_fault_tolerance:
-            for srv in self.servers.values():
-                for group in srv.server_groups:
-                    monitor = RolloutHealthMonitor(group, args)
-                    monitor.start()
-                    self._health_monitors.append(monitor)
-            self._ci_fault_injection_pending = self.args.ci_test  # Flag for CI fault injection
-
-    def _try_ci_fault_injection(self):
-        """Try to inject fault during generate (when health monitor is running)."""
-        if not self._ci_fault_injection_pending:
-            return
-
-        # Only inject fault once
-        self._ci_fault_injection_pending = False
-
-        if (
-            self.server
-            and self.server.server_groups
-            and self.server.server_groups[0].all_engines
-            and self.server.server_groups[0].all_engines[0]
-        ):
-            logger.info("CI Fault Injection: Simulating crash on engine 0 during generate")
-            try:
-                # This will cause the ray actor to exit
-                self.server.server_groups[0].all_engines[0].simulate_crash.remote()
-                # Wait for health monitor to detect the crash and mark engine as None
-                # health_check_interval + health_check_timeout + buffer
-                wait_time = self.args.rollout_health_check_interval + self.args.rollout_health_check_timeout + 5
-                logger.info(f"CI Fault Injection: Waiting {wait_time}s for health monitor to detect crash")
-                time.sleep(wait_time)
-            except Exception as e:
-                logger.warning(f"CI Fault Injection failed: {e}")
+        if self.recovery is not None:
+            self.recovery.source_state = self._source_state()
+            self.recovery.persist()
 
     def pause_rollout_admission(self):
         """Stop the distributed producer before engines drain for a weight update."""
@@ -134,21 +157,108 @@ class RolloutManager:
         if not was_paused:
             self.data_source.consumers["fully_async"].resume()
 
-    def dispose(self):
-        for monitor in self._health_monitors:
-            monitor.stop()
-        if close := getattr(self.data_source, "close", None):
-            close()
-        if self._owns_controller:
-            controller = self.controller
-            ray.get(controller.close.remote())
-            ray.kill(controller, no_restart=True)
-            self.controller = None
-            self._owns_controller = False
+    def dispose(self, timeout=None):
         from slime.data.transport import seal_rollout_store
 
-        seal_rollout_store(self.args)
-        logging_utils.finish_tracking(self.args)
+        # The driver disposes serving separately, even when a custom source
+        # fails here. Managers close only resources they own, never borrowed ones.
+        with Cleanup(getattr(self.args, "rollout_cleanup_timeout", 60) if timeout is None else timeout) as cleanup:
+            if close := getattr(self.data_source, "close", None):
+                cleanup.run("close rollout data source", close)
+            if self.recovery is not None:
+                cleanup.run("release replay history", self.recovery.release_batches)
+                cleanup.run("remove recovery journal", self.recovery.journal.unlink, missing_ok=True)
+            if self._owns_controller:
+                cleanup.run(
+                    "close queue controller",
+                    lambda: ray.get(self.controller.close.remote(), timeout=cleanup.remaining),
+                )
+                cleanup.run("terminate queue controller", ray.kill, self.controller, no_restart=True)
+            cleanup.run("seal rollout storage", seal_rollout_store, self.args)
+            cleanup.run("finish manager tracking", logging_utils.finish_tracking, self.args)
+
+    def attach_training(self, args, deployment):
+        """Bind a driver to the same serving owner, including after manager death."""
+        from slime.data.queue_data_source import QueueDataSource
+        from slime.ray.training_recovery import TrainingResume
+
+        was_paused = self.pause_rollout_admission()
+        if self._recovery_admission_was_paused is None:
+            # Remember the original state across repeated attachments; a
+            # restart must not resume a producer that was already paused.
+            self._recovery_admission_was_paused = was_paused
+        self.pg = deployment.placements["rollout"]
+        self.servers = deployment.servers
+        if self.recovery is not None:
+            self.recovery.reconcile_checkpoint()
+            if isinstance(self.data_source, QueueDataSource):
+                # A queue commit can succeed while its RPC fails. Reconcile on
+                # live-manager retries too, before training can consume and GC
+                # a conversion missing from the checkpoint replay window.
+                self.recovery.reconcile_collection(self.controller, self.data_source.branch_id)
+        # The saved load boundary wins over new CLI settings, while trainer
+        # parallelism and memory limits still come from the new attempt.
+        weight_version = getattr(args, "update_weight_start_version", 0)
+        if deployment.reused:
+            weight_version = ray.get(self.serving.get_weight_version.remote(allow_inconsistent=True)) or 0
+        resume = TrainingResume(
+            self.recovery.restore_plan if self.recovery is not None else deployment.restore_plan,
+            self.recovery.checkpoint if self.recovery is not None else None,
+            weight_version,
+            deployment.reused,
+        )
+        self.args = resume.apply(args)
+        # Trainer layout affects batch splitting. Sources and their long-lived
+        # workers keep their original rollout configuration; recovery keeps its
+        # own storage configuration and checkpoint boundary.
+        self.batch_builder.args = self.args
+        self.rollout_engine_lock = deployment.engine_lock
+        self.training_weight_version = weight_version
+        return resume
+
+    def register_training_actors(self, role, actors, configuration):
+        if self.serving is not None:
+            ray.get(self.serving.register_trainers.remote(role, actors))
+        values = self.recovery.resume_role(role, configuration) if self.recovery is not None else {}
+        values["update_weight_start_version"] = self.training_weight_version
+        return values
+
+    def detach_training(self):
+        self._recovery_admission_was_paused = self.pause_rollout_admission()
+        logger.warning("Training stopped; preserving serving and available replay batches for manual restart")
+
+    def _source_state(self):
+        """Snapshot the cursor, leaving live queue tasks with their controller."""
+        from slime.data.queue_data_source import QueueDataSource
+
+        if isinstance(self.data_source, QueueDataSource):
+            return self.data_source.manager_state()
+        if state_dict := getattr(self.data_source, "state_dict", None):
+            return state_dict()
+        return None
+
+    def training_ready(self):
+        # train.py calls this only after publishing restored weights. Starting
+        # producers earlier could generate with the failed attempt's weights.
+        if self._recovery_admission_was_paused is not None:
+            self.resume_rollout_admission(self._recovery_admission_was_paused)
+            self._recovery_admission_was_paused = None
+
+    def checkpoint_committed(self, rollout_id):
+        if self.recovery is not None:
+            self.recovery.checkpoint_committed(rollout_id)
+
+    def get_weight_version(self):
+        if self.serving is not None:
+            return ray.get(self.serving.get_weight_version.remote())
+        server = self._get_updatable_server()
+        engines = [engine for engine in server.engines if engine is not None] if server else []
+        versions = ray.get([engine.get_weight_version.remote() for engine in engines])
+        if not versions:
+            return None
+        if len(set(versions)) != 1 or not str(versions[0]).isdigit():
+            raise RuntimeError(f"Cannot checkpoint inconsistent serving weight versions: {versions}")
+        return int(versions[0])
 
     @property
     def server(self) -> Any | None:
@@ -163,10 +273,7 @@ class RolloutManager:
         When multiple updatable servers exist, returns the first one
         (multi-model weight update is not yet supported).
         """
-        for srv in self.servers.values():
-            if srv.update_weights:
-                return srv
-        return None
+        return next((server for server in self.servers.values() if server.update_weights), None)
 
     @property
     def rollout_engines(self):
@@ -180,6 +287,8 @@ class RolloutManager:
         ``update_weights=True``.  Frozen models (reference, reward,
         etc.) are automatically excluded.
         """
+        if self.serving is not None:
+            return ray.get(self.serving.get_updatable_engines_and_lock.remote())
         srv = self._get_updatable_server()
         engines = srv.engines if srv else []
         gpu_counts = srv.engine_gpu_counts if srv else []
@@ -197,27 +306,73 @@ class RolloutManager:
         self.batch_builder.rollout_id = rollout_id
         set_current_rollout_id(rollout_id)
         self.health_monitoring_resume()
-        if self.args.ci_test and self.args.use_fault_tolerance and rollout_id >= 2:
-            self._try_ci_fault_injection()
-        data, metrics = self._get_rollout_data(rollout_id=rollout_id)
-        save_debug_rollout_data(
-            self.args.save_debug_rollout_data,
-            data,
-            rollout_id=rollout_id,
-            evaluation=False,
-            args=self.args,
-            reference=self.batch_builder.raw_ref if self.args.rollout_data_transport == "straw" else None,
-        )
+        # The legacy flag still selects deliberate CI crash injection. It no
+        # longer gates internal health checks, and external servers are never
+        # eligible for this internal-engine test.
+        if self.serving is not None and self.args.ci_test and self.args.use_fault_tolerance and rollout_id >= 2:
+            self.servers = ray.get(self.serving.try_ci_fault_injection.remote())
+        result = self._generate(rollout_id, start_time)
+        if self.serving is not None:
+            # Refresh the local snapshot before offload/pause can target a dead
+            # actor. Replacement engines are created only before weight update.
+            self.servers = ray.get(self.serving.finish_rollout.remote())
+        return result
+
+    def _generate(self, rollout_id, start_time):
+        if self.recovery is not None and rollout_id in self.recovery.batches:
+            batch = self.recovery.batches[rollout_id]
+            logger.info("Replaying retained rollout %s with the current trainer parallelism", rollout_id)
+            if batch.converted is not None:
+                # Conversion already succeeded: reuse rewards and tokens and
+                # build only the partitions for this trainer's DP layout.
+                return self.batch_builder.replay_converted(
+                    (
+                        batch.converted
+                        if isinstance(batch.converted, DiskPayloadRef)
+                        else self.recovery.load_converted(rollout_id)
+                    ),
+                    batch.batch_id,
+                )
+            # A crash before conversion still leaves the accepted raw batch.
+            data, metrics = self.recovery.load_raw(rollout_id), None
+            if self.args.rollout_data_transport == "straw":
+                self.batch_builder.raw_ref = batch.raw
+        else:
+            data, metrics = self._get_rollout_data(rollout_id=rollout_id)
+            save_debug_rollout_data(
+                self.args.save_debug_rollout_data,
+                data,
+                rollout_id=rollout_id,
+                evaluation=False,
+                args=self.args,
+                reference=self.batch_builder.raw_ref if self.args.rollout_data_transport == "straw" else None,
+            )
+            if self.recovery is not None:
+                self.recovery.remember_raw(
+                    rollout_id,
+                    (
+                        self.batch_builder.raw_ref
+                        if self.args.rollout_data_transport == "straw"
+                        else self.args.save_debug_rollout_data
+                    ),
+                    source_state=self._source_state(),
+                )
         log_rollout_data(
             rollout_id, self.args, data, metrics, time.time() - start_time, weight_version=self.weight_version
         )
         if self.args.debug_rollout_only:
             # if debug rollout only, we don't convert samples to train data and directly return
             return
-        cached = self.batch_builder.begin(data)
+        cached = self.batch_builder.begin(
+            data, replay=self.recovery is not None and rollout_id in self.recovery.batches
+        )
         if cached is not None:
             return cached
         data = self.batch_builder.convert(data)
+        if self.args.rollout_data_transport == "straw":
+            data = self.batch_builder.publish_converted(data)
+        if self.recovery is not None:
+            self.recovery.remember_converted(rollout_id, data, self.batch_builder.batch_id)
         return self.batch_builder.split_by_dp(data)
 
     def eval(self, rollout_id):
@@ -228,6 +383,10 @@ class RolloutManager:
         self.health_monitoring_resume()
 
         result = call_rollout_fn(self.eval_generate_rollout, self.args, rollout_id, self.data_source, evaluation=True)
+        if self.serving is not None:
+            # Evaluation shares the engines, so it needs the same cleanup before
+            # subsequent training controls can use the local handle snapshot.
+            self.servers = ray.get(self.serving.finish_rollout.remote())
         data = result.data
         save_debug_rollout_data(
             self.args.save_debug_rollout_data,
@@ -248,6 +407,8 @@ class RolloutManager:
             self.data_source.save(rollout_id)
             self.batch_builder.save(rollout_id)
         finally:
+            # Resume only consumers that this save paused, even if saving fails.
+            # Recovery may have deliberately left other consumers paused.
             for consumer, was_paused in paused:
                 if not was_paused:
                     consumer.resume()
@@ -258,14 +419,25 @@ class RolloutManager:
     def load(self, rollout_id=None):
         from slime.data.checkpoint import SourceRestore
 
+        if self.recovery is not None and self.recovery.loaded:
+            # The live source may be ahead of the model checkpoint. Keep that
+            # progress and replay retained batches rather than rereading prompts.
+            return
+
         source_restore = self.data_source.load(rollout_id)
         # Custom sources keep their existing load() contract; only the built-in
         # queue returns a source/builder restoration handoff.
         self.batch_builder.load(
             rollout_id, source_restore=source_restore if isinstance(source_restore, SourceRestore) else None
         )
+        if self.recovery is not None:
+            self.recovery.source_state = self._source_state()
+            self.recovery.initial_load_completed(rollout_id + 1)
 
     def offload(self):
+        # These controls do not change topology; both internal and external
+        # serving use the current handle snapshot. The owner serializes health
+        # checks with this pause before we change memory residency.
         self.health_monitoring_pause()
         for srv in self.servers.values():
             srv.offload()
@@ -283,34 +455,36 @@ class RolloutManager:
             srv.onload_kv()
 
     def recover_updatable_engines(self):
-        """Restart dead updatable rollout engines before the next weight update.
-
-        Recovers the updatable model (the one that receives weight
-        updates from training).
-        """
-        self.health_monitoring_pause()
-        srv = self._get_updatable_server()
-        if self.rollout_id == -1 or srv is None:
+        if self.serving is not None:
+            self.servers = ray.get(self.serving.recover_updatable_engines.remote())
             return
-
-        srv.recover()
+        # Keep the existing external-serving recovery policy.
+        if self.rollout_id == -1:
+            return
+        server = self._get_updatable_server()
+        if server is not None:
+            server.recover()
 
     def clear_updatable_num_new_engines(self):
-        # when fault tolerance is not enabled, we need to manually clear num_new_engines after update_weights
+        if self.serving is not None:
+            return ray.get(self.serving.clear_updatable_num_new_engines.remote())
         srv = self._get_updatable_server()
         if srv:
             srv.num_new_engines = 0
 
     def health_monitoring_pause(self) -> None:
-        for monitor in self._health_monitors:
-            monitor.pause()
+        if self.serving is not None:
+            return ray.get(self.serving.health_monitoring_pause.remote())
 
     def health_monitoring_resume(self) -> None:
-        for monitor in self._health_monitors:
-            monitor.resume()
+        if self.serving is not None:
+            self.servers = ray.get(self.serving.health_monitoring_resume.remote())
+            return
 
     def check_weights(self, action: str):
-        return ray.get([engine.check_weights.remote(action=action) for engine in self.rollout_engines])
+        return ray.get(
+            [engine.check_weights.remote(action=action) for engine in self.rollout_engines if engine is not None]
+        )
 
     def _get_rollout_data(self, rollout_id):
         if self.args.load_debug_rollout_data:

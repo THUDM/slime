@@ -1,7 +1,6 @@
 import abc
 import copy
 import logging
-import os
 from pathlib import Path
 
 import torch
@@ -15,6 +14,18 @@ logger = logging.getLogger(__name__)
 
 
 class DataSource(abc.ABC):
+    def register_consumer(self, name, consumer):
+        if name in self.consumers:
+            raise ValueError(f"Consumer {name!r} already registered")
+        restored = getattr(self, "_restored_consumers", {})
+        if name in restored:
+            consumer.load_state_dict(restored.pop(name))
+        self.consumers[name] = consumer
+
+    def close(self):
+        for consumer in getattr(self, "consumers", {}).values():
+            consumer.close()
+
     @abc.abstractmethod
     def get_samples(self, num_samples: int) -> list[list[Sample]]:
         """
@@ -50,6 +61,8 @@ class DataSource(abc.ABC):
 class RolloutDataSource(DataSource):
     def __init__(self, args):
         self.args = args
+        self.consumers = {}
+        self._restored_consumers = {}
 
         self.epoch_id = 0
         self.sample_group_index = 0
@@ -120,38 +133,53 @@ class RolloutDataSource(DataSource):
     def add_samples(self, samples: list[list[Sample]]):
         raise RuntimeError(f"Cannot add samples to {self.__class__.__name__}. This is a read-only data source.")
 
+    def state_dict(self):
+        # The cursor includes prompts already borrowed by background workers.
+        # Drain admission and snapshot their ready queues with that cursor so a
+        # checkpoint cannot skip prefetched samples when the source is restored.
+        paused = []
+        try:
+            for consumer in self.consumers.values():
+                paused.append((consumer, consumer.pause()))
+            state = {
+                name: copy.deepcopy(getattr(self, name))
+                for name in ("sample_offset", "epoch_id", "sample_group_index", "sample_index", "metadata")
+            }
+            if hasattr(self, "buffer"):
+                state["buffer"] = copy.deepcopy(self.buffer)
+            state["consumers"] = {
+                **self._restored_consumers,
+                **{name: consumer.state_dict() for name, consumer in self.consumers.items()},
+            }
+            return state
+        finally:
+            for consumer, was_paused in paused:
+                if not was_paused:
+                    consumer.resume()
+
+    def load_state_dict(self, state):
+        for name, value in state.items():
+            if name == "consumers":
+                self._restored_consumers = value
+            else:
+                setattr(self, name, value)
+        if self.args.rollout_shuffle and self.dataset is not None:
+            # Rebuild the saved epoch's ordering before reading from its cursor.
+            self.dataset.shuffle(self.epoch_id)
+
     def save(self, rollout_id):
-        state_dict = {
-            "sample_offset": self.sample_offset,
-            "epoch_id": self.epoch_id,
-            "sample_group_index": self.sample_group_index,
-            "sample_index": self.sample_index,
-            "metadata": self.metadata,
-        }
-        path = os.path.join(self.args.save, f"rollout/global_dataset_state_dict_{rollout_id}.pt")
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        torch.save(state_dict, path)
+        path = Path(self.args.save) / "rollout" / f"global_dataset_state_dict_{rollout_id}.pt"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(self.state_dict(), path)
 
     def load(self, rollout_id=None):
         if self.args.load is None:
             return
-
-        path = os.path.join(self.args.load, f"rollout/global_dataset_state_dict_{rollout_id}.pt")
-        if not os.path.exists(path):
-            logger.info(f"Checkpoint {path} does not exist.")
+        path = Path(self.args.load) / "rollout" / f"global_dataset_state_dict_{rollout_id}.pt"
+        if not path.exists():
+            logger.info("Checkpoint %s does not exist.", path)
             return
-
-        logger.info(f"load metadata from {path}")
-        logger.info(f"load metadata: {self.metadata}")
-        state_dict = torch.load(path)
-        self.sample_offset = state_dict.get("sample_offset", 0)
-        self.epoch_id = state_dict.get("epoch_id", 0)
-        self.sample_group_index = state_dict.get("sample_group_index", 0)
-        self.sample_index = state_dict.get("sample_index", 0)
-        self.metadata = state_dict.get("metadata", {})
-
-        if self.args.rollout_shuffle and self.dataset is not None:
-            self.dataset.shuffle(self.epoch_id)
+        self.load_state_dict(torch.load(path, weights_only=False))
 
     def __len__(self) -> int:
         if self.dataset is None:

@@ -236,6 +236,36 @@ def test_generation_workers_cannot_claim_manager_collection_tasks(source_factory
     assert collection.assignments[0].task.task_id == task_id
 
 
+def test_manager_replacement_fences_readers_and_recovers_only_unused_results(source_factory):
+    from straw.errors import StaleAttempt
+
+    from slime.data.transport import pack_rollout_group
+
+    args = source_factory.args
+    old = QueueDataSource(args, controller=_LocalHandle(source_factory.controller), reader_generation="old")
+    reader = old.reader_config("fully_async_0").open()
+    groups = reader.get_samples(3)
+    receipts = []
+    for group in groups[:2]:
+        for sample in iter_samples(group):
+            sample.tokens, sample.response_length = [1, 2], 1
+            sample.reward, sample.status = 1.0, Sample.Status.COMPLETED
+        receipts.append(pack_rollout_group(group, args, 0, controller=reader.controller).receipt)
+    state = old.manager_state()
+    rebuilt = QueueDataSource(args, controller=old.controller, reader_generation="new")
+    rebuilt.restore_manager(state, excluded=[receipts[0].position])
+    with pytest.raises(StaleAttempt):
+        source_factory.controller.take(reader.reader_id, 1)
+    recovered = rebuilt.get_samples(1)[0]
+    assert [sample.index for sample in iter_samples(recovered)] == [sample.index for sample in iter_samples(groups[1])]
+    assert all(sample.reward == 1.0 for sample in iter_samples(recovered))
+    assert rebuilt.reader_config("fully_async_0").reader_id == "new:fully_async_0"
+    assert source_factory.controller.status(groups[2][0]._queue_lease["task_id"])["state"] == "pending"
+    reader.close()
+    old.close()
+    rebuilt.close()
+
+
 def test_group_reply_loss_returns_original_receipt_and_detects_changed_content(
     source_factory,
 ):
@@ -1267,6 +1297,7 @@ def test_two_ray_nodes_generate_transfer_and_restore(tmp_path, fanout, transport
 
         cls = RolloutManager.__ray_metadata__.modified_class
         manager = cls.__new__(cls)
+        manager.serving = manager.recovery = None
         manager.args = args
         manager.controller = source.controller
         manager.weight_version = None
@@ -1610,8 +1641,12 @@ def test_restore_source_handoff_releases_obsolete_snapshot_graphs(source_factory
     for index in range(2):
         batch = f"completed-{index}"
         plan = codec.publish({"batch_id": batch}, submission_id=f"plan-{index}")
-        controller.plan_batch(batch, [], plan)
-        ready = codec.publish({"batch_id": batch}, submission_id=f"ready-{index}")
+        lease = controller.plan_batch(batch, [], plan)["lease"]
+        ready = codec.publish(
+            {"batch_id": batch},
+            submission_id=f"ready-{index}",
+            metadata={"task_id": batch, "attempt_id": lease["attempt_id"]},
+        )
         controller.ready_batch(batch, ready)
         controller.finish_batch(batch)
     replacement = codec.publish({"buffer": []}, submission_id="empty-source")
@@ -1882,10 +1917,11 @@ def test_online_gc_waits_for_training_completion_and_checkpoint_release(source_f
     receipt = controller.complete(lease, raw)
     writer.seal()
     plan = controller.codec.publish({"raw": DiskPayloadRef(raw, str(writer.backend.root))}, submission_id="plan")
-    controller.plan_batch("batch", [receipt.position], plan)
+    batch_lease = controller.plan_batch("batch", [receipt.position], plan)["lease"]
     ready = controller.codec.publish(
         {"batch_id": "batch", "raw": DiskPayloadRef(raw, str(writer.backend.root))},
         submission_id="ready",
+        metadata={"task_id": "batch", "attempt_id": batch_lease["attempt_id"]},
     )
     controller.ready_batch("batch", ready)
     controller._collect_storage()
@@ -2219,7 +2255,7 @@ def test_automatic_empty_restore_reads_the_saved_dataset_offset(source_factory, 
     # An unrelated live queue in the same pool must not be reset or consumed.
     source_factory("parent").get_samples(1)
     parent_state = copy.deepcopy(source_factory.controller.queue.tasks)
-    plan_args = resolve_checkpoint(args)
+    args, plan_args = resolve_checkpoint(args)
     controller = RolloutQueueController(args, restore_plan=plan_args)
     try:
         assert controller.queue.tasks == {}
@@ -2247,7 +2283,7 @@ def test_automatic_restart_before_first_checkpoint_recovers_the_same_queue(
     args = copy.copy(source_factory.args)
     args.save, args.load = str(tmp_path / "initial-run"), None
     args.start_rollout_id = None
-    plan_args = resolve_checkpoint(args)
+    args, plan_args = resolve_checkpoint(args)
     if not started:
         # Fail after branch publication, before the native queue exists.
         from straw.coordinator import Coordinator
@@ -2274,7 +2310,7 @@ def test_automatic_restart_before_first_checkpoint_recovers_the_same_queue(
     resumed = copy.copy(source_factory.args)
     resumed.load = resumed.save = args.save
     resumed.start_rollout_id = None
-    plan_resumed = resolve_checkpoint(resumed)
+    resumed, plan_resumed = resolve_checkpoint(resumed)
     assert plan_resumed.mode == "resume" and plan_resumed.queue_id == plan_args.queue_id
     controller = RolloutQueueController(resumed, restore_plan=plan_resumed)
     try:
@@ -2285,6 +2321,33 @@ def test_automatic_restart_before_first_checkpoint_recovers_the_same_queue(
             assert controller.queue.producer_state("dataset") == cursor
     finally:
         controller.close()
+
+
+@pytest.mark.parametrize("source_factory", [False, True], indirect=True)
+def test_training_progress_keeps_only_unfinished_batches(source_factory):
+    from straw.protocol import RecordSetRef
+
+    controller = source_factory.controller
+    sizes = []
+    for step in range(200):
+        batch_id = f"batch:bounded:{step}"
+        plan = controller.codec.publish({"step": step}, submission_id=f"plan:{step}")
+        lease = controller.plan_batch(batch_id, [], plan)["lease"]
+        ready = controller.codec.publish(
+            {"step": step},
+            submission_id=f"ready:{step}",
+            metadata={"task_id": batch_id, "attempt_id": lease["attempt_id"]},
+        )
+        controller.ready_batch(batch_id, ready)
+        assert len(controller._training_state()["batches"]) == 1
+        controller.finish_batch(batch_id)
+        state = controller._training_state()
+        assert not state["batches"] and not state["processed_positions"]
+        assert "finished_batches" not in state
+        assert state["processed_cursor"] == step + 1
+        sizes.append(RecordSetRef.from_dict(controller.training_state()["state_ref"]).payload_bytes)
+    assert max(sizes) - min(sizes) < 32
+    assert not controller.queue.batches  # one accepted log, no second batch history
 
 
 if __name__ == "__main__":

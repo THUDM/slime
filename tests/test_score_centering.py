@@ -602,7 +602,7 @@ def test_full_argument_validation_accepts_sc_tis_with_rollout_logprobs(monkeypat
         loss_type="policy_loss",
         eval_resume_step=None,
     )
-    module.slime_validate_args(a)
+    a, _ = module.slime_validate_args(a)
     assert a.use_tis and a.use_score_centering and a.use_rollout_logprobs
 
 

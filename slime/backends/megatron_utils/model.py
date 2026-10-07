@@ -757,13 +757,15 @@ def train(
     config.grad_scale_func = optimizer.scale_loss
     config.timers = None
     if isinstance(model[0], DDP) and args.overlap_grad_reduce:
-        assert config.no_sync_func is None, (
-            "When overlap_grad_reduce is True, config.no_sync_func must be None; "
-            "a custom no_sync_func is not supported when overlapping grad-reduce"
-        )
-        config.no_sync_func = [model_chunk.no_sync for model_chunk in model]
+        no_sync_func = [model_chunk.no_sync for model_chunk in model]
         if len(model) == 1:
-            config.no_sync_func = config.no_sync_func[0]
+            no_sync_func = no_sync_func[0]
+        # train() runs once per rollout, while the model/config survive across
+        # rollouts. Reuse our DDP callback instead of rejecting it as custom.
+        assert (
+            config.no_sync_func is None or config.no_sync_func == no_sync_func
+        ), "A custom no_sync_func is not supported when overlapping grad-reduce"
+        config.no_sync_func = no_sync_func
         if args.align_grad_reduce:
             config.grad_sync_func = [model_chunk.start_grad_sync for model_chunk in model]
             if len(model) == 1:
