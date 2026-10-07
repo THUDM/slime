@@ -6,14 +6,14 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 import torch
-
 from straw import SharedFilesystemStore
 from straw.errors import CorruptData
 from straw.protocol import decode
 from straw.tensor import CHUNK_BYTES, publish_tensors
-from slime.rollout.queue_codec import CODECS, QueueTensorRef, SampleCodec
+
+from slime.data.codec import CODECS, QueueTensorRef, SampleCodec
+from slime.data.tensor import TensorRef
 from slime.utils.score_centering import validate_sampler_topk
-from slime.utils.tensor_store import TensorRef
 from slime.utils.types import Sample
 
 NUM_GPUS = 0
@@ -235,7 +235,7 @@ def test_unknown_custom_fields_fail_without_silent_loss(codec):
 def test_batch_builder_preserves_group_rewards_masks_and_r3_sc_after_replay(codec, tmp_path):
     import copy
 
-    from slime.rollout.batch_builder import BatchBuilder
+    from slime.data.batch_builder import BatchBuilder
 
     args = SimpleNamespace(
         custom_reward_post_process_path=None,
@@ -327,7 +327,7 @@ def test_completed_capture_is_validated_before_publication(tmp_path, invalid_fie
     assert not list(tmp_path.rglob("*.pack"))
 
 
-def test_large_group_bundle_obeys_native_budget_and_preserves_tensor_aliases(tmp_path, monkeypatch):
+def test_large_group_bundle_streams_past_scratch_budget_and_preserves_tensor_aliases(tmp_path, monkeypatch):
     store = SharedFilesystemStore(
         tmp_path, "bounded", codecs=CODECS, max_buffer_bytes=32 * 1024, max_record_bytes=16 * 1024
     )
@@ -339,15 +339,14 @@ def test_large_group_bundle_obeys_native_budget_and_preserves_tensor_aliases(tmp
     publish = store.publish_many
     calls = []
 
-    def bounded(publications, **kwargs):
+    def tracked(publications, **kwargs):
         size = sum(len(record.payload) for publication in publications for record in publication.records)
-        assert size <= codec.payload_budget
         calls.append(size)
         return publish(publications, **kwargs)
 
-    monkeypatch.setattr(store, "publish_many", bounded)
+    monkeypatch.setattr(store, "publish_many", tracked)
     refs = codec.publish_many(values, submission_ids=[str(i) for i in range(len(values))])
-    assert len(calls) > 1
+    assert max(calls) > store.max_buffer_bytes
     for expected, ref in zip(values, refs, strict=True):
         actual = codec.load(ref)
         assert actual["first"] is actual["same"]
@@ -367,6 +366,42 @@ def test_unvalidated_capture_roundtrip_never_narrows_values(codec, status):
         ref = getattr(restored, key)
         assert not ref.validated
         torch.testing.assert_close(ref.load(), getattr(sample, key), rtol=0, atol=0)
+
+
+def test_training_projection_reads_only_selected_tensor_records(codec, monkeypatch):
+    from slime.data.transport import TrainBatchRef
+
+    ref = codec.publish(
+        {
+            "tokens": [torch.tensor([index, index + 1]) for index in range(8)],
+            "loss_masks": [torch.ones(2, dtype=torch.int) for _ in range(8)],
+            "total_lengths": [2] * 8,
+            "unused": torch.zeros(10000),
+        },
+        submission_id="conversion",
+    )
+    loaded = []
+    original = QueueTensorRef.load
+
+    def tracked(value, *args, **kwargs):
+        loaded.append(value)
+        return original(value, *args, **kwargs)
+
+    monkeypatch.setattr(QueueTensorRef, "load", tracked)
+    view = TrainBatchRef(
+        ref,
+        str(codec.store.backend.root),
+        "batch",
+        0,
+        "layout",
+        selection={"tokens": [7, 2], "loss_masks": [7, 2], "total_lengths": None},
+        schedule={"partition": [7, 2], "num_microbatches": [1]},
+    )
+    restored = codec.load(codec.publish(view, submission_id="view"))
+    data = restored.load()
+    assert [tensor.tolist() for tensor in data["tokens"]] == [[7, 8], [2, 3]]
+    assert len(loaded) == 4
+    assert data["partition"] == [7, 2] and data["total_lengths"] == [2] * 8
 
 
 if __name__ == "__main__":

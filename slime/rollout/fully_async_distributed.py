@@ -13,6 +13,14 @@ from ray.exceptions import RayActorError
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 from straw.protocol import CommitReceipt
 
+from slime.data.transport import (
+    DiskPayloadRef,
+    RolloutGroupRef,
+    discard_rollout_group,
+    pack_rollout_payload,
+    publish_rollout_async,
+    unpack_rollout_payload,
+)
 from slime.observability import logging_utils
 from slime.observability.rollout_data_utils import validate_rollout_id_annotated
 from slime.ray.utils import add_default_ray_env_vars
@@ -22,14 +30,6 @@ from slime.rollout.sample_hooks import rollout_context
 from slime.utils.async_utils import get_async_loop
 from slime.utils.http_utils import get_rollout_num_engines, init_http_client
 from slime.utils.misc import load_function
-from slime.utils.rollout_transport import (
-    DiskPayloadRef,
-    RolloutGroupRef,
-    discard_rollout_group,
-    pack_rollout_payload,
-    publish_rollout_async,
-    unpack_rollout_payload,
-)
 from slime.utils.types import Sample
 
 
@@ -40,13 +40,14 @@ class RolloutScheduler:
     completed prefetch, so slow training applies backpressure to local pools.
     """
 
-    def __init__(self, args, workers, capacities):
+    def __init__(self, args, workers, capacities, *, controller=None):
         self.args = args
+        self.controller = controller
         self.workers = workers
         self.capacities = capacities
         self.capacity = sum(capacities)
         self.ready = deque()
-        self.delivered = set()
+        self.collecting = set()
         self.pending = {}
         self.controls = {}
         self.configurations = {}
@@ -143,9 +144,6 @@ class RolloutScheduler:
                             self.running_workers.remove(worker)
                         else:
                             self.ready.append(output)
-                            group, _ = output
-                            if isinstance(group, RolloutGroupRef) and group.receipt:
-                                self.delivered.add(group.receipt.position)
                     self.condition.notify_all()
         except Exception as error:
             with self.condition:
@@ -169,6 +167,8 @@ class RolloutScheduler:
                 raise self.error
             if self.demand:
                 raise RuntimeError("A rollout batch is already being collected")
+            # The previous batch is durable before the next collection starts.
+            self.collecting.clear()
             self.rollout_id = rollout_id
             self.demand = self.args.rollout_batch_size
             self.prefetch = min(prefetch, self.capacity)
@@ -192,6 +192,8 @@ class RolloutScheduler:
                     drop_reasons[reason] += 1
                 else:
                     groups.append(group)
+                    if isinstance(group, RolloutGroupRef) and group.receipt:
+                        self.collecting.add(group.receipt.position)
                     self.demand -= 1
                 self.condition.notify_all()
 
@@ -199,7 +201,7 @@ class RolloutScheduler:
         metrics["rollout/dynamic_filter/dropped_groups"] = dropped_count
         metrics["rollout/dynamic_filter/dropped_ratio"] = dropped_count / (len(groups) + dropped_count)
         # Publish a manifest of group references outside the scheduler lock.
-        return finalize_rollout_groups(self.args, rollout_id, groups, metrics)
+        return finalize_rollout_groups(self.args, rollout_id, groups, metrics, controller=self.controller)
 
     def pause(self, *, drain=True):
         """Stop admission; optionally wait for in-flight results to become durable."""
@@ -236,11 +238,6 @@ class RolloutScheduler:
             if self.thread is not None:
                 raise RuntimeError("Restore rollout state before starting generation")
             self.ready = deque(state["ready"])
-            self.delivered = {
-                group.receipt.position
-                for group, _ in self.ready
-                if isinstance(group, RolloutGroupRef) and group.receipt
-            }
 
     def close(self):
         with self.condition:
@@ -378,13 +375,18 @@ class _GenerationActor:
                 group,
                 self.args,
                 verdict.reason or "dynamic_filter",
+                controller=self.data_source.controller,
             )
             return None, verdict
         if self.args.rollout_data_transport == "straw":
-            group = await publish_rollout_async(group, self.args, rollout_id, group=True)
+            group = await publish_rollout_async(
+                group, self.args, rollout_id, group=True, controller=self.data_source.controller
+            )
         else:
-            if getattr(self.args, "_rollout_queue_controller", None) is not None:
-                accepted = await publish_rollout_async(group, self.args, rollout_id, group=True)
+            if getattr(self.data_source, "controller", None) is not None:
+                accepted = await publish_rollout_async(
+                    group, self.args, rollout_id, group=True, controller=self.data_source.controller
+                )
                 if accepted.receipt is not None:
                     for sample in iter_samples(group):
                         sample.__dict__.pop("_queue_lease", None)
@@ -420,13 +422,14 @@ class _GenerationActor:
             self._rebuffer_task = None
 
     def state_dict(self):
-        state = self.data_source.state_dict(include_pending=False)
-        if self.args.rollout_data_transport == "straw":
-            state = pack_rollout_payload(state, self.args, self.rollout_id)
-        return state
+        return self.data_source.state_dict(include_pending=False)
 
     def load_state_dict(self, state):
-        self.data_source.load_state_dict(unpack_rollout_payload(state))
+        state = unpack_rollout_payload(state)
+        if isinstance(state, dict) and state.get("worker_state") == 1:
+            # Older worker snapshots wrapped the reader with RNG state.
+            state = state["reader"]
+        self.data_source.load_state_dict(state)
 
     async def close(self):
         future = asyncio.run_coroutine_threadsafe(self._close(), get_async_loop().loop)
@@ -443,7 +446,7 @@ class _GenerationActor:
         # closing their files or killing this process.
         await asyncio.get_running_loop().shutdown_default_executor()
         self.data_source.close()
-        from slime.utils.rollout_transport import seal_rollout_store
+        from slime.data.transport import seal_rollout_store
 
         seal_rollout_store(self.args)
 
@@ -454,27 +457,34 @@ class DistributedRollout(RolloutScheduler):
     def _recover_worker_results(self, worker):
         if self.args.rollout_data_transport != "straw":
             return
-        delivered = pack_rollout_payload(sorted(self.delivered), self.args, self.rollout_id)
-        ref = ray.get(
-            self.args._rollout_queue_controller.recover_reader_results.remote(
-                f"fully_async_{worker}", delivered.manifest
-            )
-        )
+        # A worker can publish a result and die before its reply reaches us.
+        # Recover queue receipts, excluding positions already delivered locally.
+        positions = self.collecting | {
+            group.receipt.position for group, _ in self.ready if isinstance(group, RolloutGroupRef) and group.receipt
+        }
+        delivered = pack_rollout_payload(sorted(positions), self.args, self.rollout_id)
+        ref = ray.get(self.controller.recover_reader_results.remote(self.reader_ids[worker], delivered.manifest))
         for value in DiskPayloadRef(ref, self.args.rollout_data_dir).load():
             receipt = CommitReceipt.from_dict(value)
             payload = DiskPayloadRef(receipt.result_ref, self.args.rollout_data_dir)
             index = next(iter_samples(payload.load())).index
             group = RolloutGroupRef(receipt.result_ref, payload.root, index, receipt)
             self.ready.append((group, DynamicFilterOutput(keep=True)))
-            self.delivered.add(receipt.position)
 
     def __init__(self, args, data_source):
         if args.rollout_all_samples_process_path is not None:
             raise ValueError("--rollout-all-samples-process-path is not supported by distributed fully-async rollout")
         recovered = []
-        if getattr(args, "rollout_queue_resume", False) and "fully_async" not in data_source._restored_consumers:
-            ref = ray.get(args._rollout_queue_controller.recover_pending_rollout.remote())
-            for value in DiskPayloadRef(ref, args.rollout_data_dir).load():
+        # A new queue restores whole-job progress. A replacement manager keeps
+        # the live queue and has already recovered old readers through the source.
+        if (
+            not data_source.manager_restored
+            and data_source.restore_plan.mode == "resume"
+            and "fully_async" not in data_source._restored_consumers
+        ):
+            ref = ray.get(data_source.controller.recover_pending_rollout.remote())
+            values = DiskPayloadRef(ref, args.rollout_data_dir).load()
+            for value in values:
                 receipt = CommitReceipt.from_dict(value)
                 payload = DiskPayloadRef(receipt.result_ref, args.rollout_data_dir)
                 index = next(iter_samples(payload.load())).index
@@ -496,12 +506,13 @@ class DistributedRollout(RolloutScheduler):
         if not nodes or total_concurrency < len(nodes) * args.n_samples_per_prompt:
             raise ValueError("Distributed rollout needs concurrency for at least one prompt group per node")
         groups_per_worker, remainder = divmod(total_concurrency // args.n_samples_per_prompt, len(nodes))
-        workers, capacities = [], []
+        workers, capacities, reader_ids = [], [], []
         try:
             for i, node in enumerate(nodes):
                 capacity = groups_per_worker + (i < remainder)
                 capacities.append(capacity)
                 reader = data_source.reader_config(f"fully_async_{i}")
+                reader_ids.append(reader.reader_id)
                 workers.append(
                     ray.remote(_GenerationActor)
                     .options(
@@ -518,12 +529,14 @@ class DistributedRollout(RolloutScheduler):
             if any(size != len(data_source) for size in sizes):
                 raise ValueError(f"Replicated datasets differ in size: owner={len(data_source)}, workers={sizes}")
         except Exception:
+            # A partially started worker set is not usable. Release its actors
+            # while leaving accepted data in the independently owned queue.
             for worker in workers:
                 ray.kill(worker)
             raise
-        super().__init__(args, workers, capacities)
+        super().__init__(args, workers, capacities, controller=data_source.controller)
+        self.reader_ids = reader_ids
         self.ready.extend(recovered)
-        self.delivered.update(group.receipt.position for group, _ in recovered)
         logging.getLogger(__name__).info(
             "Fully-async rollout: %d nodes, dataset=%d, concurrency=%d",
             len(nodes),

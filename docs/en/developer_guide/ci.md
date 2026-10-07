@@ -1,117 +1,42 @@
 # CI (Continuous Integration)
 
-slime CI has two layers:
+slime runs CPU tests when a PR is opened or updated, when code is pushed to `main`, and when the workflow is triggered manually. GPU end-to-end tests are triggered by PR labels and run real Megatron training and SGLang rollout on self-hosted machines. For routine changes, start with CPU tests and select GPU tests that cover the affected behavior.
 
-1. **Always-on CPU correctness tests** that run on every PR, every push to `main`, and manual `workflow_dispatch`.
-2. **Label-gated GPU end-to-end tests** that validate real Megatron + SGLang training and rollout paths on self-hosted GPU runners.
+## Triggering Tests
 
-This split is intentional. Most invariants should be checked quickly without waiting for the GPU fleet, while full training/rollout behavior is still covered by GPU e2e jobs.
-
-## How It Works
-
-The workflow is defined in `.github/workflows/pr-test.yml`, which is auto-generated from `.github/workflows/pr-test.yml.j2`.
-
-### CPU Jobs
-
-CPU jobs run on GitHub-hosted `ubuntu-latest` runners:
-
-- `cpu-unittest` installs CPU PyTorch and lightweight dependencies, then runs registered unit and contract tests with `python tests/<test_file>.py`.
-- `agent-adapter-test` does the same for agent adapter tests, with extra dependencies such as `openai`, `openai-agents`, and `anthropic`.
-
-CPU jobs do not use Docker, do not acquire GPUs, and do not call `tests/ci/gpu_lock_exec.py`.
-
-### GPU E2E Jobs
-
-GPU jobs run on self-hosted GPU runners. Each job:
-
-1. Starts a Docker container, usually `slimerl/slime:latest`; image validation uses `slimerl/slime-test:latest`.
-2. Installs the latest `straw-queue` wheel from PyPI and slime with `pip install -e . --no-deps`.
-3. Acquires the requested GPUs with `tests/ci/gpu_lock_exec.py --count <num_gpus>`.
-4. Executes the registered test file with `python tests/<test_file>.py`.
-
-GPU tests usually follow the e2e pattern: `prepare()` downloads models/datasets, and `execute()` builds CLI arguments and calls `U.execute_train(...)`.
-
-Half of the 34 distinct training e2e matrix cases use straw; duplicate jobs and
-the GPU logprob/entropy kernel test are excluded from that count. The selected
-tests set `--rollout-data-transport straw` explicitly, so local execution and
-`run-ci-changed` use the same backend as the fixed matrix:
-
-- R3: `test_qwen3_30B_A3B_r3.py` and `test_moonlight_16B_A3B_r3.py`.
-- SC: `test_qwen2.5_0.5B_score_centering.py`, covering both top-k and top-p.
-- Fully async, fanout, PPO, MTP, PD/Mooncake, distributed SGLang configuration,
-  mixed-offload fault recovery, debug replay and release-train.
-- All five checkpoint save/load combinations share the same straw directory
-  across both phases, verify queue/builder checkpoints and explicitly resume
-  the queue on load.
-
-R3, SC and fully async also enable online GC. Ordinary straw tests use isolated
-temporary directories that are cleaned up after execution. These single-host
-GPU tests exercise the local filesystem profile; multi-host JuiceFS durability
-requires separate validation. The other e2e cases retain their Ray object-store
-or NIXL transport coverage. GPU containers install straw in both fixed and
-changed-test jobs, including when the published image predates straw support.
-
-### Changed-Test Job
-
-`run-ci-changed` dynamically detects added or modified files under `tests/test_*.py` and `tests/plugin_contracts/test_*.py` relative to `origin/main`.
-
-For each changed test file, it extracts a top-level `NUM_GPUS = <N>` constant and builds a matrix. If `NUM_GPUS` is missing, CI defaults to `8`, so CPU-only tests should declare:
-
-```python
-NUM_GPUS = 0
-```
-
-The changed-test job itself runs through the self-hosted Docker path. When `NUM_GPUS = 0`, it runs the test without acquiring GPUs.
-
-## CI Jobs and Triggers
-
-The CPU matrix marks straw-dependent tests with `straw: true`. Those jobs install
-the latest `straw-queue` wheel from PyPI before running the test. Queue
-tests do not require a Rust toolchain or access to the straw source repository.
-
-`test_optional_straw.py` runs without installing straw in its CPU job. It checks
-that the default rollout and training data path works without the package,
-startup prints `pip install straw-queue`, and selecting straw fails with an
-actionable installation error.
-
-`test_straw_fully_async_recovery.py` is an automatic CPU integration test: it
-SIGKILLs a job containing two local Ray nodes, then verifies recovery from the
-same filesystem queue in a fresh process, with and without online GC. Its tiny
-R3/SC payloads are bounded and it uses deterministic inference/reward fixtures.
-To run it locally after installing the compatible straw wheel:
-
-```bash
-PYTHONPATH=. python tests/test_straw_fully_async_recovery.py
-```
-
-| Trigger | Job | Type | Description |
+| Trigger | CI job | Environment | Coverage |
 |---|---|---|---|
-| Automatic | `cpu-unittest` | CPU | Always-on unit and contract tests for argument validation, schedules, rewards, samples, rollout validation, checkpoint utilities, and plugin contracts. |
-| Automatic | `agent-adapter-test` | CPU | Always-on agent adapter tests with optional provider SDK dependencies. |
-| `run-ci-sglang-config` | `e2e-test-sglang-config` | GPU | SGLang config tests for advanced rollout engine deployment and mixed/offload scenarios. |
-| `run-ci-megatron` | `e2e-test-megatron` | GPU | Core Megatron training tests covering dense, MoE, PPO, MTP, OPD, fully-async rollout, PD/Mooncake, and debug replay paths. |
-| `run-ci-precision` | `e2e-test-precision` | GPU | Numerical precision validation and parallel consistency checks. |
-| `run-ci-ckpt` | `e2e-test-ckpt` | GPU | Checkpoint save/load correctness, including CPU/GPU optimizer states and async save. |
-| `run-ci-image` | `e2e-test-image` | GPU | Runs the `run-ci-megatron` matrix on `slimerl/slime-test:latest`. |
-| `run-ci-changed` | `e2e-test-changed` | Mixed | Runs only changed tests, using each file's `NUM_GPUS` value. |
+| Automatic | `cpu-unittest` | CPU | Argument validation, batch scheduling, metrics, rewards, samples, checkpoint utilities, and extension interfaces. |
+| Automatic | `agent-adapter-test` | CPU | Agent adapters, with the required model-provider SDKs installed. |
+| `run-ci-sglang-config` | `e2e-test-sglang-config` | CPU/GPU | SGLang deployment configuration, including multiple models, engine layouts, and fault recovery with memory offload. |
+| `run-ci-megatron` | `e2e-test-megatron` | GPU | Megatron training, including dense models, MoE, PPO, MTP, OPD, fully async rollout, PD/Mooncake, and debug replay. |
+| `run-ci-precision` | `e2e-test-precision` | CPU/GPU | Numerical precision and consistency across parallel configurations. |
+| `run-ci-ckpt` | `e2e-test-ckpt` | GPU | Checkpoint saving and loading, including CPU/GPU optimizer states and async saves. |
+| `run-ci-image` | `e2e-test-image` | GPU | The same tests as `run-ci-megatron`, using the `slimerl/slime-test:latest` image. |
+| `run-ci-changed` | `e2e-test-changed` | CPU/GPU | Only added or modified tests, with GPU counts taken from each file's `NUM_GPUS`. |
 
-`workflow_dispatch` can be used from the Actions page for manual validation. It runs the registered jobs according to the workflow conditions.
+You can also run the workflow manually through `workflow_dispatch` on the GitHub Actions page. Manual runs execute the registered CPU and GPU jobs. Pushes to `main` automatically run only the CPU jobs.
 
-## CPU Unit Tests
+The workflow is defined in `.github/workflows/pr-test.yml`, generated from `.github/workflows/pr-test.yml.j2`. To change test lists or trigger conditions, edit the template and regenerate the workflow.
 
-The CPU suite is the first line of defense for correctness. It is designed to catch silent RL infrastructure bugs before a change reaches expensive GPU runs.
+## How Tests Run
 
-The registered CPU suite currently covers:
+### CPU Tests
 
-- Megatron argument and HF config validation;
-- DP/CP scheduling utilities and CP loss invariance;
-- metric reporting and distributed metric aggregation;
-- reward-model grading utilities for math, GPQA, F1, DeepScaler, and DAPO-style math;
+CPU jobs run on GitHub-hosted `ubuntu-latest` runners. They install CPU PyTorch and test dependencies, then execute `python tests/<test_file>.py`. They do not use Docker or acquire GPUs.
+
+`cpu-unittest` checks:
+
+- Megatron arguments and Hugging Face model configuration;
+- DP/CP batch scheduling and loss invariance under CP partitioning;
+- metric reporting and distributed aggregation;
+- reward calculation for math, GPQA, F1, DeepScaler, and DAPO;
 - `Sample` behavior, rollout validation, and agent trajectory merging;
-- HF checkpoint saver behavior;
-- customization hook contracts for rollout functions, generate functions, runtime hooks, and path loading.
+- Hugging Face checkpoint saving and interface contracts for custom rollout, generation functions, and runtime hooks.
 
-Agent adapter tests are kept in a separate CPU job because they need extra SDK dependencies.
+Agent adapter tests run in a separate `agent-adapter-test` job because they also require SDKs such as `openai`, `openai-agents`, and `anthropic`.
+
+CPU test entries marked with `straw: true` install the latest `straw-queue` wheel from PyPI. They do not need a Rust toolchain or the Straw source repository. `test_optional_straw.py` deliberately runs without Straw to check that default data transport still works and that explicitly selecting Straw produces a clear installation hint.
 
 Useful local commands:
 
@@ -120,46 +45,103 @@ python tests/test_agent/test_trajectory_manager_branching.py
 python -m pytest tests/test_megatron_argument_validation.py tests/plugin_contracts/test_plugin_generate_contracts.py
 ```
 
-## GPU E2E Tests
+### GPU End-to-End Tests
 
-GPU e2e tests validate the integrated training/rollout behavior that CPU tests cannot cover:
+GPU jobs run on self-hosted machines. Each test follows these steps:
 
-- `run-ci-sglang-config`: advanced SGLang deployment paths, including config-based engine layouts.
-- `run-ci-megatron`: main Megatron backend coverage for dense/MoE recipes, fully-async rollout, OPD, PPO-style paths, PD/Mooncake, and debug rollout-then-train replay.
-- `run-ci-precision`: numerical consistency across parallel settings.
-- `run-ci-ckpt`: checkpoint save/load combinations and async save.
-- `run-ci-image`: the same matrix as `run-ci-megatron`, but on the release/test image.
+1. Start a Docker container, usually `slimerl/slime:latest`; image validation uses `slimerl/slime-test:latest`.
+2. Install the latest `straw-queue` wheel from PyPI and the current slime checkout with `pip install -e . --no-deps`.
+3. Acquire the required GPUs with `tests/ci/gpu_lock_exec.py --count <num_gpus>`.
+4. Execute `python tests/<test_file>.py`.
 
-Use targeted labels for routine PRs. Use `run-ci-image` sparingly because it consumes significantly more GPU time.
+Test files usually use `prepare()` to download models and datasets, then `execute()` to build training arguments and call `U.execute_train(...)`.
 
-## Writing a New Test
+### Running Only Changed Tests
+
+With the `run-ci-changed` label, CI finds added or modified `tests/test_*.py` and `tests/plugin_contracts/test_*.py` files relative to `origin/main` and creates a test job for each file.
+
+The GPU count comes from the file's top-level `NUM_GPUS = <N>`. Without this declaration, CI requests 8 GPUs. CPU-only tests should therefore declare:
+
+```python
+NUM_GPUS = 0
+```
+
+These jobs still run in Docker on self-hosted machines, but do not acquire GPUs when `NUM_GPUS = 0`.
+
+## Data Transport and Recovery Tests
+
+### Straw
+
+Straw end-to-end tests explicitly set `--rollout-data-transport straw`, so local runs, `run-ci-changed`, and the fixed test list use the same transport. Coverage includes:
+
+- R3: `test_qwen3_30B_A3B_r3.py` and `test_moonlight_16B_A3B_r3.py`.
+- SC: `test_qwen2.5_0.5B_score_centering.py`, checking both top-k and top-p data.
+- Fully async rollout, fanout, PPO, MTP, PD/Mooncake, distributed SGLang, fault recovery with mixed memory offload, debug replay, and continued rollout after releasing training resources.
+- Checkpoint saving and loading: phases share a Straw storage pool to check queue and training-state recovery. `test_straw_checkpoint_fork.py` also checks step selection, repeated rollback, automatic branch selection, and debug replay.
+
+R3, SC, and fully async tests also enable online GC. Ordinary Straw tests use isolated temporary directories and clean them up afterward. Single-host GPU tests use the local filesystem profile; multi-host JuiceFS durability needs separate validation. Other end-to-end tests continue to cover Ray object-store and NIXL transport.
+
+`test_straw_fully_async_recovery.py` is an automatic CPU integration test. It uses SIGKILL to terminate a job with two local Ray nodes, then starts a new process to recover from the same filesystem queue. It tests both enabled and disabled online GC, using small R3/SC payloads and deterministic inference and reward fixtures. After installing a compatible Straw wheel, run it locally with:
+
+```bash
+PYTHONPATH=. python tests/test_straw_fully_async_recovery.py
+```
+
+### PipelineRL
+
+`test_qwen2.5_0.5B_pipeline_rl.py` runs fully async rollout and three actual GRPO training steps on 4 GPUs. It checks whether the same HTTP request continues generating across weight updates and whether training changes the policy weights.
+
+The fixed test list covers three configurations: `--flush-cache-interval 0` with NCCL or full disk weight synchronization, and `--flush-cache-interval 2` with NCCL for periodic cache flushing. The CPU test `test_pipeline_rl.py` checks the flush schedule and SGLang control requests. These tests check functionality, not learning quality or throughput gains.
+
+### Manual Megatron Restart
+
+`test_qwen2.5_0.5B_training_recovery.py` uses 4 GPUs and two successive training jobs on the same Ray cluster. The first uses TP=1 and deliberately triggers a real CUDA OOM. After verifying that serving still responds when the job exits, it resubmits training with TP=2, which also changes the DP size.
+
+The test checks that healthy SGLang processes, routers, and GPU placements are reused; replayed batch contents match; and training scheduler progress, finite nonzero gradients, and the final checkpoint are correct. The fixed test list includes:
+
+| Data storage | RolloutManager state | Checks |
+|---|---|---|
+| Straw with online GC | Remains alive | Reconnect trainers and replay completed training batches that were not checkpointed. |
+| Straw with online GC | Killed after failure | Reconnect a new manager to the original serving cluster and replay the same batches. |
+| Straw with a model/optimizer checkpoint and Megatron YAML configuration | Killed during training | Restore from the checkpoint and check configuration and recovery state. |
+| Rollout debug files | Killed after failure | Restore data from debug files and reconnect a new manager to the original serving cluster. |
+| Straw with disk-delta weight synchronization | Killed after failure | Publish restored weights as a new full baseline, then continue delta updates. |
+| Straw with PD/Mooncake serving | Killed after failure | Wedge the prefill actor, replace it within the reset timeout, and retain the healthy decode actor. |
+
+`test_qwen3_30B_A3B_training_recovery.py` uses 8 GPUs for the same OOM/checkpoint/manager-loss workflow with a MoE model, R3, and stateless Adam. It omits optimizer tensors while checking scheduler progress, compares persisted routing bytes across the TP/DP change, and completes training after recovery. The dense cases cover ordinary Adam with optimizer checkpoints.
+
+Internal serving health checks are enabled with or without the compatibility flag `--use-fault-tolerance`. CPU coverage includes configuration and checkpoint boundaries in `test_training_recovery.py`, lost disk-update replies in `test_disk_delta_recovery.py`, and real Ray manager SIGKILL or conversion-reply loss in `test_rollout_manager_recovery.py`.
+
+### Removing Failed Engines at Rollout Completion
+
+`test_qwen2.5_0.5B_rollout_health.py` stops a real SGLang HTTP server just before rollout completes, leaving its router registration intact. Two four-GPU cases either retain or kill the corresponding Ray actor. They check bounded rollout completion, deregistration before training, engine recovery at weight update, and a final training checkpoint.
+
+Both cases omit `--use-fault-tolerance` and set the background interval and initial wait to 600 seconds. This verifies that rollout-completion checks run immediately without waiting for background checks.
+
+## Adding Tests
 
 ### CPU Tests
 
-For CPU-only tests:
+Follow nearby examples and place tests under `tests/test_*.py`, `tests/utils/test_*.py`, or `tests/plugin_contracts/test_*.py`. Declare a top-level `NUM_GPUS = 0` if the file will be run by `run-ci-changed`.
 
-1. Add the test under `tests/test_*.py`, `tests/utils/test_*.py`, or `tests/plugin_contracts/test_*.py`, following nearby patterns.
-2. Add a top-level `NUM_GPUS = 0` if the file may be run by `run-ci-changed`.
-3. Make the file executable directly:
+CI executes test files directly, so pytest files need an entry point:
 
 ```python
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
 ```
 
-4. If the test should run permanently, register it in the `cpu-unittest` or `agent-adapter-test` job in `.github/workflows/pr-test.yml.j2`, then regenerate the workflow.
+To run a test automatically, register it in the `cpu-unittest` or `agent-adapter-test` list in `.github/workflows/pr-test.yml.j2`, then regenerate the workflow.
 
-### GPU E2E Tests
+### GPU End-to-End Tests
 
-For GPU e2e tests:
-
-1. Create `tests/test_<your_test_name>.py` following the existing `prepare()` / `execute()` pattern.
-2. Declare the required GPU count with `NUM_GPUS = <N>`.
-3. Download required models/datasets in `prepare()`.
+1. Create `tests/test_<your_test_name>.py` using the existing `prepare()` / `execute()` structure.
+2. Declare the required GPU count with a top-level `NUM_GPUS = <N>`.
+3. Download models and datasets in `prepare()`.
 4. Build arguments and call `U.execute_train(...)` in `execute()`.
 5. Register the test in the appropriate GPU job in `.github/workflows/pr-test.yml.j2`, then regenerate the workflow.
 
-Example skeleton:
+Example:
 
 ```python
 import os
@@ -184,25 +166,20 @@ if __name__ == "__main__":
     execute()
 ```
 
-## Workflow Generation
+## Generating the Workflow
 
-The workflow file `pr-test.yml` is auto-generated from the Jinja2 template `pr-test.yml.j2`. Do not edit `pr-test.yml` directly.
-
-To change the permanent CI matrix:
-
-1. Edit `.github/workflows/pr-test.yml.j2`.
-2. Run:
+Do not edit the generated `.github/workflows/pr-test.yml` directly. After editing `.github/workflows/pr-test.yml.j2`, run:
 
 ```bash
 python .github/workflows/generate_github_workflows.py
 ```
 
-3. Commit both `.github/workflows/pr-test.yml.j2` and the generated `.github/workflows/pr-test.yml`.
+Commit both the template and the generated workflow file.
 
 ## Choosing Checks for a PR
 
-- Pure argument parsing, reward, schedule, sample, trajectory, or hook-contract changes: rely on CPU tests first.
-- SGLang topology or rollout engine deployment changes: use `run-ci-sglang-config`.
-- Megatron training, loss, checkpoint conversion, or model recipe changes: use `run-ci-megatron`; add `run-ci-precision` or `run-ci-ckpt` when relevant.
-- Docker image or dependency changes: use `run-ci-image`.
-- New or modified tests: use `run-ci-changed` for quick targeted validation.
+- Argument parsing, rewards, batch scheduling, samples, trajectories, or extension interfaces: start with the corresponding CPU tests.
+- SGLang deployment or engine layouts: add `run-ci-sglang-config`.
+- Megatron training, loss, checkpoint conversion, or model training configurations: add `run-ci-megatron`. For numerical or checkpoint changes, also add `run-ci-precision` or `run-ci-ckpt` as needed.
+- Docker images or dependencies: add `run-ci-image`. It runs the full Megatron test list and uses more GPU time.
+- Added or modified tests: add `run-ci-changed` to validate the changed test files directly.

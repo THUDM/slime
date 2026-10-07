@@ -18,7 +18,7 @@ qwen_vl_utils # for VLM
 ray[default]
 safetensors
 sglang-router>=0.3.0
-straw-queue
+straw-queue>=0.1.2
 tensorboard
 transformers
 wandb

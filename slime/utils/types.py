@@ -6,8 +6,8 @@ from typing import Any
 import numpy as np
 import torch
 
+from slime.data.tensor import TensorRef
 from slime.utils.misc import decode_int32_meta_array
-from slime.utils.tensor_store import TensorRef
 
 _TOP_P_TOKEN_ID_META_KEYS = ("top_p_token_ids", "top_p_kept_token_ids")
 _TOP_P_TOKEN_OFFSET_META_KEYS = ("top_p_token_offsets", "top_p_kept_token_offsets")

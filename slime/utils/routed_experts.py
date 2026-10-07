@@ -7,8 +7,8 @@ from typing import Any
 
 import torch
 
+from slime.data.tensor import TensorRef
 from slime.utils import accelerator
-from slime.utils.tensor_store import TensorRef
 
 logger = logging.getLogger(__name__)
 

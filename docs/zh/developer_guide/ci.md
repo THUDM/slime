@@ -1,145 +1,147 @@
 # CI（持续集成）
 
-slime CI 分成两层：
+提交或更新 PR、向 `main` 推送代码，以及手动触发工作流时，slime 都会运行 CPU 测试。GPU 端到端测试通过 PR 标签触发，在自托管的 GPU 机器上运行真实的 Megatron 训练和 SGLang 推理。日常改动可以先用 CPU 测试检查，再按改动范围选择 GPU 测试。
 
-1. **默认运行的 CPU 正确性测试**：每个 PR、每次 push 到 `main`、以及手动 `workflow_dispatch` 都会运行。
-2. **通过 label 触发的 GPU end-to-end 测试**：在自托管 GPU runner 上验证真实的 Megatron + SGLang training/rollout 路径。
+## 如何触发测试
 
-这个拆分是有意为之。大部分 correctness invariant 应该在不等待 GPU 集群的情况下快速检查；真正依赖完整训练和 rollout 的行为，则由 GPU e2e job 覆盖。
-
-## 工作原理
-
-workflow 定义在 `.github/workflows/pr-test.yml`，它由 `.github/workflows/pr-test.yml.j2` 自动生成。
-
-### CPU Jobs
-
-CPU job 运行在 GitHub-hosted `ubuntu-latest` runner 上：
-
-- `cpu-unittest` 安装 CPU PyTorch 和轻量依赖，然后通过 `python tests/<test_file>.py` 运行注册的 unit/contract tests。
-- `agent-adapter-test` 使用同样的方式运行 agent adapter tests，并额外安装 `openai`、`openai-agents`、`anthropic` 等 SDK 依赖。
-
-CPU job 不使用 Docker，不申请 GPU，也不会调用 `tests/ci/gpu_lock_exec.py`。
-
-### GPU E2E Jobs
-
-GPU job 运行在自托管 GPU runner 上。每个 job 会：
-
-1. 启动 Docker container，通常使用 `slimerl/slime:latest`；镜像验证使用 `slimerl/slime-test:latest`。
-2. 从 PyPI 安装最新版 `straw-queue` wheel，并通过 `pip install -e . --no-deps` 安装 slime。
-3. 通过 `tests/ci/gpu_lock_exec.py --count <num_gpus>` 申请所需 GPU。
-4. 执行注册的测试文件：`python tests/<test_file>.py`。
-
-GPU 测试通常遵循 e2e 模式：`prepare()` 下载模型和数据集，`execute()` 构建 CLI 参数并调用 `U.execute_train(...)`。
-
-34 个独立训练 e2e 矩阵场景中，一半使用 straw；此计数排除了重复 job 和 GPU logprob/entropy 算子测试。选中的测试显式设置 `--rollout-data-transport straw`，因此本地执行、`run-ci-changed` 和固定矩阵使用同一后端：
-
-- R3：`test_qwen3_30B_A3B_r3.py` 和 `test_moonlight_16B_A3B_r3.py`。
-- SC：`test_qwen2.5_0.5B_score_centering.py`，覆盖 top-k 和 top-p。
-- Fully async、fanout、PPO、MTP、PD/Mooncake、分布式 SGLang 配置、混合 offload 故障恢复、debug 重放和 release-train。
-- 五种 checkpoint 保存/加载组合，两阶段共用 straw 目录，检查 queue/builder checkpoint，并在加载时显式恢复队列。
-
-R3、SC 和 fully async 同时启用在线 GC。普通 straw 测试使用独立临时目录，执行后清理。这些单机 GPU 测试使用本地文件系统 profile；多机 JuiceFS 持久性仍需单独验证。其余 e2e 保留 Ray object-store 或 NIXL 传输覆盖。固定矩阵和 changed-test 的 GPU 容器均安装 straw，因此发布镜像尚未包含 straw 时也能运行。
-
-### Changed-Test Job
-
-`run-ci-changed` 会动态检测相对于 `origin/main` 新增或修改的 `tests/test_*.py` 和 `tests/plugin_contracts/test_*.py` 文件。
-
-对每个 changed test file，它会读取文件顶层的 `NUM_GPUS = <N>` 常量并构建 matrix。如果缺少 `NUM_GPUS`，CI 会默认使用 `8`，因此 CPU-only test 应该声明：
-
-```python
-NUM_GPUS = 0
-```
-
-changed-test job 本身走 self-hosted Docker 路径。当 `NUM_GPUS = 0` 时，它会直接运行测试，不申请 GPU。
-
-## CI Jobs 与触发方式
-
-CPU 矩阵通过 `straw: true` 标记依赖 straw 的测试。对应 job 从 PyPI 安装最新版 `straw-queue` wheel，再运行测试。队列测试无需 Rust 工具链，也不需要访问 straw 源码仓库。
-
-`test_optional_straw.py` 的 CPU job 不安装 straw，验证默认 rollout 与训练数据路径仍可运行、启动时打印 `pip install straw-queue` 提示，以及显式选择 straw 时给出明确的安装错误。
-
-`test_straw_fully_async_recovery.py` 是自动运行的 CPU 集成测试：SIGKILL 一个包含两个本地 Ray 节点的任务，再用新进程从同一个文件系统队列恢复，分别验证在线 GC 关闭和开启。测试使用有界的小规模 R3/SC 载荷，以及确定性的推理/reward fixture。安装兼容 straw wheel 后，本地运行：
-
-```bash
-PYTHONPATH=. python tests/test_straw_fully_async_recovery.py
-```
-
-| Trigger | Job | 类型 | 说明 |
+| 触发方式 | CI 任务 | 运行环境 | 覆盖范围 |
 |---|---|---|---|
-| 自动运行 | `cpu-unittest` | CPU | 默认运行的 unit/contract tests，覆盖 argument validation、schedule、reward、sample、rollout validation、checkpoint utilities 和 plugin contracts。 |
-| 自动运行 | `agent-adapter-test` | CPU | 默认运行的 agent adapter tests，包含额外 provider SDK 依赖。 |
-| `run-ci-sglang-config` | `e2e-test-sglang-config` | GPU | SGLang config 测试，覆盖高级 rollout engine deployment 和 mixed/offload 场景。 |
-| `run-ci-megatron` | `e2e-test-megatron` | GPU | 核心 Megatron 训练测试，覆盖 dense、MoE、PPO、MTP、OPD、fully-async rollout、PD/Mooncake 和 debug replay 路径。 |
-| `run-ci-precision` | `e2e-test-precision` | GPU | 数值精度和并行一致性检查。 |
-| `run-ci-ckpt` | `e2e-test-ckpt` | GPU | Checkpoint save/load 正确性，包括 CPU/GPU optimizer state 和 async save。 |
-| `run-ci-image` | `e2e-test-image` | GPU | 在 `slimerl/slime-test:latest` 上运行与 `run-ci-megatron` 相同的 matrix。 |
-| `run-ci-changed` | `e2e-test-changed` | Mixed | 只运行 changed tests，并使用每个文件中的 `NUM_GPUS`。 |
+| 自动运行 | `cpu-unittest` | CPU | 参数校验、批次调度、指标、奖励计算、样本处理、checkpoint 工具和扩展接口。 |
+| 自动运行 | `agent-adapter-test` | CPU | Agent 适配器，额外安装所需的模型服务 SDK。 |
+| `run-ci-sglang-config` | `e2e-test-sglang-config` | CPU/GPU | SGLang 部署配置，包括多模型、不同引擎布局和显存卸载后的故障恢复。 |
+| `run-ci-megatron` | `e2e-test-megatron` | GPU | Megatron 训练，包括 Dense、MoE、PPO、MTP、OPD、全异步 rollout、PD/Mooncake 和调试数据重放。 |
+| `run-ci-precision` | `e2e-test-precision` | CPU/GPU | 数值精度，以及不同并行配置下的结果一致性。 |
+| `run-ci-ckpt` | `e2e-test-ckpt` | GPU | Checkpoint 保存和加载，包括 CPU/GPU 优化器状态和异步保存。 |
+| `run-ci-image` | `e2e-test-image` | GPU | 在 `slimerl/slime-test:latest` 镜像上运行与 `run-ci-megatron` 相同的测试。 |
+| `run-ci-changed` | `e2e-test-changed` | CPU/GPU | 只运行本次新增或修改的测试，GPU 数量由文件中的 `NUM_GPUS` 决定。 |
 
-也可以在 Actions 页面通过 `workflow_dispatch` 手动验证；它会按照 workflow 条件运行注册的 jobs。
+也可以在 GitHub Actions 页面通过 `workflow_dispatch` 手动运行。手动触发会运行已注册的 CPU 和 GPU 任务；向 `main` 推送代码只自动运行 CPU 任务。
 
-## CPU Unit Tests
+工作流定义在 `.github/workflows/pr-test.yml`，由 `.github/workflows/pr-test.yml.j2` 生成。修改测试列表或触发条件时，应编辑模板，再生成工作流文件。
 
-CPU suite 是 correctness 的第一道防线，用来在进入昂贵 GPU run 之前捕获 silent RL infrastructure bugs。
+## 测试如何运行
 
-当前注册的 CPU suite 覆盖：
+### CPU 测试
 
-- Megatron argument 和 HF config validation；
-- DP/CP scheduling utilities 和 CP loss invariance；
-- metric reporting 和 distributed metric aggregation；
-- math、GPQA、F1、DeepScaler、DAPO-style math 等 reward-model grading utilities；
-- `Sample` 行为、rollout validation 和 agent trajectory merging；
-- HF checkpoint saver 行为；
-- rollout function、generate function、runtime hook 和 path loading 的 customization hook contracts。
+CPU 任务运行在 GitHub 托管的 `ubuntu-latest` 环境中，安装 CPU 版 PyTorch 和测试依赖，再执行 `python tests/<test_file>.py`。它们不使用 Docker，也不申请 GPU。
 
-Agent adapter tests 单独放在一个 CPU job 中，因为它们需要额外 SDK 依赖。
+`cpu-unittest` 主要检查：
 
-常用本地命令：
+- Megatron 参数和 Hugging Face 模型配置是否合法；
+- DP/CP 批次调度，以及 CP 划分前后的 loss 是否一致；
+- 指标上报和分布式指标汇总；
+- math、GPQA、F1、DeepScaler、DAPO 等奖励计算；
+- `Sample`、rollout 数据校验和 agent 轨迹合并；
+- Hugging Face checkpoint 保存，以及自定义 rollout、生成函数和运行时 hook 的接口约定。
+
+Agent 适配器测试放在独立的 `agent-adapter-test` 任务中，因为它们还需要 `openai`、`openai-agents`、`anthropic` 等 SDK。
+
+CPU 测试列表中带有 `straw: true` 的条目，会从 PyPI 安装最新版 `straw-queue` wheel。测试不需要 Rust 工具链或 Straw 源码仓库。`test_optional_straw.py` 则刻意不安装 Straw，检查默认数据传输仍可运行，以及显式选择 Straw 时是否给出清晰的安装提示。
+
+常用的本地运行方式：
 
 ```bash
 python tests/test_agent/test_trajectory_manager_branching.py
 python -m pytest tests/test_megatron_argument_validation.py tests/plugin_contracts/test_plugin_generate_contracts.py
 ```
 
-## GPU E2E Tests
+### GPU 端到端测试
 
-GPU e2e tests 验证 CPU tests 无法覆盖的集成训练/rollout 行为：
+GPU 任务运行在自托管机器上，每项测试依次执行以下步骤：
 
-- `run-ci-sglang-config`：高级 SGLang deployment path，包括 config-based engine layouts。
-- `run-ci-megatron`：主要 Megatron backend coverage，包括 dense/MoE recipe、fully-async rollout、OPD、PPO-style path、PD/Mooncake 和 debug rollout-then-train replay。
-- `run-ci-precision`：不同并行设置下的数值一致性。
-- `run-ci-ckpt`：checkpoint save/load 组合和 async save。
-- `run-ci-image`：与 `run-ci-megatron` 相同的 matrix，但运行在 release/test image 上。
+1. 启动 Docker 容器，通常使用 `slimerl/slime:latest`；镜像验证使用 `slimerl/slime-test:latest`。
+2. 从 PyPI 安装最新版 `straw-queue` wheel，并通过 `pip install -e . --no-deps` 安装当前版本的 slime。
+3. 通过 `tests/ci/gpu_lock_exec.py --count <num_gpus>` 申请所需 GPU。
+4. 执行 `python tests/<test_file>.py`。
 
-日常 PR 优先使用 targeted labels。`run-ci-image` 消耗 GPU 时间较多，应谨慎使用。
+测试文件通常用 `prepare()` 下载模型和数据集，用 `execute()` 构建训练参数并调用 `U.execute_train(...)`。
 
-## 编写新测试
+### 只运行改动的测试
 
-### CPU Tests
+添加 `run-ci-changed` 标签后，CI 会相对于 `origin/main` 查找新增或修改的 `tests/test_*.py` 和 `tests/plugin_contracts/test_*.py`，并为每个文件创建一个测试任务。
 
-对于 CPU-only tests：
+GPU 数量取自文件顶层的 `NUM_GPUS = <N>`。没有声明时默认申请 8 张卡，因此只需要 CPU 的测试应写明：
 
-1. 按照附近文件的模式，将测试放在 `tests/test_*.py`、`tests/utils/test_*.py` 或 `tests/plugin_contracts/test_*.py` 下。
-2. 如果这个文件可能被 `run-ci-changed` 运行，添加顶层 `NUM_GPUS = 0`。
-3. 让文件可以直接执行：
+```python
+NUM_GPUS = 0
+```
+
+这类任务仍在自托管机器的 Docker 容器中执行，但 `NUM_GPUS = 0` 时不会申请 GPU。
+
+## 数据传输与恢复测试
+
+### Straw
+
+使用 Straw 的端到端测试会显式设置 `--rollout-data-transport straw`，确保本地执行、`run-ci-changed` 和固定测试列表使用同一种传输方式。覆盖范围包括：
+
+- R3：`test_qwen3_30B_A3B_r3.py` 和 `test_moonlight_16B_A3B_r3.py`。
+- SC：`test_qwen2.5_0.5B_score_centering.py`，分别检查 top-k 和 top-p 数据。
+- 全异步 rollout、fanout、PPO、MTP、PD/Mooncake、分布式 SGLang、混合显存卸载后的故障恢复、调试数据重放，以及释放训练资源后继续 rollout。
+- Checkpoint 保存与加载：不同阶段共用 Straw 存储池，检查队列和训练状态能否恢复。`test_straw_checkpoint_fork.py` 还检查指定恢复步骤、多次回退、自动选择分支和调试数据重放。
+
+R3、SC 和全异步测试同时开启在线 GC。普通 Straw 测试使用独立的临时目录，并在结束后清理。单机 GPU 测试使用本地文件系统配置；多机 JuiceFS 的持久性需要单独验证。其他端到端测试继续覆盖 Ray object-store 和 NIXL 传输。
+
+`test_straw_fully_async_recovery.py` 是自动运行的 CPU 集成测试。它用 SIGKILL 终止一个包含两个本地 Ray 节点的任务，再启动新进程，从同一个文件系统队列恢复；在线 GC 开启和关闭两种情况都会验证。测试使用小规模 R3/SC 数据，以及结果固定的模拟推理和打分函数。安装兼容的 Straw wheel 后，可以本地运行：
+
+```bash
+PYTHONPATH=. python tests/test_straw_fully_async_recovery.py
+```
+
+### PipelineRL
+
+`test_qwen2.5_0.5B_pipeline_rl.py` 使用 4 张 GPU，运行全异步 rollout 和三个实际的 GRPO 训练步骤。它检查同一个 HTTP 请求能否在权重更新期间继续生成，也检查训练是否确实改变了策略权重。
+
+固定测试列表包含三种配置：`--flush-cache-interval 0` 配合 NCCL 或完整权重落盘同步，以及 `--flush-cache-interval 2` 配合 NCCL 定期刷新缓存。CPU 测试 `test_pipeline_rl.py` 检查刷新周期和发给 SGLang 的控制请求。这些测试检查功能是否正确，不评估学习效果或吞吐提升。
+
+### Megatron 手动重启
+
+`test_qwen2.5_0.5B_training_recovery.py` 使用 4 张 GPU，在同一个 Ray 集群中先后运行两次训练任务。第一次使用 TP=1，故意触发真实的 CUDA OOM；确认训练任务退出后推理服务仍能响应，再改成 TP=2 重新提交，此时 DP 大小也会改变。
+
+测试检查是否复用了健康的 SGLang 进程、路由器和 GPU 资源，重放的批次内容是否一致，以及训练调度器进度、非零且有限的梯度和最终 checkpoint。固定测试列表包括：
+
+| 数据保存方式 | RolloutManager 状态 | 检查内容 |
+|---|---|---|
+| Straw，开启在线 GC | 保持存活 | 重新连接训练进程，重放已经训练但尚未保存到 checkpoint 的批次。 |
+| Straw，开启在线 GC | 失败后被杀掉 | 新 manager 接回原推理集群，并重放同样的批次。 |
+| Straw，已有模型和优化器 checkpoint，使用 Megatron YAML 配置 | 训练过程中被杀掉 | 从 checkpoint 恢复，核对配置与恢复状态。 |
+| Rollout 调试文件 | 失败后被杀掉 | 从调试文件恢复数据，新 manager 接回原推理集群。 |
+| Straw，使用 disk-delta 同步权重 | 失败后被杀掉 | 以恢复后的权重发布新的完整基准，再继续 delta 更新。 |
+| Straw，使用 PD/Mooncake 推理 | 失败后被杀掉 | 卡住 prefill actor，在连接重置超时后替换它，并保留健康的 decode actor。 |
+
+`test_qwen3_30B_A3B_training_recovery.py` 使用 8 张 GPU，在 MoE 模型、R3 和 stateless Adam 配置下覆盖 OOM、checkpoint 恢复及 manager 丢失。它不保存优化器张量，但会检查 scheduler 进度，比对 TP/DP 改变前后的持久化路由字节，并在恢复后完成训练。Dense 测试覆盖普通 Adam 的优化器 checkpoint 恢复。
+
+无论是否传入兼容参数 `--use-fault-tolerance`，内部推理健康检查都会启用。CPU 测试还包括：`test_training_recovery.py` 的配置与 checkpoint 边界检查，`test_disk_delta_recovery.py` 的权重更新应答丢失，以及 `test_rollout_manager_recovery.py` 中真实 Ray manager 的 SIGKILL 和转换应答丢失。
+
+### Rollout 收尾时清理失效引擎
+
+`test_qwen2.5_0.5B_rollout_health.py` 在 rollout 收尾前停掉真实的 SGLang HTTP 服务，但保留它在路由器中的注册信息。两个四卡场景分别保留或杀掉对应的 Ray actor，检查收尾是否有超时限制、返回训练前是否注销失效服务、更新权重时能否恢复引擎，以及训练能否保存最终 checkpoint。
+
+两种情况都不传 `--use-fault-tolerance`，并将后台检查间隔和首次等待时间设为 600 秒，以验证收尾检查会立即执行，不必等待后台定时检查。
+
+## 添加测试
+
+### CPU 测试
+
+参考相邻文件，将测试放在 `tests/test_*.py`、`tests/utils/test_*.py` 或 `tests/plugin_contracts/test_*.py` 下。如果文件会被 `run-ci-changed` 运行，需要声明顶层 `NUM_GPUS = 0`。
+
+CI 会直接执行测试文件，因此使用 pytest 的文件需要提供入口：
 
 ```python
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
 ```
 
-4. 如果测试需要永久进入 CI matrix，在 `.github/workflows/pr-test.yml.j2` 的 `cpu-unittest` 或 `agent-adapter-test` job 中注册，然后重新生成 workflow。
+需要自动运行的测试，还应注册到 `.github/workflows/pr-test.yml.j2` 的 `cpu-unittest` 或 `agent-adapter-test` 列表中，再重新生成工作流。
 
-### GPU E2E Tests
+### GPU 端到端测试
 
-对于 GPU e2e tests：
-
-1. 创建 `tests/test_<your_test_name>.py`，遵循已有的 `prepare()` / `execute()` 模式。
-2. 用 `NUM_GPUS = <N>` 声明所需 GPU 数量。
-3. 在 `prepare()` 中下载所需模型和数据集。
+1. 创建 `tests/test_<your_test_name>.py`，沿用现有的 `prepare()` / `execute()` 结构。
+2. 用顶层 `NUM_GPUS = <N>` 声明所需 GPU 数量。
+3. 在 `prepare()` 中下载模型和数据集。
 4. 在 `execute()` 中构建参数并调用 `U.execute_train(...)`。
-5. 在 `.github/workflows/pr-test.yml.j2` 的合适 GPU job 中注册测试，然后重新生成 workflow。
+5. 将测试注册到 `.github/workflows/pr-test.yml.j2` 中合适的 GPU 任务，再重新生成工作流。
 
-示例骨架：
+示例：
 
 ```python
 import os
@@ -164,25 +166,20 @@ if __name__ == "__main__":
     execute()
 ```
 
-## Workflow 生成
+## 生成工作流
 
-workflow 文件 `pr-test.yml` 由 Jinja2 模板 `pr-test.yml.j2` 自动生成。不要直接编辑 `pr-test.yml`。
-
-如果要修改固定 CI matrix：
-
-1. 编辑 `.github/workflows/pr-test.yml.j2`。
-2. 运行：
+不要直接编辑生成的 `.github/workflows/pr-test.yml`。修改 `.github/workflows/pr-test.yml.j2` 后，运行：
 
 ```bash
 python .github/workflows/generate_github_workflows.py
 ```
 
-3. 同时提交 `.github/workflows/pr-test.yml.j2` 和生成的 `.github/workflows/pr-test.yml`。
+提交时要同时包含模板和生成后的工作流文件。
 
-## PR 应该选择哪些检查
+## PR 选择哪些检查
 
-- 纯 argument parsing、reward、schedule、sample、trajectory 或 hook-contract 改动：优先依赖 CPU tests。
-- SGLang topology 或 rollout engine deployment 改动：使用 `run-ci-sglang-config`。
-- Megatron training、loss、checkpoint conversion 或 model recipe 改动：使用 `run-ci-megatron`；必要时加 `run-ci-precision` 或 `run-ci-ckpt`。
-- Docker image 或 dependency 改动：使用 `run-ci-image`。
-- 新增或修改测试：使用 `run-ci-changed` 做 targeted validation。
+- 参数解析、奖励计算、批次调度、样本、轨迹或扩展接口改动：先运行对应的 CPU 测试。
+- SGLang 部署或推理引擎布局改动：添加 `run-ci-sglang-config`。
+- Megatron 训练、loss、checkpoint 转换或模型训练配置改动：添加 `run-ci-megatron`；涉及数值或保存恢复时，再加 `run-ci-precision` 或 `run-ci-ckpt`。
+- Docker 镜像或依赖改动：添加 `run-ci-image`。它运行完整的 Megatron 测试列表，消耗的 GPU 时间较多。
+- 新增或修改测试：添加 `run-ci-changed`，直接验证改动的测试文件。

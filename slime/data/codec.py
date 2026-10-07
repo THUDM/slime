@@ -3,7 +3,7 @@
 The representation is tagged JSON plus immutable typed byte records. It never
 imports a class named by a payload and never executes pickle. Unknown Python
 objects fail at publication. Replay tensors are stored lazily with their owning
-Sample; buffers, training batches and checkpoints share immutable records.
+Sample; continuations, training batches and checkpoints share immutable records.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ import numpy as np
 import torch
 from straw import Publication, Record
 from straw.errors import CorruptData, InvalidReference, UnsupportedSchema
-from straw.protocol import RecordRef, RecordSetRef, decode, encode
+from straw.protocol import RecordSetRef, decode, encode
 from straw.store import MAX_RECORDS
 from straw.tensor import TensorRef as QueueTensorRef
 from straw.tensor import tensor_record
@@ -35,8 +35,6 @@ class SampleCodec:
             raise ValueError("SampleCodec requires explicit slime.v1 and tensor.v1 store codecs")
         self.store = store
         self.args = args
-        # Leave room for framing and manifests within the native write budget.
-        self.payload_budget = store.max_buffer_bytes - min(8 * 1024**2, store.max_buffer_bytes // 8)
 
     def _prepare_sample(self, sample):
         """Validate completed captures before publication; partial prefixes can resume."""
@@ -109,17 +107,15 @@ class SampleCodec:
         return [refs[i] for i in roots]
 
     def _publish(self, publications, *, submission_id):
-        """Bound each native write, exposing roots only after their dependencies commit."""
+        """Batch manifests; native Straw streams payloads with bounded scratch."""
         refs = []
         start = 0
         while start < len(publications):
-            stop, size, count = start, 0, 0
+            stop, count = start, 0
             while stop < len(publications):
                 records = publications[stop].records
-                added = sum(len(record.payload) for record in records)
-                if stop > start and (size + added > self.payload_budget or count + len(records) + 1 > MAX_RECORDS):
+                if stop > start and count + len(records) + 1 > MAX_RECORDS:
                     break
-                size += added
                 count += len(records) + 1
                 stop += 1
             batch = [
@@ -194,17 +190,19 @@ class SampleCodec:
 
         def visit(value):
             nonlocal token_count
-            from slime.utils.rollout_transport import DiskPayloadRef, RawRolloutRef, RolloutGroupRef, TrainBatchRef
+            from slime.data.transport import DiskPayloadRef, RawRolloutRef, RolloutGroupRef, TrainBatchRef
 
             if isinstance(value, DiskPayloadRef):
-                dependency_index = len(dependencies)
-                dependency_positions.setdefault(value.manifest, dependency_index)
-                dependencies.append(value.manifest)
+                if value.manifest not in dependency_positions:
+                    dependency_positions[value.manifest] = len(dependencies)
+                    dependencies.append(value.manifest)
+                dependency_index = dependency_positions[value.manifest]
                 extra = {}
                 if isinstance(value, RolloutGroupRef):
                     extra = {
                         "index": value.index,
                         "receipt": (dataclasses.asdict(value.receipt) if value.receipt else None),
+                        "source_positions": value.source_positions,
                     }
                 elif isinstance(value, RawRolloutRef):
                     extra = {
@@ -216,7 +214,13 @@ class SampleCodec:
                         "batch_id": value.batch_id,
                         "rank": value.rank,
                         "plan_digest": value.plan_digest,
+                        "selection": value.selection,
+                        "schedule": value.schedule,
                     }
+                if value.path:
+                    extra["path"] = value.path
+                if value.sample_metadata is not None:
+                    extra["sample_metadata"] = value.sample_metadata
                 return [
                     "rollout-ref",
                     type(value).__name__,
@@ -238,9 +242,10 @@ class SampleCodec:
             if isinstance(value, Sample.Status):
                 return ["status", value.value]
             if isinstance(value, RecordSetRef):
-                dependency_positions.setdefault(value, len(dependencies))
-                dependencies.append(value)
-                return ["record-set", len(dependencies) - 1]
+                if value not in dependency_positions:
+                    dependency_positions[value] = len(dependencies)
+                    dependencies.append(value)
+                return ["record-set", dependency_positions[value]]
             identity = id(value)
             if identity in active:
                 raise TypeError("Cyclic custom fields are not supported by the durable Sample codec")
@@ -317,13 +322,7 @@ class SampleCodec:
             positions = {}
             start = 0
             while start < len(blobs):
-                stop, size = start, 0
-                while stop < len(blobs) and stop - start < MAX_RECORDS - 1:
-                    added = len(blobs[stop].payload)
-                    if stop > start and size + added > self.payload_budget:
-                        break
-                    size += added
-                    stop += 1
+                stop = min(len(blobs), start + MAX_RECORDS - 1)
                 dependency_index = len(dependencies)
                 dependencies.append(len(publications))
                 publications.append(Publication(tuple(blobs[start:stop])))
@@ -350,10 +349,10 @@ class SampleCodec:
         )
         return publications
 
-    def load(self, ref, *, reader=None):
+    def load(self, ref, *, reader=None, selection=None):
         if reader is None:
             with self.store.read_session() as reader:
-                return self.load(ref, reader=reader)
+                return self.load(ref, reader=reader, selection=selection)
         if reader.run_id != self.store.run_id or reader.backend.root != self.store.backend.root:
             raise InvalidReference("Sample reader belongs to a different storage root or run")
         records = list(reader.read(ref))
@@ -379,7 +378,7 @@ class SampleCodec:
             if tag == "rollout-ref":
                 from straw.protocol import CommitReceipt
 
-                from slime.utils.rollout_transport import DiskPayloadRef, RawRolloutRef, RolloutGroupRef, TrainBatchRef
+                from slime.data.transport import DiskPayloadRef, RawRolloutRef, RolloutGroupRef, TrainBatchRef
 
                 classes = {
                     cls.__name__: cls
@@ -392,10 +391,10 @@ class SampleCodec:
                 }
                 if node[1] not in classes:
                     raise UnsupportedSchema(f"Unknown rollout reference type: {node[1]}")
-                extra = visit(node[3]) if isinstance(node[3], list) else dict(node[3])
+                extra = visit(node[3])
                 if extra.get("receipt"):
                     extra["receipt"] = CommitReceipt.from_dict(extra["receipt"])
-                ref = dependency(node[2]) if isinstance(node[2], int) else RecordSetRef.from_dict(node[2])
+                ref = dependency(node[2])
                 return classes[node[1]](ref, str(self.store.backend.root), **extra)
             if tag == "dict":
                 return {visit(key): visit(value) for key, value in node[1]}
@@ -427,24 +426,21 @@ class SampleCodec:
             if tag == "bytes":
                 return base64.b64decode(node[1], validate=True)
             if tag == "record-set":
-                value = dependency(node[1]) if isinstance(node[1], int) else RecordSetRef.from_dict(node[1])
+                value = dependency(node[1])
                 reader.validate(value)
                 return value
             if tag == "tensor":
                 key = (encode(node[1]), node[4])
                 if key not in aliases:
-                    if "dependency" in node[1]:
-                        dep = node[1]["dependency"]
-                        if dep not in tensor_sets:
-                            tensor_sets[dep] = QueueTensorRef.from_record_set_many(
-                                self.store, dependency(dep), reader=reader
-                            )
-                        ordinal = node[1]["ordinal"]
-                        if type(ordinal) is not int or ordinal not in tensor_sets[dep]:
-                            raise CorruptData("Tensor ordinal does not name a tensor in the publication")
-                        value = dataclasses.replace(tensor_sets[dep][ordinal], validated=node[6])
-                    else:
-                        value = QueueTensorRef.from_record(self.store, RecordRef.from_dict(node[1]), validated=node[6])
+                    dep = node[1]["dependency"]
+                    if dep not in tensor_sets:
+                        tensor_sets[dep] = QueueTensorRef.from_record_set_many(
+                            self.store, dependency(dep), reader=reader
+                        )
+                    ordinal = node[1]["ordinal"]
+                    if type(ordinal) is not int or ordinal not in tensor_sets[dep]:
+                        raise CorruptData("Tensor ordinal does not name a tensor in the publication")
+                    value = dataclasses.replace(tensor_sets[dep][ordinal], validated=node[6])
                     if value.shape != tuple(node[2]) or value.dtype != node[3]:
                         raise CorruptData("Sample tensor descriptor disagrees with its storage record")
                     value = dataclasses.replace(value, kind=node[5])
@@ -462,4 +458,22 @@ class SampleCodec:
                 return image
             raise UnsupportedSchema(f"Unknown Sample codec tag: {tag!r}")
 
-        return visit(payload["tree"])
+        tree = payload["tree"]
+        if selection is None:
+            return visit(tree)
+        if tree[0] != "dict":
+            raise ValueError("A column selection requires a dictionary payload")
+        result = {}
+        for key, node in tree[1]:
+            if key not in selection:
+                continue
+            indices = selection[key]
+            if indices is None:
+                result[key] = visit(node)
+            elif node[0] in {"list", "tuple"}:
+                # Select descriptors before opening tensor records. Other DP
+                # ranks' token/mask/R3 payloads are never read or materialized.
+                result[key] = [visit(node[1][index]) for index in indices]
+            else:
+                result[key] = visit(node)[indices]
+        return result

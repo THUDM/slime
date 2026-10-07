@@ -156,7 +156,7 @@ sglang 的加载非常简单，只需要：
 
 ### 数据格式
 
-原始数据统一由 DataSource 管理。有 `--prompt-data` 时内置 DataSource 会加载数据；需要自行管理数据时可通过 `--data-source-path` 提供自定义实现。原来的 `--disable-rollout-global-dataset` 已移除，旧启动脚本需要删除该参数。
+原始数据统一由 DataSource 管理。有 `--prompt-data` 时内置 DataSource 会加载数据；需要自行管理数据时可通过 `--data-source-path` 提供自定义实现。
 
 slime 支持加载 `.jsonl` 和 `.parquet` 格式文件；读取 Parquet 需要安装 `pyarrow`。两种格式中的每条记录都应包含 `--input-key` 和 `--label-key` 指定的字段。下面是一条 JSONL 数据展开后的示例：
 
@@ -393,11 +393,9 @@ slime 支持不同程度的自定义数据生成（rollout）。
 
 ### 持久化 rollout 队列和分布式 fully async
 
-数据流、共享张量所有权和 checkpoint 边界详见 [straw 架构与恢复](../advanced/straw.md)。
+默认 rollout 传输为 Ray `object-store`，不需要共享目录。`--rollout-data-transport nixl` 选择 Ray 的 NIXL 张量传输。需要跨机持久化队列和打包张量存储时，使用 [straw](../advanced/straw.md) 和共享 JuiceFS 目录。
 
-Rollout payload 默认使用 Ray `object-store`，数据源为 `slime.rollout.data_source.RolloutDataSourceWithBuffer`；此模式不需要 straw 或共享 rollout 目录。`--rollout-data-transport nixl` 则选择 Ray 的 NIXL 张量传输。
-
-安装 [straw](../advanced/straw.md) 后，通过 `--rollout-data-transport straw` 启用持久化队列和打包张量存储。straw 传输默认使用 `slime.rollout.queue_data_source.QueueDataSource`，数据与协调日志存放在 `--rollout-data-dir`；设置了 `--save` 时可省略目录，使用 `<save>/rollout_data`，否则必须显式提供共享目录。Ray 仍负责 actor、RPC 和小引用传递。默认仍是同步 rollout；分布式 fully async 需要显式选择：
+启用使用 straw 的分布式 fully async rollout：
 
 ```bash
 --rollout-function-path slime.rollout.fully_async_rollout.generate_rollout_fully_async \
@@ -405,31 +403,42 @@ Rollout payload 默认使用 Ray `object-store`，数据源为 `slime.rollout.da
 --rollout-data-dir /shared/run/rollout_data
 ```
 
-straw 传输下，开启 `--use-rollout-routing-replay` 后会将已完成 sample 的 R3 routes 随所属 group 一起写入 straw；开启 `--use-score-centering` 时也会在同一次发布中保存 SC 张量，包括只使用 SC 的情况。R3/SC 落盘统一使用 straw 后端；默认 object-store 传输将这些张量保存在内存中。不再提供独立的 spill hook 或目录。自定义 sample hook 先执行，R3、SC 与 sample 元数据一起发布到共享 pack，后续队列发布复用引用。大批 group 按底层写入预算拆分。Aborted prefix 由队列 continuation 路径持久化。`--rollout-queue-online-gc` 是独立开关，默认关闭：训练确认使用完成后，straw 可回收所有 owner 都已释放的 sealed pack。
+所有节点必须以相同绝对路径挂载该目录，并安装 `straw-queue`。标准 slime 安装已包含此依赖；已有环境可以执行 `pip install 'straw-queue>=0.1.2'`。JuiceFS storage profile 和部署声明的配置见 [straw 指南](../advanced/straw.md#启用方式)。只选择 straw 时使用同步 rollout 入口。新任务已设置 `--save` 时，省略 `--rollout-data-dir` 会使用 `<save>/rollout_data`。
 
-作业内一个禁止自动重启的 Ray actor 管理任务 lease 和串行 dataset producer。Dataset 游标与任务提交在同一日志事务中保存，worker 通过小引用直接读取共享存储中的 prompt group，替代原来的内存索引分配器。Shuffle、group/sample 编号沿用原有数据源逻辑，故障不会丢弃 reader 预留的索引区间。
+使用 straw 时，`--use-rollout-routing-replay` 和 `--use-score-centering` 将 R3、SC 张量随 sample 持久化，也支持 partial continuation。`--rollout-queue-online-gc` 可开启未使用存储的回收，默认关闭。恢复使用 `--load`、`--save` 和可选的 `--ckpt-step`。调度、checkpoint 恢复和 debug 回放见 [straw 指南](../advanced/straw.md)，自定义 rollout 函数见[自定义功能](customization.md)。
 
-保留 `get_samples(n)`、`add_samples(groups)` 接口。Custom producer 可以传递 `source.reader_config("unique_reader_id")`，在远端调用 `config.open()`。Reader ID 必须唯一，`owner` 为保留名称。归还的 partial group 持久化后可由任意 reader 领取，不再保留 reader 本地 sample buffer。Reader 定期续租，正常关闭归还未完成任务，故障 worker 的任务在 lease 到期后重试。恢复协调器前必须停止旧作业，再以相同 root/run ID 显式传入 `--rollout-queue-resume`，不自动抢占旧实例。
+### 跨权重更新保留 KV（PipelineRL）
 
-Fully async 在每个有 CPU 资源的 Ray 节点启动一个常驻生成进程，每个占用一个 CPU，并按完整 prompt group 分配总并发。快速 worker 可以独立补足全局 batch，保留原有有界生成队列和 collector 预取。完整 group 通过现有 dynamic filter 后才提交；丢弃结果计入过滤指标。分布式 fully async 仍不支持 `--rollout-all-samples-process-path`；同步入口保留其 Samples 和调用顺序。
+`--flush-cache-interval` 控制权重同步时的缓存刷新策略：
 
-逻辑提交单位是过滤后的完整 group，物理 segment 不决定训练分组。Sample 使用显式编码，大张量成为 typed blob 依赖；采用`.pack` 追加文件中的不可变已提交区间、相对引用和校验和，不以 pickle 作为 payload 协议。不支持的自定义字段类型会报错。参阅 [straw 架构、部署与恢复指南](../advanced/straw.md)。
+| 值 | 行为 |
+| --- | --- |
+| `1`（默认） | 保持原有实现：abort 生成、flush KV、更新权重，再恢复生成。 |
+| `<= 0` | 原地暂停生成，更新权重后让未完成请求沿用已有 KV 继续生成。 |
+| `N > 1` | 每 N 次训练权重更新完整刷新一次，其余更新保留 KV。 |
 
-内置 producer 返回 collection manifest。旧 custom rollout 仍可返回 Sample 列表，由 Manager 兜底持久化并接受一个兼容 collection；新 producer 可以直接返回关联有效 receipt 的 `RawRolloutRef`。两者进入同一个 BatchBuilder，保留 reward/conversion hook 和 DP 调度。Builder 先保存选择计划，全部 rank shard 持久化后才返回同一 batch ID/plan 的 `TrainBatchRef`。
+首次发布权重总会刷新，包括从 checkpoint 恢复时。例如 `2` 会在 serving
+version 2 保留 KV、version 3 刷新、version 4 再次保留。周期按权重同步次数
+计算，而不是 optimizer step 或 rollout batch 数。
 
-Slime adapter 当前要求各节点使用同一个绝对挂载路径，并双向检查可见性；底层引用支持重新绑定 root。r3/sc 的临时文件依赖会先复制进队列，旧 spill 清理不会使已提交数据失效。默认保留队列文件；读取、batch-ready 都不删除数据。离线清理要求停止 coordinator、writer 和 reader。Debug dump 仍按需用 `torch.save` 写入，可能引用保留的队列张量；evaluation 路径保持原有行为。
+使用默认 rollout 函数时，非 `1` 的值会自动选择 fully async rollout 实现。
+自定义 rollout 函数保留自己的调度逻辑。训推需要使用独立 GPU，不能开启
+rollout offload 或 `--release-train`。默认评估仍使用标准 SGLang rollout 函数。
 
-数据源 checkpoint 暂停注册 consumer、等待在途请求，将 buffer 和已完成 group 通过 `<save>/rollout/queue_state_<rollout_id>.json` 保存。buffer 快照引用已经持久化的 group，并单独保存当前 lease，避免在 checkpoint 或退出时再次编码所有缓存 token；旧版内嵌 group 的快照仍可读取。恢复检查数据集大小、每个 prompt 的样本数、seed、shuffle、run identity 和 fully async worker 拓扑。恢复早期 checkpoint 不回滚 journal 中的全局生产事实。Custom execution state 通过 `register_consumer(name, consumer)` 参与保存，实现 `pause`、`resume`、`state_dict`、`load_state_dict`、`close`。停用的 worker 槽位在恢复后仍停用。这是持久化队列与数据状态，不等于完整分布式 optimizer 精确恢复或训练结果逐位一致。
+```bash
+--flush-cache-interval 8 \
+--use-rollout-logprobs
+```
 
-R3 训练只读取当前 CP/TP rank 分配到的行。续跑批量发布、加载和状态保存通过有界读取会话复用已认证索引，结果回执采用批量 RPC 查询。这些优化保留 checksum、WAL 持久化和 GC 所有权约束；读取会话不能替代所有权 pin。
+实现使用 SGLang 已有的 `pause_generation(mode="in_place")` API，无需修改
+SGLang 源码。跨更新的请求会使用旧权重计算的 KV；rollout log probabilities
+对应实际生成各 token 的策略。周期性完整刷新会 abort 未完成请求，标准
+fully async worker 会将其重新排队生成。
 
-分布式 fully async producer 在权重同步期间停止补发新 group；还有下一次训练 rollout 时，同步后恢复。已开始的请求继续返回并持久化。
-
-从联合 checkpoint 恢复时，先持久化恢复后的训练 consumer 状态及存储引用，再启动后台 GC。所需 checkpoint 数据不可用时，恢复失败且不启动 GC。
-
-恢复的 reader buffer 通过独立于过滤决策的存储引用受到保护。后续数据源 checkpoint 必须完整保存活跃及尚未启动的 consumer，并保留、持久化新快照，才能交接该引用。之后正常退役旧 checkpoint 时，可以回收过期张量，同时保留可续跑前缀。保存失败会保留原引用；checkpoint 退役仍由调用方负责。
-
-Manager 仍会读取选中的 batch 做转换，共享存储带宽和 manager 内存仍可能成为瓶颈。`--rollout-io-concurrency` 限制队列发布的 I/O 待办数量。straw 的存储、日志和 GC 由 Rust 实现，slime 保留 Python sample 转换和训练集成。改变部署默认值前，需针对实际模型、并发和共享文件系统测量吞吐。
+公共 prefix 也可能在刷新前一直复用旧 KV。设为 `<= 0` 时，高频 prefix 没有
+缓存年龄上限。可选地添加 `--sglang-disable-radix-cache`，关闭跨请求 prefix
+复用，同时保留未完成请求自身的 KV。周期性刷新则可以限制公共 KV 的存活
+时间，暂不引入权重版本缓存命名空间。
 
 ## sglang 使用方法
 

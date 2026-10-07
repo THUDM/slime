@@ -3,9 +3,11 @@ import os
 import re
 from pathlib import Path
 
+import torch
+
 # TODO: may need to copy those 2 functions and do refactoring.
 from megatron.training.checkpointing import load_checkpoint as _load_checkpoint_megatron
-from megatron.training.checkpointing import save_checkpoint
+from megatron.training.checkpointing import save_checkpoint as _save_checkpoint_megatron
 from megatron.training.global_vars import get_args
 
 try:
@@ -92,6 +94,20 @@ logger = logging.getLogger(__name__)
 __all__ = ["save_checkpoint"]
 
 
+def save_checkpoint(iteration, model, optimizer, opt_param_scheduler, **kwargs):
+    _save_checkpoint_megatron(iteration, model, optimizer, opt_param_scheduler, **kwargs)
+    args = get_args()
+    if getattr(args, "use_stateless_adam", False) and opt_param_scheduler is not None and dist.get_rank() == 0:
+        # Megatron omits the scheduler together with --no-save-optim. Stateless
+        # Adam needs no moments, but LR/WD progress must share the model's commit
+        # boundary. Store this small payload inside the same checkpoint directory;
+        # the joint checkpoint commit waits for and includes it in its manifest.
+        path = Path(args.save) / f"iter_{iteration:07d}" / "opt_param_scheduler.pt"
+        temporary = path.with_suffix(".tmp")
+        torch.save(opt_param_scheduler.state_dict(), temporary)
+        temporary.replace(path)
+
+
 def load_checkpoint(ddp_model, optimizer, opt_param_scheduler, checkpointing_context):
     # ref: how megatron `load_checkpoint` gets directory
     args = get_args()
@@ -102,13 +118,32 @@ def load_checkpoint(ddp_model, optimizer, opt_param_scheduler, checkpointing_con
     ), f"{args.load=} does not exist or is an empty directory. Did you specify the wrong folder?"
 
     if _is_megatron_checkpoint(load_path):
-        return _load_checkpoint_megatron(
+        if getattr(args, "use_stateless_adam", False):
+            # The master parameters are rebuilt from the saved model. There are
+            # no Adam moments to load, and Megatron must skip its optimizer keys.
+            args.no_load_optim = True
+        result = _load_checkpoint_megatron(
             ddp_model=ddp_model,
             optimizer=optimizer,
             opt_param_scheduler=opt_param_scheduler,
             checkpointing_context=checkpointing_context,
             skip_load_to_model_and_opt=False,
         )
+        if getattr(args, "ckpt_step", None) is not None and not args.finetune and result[0] != args.ckpt_step:
+            raise ValueError(
+                f"Model loaded step {result[0]}, but checkpoint restoration requires step {args.ckpt_step}. "
+                "The Megatron checkpoint loader must honor --ckpt-step (including zero)."
+            )
+        if getattr(args, "use_stateless_adam", False) and not args.finetune and opt_param_scheduler is not None:
+            checkpoint = Path(load_path)
+            if not re.fullmatch(r"iter_\d{7}", checkpoint.name):
+                checkpoint /= f"iter_{result[0]:07d}"
+            # Loading only the model without this file would silently restart
+            # the learning-rate schedule. A missing payload is an invalid resume.
+            opt_param_scheduler.load_state_dict(
+                torch.load(checkpoint / "opt_param_scheduler.pt", map_location="cpu", weights_only=True)
+            )
+        return result
     else:
         return _load_checkpoint_hf(
             ddp_model=ddp_model,

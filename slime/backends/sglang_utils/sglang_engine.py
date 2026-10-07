@@ -11,6 +11,7 @@ from sglang.srt.utils import kill_process_tree
 from urllib3.exceptions import NewConnectionError
 
 from slime.backends.sglang_utils.external import get_server_info
+from slime.backends.sglang_utils.server_control import unregister_worker
 from slime.ray.ray_actor import RayActor
 from slime.utils import accelerator
 from slime.utils.http_utils import get_host_info
@@ -45,11 +46,9 @@ def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
             wait_for_server=True,
         )
 
-    from sglang.srt.entrypoints.http_server import launch_server
-
     multiprocessing.set_start_method("spawn", force=True)
     server_args.host = server_args.host.strip("[]")
-    p = multiprocessing.Process(target=launch_server, args=(server_args,))
+    p = multiprocessing.Process(target=_launch_server, args=(server_args, os.getpid()))
     p.start()
 
     if getattr(server_args, "node_rank", 0) != 0:
@@ -64,6 +63,17 @@ def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
     return p
 
 
+def _launch_server(server_args, parent_pid):
+    from sglang.srt.entrypoints.http_server import launch_server
+    from sglang.srt.utils import kill_itself_when_parent_died
+
+    # A wedged actor cannot run shutdown(). Its server must still release GPUs
+    # when the owner kills that actor before creating a replacement engine.
+    kill_itself_when_parent_died()
+    if os.getppid() == parent_pid:
+        launch_server(server_args)
+
+
 def _wait_server_healthy(base_url, api_key, is_process_alive):
     headers = {
         "Content-Type": "application/json; charset=utf-8",
@@ -73,7 +83,7 @@ def _wait_server_healthy(base_url, api_key, is_process_alive):
     with requests.Session() as session:
         while True:
             try:
-                response = session.get(f"{base_url}/health_generate", headers=headers)
+                response = session.get(f"{base_url}/health_generate", headers=headers, timeout=5)
                 if response.status_code == 200:
                     break
             except requests.RequestException:
@@ -101,6 +111,7 @@ class SGLangEngine(RayActor):
         self.base_gpu_id = base_gpu_id
         self.sglang_overrides = sglang_overrides or {}
         self.num_gpus_per_engine = num_gpus_per_engine
+        self._weight_update_groups = set()
 
     def init(
         self,
@@ -198,7 +209,7 @@ class SGLangEngine(RayActor):
             )
             response.raise_for_status()
 
-    def _make_request(self, endpoint: str, payload: dict | None = None):
+    def _make_request(self, endpoint: str, payload: dict | None = None, *, timeout=None):
         """Make a POST request to the specified endpoint with the given payload.
 
         Args:
@@ -212,7 +223,7 @@ class SGLangEngine(RayActor):
             return
 
         url = f"http://{self.server_host}:{self.server_port}/{endpoint}"
-        response = requests.post(url, json=payload or {})
+        response = requests.post(url, json=payload or {}, timeout=timeout)
         try:
             response.raise_for_status()
         except requests.exceptions.HTTPError as e:
@@ -295,33 +306,29 @@ class SGLangEngine(RayActor):
 
     def shutdown(self):
         if self.args.rollout_external:
+            # The external cluster owns its processes; slime must not kill them.
             return
 
         logger.info(f"Shutdown engine {self.server_host}:{self.server_port}...")
         if self.worker_type != "encoder" and self.node_rank == 0:
             worker_url = f"http://{self.server_host}:{self.server_port}"
-            response = None
             try:
-                all_workers = requests.get(f"http://{self.router_ip}:{self.router_port}/workers").json()["workers"]
-                for worker in all_workers:
-                    if worker["url"] == worker_url:
-                        worker_id = worker["id"]
-                        response = requests.delete(f"http://{self.router_ip}:{self.router_port}/workers/{worker_id}")
-                        break
-                else:
-                    logger.warning(f"Worker {worker_url} not found in router during shutdown.")
+                unregister_worker(
+                    f"http://{self.router_ip}:{self.router_port}",
+                    worker_url,
+                    timeout=self.args.rollout_health_check_timeout,
+                )
             except Exception as e:
+                # Even if router cleanup fails, terminate the local process.
+                # Owner-side cleanup keeps the URL outside this actor for retry.
                 logger.warning(f"Failed to fetch workers list or remove worker: {e}")
-
-            if response is not None:
-                response.raise_for_status()
         kill_process_tree(self.process.pid)
 
     def get_weight_version(self):
         if self.node_rank != 0:
             return
         url = f"http://{self.server_host}:{self.server_port}/get_weight_version"
-        response = requests.get(url)
+        response = requests.get(url, timeout=self.args.rollout_health_check_timeout)
         response.raise_for_status()
         return response.json()["weight_version"]
 
@@ -360,9 +367,10 @@ class SGLangEngine(RayActor):
         model_path: str,
         load_format: str | None = None,
         weight_version: str | None = None,
+        flush_cache: bool = True,
     ):
         """Reload weights from the checkpoint at *model_path* without restarting the engine."""
-        payload: dict = {"model_path": model_path}
+        payload: dict = {"model_path": model_path, "flush_cache": flush_cache}
         if load_format is not None:
             payload["load_format"] = load_format
         if weight_version is not None:
@@ -370,7 +378,10 @@ class SGLangEngine(RayActor):
         return self._make_request("update_weights_from_disk", payload)
 
     def init_weights_update_group(self, master_address, master_port, rank_offset, world_size, group_name, backend):
-        return self._make_request(
+        # A lost reply can leave a live NCCL group behind. Reset every attempted
+        # group on reattachment, including those whose creation never replied.
+        self._weight_update_groups.add(group_name)
+        result = self._make_request(
             "init_weights_update_group",
             {
                 "master_address": master_address,
@@ -381,15 +392,30 @@ class SGLangEngine(RayActor):
                 "backend": backend,
             },
         )
+        return result
+
+    def reset_weights_update_groups(self):
+        """Remove dead trainer peers while retaining the serving process."""
+        # Old NCCL groups refer to the previous trainer's ranks and cannot be
+        # reused, even when the new trainer has the same parallel layout.
+        for group_name in list(self._weight_update_groups):
+            self._make_request(
+                "destroy_weights_update_group",
+                {"group_name": group_name},
+                timeout=self.args.rollout_health_check_timeout,
+            )
+            self._weight_update_groups.remove(group_name)
 
     def destroy_weights_update_group(self, group_name):
         try:
-            return self._make_request(
+            result = self._make_request(
                 "destroy_weights_update_group",
                 {
                     "group_name": group_name,
                 },
             )
+            self._weight_update_groups.discard(group_name)
+            return result
         except requests.exceptions.RequestException:
             # catch the case there the engine is just created and does not have the group.
             pass
@@ -420,10 +446,10 @@ class SGLangEngine(RayActor):
             payload,
         )
 
-    def pause_generation(self):
+    def pause_generation(self, mode: str = "abort"):
         if self.node_rank != 0:
             return
-        response = requests.post(f"http://{self.server_host}:{self.server_port}/pause_generation", json={})
+        response = requests.post(f"http://{self.server_host}:{self.server_port}/pause_generation", json={"mode": mode})
         response.raise_for_status()
         return response
 

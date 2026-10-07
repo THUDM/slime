@@ -68,6 +68,7 @@ def test_custom_data_source_keeps_original_entrypoint(monkeypatch):
         assert rollout_id == 3
         return expected
 
+    monkeypatch.setattr(fa, "_get_worker", lambda args, source: _make_worker(monkeypatch))
     monkeypatch.setattr(fa, "_generate_rollout_async", generate)
     monkeypatch.setattr(fa, "run", asyncio.run)
     assert fa.generate_rollout_fully_async(args, 3, source) is expected
@@ -112,7 +113,7 @@ def test_rollout_takes_target_groups_and_leaves_surplus_queued(monkeypatch):
     worker = _make_worker(monkeypatch)
     for gid in range(10):
         worker.output_queue.put((gid, _make_group(gid)))
-    monkeypatch.setattr(fa, "_get_global_worker", lambda args, data_buffer: worker)
+    monkeypatch.setattr(fa, "_get_worker", lambda args, data_buffer: worker)
 
     args = SimpleNamespace(
         rollout_batch_size=4, rollout_data_transport="object-store", rollout_sample_filter_path=None
@@ -153,7 +154,7 @@ def test_dynamic_filter_drops_groups_and_refills(monkeypatch):
         group = _make_group(gid)
         group[0].reward = float(gid % 2)
         worker.output_queue.put((gid, group))
-    monkeypatch.setattr(fa, "_get_global_worker", lambda args, data_buffer: worker)
+    monkeypatch.setattr(fa, "_get_worker", lambda args, data_buffer: worker)
 
     def keep_odd(args, group):
         return DynamicFilterOutput(keep=bool(group[0].reward), reason="even")
@@ -262,7 +263,7 @@ def test_loop_backpressure_stops_topping_up_when_queue_is_full(monkeypatch):
                 break
             time.sleep(0.02)
     finally:
-        worker.stop()
+        worker.close()
 
     # In-flight tasks may still land after the gate check, so allow one pool
     # beyond the gate — but nothing near the unthrottled fuel size.
@@ -455,14 +456,50 @@ def test_evaluation_runs_on_the_worker_event_loop(monkeypatch):
         return f"eval-{rollout_id}", []
 
     monkeypatch.setattr(fa, "eval_rollout", eval_rollout)
-    monkeypatch.setattr(fa, "_get_global_worker", lambda args, data_buffer: worker)
+    monkeypatch.setattr(fa, "_get_worker", lambda args, data_buffer: worker)
     worker.start()
     try:
         output = fa.generate_rollout_fully_async(SimpleNamespace(), 5, None, evaluation=True)
     finally:
-        worker.stop()
+        worker.close()
     assert output == "eval-5"
     assert seen["loop"] is worker.event_loop
+
+
+@pytest.mark.parametrize("transport", ["object-store", "straw"])
+def test_local_worker_lifecycle_is_scoped_to_source(monkeypatch, transport):
+    from slime.data.data_source import DataSource
+
+    monkeypatch.setattr(fa, "GenerateState", _FakeGenerateState)
+    monkeypatch.setattr(fa, "get_rollout_num_engines", lambda args: 1)
+
+    async def generate(args, group, sampling_params, evaluation):
+        await asyncio.sleep(0.01)
+        return group
+
+    monkeypatch.setattr(fa, "generate_and_rm_group", generate)
+    args = SimpleNamespace(n_samples_per_prompt=1, sglang_server_concurrency=2, rollout_data_transport=transport)
+    sources = [_FakeDataBuffer([_make_group(i) for i in range(20)]) for _ in range(2)]
+    workers = [fa._get_worker(args, source) for source in sources]
+    try:
+        assert workers[0] is not workers[1]
+        deadline = time.monotonic() + 5
+        while not all(worker.queue_size() for worker in workers):
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        for worker in workers:
+            assert worker.pause() is False
+            saved = worker.state_dict()
+            queued = worker.queue_size()
+            time.sleep(0.03)
+            assert worker.queue_size() == queued and not worker.active
+            replacement = fa.AsyncRolloutWorker(args, worker.data_buffer, concurrency=2)
+            replacement.load_state_dict(saved)
+            assert replacement.get_completed_groups() == worker.get_completed_groups()
+    finally:
+        for source in sources:
+            DataSource.close(source)
+    assert all(not worker.worker_thread.is_alive() for worker in workers)
 
 
 if __name__ == "__main__":

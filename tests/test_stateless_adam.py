@@ -1,3 +1,9 @@
+import importlib.util
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
+
 import pytest
 import torch
 
@@ -56,6 +62,70 @@ def test_stateless_adam_does_not_persist_moment_tensors():
 
     assert optimizer.state == {}
     assert optimizer.state_dict()["state"] == {}
+
+
+@pytest.fixture
+def checkpoint_module(tmp_path, monkeypatch):
+    # Only Megatron's model/collective boundary is replaced. The Slime adapter
+    # writes real checkpoint files, and the optimizer/scheduler below are real.
+    args = SimpleNamespace(
+        save=str(tmp_path), load=str(tmp_path), use_stateless_adam=True, finetune=False, ckpt_step=0
+    )
+
+    def save_model(iteration, *a, **kw):
+        (tmp_path / f"iter_{iteration:07d}").mkdir()
+        (tmp_path / "latest_checkpointed_iteration.txt").write_text(str(iteration))
+
+    native = SimpleNamespace(save_checkpoint=Mock(side_effect=save_model), load_checkpoint=Mock(return_value=(0, 0)))
+    monkeypatch.setitem(sys.modules, "megatron.training.checkpointing", native)
+    monkeypatch.setitem(sys.modules, "megatron.training.global_vars", SimpleNamespace(get_args=lambda: args))
+    path = Path(__file__).resolve().parents[1] / "slime/backends/megatron_utils/checkpoint.py"
+    spec = importlib.util.spec_from_file_location("stateless_checkpoint_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module.dist, "get_rank", lambda: 0)
+    return module, args, native
+
+
+@pytest.mark.parametrize("step", [0, 7])
+def test_stateless_checkpoint_restores_scheduler_progress(checkpoint_module, step):
+    module, args, native = checkpoint_module
+    args.ckpt_step = step
+    param = torch.tensor([1.0])
+    optimizer = StatelessAdam([param], lr=0.1)
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda count: 0.8**count)
+    for _ in range(3):
+        param.grad = torch.ones_like(param)
+        optimizer.step()
+        scheduler.step()
+    module.save_checkpoint(step, [], optimizer, scheduler, num_floating_point_operations_so_far=0)
+    expected = scheduler.state_dict()
+    param.grad = torch.ones_like(param)
+    optimizer.step()
+    scheduler.step()
+    expected_next_lr = scheduler.get_last_lr()
+
+    restored_optimizer = StatelessAdam([torch.tensor([1.0])], lr=0.1)
+    restored_scheduler = torch.optim.lr_scheduler.LambdaLR(restored_optimizer, lambda count: 0.8**count)
+    native.load_checkpoint.return_value = (step, 0)
+    assert module.load_checkpoint([], restored_optimizer, restored_scheduler, {}) == (step, 0)
+    assert args.no_load_optim and restored_optimizer.state == {}
+    assert restored_scheduler.state_dict() == expected
+    restored_optimizer.step()
+    restored_scheduler.step()
+    assert restored_scheduler.get_last_lr() == expected_next_lr
+
+
+def test_stateless_resume_rejects_missing_scheduler_but_finetune_can_reset(checkpoint_module):
+    module, args, native = checkpoint_module
+    native.save_checkpoint(0)
+    scheduler = Mock()
+    with pytest.raises(FileNotFoundError, match="opt_param_scheduler"):
+        module.load_checkpoint([], Mock(), scheduler, {})
+    scheduler.load_state_dict.assert_not_called()
+    args.finetune = True
+    assert module.load_checkpoint([], Mock(), scheduler, {}) == (0, 0)
+    scheduler.load_state_dict.assert_not_called()
 
 
 if __name__ == "__main__":

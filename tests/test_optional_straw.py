@@ -19,12 +19,12 @@ def test_missing_straw_startup_hint(monkeypatch, caplog, transport):
     args = make_slime_validate_args(rollout_data_transport=transport)
     if transport == "straw":
         with pytest.raises(ModuleNotFoundError, match="pip install straw-queue") as raised:
-            module.slime_validate_args(args)
+            args, _ = module.slime_validate_args(args)
         assert raised.value.name == "straw"
     else:
-        module.slime_validate_args(args)
+        args, _ = module.slime_validate_args(args)
         assert args.rollout_data_transport == transport
-        assert args.data_source_path == "slime.rollout.data_source.RolloutDataSourceWithBuffer"
+        assert args.data_source_path == "slime.data.data_source.RolloutDataSourceWithBuffer"
         assert args.rollout_data_dir is None
         assert f"continuing with {transport}" in caplog.text
         assert "pip install straw-queue" in caplog.text
@@ -45,11 +45,18 @@ def _run_default_without_straw():
     import ray
     import torch
 
+    from slime.data.batch_builder import BatchBuilder
+    from slime.data.checkpoint import save_checkpoint
+    from slime.data.transport import (
+        discard_rollout_group,
+        group_lease,
+        pack_rollout_group,
+        pack_rollout_payload,
+        rollout_store,
+    )
     from slime.rollout import fully_async_rollout
     from slime.rollout.base_types import finalize_rollout_groups
-    from slime.rollout.batch_builder import BatchBuilder
     from slime.utils.data import process_rollout_data
-    from slime.utils.rollout_transport import pack_rollout_group, pack_rollout_payload, rollout_store
     from slime.utils.types import Sample
 
     args = SimpleNamespace(
@@ -67,6 +74,9 @@ def _run_default_without_straw():
     assert pack_rollout_payload(groups, args, 0) is groups
     assert pack_rollout_group(groups[0], args, 0) is groups[0]
     assert finalize_rollout_groups(args, 0, groups).samples is groups
+    # Dynamic filters also discard ordinary groups in installations without Straw.
+    assert group_lease(groups[0]) is None
+    discard_rollout_group(groups[0], args)
     builder = BatchBuilder(args)
     assert builder.begin(groups) is None
     builder.save(0)
@@ -76,7 +86,9 @@ def _run_default_without_straw():
         return groups
 
     fully_async_rollout._generate_rollout_async = generate
-    assert fully_async_rollout.generate_rollout_fully_async(args, 0, object()) is groups
+    # The source owns its consumer; no distributed (Straw) imports are needed.
+    source = SimpleNamespace(consumers={"fully_async": object.__new__(fully_async_rollout.AsyncRolloutWorker)})
+    assert fully_async_rollout.generate_rollout_fully_async(args, 0, source) is groups
 
     ray.init(address="local", num_cpus=1, include_dashboard=False, object_store_memory=128 * 1024**2)
     try:
@@ -109,6 +121,17 @@ def _run_default_without_straw():
         loss.backward()
         optimizer.step()
         assert torch.isfinite(loss) and weight.detach().abs().sum() > 0
+
+        # The shared save entrypoint also works without importing straw or
+        # requiring a weight version on the legacy training group.
+        calls = []
+        actor = SimpleNamespace(save_model=lambda step, *, force_sync: calls.append((step, force_sync)))
+        manager = SimpleNamespace(save=SimpleNamespace(remote=lambda step: ray.put(step)))
+        save_args = SimpleNamespace(
+            rollout_data_transport="object-store", release_train=False, num_rollout=2, use_critic=False
+        )
+        save_checkpoint(save_args, 0, actor, None, manager, actor_trains=True)
+        assert calls == [(0, False)]
     finally:
         ray.shutdown()
 
