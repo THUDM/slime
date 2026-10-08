@@ -4,6 +4,7 @@ import ast
 import threading
 import types
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -85,7 +86,7 @@ def test_ranks_cannot_import_partially_written_tokenizer_code(tmp_path):
             concurrent_reader = executor.submit(reader)
             assert reader_started.wait(5)
             # The reader must wait for the copy/import transaction to finish.
-            with pytest.raises(TimeoutError):
+            with pytest.raises(FutureTimeoutError):
                 concurrent_reader.result(timeout=0.2)
         finally:
             finish_copy.set()
