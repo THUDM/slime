@@ -193,8 +193,12 @@ class TestZeroGpuRolloutConfig:
         assert group.parallel_config()["pp_size"] == 2
         assert group.parallel_config()["tp_size"] == 16
 
-    def test_sglang_server_args_derive_tp_from_overridden_pp(self):
+    def test_sglang_server_args_derive_tp_from_overridden_pp(self, monkeypatch):
         from slime.backends.sglang_utils.sglang_engine import _compute_server_args
+        from slime.utils import accelerator
+
+        # Device mapping is tested separately; building server args needs no GPU.
+        monkeypatch.setattr(accelerator, "resolve_visible_device_id", lambda device_id: device_id)
 
         args = Namespace(
             hf_checkpoint="/tmp/hf",
@@ -226,6 +230,8 @@ class TestZeroGpuRolloutConfig:
 
     def test_memory_saver_disables_default_breakable_prefill_cuda_graph(self, monkeypatch):
         from slime.backends.sglang_utils import sglang_engine
+
+        monkeypatch.setattr(sglang_engine.accelerator, "resolve_visible_device_id", lambda device_id: device_id)
 
         @dataclass
         class CurrentServerArgs:
