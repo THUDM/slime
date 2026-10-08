@@ -42,82 +42,70 @@ export NCCL_VERSION="2.30.7"
 export BASE_DIR=${BASE_DIR:-"/root"}
 cd "$BASE_DIR"
 
-# install cuda 12.9 as it's the default cuda version for torch
+# Install the CUDA compiler and development libraries, without the full CUDA
+# meta-package's Nsight, profilers and GUI tools. Runtime cuDNN and NCCL come
+# from PyTorch's wheels below.
 micromamba install -n slime \
-  cuda=12.9.1 \
-  cuda-nvtx=12.9.79 \
+  cuda-nvcc=12.9.86 \
+  cuda-libraries-dev=12.9.1 \
   cuda-nvtx-dev=12.9.79 \
-  nccl \
   -c nvidia/label/cuda-12.9.1 \
   -c nvidia \
   -c conda-forge \
   -y
-micromamba install -n slime -c conda-forge cudnn -y
 # sglang's editable install builds a Rust extension (sglang-grpc via
 # setuptools-rust), so the conda env needs a working rustc + cargo.
 micromamba install -n slime -c conda-forge rust -y
 
-# install sglang. The Dockerfile starts FROM slimerl/sglang:v0.5.15.post1-cu129
-# which already has sglang installed with cu129-built native kernels; we have
-# to install it ourselves here. Three follow-up steps clean up the cu13 spill:
-#   1. restore cuda-python 12.9 after SGLang's >=13 dependency upgrades it;
-#   2. force-reinstall torch / sglang-kernel / sgl-deep-gemm to their +cu129
-#      wheels (pypi defaults are cu13);
-#   3. uninstall the cu13 nvidia-* runtime libs sglang dragged in, then
-#      reinstall the cu12 equivalents to repair the `site-packages/nvidia/*`
-#      shared dirs (pip uninstall stomps libs co-owned across cu12/cu13).
+# Select CUDA 12 wheels before resolving SGLang or other runtime dependencies.
+# An extra index alone does not select a CUDA variant: pip can choose PyPI's
+# CUDA 13 build, then download both sets of runtime libraries while resolving.
+export PIP_CONSTRAINT="$CONDA_PREFIX/slime-constraints.txt"
+cat > "$PIP_CONSTRAINT" <<'REQ'
+torch==2.11.0+cu129
+torchvision==0.26.0+cu129
+torchaudio==2.11.0+cu129
+torchao==0.17.0+cu129
+torchcodec==0.11.1+cu129
+cuda-python==12.9.0
+tilelang==0.1.9
+numpy==1.26.4
+scipy==1.17.1
+kernels<0.15.0
+setuptools<82
+REQ
+pip install torch==2.11.0+cu129 torchvision==0.26.0+cu129 torchaudio==2.11.0+cu129 \
+  torchao==0.17.0+cu129 torchcodec==0.11.1+cu129 \
+  --index-url https://download.pytorch.org/whl/cu129
+pip install --no-deps sglang-kernel==0.4.4 sgl-deep-gemm==0.1.4 \
+  --index-url https://docs.sglang.ai/whl/cu129/
+pip install cmake ninja wheel "setuptools>=80.0.0"
+
+TMS_CUDA_MAJOR="${TMS_CUDA_MAJOR:-$(python -c 'import torch; print(torch.version.cuda.split(".")[0])')}"
+export TMS_CUDA_MAJOR
+# Build the fork before SGLang so its dependency does not install upstream TMS.
+# Build isolation hides nvcc and produces a wheel without the preload hook.
+pip install -v git+https://github.com/zhuzilin/torch_memory_saver.git@${TMS_COMMIT} \
+  --no-cache-dir --no-build-isolation
+
+# Install SGLang's LLM runtime. The [all] extra also pulls diffusion, video and
+# tracing packages that are not used by slime's training/rollout environment.
 if [ ! -d "$BASE_DIR/sglang" ]; then
   cd "$BASE_DIR"
   git clone https://github.com/sgl-project/sglang.git
 fi
 cd "$BASE_DIR/sglang"
 git checkout ${SGLANG_COMMIT}
-pip install -e "python[all]" --extra-index-url https://download.pytorch.org/whl/cu129
-pip install --force-reinstall "cuda-python==12.9"
-pip install --force-reinstall --no-deps \
-  torch==2.11.0+cu129 torchvision==0.26.0+cu129 torchaudio==2.11.0+cu129 \
-  --index-url https://download.pytorch.org/whl/cu129
-pip install --force-reinstall --no-deps \
-  sglang-kernel==0.4.4 sgl-deep-gemm==0.1.4 \
-  --index-url https://docs.sglang.ai/whl/cu129/
-pip uninstall -y \
-  nvidia-cublas \
-  nvidia-cuda-cupti \
-  nvidia-cuda-nvrtc \
-  nvidia-cuda-runtime \
-  nvidia-cudnn-cu13 \
-  nvidia-cufft \
-  nvidia-cufile \
-  nvidia-curand \
-  nvidia-cusolver \
-  nvidia-cusparse \
-  nvidia-cusparselt-cu13 \
-  nvidia-nccl-cu13 \
-  nvidia-nvjitlink \
-  nvidia-nvshmem-cu13 \
-  nvidia-nvtx \
-  nvidia-cutlass-dsl-libs-cu13 \
-  || true
-pip install --force-reinstall --no-deps \
-  nvidia-cublas-cu12 \
-  nvidia-cuda-cupti-cu12 \
-  nvidia-cuda-nvrtc-cu12 \
-  nvidia-cuda-runtime-cu12 \
-  nvidia-cudnn-cu12==9.16.0.29 \
-  nvidia-cufft-cu12 \
-  nvidia-cufile-cu12 \
-  nvidia-curand-cu12 \
-  nvidia-cusolver-cu12 \
-  nvidia-cusparse-cu12 \
-  nvidia-cusparselt-cu12 \
-  nvidia-nccl-cu12 \
-  nvidia-nvjitlink-cu12 \
-  nvidia-nvshmem-cu12 \
-  nvidia-nvtx-cu12 \
-  --index-url https://download.pytorch.org/whl/cu129 \
-  --extra-index-url https://pypi.org/simple
-
-pip install cmake ninja
+# Match upstream SGLang's CUDA 12 Docker dependency adjustments. Keep TileLang
+# aligned with FlashQLA and use FA2/FA3 instead of installing then removing FA4.
+sed -i \
+  -e 's/cuda-python>=13\.0/cuda-python>=12,<13/' \
+  -e 's/flashinfer_python\[cu13\]/flashinfer_python[cu12]/' \
+  -e 's/nvidia-cutlass-dsl\[cu13\]/nvidia-cutlass-dsl/' \
+  -e 's/tilelang==[0-9.]*/tilelang==0.1.9/' \
+  -e '/"flash-attn-4==/d' \
+  python/pyproject.toml
+pip install -e python --extra-index-url https://download.pytorch.org/whl/cu129
 
 # Match Docker's FA2/FA3 wheels without compiling or resolving PyTorch again.
 # FA2 uses the community build linked from upstream issue #2425; FA3 uses
@@ -136,6 +124,8 @@ pip install tilelang==0.1.9 -f https://tile-ai.github.io/whl/nightly/cu128/
 # Match Docker's official TE core wheel and compile only the PyTorch bindings.
 # Use the pip NCCL library consistently instead of an older system copy.
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib/python3.12/site-packages/nvidia/nccl/lib:${LD_LIBRARY_PATH:-}"
+# Native extensions need the NCCL/cuDNN headers shipped in the runtime wheels.
+export CPATH="$CONDA_PREFIX/lib/python3.12/site-packages/nvidia/nccl/include:$CONDA_PREFIX/lib/python3.12/site-packages/nvidia/cudnn/include${CPATH:+:$CPATH}"
 mkdir -p "$CONDA_PREFIX/etc/conda/activate.d" "$CONDA_PREFIX/etc/conda/deactivate.d"
 cat > "$CONDA_PREFIX/etc/conda/activate.d/slime-nccl.sh" <<'SH'
 export _SLIME_OLD_LD_LIBRARY_PATH="${LD_LIBRARY_PATH-}"
@@ -159,15 +149,6 @@ NVCC_APPEND_FLAGS="--threads 1" \
   --no-build-isolation \
   --config-settings "--build-option=--cpp_ext --cuda_ext --parallel ${MAX_JOBS}" git+https://github.com/NVIDIA/apex.git@10417aceddd7d5d05d7cbf7b0fc2daad1105f8b4
 
-TMS_CUDA_MAJOR="${TMS_CUDA_MAJOR:-$(python -c 'import torch; print(torch.version.cuda.split(".")[0])')}"
-export TMS_CUDA_MAJOR
-# --no-build-isolation: TMS's setup.py needs to find nvcc + headers + the
-# installed torch to build its cu${TMS_CUDA_MAJOR} native hook; pip's default
-# PEP 517 build venv hides them, so the wheel comes out python-only (~46KB)
-# and sglang trips `Only hook_mode=preload supports pauseable CUDA Graph`
-# because the preload .so was never compiled in.
-pip install -v git+https://github.com/zhuzilin/torch_memory_saver.git@${TMS_COMMIT} \
-  --no-cache-dir --force-reinstall --no-build-isolation
 pip install "nvidia-modelopt[torch]>=0.37.0" --no-build-isolation
 
 # megatron
@@ -203,17 +184,10 @@ pip install "numpy==1.26.4" "scipy==1.17.1"
 # so `import sglang` works at runtime.
 pip install "kernels<0.15.0"
 
-# Resolving installs above can replace native libraries. Restore the CUDA 12
-# wheels and the router fork after all dependency resolution has finished.
-pip install "cuda-python==12.9"
-pip install --force-reinstall --no-deps \
-  torch==2.11.0+cu129 torchvision==0.26.0+cu129 torchaudio==2.11.0+cu129 \
-  --index-url https://download.pytorch.org/whl/cu129
-pip install --force-reinstall --no-deps \
-  sglang-kernel==0.4.4 sgl-deep-gemm==0.1.4 \
-  --index-url https://docs.sglang.ai/whl/cu129/
+# Constraints retain the CUDA 12 stack throughout dependency resolution. Only
+# the router fork and NCCL override need installing after the runtime deps.
 pip install --no-deps https://github.com/zhuzilin/sgl-router/releases/download/v0.3.2-9daabcd/sglang_router-0.3.2-cp38-abi3-manylinux_2_28_x86_64.whl --force-reinstall
-pip install --no-deps --force-reinstall "nvidia-nccl-cu12==${NCCL_VERSION}"
+pip install --no-deps "nvidia-nccl-cu12==${NCCL_VERSION}"
 python -c "import sglang_router; assert 'slime' in sglang_router.__version__"
 
 # Apply patches in the same order as Dockerfile.
