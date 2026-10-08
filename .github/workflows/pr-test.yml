@@ -707,6 +707,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_update_weight_factory.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "utils/test_megatron_server_arguments.py"
             },
             {
@@ -858,6 +862,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_disk_delta_checkpoint_index.py"
+            },
+            {
+              "num_gpus": 0,
               "straw": true,
               "test_file": "test_rollout_manager_recovery.py"
             },
@@ -897,6 +905,16 @@ jobs:
               "num_gpus": 0,
               "straw": true,
               "test_file": "test_rollout_straw_transport.py"
+            },
+            {
+              "num_gpus": 0,
+              "straw": true,
+              "test_file": "test_published_payload_retry.py"
+            },
+            {
+              "num_gpus": 0,
+              "straw": true,
+              "test_file": "test_rollout_metadata_index.py"
             },
             {
               "num_gpus": 0,

@@ -10,6 +10,8 @@ from slime.data.archive import RolloutArchive
 from slime.data.sample_metadata import describe_sample, validate_sample_metadata
 from slime.utils.types import Sample
 
+NUM_GPUS = 0
+
 
 def sample():
     return Sample(
@@ -92,3 +94,7 @@ def test_metadata_counts_routed_chunks_without_materializing():
     ]
     metadata = describe_sample(value)
     assert metadata["tensors"]["rollout_routed_experts"] == {"shape": [3, 3, 2], "dtype": "int32"}
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

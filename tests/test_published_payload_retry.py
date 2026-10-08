@@ -9,6 +9,8 @@ import pytest
 from straw.errors import CorruptData
 from slime.data import transport
 
+NUM_GPUS = 0
+
 
 @pytest.mark.parametrize("loader", ["plain", "async", "disk_ref"])
 def test_result_and_shelve_payloads_recover_at_the_storage_layer(tmp_path, loader, capfd):
@@ -64,3 +66,7 @@ def test_native_failure_is_not_retried_again_by_slime(monkeypatch, message):
         asyncio.run(transport.unpack_published_payload(ref))
     assert len(calls) == 1
     assert "offset=123" in error.value.__notes__[0]
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))
