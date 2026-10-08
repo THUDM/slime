@@ -418,7 +418,13 @@ async def unpack_published_payload(value):
     try:
         return await asyncio.to_thread(unpack_rollout_payload, value)
     except CorruptData as error:
-        error.add_note(context)
+        # Python 3.10 has no exception notes; keep the original storage error
+        # and expose its manifest context in the message instead.
+        add_note = getattr(error, "add_note", None)
+        if add_note is not None:
+            add_note(context)
+        else:
+            error.args = (f"{error}\n{context}",)
         raise
 
 
