@@ -36,7 +36,7 @@ CPU 任务运行在 GitHub 托管的 `ubuntu-latest` 环境中，安装 CPU 版 
 
 Agent 适配器测试放在独立的 `agent-adapter-test` 任务中，因为它们还需要 `openai`、`openai-agents`、`anthropic` 等 SDK。
 
-CPU 测试列表中带有 `straw: true` 的条目，会从 PyPI 安装最新版 `straw-queue` wheel。测试不需要 Rust 工具链或 Straw 源码仓库。`test_optional_straw.py` 则刻意不安装 Straw，检查默认数据传输仍可运行，以及显式选择 Straw 时是否给出清晰的安装提示。
+CPU 测试列表中带有 `straw: true` 的条目，会从 PyPI 安装最新版 `straw-queue` wheel。测试不需要 Rust 工具链或 straw 源码仓库。`test_optional_straw.py` 则刻意不安装 straw，检查默认数据传输仍可运行，以及显式选择 straw 时是否给出清晰的安装提示。
 
 常用的本地运行方式：
 
@@ -70,18 +70,18 @@ NUM_GPUS = 0
 
 ## 数据传输与恢复测试
 
-### Straw
+### straw
 
-使用 Straw 的端到端测试会显式设置 `--rollout-data-transport straw`，确保本地执行、`run-ci-changed` 和固定测试列表使用同一种传输方式。覆盖范围包括：
+使用 straw 的端到端测试会显式设置 `--rollout-data-transport straw`，确保本地执行、`run-ci-changed` 和固定测试列表使用同一种传输方式。覆盖范围包括：
 
 - R3：`test_qwen3_30B_A3B_r3.py` 和 `test_moonlight_16B_A3B_r3.py`。
 - SC：`test_qwen2.5_0.5B_score_centering.py`，分别检查 top-k 和 top-p 数据。
 - 全异步 rollout、fanout、PPO、MTP、PD/Mooncake、分布式 SGLang、混合显存卸载后的故障恢复、调试数据重放，以及释放训练资源后继续 rollout。
-- Checkpoint 保存与加载：不同阶段共用 Straw 存储池，检查队列和训练状态能否恢复。`test_straw_checkpoint_fork.py` 还检查指定恢复步骤、多次回退、自动选择分支和调试数据重放。
+- Checkpoint 保存与加载：不同阶段共用 straw 存储池，检查队列和训练状态能否恢复。`test_straw_checkpoint_fork.py` 还检查指定恢复步骤、多次回退、自动选择分支和调试数据重放。
 
-R3、SC 和全异步测试同时开启在线 GC。普通 Straw 测试使用独立的临时目录，并在结束后清理。单机 GPU 测试使用本地文件系统配置；多机 JuiceFS 的持久性需要单独验证。其他端到端测试继续覆盖 Ray object-store 和 NIXL 传输。
+R3、SC 和全异步测试同时开启在线 GC。普通 straw 测试使用独立的临时目录，并在结束后清理。单机 GPU 测试使用本地文件系统配置；多机 JuiceFS 的持久性需要单独验证。其他端到端测试继续覆盖 Ray object-store 和 NIXL 传输。
 
-`test_straw_fully_async_recovery.py` 是自动运行的 CPU 集成测试。它用 SIGKILL 终止一个包含两个本地 Ray 节点的任务，再启动新进程，从同一个文件系统队列恢复；在线 GC 开启和关闭两种情况都会验证。测试使用小规模 R3/SC 数据，以及结果固定的模拟推理和打分函数。安装兼容的 Straw wheel 后，可以本地运行：
+`test_straw_fully_async_recovery.py` 是自动运行的 CPU 集成测试。它用 SIGKILL 终止一个包含两个本地 Ray 节点的任务，再启动新进程，从同一个文件系统队列恢复；在线 GC 开启和关闭两种情况都会验证。测试使用小规模 R3/SC 数据，以及结果固定的模拟推理和打分函数。安装兼容的 straw wheel 后，可以本地运行：
 
 ```bash
 PYTHONPATH=. python tests/test_straw_fully_async_recovery.py
@@ -101,12 +101,12 @@ PYTHONPATH=. python tests/test_straw_fully_async_recovery.py
 
 | 数据保存方式 | RolloutManager 状态 | 检查内容 |
 |---|---|---|
-| Straw，开启在线 GC | 保持存活 | 重新连接训练进程，重放已经训练但尚未保存到 checkpoint 的批次。 |
-| Straw，开启在线 GC | 失败后被杀掉 | 新 manager 接回原推理集群，并重放同样的批次。 |
-| Straw，已有模型和优化器 checkpoint，使用 Megatron YAML 配置 | 训练过程中被杀掉 | 从 checkpoint 恢复，核对配置与恢复状态。 |
+| straw，开启在线 GC | 保持存活 | 重新连接训练进程，重放已经训练但尚未保存到 checkpoint 的批次。 |
+| straw，开启在线 GC | 失败后被杀掉 | 新 manager 接回原推理集群，并重放同样的批次。 |
+| straw，已有模型和优化器 checkpoint，使用 Megatron YAML 配置 | 训练过程中被杀掉 | 从 checkpoint 恢复，核对配置与恢复状态。 |
 | Rollout 调试文件 | 失败后被杀掉 | 从调试文件恢复数据，新 manager 接回原推理集群。 |
-| Straw，使用 disk-delta 同步权重 | 失败后被杀掉 | 以恢复后的权重发布新的完整基准，再继续 delta 更新。 |
-| Straw，使用 PD/Mooncake 推理 | 失败后被杀掉 | 卡住 prefill actor，在连接重置超时后替换它，并保留健康的 decode actor。 |
+| straw，使用 disk-delta 同步权重 | 失败后被杀掉 | 以恢复后的权重发布新的完整基准，再继续 delta 更新。 |
+| straw，使用 PD/Mooncake 推理 | 失败后被杀掉 | 卡住 prefill actor，在连接重置超时后替换它，并保留健康的 decode actor。 |
 
 `test_qwen3_30B_A3B_training_recovery.py` 使用 8 张 GPU，在 MoE 模型、R3 和 stateless Adam 配置下覆盖 OOM、checkpoint 恢复及 manager 丢失。它不保存优化器张量，但会检查 scheduler 进度，比对 TP/DP 改变前后的持久化路由字节，并在恢复后完成训练。Dense 测试覆盖普通 Adam 的优化器 checkpoint 恢复。
 

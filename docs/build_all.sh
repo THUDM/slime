@@ -27,7 +27,7 @@ cat > "$ROOT_INDEX" <<'EOF'
     (function(){
       var stored = null;
       try{stored = localStorage.getItem('slime-doc-lang');}catch(e){}
-      var path = (stored === 'zh') ? 'zh/' : (stored === 'en') ? 'en/' : null;
+      var path = (stored === 'zh' || (!stored && navigator.language.startsWith('zh'))) ? 'zh/' : 'en/';
       if(path){ window.location.replace(path); }
     })();
   </script>

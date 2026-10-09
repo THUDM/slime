@@ -65,3 +65,12 @@ div.output_area.stdout {
   .lang-toggle-btn { --lt-border: #30363d; --lt-bg:#161b22; --lt-bg-hover:#1c2128; }
   .lang-toggle-btn .lang-seg { color: #adbac7; }
 }
+
+/* Comfortable article text, with a short categorized library entry point. */
+.bd-article { font-size: 18px; line-height: 1.8; }
+.bd-sidebar-primary { font-size: 16px; }
+.library-categories .toctree-wrapper > ul { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; padding: 0; list-style: none; }
+.library-categories .toctree-l1 { margin: 0; padding: 24px; border: 1px solid var(--pst-color-border); border-radius: 12px; background: var(--pst-color-surface); }
+.library-categories .toctree-l1 > a { font-size: 20px; font-weight: 650; }
+.library-categories .toctree-l1 > ul { display: none; }
+@media (max-width: 600px) { .library-categories .toctree-wrapper > ul { grid-template-columns: minmax(0, 1fr); } }

@@ -36,7 +36,7 @@ CPU jobs run on GitHub-hosted `ubuntu-latest` runners. They install CPU PyTorch 
 
 Agent adapter tests run in a separate `agent-adapter-test` job because they also require SDKs such as `openai`, `openai-agents`, and `anthropic`.
 
-CPU test entries marked with `straw: true` install the latest `straw-queue` wheel from PyPI. They do not need a Rust toolchain or the Straw source repository. `test_optional_straw.py` deliberately runs without Straw to check that default data transport still works and that explicitly selecting Straw produces a clear installation hint.
+CPU test entries marked with `straw: true` install the latest `straw-queue` wheel from PyPI. They do not need a Rust toolchain or the straw source repository. `test_optional_straw.py` deliberately runs without straw to check that default data transport still works and that explicitly selecting straw produces a clear installation hint.
 
 Useful local commands:
 
@@ -70,18 +70,18 @@ These jobs still run in Docker on self-hosted machines, but do not acquire GPUs 
 
 ## Data Transport and Recovery Tests
 
-### Straw
+### straw
 
-Straw end-to-end tests explicitly set `--rollout-data-transport straw`, so local runs, `run-ci-changed`, and the fixed test list use the same transport. Coverage includes:
+straw end-to-end tests explicitly set `--rollout-data-transport straw`, so local runs, `run-ci-changed`, and the fixed test list use the same transport. Coverage includes:
 
 - R3: `test_qwen3_30B_A3B_r3.py` and `test_moonlight_16B_A3B_r3.py`.
 - SC: `test_qwen2.5_0.5B_score_centering.py`, checking both top-k and top-p data.
 - Fully async rollout, fanout, PPO, MTP, PD/Mooncake, distributed SGLang, fault recovery with mixed memory offload, debug replay, and continued rollout after releasing training resources.
-- Checkpoint saving and loading: phases share a Straw storage pool to check queue and training-state recovery. `test_straw_checkpoint_fork.py` also checks step selection, repeated rollback, automatic branch selection, and debug replay.
+- Checkpoint saving and loading: phases share a straw storage pool to check queue and training-state recovery. `test_straw_checkpoint_fork.py` also checks step selection, repeated rollback, automatic branch selection, and debug replay.
 
-R3, SC, and fully async tests also enable online GC. Ordinary Straw tests use isolated temporary directories and clean them up afterward. Single-host GPU tests use the local filesystem profile; multi-host JuiceFS durability needs separate validation. Other end-to-end tests continue to cover Ray object-store and NIXL transport.
+R3, SC, and fully async tests also enable online GC. Ordinary straw tests use isolated temporary directories and clean them up afterward. Single-host GPU tests use the local filesystem profile; multi-host JuiceFS durability needs separate validation. Other end-to-end tests continue to cover Ray object-store and NIXL transport.
 
-`test_straw_fully_async_recovery.py` is an automatic CPU integration test. It uses SIGKILL to terminate a job with two local Ray nodes, then starts a new process to recover from the same filesystem queue. It tests both enabled and disabled online GC, using small R3/SC payloads and deterministic inference and reward fixtures. After installing a compatible Straw wheel, run it locally with:
+`test_straw_fully_async_recovery.py` is an automatic CPU integration test. It uses SIGKILL to terminate a job with two local Ray nodes, then starts a new process to recover from the same filesystem queue. It tests both enabled and disabled online GC, using small R3/SC payloads and deterministic inference and reward fixtures. After installing a compatible straw wheel, run it locally with:
 
 ```bash
 PYTHONPATH=. python tests/test_straw_fully_async_recovery.py
@@ -101,12 +101,12 @@ The test checks that healthy SGLang processes, routers, and GPU placements are r
 
 | Data storage | RolloutManager state | Checks |
 |---|---|---|
-| Straw with online GC | Remains alive | Reconnect trainers and replay completed training batches that were not checkpointed. |
-| Straw with online GC | Killed after failure | Reconnect a new manager to the original serving cluster and replay the same batches. |
-| Straw with a model/optimizer checkpoint and Megatron YAML configuration | Killed during training | Restore from the checkpoint and check configuration and recovery state. |
+| straw with online GC | Remains alive | Reconnect trainers and replay completed training batches that were not checkpointed. |
+| straw with online GC | Killed after failure | Reconnect a new manager to the original serving cluster and replay the same batches. |
+| straw with a model/optimizer checkpoint and Megatron YAML configuration | Killed during training | Restore from the checkpoint and check configuration and recovery state. |
 | Rollout debug files | Killed after failure | Restore data from debug files and reconnect a new manager to the original serving cluster. |
-| Straw with disk-delta weight synchronization | Killed after failure | Publish restored weights as a new full baseline, then continue delta updates. |
-| Straw with PD/Mooncake serving | Killed after failure | Wedge the prefill actor, replace it within the reset timeout, and retain the healthy decode actor. |
+| straw with disk-delta weight synchronization | Killed after failure | Publish restored weights as a new full baseline, then continue delta updates. |
+| straw with PD/Mooncake serving | Killed after failure | Wedge the prefill actor, replace it within the reset timeout, and retain the healthy decode actor. |
 
 `test_qwen3_30B_A3B_training_recovery.py` uses 8 GPUs for the same OOM/checkpoint/manager-loss workflow with a MoE model, R3, and stateless Adam. It omits optimizer tensors while checking scheduler progress, compares persisted routing bytes across the TP/DP change, and completes training after recovery. The dense cases cover ordinary Adam with optimizer checkpoints.
 

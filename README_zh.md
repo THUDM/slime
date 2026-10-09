@@ -6,9 +6,14 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/THUDM/slime/pr-test.yml?branch=main&event=push&label=CI&logo=github)](https://github.com/THUDM/slime/actions/workflows/pr-test.yml)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/THUDM/slime)
 
-**slime** 是一个面向大规模强化学习的 LLM 后训练框架，将 Megatron 训练与 SGLang rollout 连接起来，并提供自定义数据生成和奖励接口。
+**slime** 是为 RL scaling 设计的 LLM post‑training 框架，提供两大核心能力：
 
-训练、rollout、数据缓冲区和环境反馈共享同一条数据流，可以在同一套训练循环中接入数学、代码、搜索、工具调用和长程智能体任务。
+1. **高性能训练**：通过连接 Megatron 与 SGLang，支持各种模式的高效训练；
+2. **灵活的数据生成**：通过自定义数据生成接口以及 server-based engine，实现任意训练数据生成流程。
+
+slime 的设计目标，是让这两大能力彼此强化，同时避免把系统变成一组割裂的 trainer、rollout service 和 agent framework。Megatron training、SGLang rollout、custom data generation、reward computation、verifier feedback 和 environment interaction 都流经同一条 training / rollout / Data Buffer 路径。
+
+这让 slime 成为最经受实战验证的开源 RL post-training 框架之一：它足够轻量、清晰、易扩展，同时也经过了 SOTA 级模型发布背后的完整训练闭环验证。
 
 ## 设计特点
 

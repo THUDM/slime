@@ -10,7 +10,7 @@ The Qwen3-Next integration has three parts:
 2. **Run GDN within Megatron.** The GDN implementation adapts the Hugging Face model layout and uses FLA or the optional FlashQLA backend for the recurrent attention kernel. `HuggingfaceAttention` gathers sequence and context partitions before the replicated computation, then returns the local output partition. See [hf_attention.py](https://github.com/THUDM/slime/blob/main/slime_plugins/models/hf_attention.py).
 3. **Load the model weights.** The checkpoint loader maps Hugging Face parameter names and tensor layouts to the custom modules and the retained Megatron layers. See [the Qwen3-Next weight loader](https://github.com/THUDM/slime/blob/main/slime/backends/megatron_utils/hf_to_megatron/qwen3_next.py).
 
-The [Qwen3-Next example](../examples/qwen3-next-80B-A3B.md) contains the launch configuration and backend options.
+The [experiment tutorial](../get_started/experiment-guide.md) explains model selection and launch configuration. Existing architecture-specific launchers remain in `scripts/`.
 
 ## Current Limitations
 

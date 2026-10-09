@@ -1,6 +1,6 @@
 # 容灾
 
-slime 会检查 SGLang 推理引擎是否正常工作，移除失效的引擎，并在下次更新权重前重启它们。使用 Straw 传输或保存 rollout 调试数据时，还支持在 Megatron 训练失败后保留推理集群，调整训练配置，再继续训练。
+slime 会检查 SGLang 推理引擎是否正常工作，移除失效的引擎，并在下次更新权重前重启它们。使用 straw 传输或保存 rollout 调试数据时，还支持在 Megatron 训练失败后保留推理集群，调整训练配置，再继续训练。
 
 这些能力默认对 slime 启动的推理集群生效，不需要传入 `--use-fault-tolerance`。该参数保留用于兼容旧命令；使用外部推理集群时，仍按原来的策略处理。
 
@@ -12,7 +12,7 @@ slime 会检查 SGLang 推理引擎是否正常工作，移除失效的引擎，
 
 以下两种方式任选其一。选择后，slime 会自动保存恢复所需的数据，不依赖 `--use-fault-tolerance`。
 
-使用 Straw 保存 rollout 和训练数据：
+使用 straw 保存 rollout 和训练数据：
 
 ```bash
 --rollout-data-transport straw --rollout-data-dir /shared/my-run/queue
@@ -60,7 +60,7 @@ slime 使用具名 Ray actor 管理推理集群。新任务根据会话名称找
 
 可以用 `--rollout-session-id` 显式指定会话标识。未指定时，按以下顺序选择标识来源，再计算哈希得到稳定的名称：
 
-1. 使用 Straw 时，取存储目录的绝对路径和 `--rollout-queue-run-id`。
+1. 使用 straw 时，取存储目录的绝对路径和 `--rollout-queue-run-id`。
 2. 否则，取 `--save-debug-rollout-data` 路径模板的绝对路径。
 3. 未保存调试数据时，取 `--save` 目录的绝对路径。
 4. 以上都没有时，取模型和 rollout 配置。
@@ -69,9 +69,9 @@ slime 使用具名 Ray actor 管理推理集群。新任务根据会话名称找
 
 代码中有三个组件负责恢复：
 
-- `ServingCluster` 管理路由器、SGLang 引擎、GPU 资源、Straw 队列控制器和权重更新锁。它是具名的 detached Ray actor，不会随创建它的训练任务退出。
+- `ServingCluster` 管理路由器、SGLang 引擎、GPU 资源、straw 队列控制器和权重更新锁。它是具名的 detached Ray actor，不会随创建它的训练任务退出。
 - `RolloutManager` 负责生成、读取数据、转换样本和划分训练数据。它可以继续使用，也可以在退出后重建；重建不会销毁 `ServingCluster` 持有的资源。
-- `TrainingRecovery` 管理模型 checkpoint 边界，并保留该边界之后需要重放的批次。原始批次和转换结果是否已接收，由 Straw 接收日志中的回执决定；manager 或 RPC 在更新恢复日志前失败时，会根据回执补齐记录。转换结果只存一份，各 DP rank 获取自己的索引视图，改变并行配置只需重建视图。
+- `TrainingRecovery` 管理模型 checkpoint 边界，并保留该边界之后需要重放的批次。原始批次和转换结果是否已接收，由 straw 接收日志中的回执决定；manager 或 RPC 在更新恢复日志前失败时，会根据回执补齐记录。转换结果只存一份，各 DP rank 获取自己的索引视图，改变并行配置只需重建视图。
 
 如果 `RolloutManager` 还活着，它会暂停接收新的生成任务。如果它已经退出，新实例会接回 `ServingCluster`，恢复数据源进度，并由队列控制器阻止旧读取进程继续取任务。已经完成、但尚未交给训练的预取结果仍可使用。训练进程也登记在 `ServingCluster` 中，因此 manager 退出后仍能清理旧训练进程。
 
@@ -122,7 +122,7 @@ rollout 过程中，slime 定期请求 SGLang 的 `/health_generate` 接口，�
 
 ## 恢复范围与限制
 
-未使用 Straw、也未保存 rollout 调试数据时，仍可保留推理集群，但无法重放未保存到 checkpoint 的训练批次。
+未使用 straw、也未保存 rollout 调试数据时，仍可保留推理集群，但无法重放未保存到 checkpoint 的训练批次。
 
 `RolloutManager` 重建支持内置数据源。自定义数据源需要提供兼容的 `state_dict` / `load_state_dict`，并让自己的队列控制器独立于 manager 存活；数据源构造函数和 rollout hook 的签名不变。
 

@@ -214,6 +214,41 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  docs-lab:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [generator, browser]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Generator contracts and exported shell execution
+        if: matrix.suite == 'generator'
+        run: node --test docs/tests/experiment.test.cjs
+      - name: Install browser and documentation dependencies
+        if: matrix.suite == 'browser'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pandoc fonts-noto-cjk
+          pip install -r docs/requirements.txt -r docs/tests/requirements.txt
+          python -m playwright install --with-deps chromium
+      - name: Strict bilingual build and browser walkthrough
+        if: matrix.suite == 'browser'
+        env:
+          SLIME_DOC_LAYOUT: prefix
+        run: |
+          bash docs/build.sh en -W --keep-going
+          bash docs/build.sh zh -W --keep-going
+          python docs/tests/test_browser.py
+
 <% for job_name, config in jobs.items() %>
   << job_name >>:
 <% if config.get('always') %>

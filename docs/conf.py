@@ -72,7 +72,7 @@ nb_render_priority = {
 
 myst_ref_domains = ["std", "py"]
 
-templates_path = []
+templates_path = ["_templates"]
 
 source_suffix = {
     ".rst": "restructuredtext",
@@ -98,7 +98,7 @@ html_theme_options = {
     "repository_url": "https://github.com/THUDM/slime",
     "repository_branch": "main",
     "path_to_docs": f"docs/{language}",
-    "show_navbar_depth": 3,
+    "show_navbar_depth": 1,
     "max_navbar_depth": 4,
     "collapse_navbar": True,
     "use_edit_page_button": True,
@@ -160,6 +160,13 @@ def setup(app):
     # ensure examples are synced before reading source files
     app.connect("builder-inited", _sync_examples)
     app.connect("html-page-context", _example_source_context, priority=499)
+    app.connect("html-page-context", _experiment_home)
+
+
+def _experiment_home(app, pagename, templatename, context, doctree):
+    if pagename == "index" and app.builder.format == "html":
+        context["doc_layout"] = os.environ.get("SLIME_DOC_LAYOUT", "root")
+        return "experiment.html"
 
 
 def _example_source_context(app, pagename, templatename, context, doctree):
