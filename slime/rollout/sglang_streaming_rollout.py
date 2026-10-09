@@ -87,8 +87,10 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
     images = sample.multimodal_inputs.get("images") if sample.multimodal_inputs else None
     if images:
         payload["image_data"] = [encode_image_for_rollout_engine(image) for image in images]
+    if images and not sample.response_length:
         payload["text"] = sample.prompt
     else:
+        # A resumed sample must resend its partial response (see sglang_rollout.generate).
         payload["input_ids"] = prompt_ids
 
     if not sample.tokens:

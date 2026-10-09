@@ -22,6 +22,17 @@ generation short-circuits on those signals on its own and surfaces
 them to training, so the next rollout (with refreshed weights) can pick
 them up.
 
+A weight update pauses the engines, which aborts every in-flight request: the
+sample keeps the tokens and per-token rollout log-probs generated so far. When
+the requeued group is picked up again, ``generate`` resends prompt plus partial
+response with the remaining token budget, so the trajectory continues under the
+new weights and its ``weight_versions`` lists every policy that produced it.
+Correct those tokens with importance sampling (``--use-tis``) or mask them with
+``--partial-rollout --mask-offpolicy-in-partial-rollout``.
+
+Evaluation runs on the worker's event loop, next to the in-flight trajectories,
+because ``GenerateState``'s semaphore and pacer are bound to one event loop.
+
 ``--dynamic-sampling-filter-path`` is honoured DAPO-style: rejected groups do
 not count toward ``rollout_batch_size`` and are replaced from the warm queue.
 """
@@ -37,7 +48,7 @@ import time
 from slime.data.transport import discard_rollout_group, publish_rollout_async
 from slime.rollout.base_types import RolloutFnTrainOutput, finalize_rollout_groups
 from slime.rollout.filter_hub.base_types import call_dynamic_filter
-from slime.rollout.sglang_rollout import GenerateState, generate_and_rm_group
+from slime.rollout.sglang_rollout import GenerateState, eval_rollout, generate_and_rm_group
 from slime.utils.async_utils import run
 from slime.utils.http_utils import get_rollout_num_engines
 from slime.utils.misc import load_function
@@ -97,6 +108,8 @@ class AsyncRolloutWorker:
         self.output_queue: queue.Queue[tuple[int, list[Sample]]] = queue.Queue()
         self.poll_interval = 0.01
         self.worker_thread: threading.Thread | None = None
+        self.event_loop: asyncio.AbstractEventLoop | None = None
+        self._event_loop_ready = threading.Event()
         self.state = GenerateState(args)
 
     # -- public --------------------------------------------------------------
@@ -158,6 +171,16 @@ class AsyncRolloutWorker:
     def queue_size(self) -> int:
         return self.output_queue.qsize()
 
+    def run_coroutine(self, coro):
+        """Run ``coro`` on the worker's event loop and block until it finishes.
+
+        ``GenerateState``'s semaphore and pacer are bound to the event loop that
+        first waits on them, so any other generation that shares them with the
+        in-flight trajectories (e.g. evaluation) must run on this loop too.
+        """
+        self._event_loop_ready.wait()
+        return asyncio.run_coroutine_threadsafe(coro, self.event_loop).result()
+
     # -- internals -----------------------------------------------------------
 
     def _thread_main(self) -> None:
@@ -171,6 +194,8 @@ class AsyncRolloutWorker:
                 self.condition.notify_all()
 
     async def _loop(self) -> None:
+        self.event_loop = asyncio.get_running_loop()
+        self._event_loop_ready.set()
         active_tasks: set[asyncio.Task] = set()
         max_concurrent = self.concurrency
         gid_counter = 0
@@ -368,9 +393,13 @@ async def _generate_rollout_async(args, rollout_id: int, data_buffer) -> Rollout
 def generate_rollout_fully_async(args, rollout_id, data_buffer, evaluation: bool = False):
     """Slime ``--rollout-function-path`` entrypoint."""
 
-    if evaluation:
-        raise ValueError("fully-async rollout doesn't support evaluation mode")
     worker = _get_worker(args, data_buffer)
     if not isinstance(worker, AsyncRolloutWorker):
+        if evaluation:
+            raise ValueError("distributed fully-async rollout doesn't support evaluation mode")
         return worker.generate(rollout_id, prefetch=worker.capacity)
+    if evaluation:
+        # Evaluate next to the in-flight trajectories: they share GenerateState's loop-bound primitives.
+        output, _ = worker.run_coroutine(eval_rollout(args, rollout_id))
+        return output
     return run(_generate_rollout_async(args, rollout_id, data_buffer))

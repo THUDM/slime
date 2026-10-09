@@ -442,6 +442,35 @@ def test_unrelated_stream_cancellation_propagates(monkeypatch):
     assert not state.cancellable_tasks
 
 
+def test_resumed_multimodal_sample_resends_its_partial_response(monkeypatch):
+    sent = []
+    line = "data: " + json.dumps(_chunk("<12>", [[-0.2, 12, None]], 1, finish_reason={"type": "stop"}))
+
+    @asynccontextmanager
+    async def stream(method, url, json, headers):
+        sent.append((sorted(json), list(json.get("input_ids") or []), json.get("image_data")))
+
+        async def lines():
+            yield line
+
+        yield SimpleNamespace(raise_for_status=lambda: None, aiter_lines=lines)
+
+    _patch_streaming(monkeypatch, _generation_state(), stream)
+    monkeypatch.setattr(streaming, "encode_image_for_rollout_engine", lambda image: "img")
+    monkeypatch.setattr(streaming, "_prepare_prompt_ids", lambda sample, *_args: sample.tokens)
+    sample = Sample(prompt="<image> hi", tokens=[1, 2], multimodal_inputs={"images": [object()]})
+    sample.append_response_tokens(
+        _streaming_args(), tokens=[11], log_probs=[-0.1], meta_info={"finish_reason": {"type": "abort"}}
+    )
+    assert sample.status == Sample.Status.ABORTED
+
+    result = asyncio.run(streaming.generate_streaming(_streaming_args(), sample, {"max_new_tokens": 4}))
+
+    keys, input_ids, image_data = sent[0]
+    assert "text" not in keys and input_ids == [1, 2, 11] and image_data == ["img"]
+    assert result.status == Sample.Status.COMPLETED and result.tokens == [1, 2, 11, 12]
+
+
 def test_partial_abort_buffers_and_resumes_only_aborted_siblings(monkeypatch):
     partial = Sample(
         tokens=[1, 11],

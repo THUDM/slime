@@ -201,10 +201,13 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     images = sample.multimodal_inputs.get("images") if sample.multimodal_inputs else None
     if images:
         payload["image_data"] = [encode_image_for_rollout_engine(image) for image in images]
-        # For single-turn multimodal requests, send text so SGLang expands the
+    if images and not sample.response_length:
+        # A fresh single-turn multimodal request sends text so SGLang expands the
         # image placeholders with its own processor rules.
         payload["text"] = sample.prompt
     else:
+        # Token ids carry the partial response of a resumed sample; for a multimodal
+        # sample they are the processor-expanded prompt ids, as in multi-turn VLM rollouts.
         payload["input_ids"] = prompt_ids
 
     if not sample.tokens:
@@ -413,8 +416,13 @@ async def generate_and_rm_group(
 
     group = await asyncio.gather(*tasks)
 
-    # for the rm that need the whole group, we will do the rm here
-    if not state.aborted and args.group_rm:
+    # For the rm that needs the whole group, score it here. Fully-async requeues a group
+    # with an ABORTED member and resumes it later, so only a finished group is scored.
+    if (
+        not state.aborted
+        and args.group_rm
+        and not any(getattr(sample, "status", None) == Sample.Status.ABORTED for sample in group)
+    ):
         with trace_span(group, "group_reward_model"):
             rewards = await batched_async_rm(args, group)
         for sample, reward in zip(group, rewards, strict=False):
