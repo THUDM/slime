@@ -41,7 +41,7 @@ python $WORK_DIR/scripts/data_process/qa_search_test_merge.py \
     --data_sources $DATA
 ```
 
-**注意：** 如果您计划使用本地搜索后端，请参阅[附录](#附录配置本地检索器)了解如何设置本地检索服务器。
+**注意：** 如果您计划使用本地搜索后端，请参阅[附录](README.md#附录配置本地检索器)了解如何设置本地检索服务器。
 
 初始化 Qwen2.5-3B 模型：
 
@@ -176,7 +176,7 @@ CUSTOM_ARGS=(
 
 也就是 `generate_with_search.py` 中的 `generate` 和 `reward_func` 两个函数。
 
-## 附录：配置本地检索器
+## 附录配置本地检索器
 
 本节提供详细的本地密集检索器设置说明，用于本地搜索后端。
 

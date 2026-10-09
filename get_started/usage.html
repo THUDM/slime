@@ -41,7 +41,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
-    <script src="../_static/documentation_options.js?v=2f2e10e9"></script>
+    <script src="../_static/documentation_options.js?v=183391d5"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -50,7 +50,7 @@
     <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'get_started/usage';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
-    <script src="../_static/js/lang-toggle.js?v=8d03b7be"></script>
+    <script data-layout="root" src="../_static/js/lang-toggle.js?v=082004b6"></script>
     <link rel="icon" href="../_static/logo.ico"/>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
@@ -58,8 +58,8 @@
     <link rel="prev" title="Quick Start" href="quick_start.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-  <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="Oct 07, 2026"/>
+  <meta name="docsearch:version" content="0.4.0" />
+    <meta name="docbuild:last-update" content="Oct 09, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -219,6 +219,7 @@
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-30B-A3B.html">GLM-4.7-Flash with 8×H100</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-30B-A3B.html">Qwen3-30B-A3B with 8xH100</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-next-80B-A3B.html">Qwen3-Next-80B-A3B</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../examples/glm5.2-744B-A40B.html">GLM-5.2 744B-A40B with 256xH100</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-355B-A32B.html">GLM-4.7 with 64xH100</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../examples/deepseek-r1.html">DeepSeek R1 with 128xH100</a></li>
@@ -247,6 +248,17 @@
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/coding_agent_rl/README.html">Coding-Agent RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/delta_weight_sync/README.html">Delta Weight Sync</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/eval_multi_task/README.html">Multi-Task Evaluation Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/geo3k_vlm/README.html">VLM Single-Turn RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/geo3k_vlm_multi_turn/README.html">VLM Multi-Turn (geo3k dataset)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/on_policy_distillation/README.html">On-Policy Distillation Example</a></li>
+
+
+
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/strands_sglang/README.html">slime x Strands-SGLang</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/tau-bench/README.html">Tau bench</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/train_infer_mismatch_helper/README.html">Rollout Correction Methods</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Developer Guide</span></p>
 <ul class="nav bd-sidenav">
@@ -254,10 +266,11 @@
 <li class="toctree-l1"><a class="reference internal" href="../developer_guide/debug.html">Debugging</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_guide/trace.html">Trace Viewer</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_guide/profiling.html">Profiling</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/install_flashqla.html">Installing FlashQLA</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Hardware Platforms</span></p>
 <ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../platform_support/amd_tutorial.html">AMD</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../platform_support/amd_tutorial.html">AMD ROCm</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Blogs</span></p>
 <ul class="nav bd-sidenav">
@@ -339,7 +352,7 @@
       
       
       
-      <li><a href="https://github.com/THUDM/slime/blob/main/get_started/usage.md?plain=1" target="_blank"
+      <li><a href="https://github.com/THUDM/slime/blob/main/docs/en/get_started/usage.md?plain=1" target="_blank"
    class="btn btn-sm btn-source-file-button dropdown-item"
    title="Show source"
    data-bs-placement="left" data-bs-toggle="tooltip"
@@ -356,7 +369,7 @@
       
       
       
-      <li><a href="https://github.com/THUDM/slime/edit/main/get_started/usage.md" target="_blank"
+      <li><a href="https://github.com/THUDM/slime/edit/main/docs/en/get_started/usage.md" target="_blank"
    class="btn btn-sm btn-source-edit-button dropdown-item"
    title="Suggest edit"
    data-bs-placement="left" data-bs-toggle="tooltip"
@@ -522,13 +535,13 @@
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-to-use-sglang">How to Use SGLang</a><ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parameter-configuration">Parameter Configuration</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-arguments">SGLang Arguments</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#how-to-use-the-router">How to Use the Router</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#advanced-engine-configuration-sglang-config">Advanced Engine Configuration (–sglang-config)</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-to-use-megatron">How to Use Megatron</a><ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">Parameter Configuration</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-arguments">Megatron Arguments</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-parameters">Custom Parameters</a></li>
 </ul>
 </li>
@@ -563,7 +576,7 @@
 <li><p><code class="docutils literal notranslate"><span class="pre">--actor-num-gpus-per-node</span></code>: The number of GPUs per node for RL actor training.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus</span></code>: The total number of GPUs required for rollout (inference). Set it to <code class="docutils literal notranslate"><span class="pre">0</span></code> to still parse SGLang arguments and launch the router without launching local SGLang servers.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus-per-engine</span></code>: The number of GPUs per inference engine. This parameter is similar to SGLang’s <code class="docutils literal notranslate"><span class="pre">tp_size</span></code>. When performing multi-node serving, this value should be the total number of GPUs. For example, if serving one model with 2 nodes and 16 GPUs, this value should be 16.
-The reason for not using a parameter like <code class="docutils literal notranslate"><span class="pre">--sglang-tp-size</span></code> is that we might consider supporting SGLang’s <code class="docutils literal notranslate"><span class="pre">dp_size</span></code> parameter in the future, which means an engine could contain multiple SGLang servers (currently, only <code class="docutils literal notranslate"><span class="pre">--sglang-dp-size</span></code> under the <code class="docutils literal notranslate"><span class="pre">--sglang-enable-dp-attention</span></code> condition is supported).</p></li>
+SGLang receives <code class="docutils literal notranslate"><span class="pre">--sglang-dp-size</span></code> separately. By default, its TP size is the engine GPU count divided by the PP size; an SGLang config can override the parallel settings for a server group.</p></li>
 </ul>
 <p>With the default configuration, we use these parameters to allocate <code class="docutils literal notranslate"><span class="pre">actor_num_nodes</span> <span class="pre">*</span> <span class="pre">actor_num_gpus_per_node</span></code> GPUs for training and <code class="docutils literal notranslate"><span class="pre">rollout_num_gpus</span></code> GPUs for inference via Ray, thus achieving a separation of training and inference resources.</p>
 <p>For co-located training and inference, you also need to configure:</p>
@@ -612,7 +625,7 @@ The reason for not using a parameter like <code class="docutils literal notransl
 <span class="o">)</span>
 </pre></div>
 </div>
-<p>We provide configurations for common models in <a class="reference internal" href="#../../../scripts/models"><span class="xref myst">scripts/models</span></a>, which you can reuse directly. If you are also using Megatron for pre-training/SFT, you can directly reuse the model configurations from your pre-training/SFT setup.</p>
+<p>We provide configurations for common models in <a class="reference external" href="https://github.com/THUDM/slime/tree/main/scripts/models">scripts/models</a>, which you can reuse directly. If you are also using Megatron for pre-training/SFT, you can directly reuse the model configurations from your pre-training/SFT setup.</p>
 <p>Note:</p>
 <ul class="simple">
 <li><p>slime will load all parameters of Megatron found in the <code class="docutils literal notranslate"><span class="pre">PYTHONPATH</span></code>, so you can find parameters and their descriptions within the Megatron in your environment.</p></li>
@@ -650,7 +663,7 @@ The reason for not using a parameter like <code class="docutils literal notransl
 <li><p>The currently recommended <code class="docutils literal notranslate"><span class="pre">torch_dist</span></code> format (corresponding to <code class="docutils literal notranslate"><span class="pre">--ckpt-format</span> <span class="pre">torch_dist</span></code>).</p></li>
 </ul>
 <p>The <code class="docutils literal notranslate"><span class="pre">torch</span></code> format is Megatron’s older storage format. Its structure consists of directories like <code class="docutils literal notranslate"><span class="pre">mp_rank_xxx</span></code>, where each directory corresponds to the checkpoint stored by each rank under a specific parallel partitioning. Because of this, when loading a <code class="docutils literal notranslate"><span class="pre">torch</span></code> format checkpoint, you must ensure that the checkpoint’s parallelism strategy matches that of the training task.</p>
-<p>We recommend using the <code class="docutils literal notranslate"><span class="pre">torch_dist</span></code> format because it supports automatic parallel sharding, meaning that training tasks with different parallelism settings can share the same checkpoint, which is much more convenient. <code class="docutils literal notranslate"><span class="pre">torch_dist</span></code> is also the default format in the open-source Megatron. A <code class="docutils literal notranslate"><span class="pre">torch_dist</span></code> format checkpoint typically contains a set of <code class="docutils literal notranslate"><span class="pre">.distcp</span></code> files. When using <code class="docutils literal notranslate"><span class="pre">torch_dist</span></code>, you can convert from Hugging Face to <code class="docutils literal notranslate"><span class="pre">torch_dist</span></code> and vice versa using the checkpoint conversion method described in the <span class="xref myst">README</span>.</p>
+<p>We recommend using the <code class="docutils literal notranslate"><span class="pre">torch_dist</span></code> format because it supports automatic parallel sharding, meaning that training tasks with different parallelism settings can share the same checkpoint, which is much more convenient. <code class="docutils literal notranslate"><span class="pre">torch_dist</span></code> is also the default format in the open-source Megatron. A <code class="docutils literal notranslate"><span class="pre">torch_dist</span></code> format checkpoint typically contains a set of <code class="docutils literal notranslate"><span class="pre">.distcp</span></code> files. When using <code class="docutils literal notranslate"><span class="pre">torch_dist</span></code>, you can convert from Hugging Face to <code class="docutils literal notranslate"><span class="pre">torch_dist</span></code> and vice versa using the checkpoint conversion method described in the <a class="reference external" href="https://github.com/THUDM/slime/blob/main/README.md">README</a>.</p>
 <p>In terms of storage structure, a Megatron checkpoint typically looks like this, assuming the storage path is <code class="docutils literal notranslate"><span class="pre">/ckpt/</span></code>:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--/ckpt/
 <span class="w">    </span><span class="p">|</span>--<span class="w"> </span>latest_checkpointed_iteration.txt
@@ -742,7 +755,7 @@ Additionally, we provide a <code class="docutils literal notranslate"><span clas
 <p>Note: On-policy distillation (OPD) is now orthogonal to the advantage estimator. Use <code class="docutils literal notranslate"><span class="pre">--use-opd</span></code> and <code class="docutils literal notranslate"><span class="pre">--opd-kl-coef</span></code> to enable OPD on top of any estimator.</p>
 </li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--calculate-per-token-loss</span></code>: By default, slime calculates loss on a per-sample basis, i.e., <code class="docutils literal notranslate"><span class="pre">mean(sum(sample_i)</span> <span class="pre">/</span> <span class="pre">len(sample_i))</span></code>. Enable this flag to calculate loss on a per-token basis, i.e., <code class="docutils literal notranslate"><span class="pre">sum(sum(sample_i))</span> <span class="pre">/</span> <span class="pre">sum(len(sample_i))</span></code>.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">--use-tis</span></code>: Enable this setting to use TIS (Truncated Importance Sampling) (https://fengyao.notion.site/off-policy-rl).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--use-tis</span></code>: Enable this setting to use TIS (Truncated Importance Sampling) (<a class="reference external" href="https://fengyao.notion.site/off-policy-rl">https://fengyao.notion.site/off-policy-rl</a>).</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--use-score-centering</span></code>: Enable <a class="reference external" href="https://arxiv.org/abs/2609.20807">Score Centering</a>, optionally combined with TIS. See <a class="reference internal" href="#score-centering"><span class="std std-ref">Score Centering</span></a> below.</p></li>
 </ul>
 <section id="grpo-algorithm">
@@ -991,8 +1004,8 @@ without introducing weight-version cache namespaces.</p>
 <section id="how-to-use-sglang">
 <h2>How to Use SGLang<a class="headerlink" href="#how-to-use-sglang" title="Link to this heading">#</a></h2>
 <p>slime implements a server-based engine using SGLang via the <code class="docutils literal notranslate"><span class="pre">HttpServerEngineAdapter</span></code> as an intermediary.</p>
-<section id="parameter-configuration">
-<h3>Parameter Configuration<a class="headerlink" href="#parameter-configuration" title="Link to this heading">#</a></h3>
+<section id="sglang-arguments">
+<h3>SGLang Arguments<a class="headerlink" href="#sglang-arguments" title="Link to this heading">#</a></h3>
 <p>slime incorporates almost all SGLang parameters by using SGLang’s <code class="docutils literal notranslate"><span class="pre">ServerArgs.add_cli_args</span></code>. When setting an SGLang parameter, you need to add the <code class="docutils literal notranslate"><span class="pre">--sglang-</span></code> prefix. For example:</p>
 <ul class="simple">
 <li><p>In co-located training and inference, you often need to limit <code class="docutils literal notranslate"><span class="pre">--mem-fraction-static</span></code>. This parameter should be changed to <code class="docutils literal notranslate"><span class="pre">--sglang-mem-fraction-static</span></code>.</p></li>
@@ -1044,8 +1057,8 @@ without introducing weight-version cache namespaces.</p>
 <section id="how-to-use-megatron">
 <h2>How to Use Megatron<a class="headerlink" href="#how-to-use-megatron" title="Link to this heading">#</a></h2>
 <p>slime supports different and lightly modified versions of Megatron by reusing common functions from the <code class="docutils literal notranslate"><span class="pre">megatron.training</span></code> directory, such as <code class="docutils literal notranslate"><span class="pre">parse_args</span></code>, <code class="docutils literal notranslate"><span class="pre">save_checkpoint</span></code>, and <code class="docutils literal notranslate"><span class="pre">load_checkpoint</span></code>. Therefore, when using it, you must ensure that Megatron is accessible in the <code class="docutils literal notranslate"><span class="pre">PYTHONPATH</span></code>, for example, by adding <code class="docutils literal notranslate"><span class="pre">export</span> <span class="pre">PYTHONPATH=/root/Megatron-LM</span></code> at runtime.</p>
-<section id="id1">
-<h3>Parameter Configuration<a class="headerlink" href="#id1" title="Link to this heading">#</a></h3>
+<section id="megatron-arguments">
+<h3>Megatron Arguments<a class="headerlink" href="#megatron-arguments" title="Link to this heading">#</a></h3>
 <p>slime directly imports all parameters of the Megatron in the current environment by using <code class="docutils literal notranslate"><span class="pre">from</span> <span class="pre">megatron.training.arguments</span> <span class="pre">import</span> <span class="pre">parse_args</span></code>. If the version of Megatron you are using has parameters defined outside of <code class="docutils literal notranslate"><span class="pre">parse_args</span></code>, you can configure them by passing them in, similar to how it’s done in <a class="reference external" href="https://github.com/THUDM/slime/blob/main/train.py">train.py</a>, for example:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">"__main__"</span><span class="p">:</span>
     <span class="k">try</span><span class="p">:</span>
@@ -1142,13 +1155,13 @@ without introducing weight-version cache namespaces.</p>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-to-use-sglang">How to Use SGLang</a><ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parameter-configuration">Parameter Configuration</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-arguments">SGLang Arguments</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#how-to-use-the-router">How to Use the Router</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#advanced-engine-configuration-sglang-config">Advanced Engine Configuration (–sglang-config)</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-to-use-megatron">How to Use Megatron</a><ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">Parameter Configuration</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-arguments">Megatron Arguments</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-parameters">Custom Parameters</a></li>
 </ul>
 </li>
@@ -1185,7 +1198,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Oct 07, 2026.
+  Last updated on Oct 09, 2026.
   <br/>
 </p>
   </div>

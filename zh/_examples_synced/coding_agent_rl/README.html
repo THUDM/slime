@@ -41,7 +41,7 @@
   <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
 <link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
-    <script src="../../_static/documentation_options.js?v=f9a8c948"></script>
+    <script src="../../_static/documentation_options.js?v=ceb54874"></script>
     <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -50,16 +50,16 @@
     <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = '_examples_synced/coding_agent_rl/README';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
-    <script src="../../_static/js/lang-toggle.js?v=8d03b7be"></script>
+    <script data-layout="root" src="../../_static/js/lang-toggle.js?v=082004b6"></script>
     <link rel="icon" href="../../_static/logo.ico"/>
     <link rel="index" title="索引" href="../../genindex.html" />
     <link rel="search" title="搜索" href="../../search.html" />
-    <link rel="next" title="CI（持续集成）" href="../../developer_guide/ci.html" />
+    <link rel="next" title="Delta Weight Sync" href="../delta_weight_sync/README.html" />
     <link rel="prev" title="Multi-Agent RL" href="../multi_agent/README.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-  <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="2026 年 10 月 07 日"/>
+  <meta name="docsearch:version" content="0.4.0" />
+    <meta name="docbuild:last-update" content="2026 年 10 月 09 日"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -219,6 +219,7 @@
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../../examples/glm4.7-30B-A3B.html">8×H100 训练 GLM-4.7-Flash</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../examples/qwen3-30B-A3B.html">8xH100 训练 Qwen3-30B-A3B</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples/qwen3-next-80B-A3B.html">Qwen3-Next-80B-A3B</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../examples/glm5.2-744B-A40B.html">256xH100 训练 GLM-5.2 744B-A40B</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../examples/glm4.7-355B-A32B.html">64xH100 训练 GLM-4.7</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../examples/deepseek-r1.html">128xH100 训练 DeepSeek R1</a></li>
@@ -247,6 +248,17 @@
 <li class="toctree-l1"><a class="reference internal" href="../retool/README.html">Retool: from SFT to RL</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../multi_agent/README.html">Multi-Agent RL</a></li>
 <li class="toctree-l1 current active"><a class="current reference internal" href="#">Coding-Agent RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../delta_weight_sync/README.html">Delta Weight Sync</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../eval_multi_task/README.html">Multi-Task Evaluation Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../geo3k_vlm/README.html">VLM Single-Turn RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../geo3k_vlm_multi_turn/README.html">VLM Multi-Turn (geo3k dataset)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../on_policy_distillation/README.html">On-Policy Distillation Example</a></li>
+
+
+
+<li class="toctree-l1"><a class="reference internal" href="../strands_sglang/README.html">slime x Strands-SGLang</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tau-bench/README.html">Tau bench</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../train_infer_mismatch_helper/README.html">Rollout Correction Methods</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">开发指南</span></p>
 <ul class="nav bd-sidenav">
@@ -254,6 +266,11 @@
 <li class="toctree-l1"><a class="reference internal" href="../../developer_guide/debug.html">Debug 指南</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../developer_guide/trace.html">Trace 可视化</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../developer_guide/profiling.html">性能分析 (Profiling)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../developer_guide/install_flashqla.html">安装 FlashQLA</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">硬件平台</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../../platform_support/amd_tutorial.html">AMD ROCm</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">博客</span></p>
 <ul class="nav bd-sidenav">
@@ -335,7 +352,7 @@
       
       
       
-      <li><a href="https://github.com/THUDM/slime/blob/main/_examples_synced/coding_agent_rl/README.md?plain=1" target="_blank"
+      <li><a href="https://github.com/THUDM/slime/blob/main/examples/coding_agent_rl/README.md?plain=1" target="_blank"
    class="btn btn-sm btn-source-file-button dropdown-item"
    title="Show source"
    data-bs-placement="left" data-bs-toggle="tooltip"
@@ -352,7 +369,7 @@
       
       
       
-      <li><a href="https://github.com/THUDM/slime/edit/main/_examples_synced/coding_agent_rl/README.md" target="_blank"
+      <li><a href="https://github.com/THUDM/slime/edit/main/examples/coding_agent_rl/README.md" target="_blank"
    class="btn btn-sm btn-source-edit-button dropdown-item"
    title="Suggest edit"
    data-bs-placement="left" data-bs-toggle="tooltip"
@@ -529,7 +546,7 @@ the Anthropic-compatible endpoint, and drains trainable <code class="docutils li
 <h2>Environment Setup<a class="headerlink" href="#environment-setup" title="链接到此标题。">#</a></h2>
 <p>The slime training stack itself follows the standard setup. On top of that you need:</p>
 <ol class="arabic simple">
-<li><p><strong>An E2B-compatible sandbox cluster</strong> (or any provider that speaks the E2B SDK). Configure via <code class="docutils literal notranslate"><span class="pre">E2B_API_KEY</span></code> (e.g. the standard <code class="docutils literal notranslate"><span class="pre">e2b_xxx</span></code> key from https://e2b.dev, or any internal endpoint that accepts the same SDK). The official SDK validates this value locally, so internal gateways that ignore auth still need a syntactically valid <code class="docutils literal notranslate"><span class="pre">e2b_</span></code> + 40 hex-character placeholder.</p></li>
+<li><p><strong>An E2B-compatible sandbox cluster</strong> (or any provider that speaks the E2B SDK). Configure via <code class="docutils literal notranslate"><span class="pre">E2B_API_KEY</span></code> (e.g. the standard <code class="docutils literal notranslate"><span class="pre">e2b_xxx</span></code> key from <a class="reference external" href="https://e2b.dev">https://e2b.dev</a>, or any internal endpoint that accepts the same SDK). The official SDK validates this value locally, so internal gateways that ignore auth still need a syntactically valid <code class="docutils literal notranslate"><span class="pre">e2b_</span></code> + 40 hex-character placeholder.</p></li>
 <li><p><strong>Host-side tarballs</strong> that get uploaded into each sandbox at boot:</p>
 <ul class="simple">
 <li><p>Node 22 (<code class="docutils literal notranslate"><span class="pre">node-v22.x-linux-x64.tar.xz</span></code>) — exported as <code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_NODE_TARBALL</span></code>.</p></li>
@@ -543,20 +560,20 @@ the Anthropic-compatible endpoint, and drains trainable <code class="docutils li
 <section id="dataset-format">
 <h2>Dataset Format<a class="headerlink" href="#dataset-format" title="链接到此标题。">#</a></h2>
 <p>Standard slime JSONL with three keys:</p>
-<div class="highlight-jsonc notranslate"><div class="highlight"><pre><span></span>{
-  "prompt": "&lt;falls back here if metadata.problem_statement is missing&gt;",
-  "label": "&lt;instance_id or grader label&gt;",
-  "metadata": {
-    "image": "your-registry/swe-image:&lt;tag&gt;",  // sandbox image reference
-    "workdir": "/workspace/&lt;repo&gt;",            // repo path inside the sandbox
-    "problem_statement": "&lt;issue body&gt;",
-    // exactly one of the following two graders:
-    "swepro": { /* SWE-bench Pro test harness — preferred */ },
-    "eval_cmd": "pytest -x tests/..."          // last-resort: exit 0 = solved
-    // sweb-style rows: metadata.remote_env_info.f2p_script (Python file
-    // ending in `sys.exit(pytest.main(...))`) is auto-wrapped into eval_cmd.
-  }
-}
+<div class="highlight-javascript notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="s2">"prompt"</span><span class="o">:</span><span class="w"> </span><span class="s2">"&lt;falls back here if metadata.problem_statement is missing&gt;"</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">"label"</span><span class="o">:</span><span class="w"> </span><span class="s2">"&lt;instance_id or grader label&gt;"</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">"metadata"</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="s2">"image"</span><span class="o">:</span><span class="w"> </span><span class="s2">"your-registry/swe-image:&lt;tag&gt;"</span><span class="p">,</span><span class="w">  </span><span class="c1">// sandbox image reference</span>
+<span class="w">    </span><span class="s2">"workdir"</span><span class="o">:</span><span class="w"> </span><span class="s2">"/workspace/&lt;repo&gt;"</span><span class="p">,</span><span class="w">            </span><span class="c1">// repo path inside the sandbox</span>
+<span class="w">    </span><span class="s2">"problem_statement"</span><span class="o">:</span><span class="w"> </span><span class="s2">"&lt;issue body&gt;"</span><span class="p">,</span>
+<span class="w">    </span><span class="c1">// exactly one of the following two graders:</span>
+<span class="w">    </span><span class="s2">"swepro"</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="cm">/* SWE-bench Pro test harness — preferred */</span><span class="w"> </span><span class="p">},</span>
+<span class="w">    </span><span class="s2">"eval_cmd"</span><span class="o">:</span><span class="w"> </span><span class="s2">"pytest -x tests/..."</span><span class="w">          </span><span class="c1">// last-resort: exit 0 = solved</span>
+<span class="w">    </span><span class="c1">// sweb-style rows: metadata.remote_env_info.f2p_script (Python file</span>
+<span class="w">    </span><span class="c1">// ending in `sys.exit(pytest.main(...))`) is auto-wrapped into eval_cmd.</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
 </pre></div>
 </div>
 <p>Wire it up with <code class="docutils literal notranslate"><span class="pre">--input-key</span> <span class="pre">prompt</span> <span class="pre">--label-key</span> <span class="pre">label</span> <span class="pre">--metadata-key</span> <span class="pre">metadata</span></code>.</p>
@@ -774,11 +791,11 @@ prompt-base restarts.</p>
       </div>
     </a>
     <a class="right-next"
-       href="../../developer_guide/ci.html"
+       href="../delta_weight_sync/README.html"
        title="下一页">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">下一页</p>
-        <p class="prev-next-title">CI（持续集成）</p>
+        <p class="prev-next-title">Delta Weight Sync</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -841,7 +858,7 @@ prompt-base restarts.</p>
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 10 月 07 日.
+  最后更新于 2026 年 10 月 09 日.
   <br/>
 </p>
   </div>

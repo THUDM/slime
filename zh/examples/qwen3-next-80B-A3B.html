@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Qwen3-Next-80B-A3B 训练示例 &#8212; slime</title>
+    <title>Qwen3-Next-80B-A3B &#8212; slime</title>
   
   
   
@@ -41,7 +41,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
-    <script src="../_static/documentation_options.js?v=f9a8c948"></script>
+    <script src="../_static/documentation_options.js?v=ceb54874"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -50,14 +50,16 @@
     <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'examples/qwen3-next-80B-A3B';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
-    <script src="../_static/js/lang-toggle.js?v=8d03b7be"></script>
+    <script data-layout="root" src="../_static/js/lang-toggle.js?v=082004b6"></script>
     <link rel="icon" href="../_static/logo.ico"/>
     <link rel="index" title="索引" href="../genindex.html" />
     <link rel="search" title="搜索" href="../search.html" />
+    <link rel="next" title="256xH100 训练 GLM-5.2 744B-A40B" href="glm5.2-744B-A40B.html" />
+    <link rel="prev" title="8xH100 训练 Qwen3-30B-A3B" href="qwen3-30B-A3B.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-  <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="2026 年 10 月 07 日"/>
+  <meta name="docsearch:version" content="0.4.0" />
+    <meta name="docbuild:last-update" content="2026 年 10 月 09 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -156,8 +158,6 @@
       
       
       
-        
-      
       <dialog id="pst-primary-sidebar-modal"></dialog>
       <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
         
@@ -216,9 +216,10 @@
 <li class="toctree-l1"><a class="reference internal" href="glm4-9B.html">8xH100 训练 GLM4-9B</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">MoE</span></p>
-<ul class="nav bd-sidenav">
+<ul class="current nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="glm4.7-30B-A3B.html">8×H100 训练 GLM-4.7-Flash</a></li>
 <li class="toctree-l1"><a class="reference internal" href="qwen3-30B-A3B.html">8xH100 训练 Qwen3-30B-A3B</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">Qwen3-Next-80B-A3B</a></li>
 <li class="toctree-l1"><a class="reference internal" href="glm5.2-744B-A40B.html">256xH100 训练 GLM-5.2 744B-A40B</a></li>
 <li class="toctree-l1"><a class="reference internal" href="glm4.7-355B-A32B.html">64xH100 训练 GLM-4.7</a></li>
 <li class="toctree-l1"><a class="reference internal" href="deepseek-r1.html">128xH100 训练 DeepSeek R1</a></li>
@@ -247,6 +248,17 @@
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/coding_agent_rl/README.html">Coding-Agent RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/delta_weight_sync/README.html">Delta Weight Sync</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/eval_multi_task/README.html">Multi-Task Evaluation Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/geo3k_vlm/README.html">VLM Single-Turn RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/geo3k_vlm_multi_turn/README.html">VLM Multi-Turn (geo3k dataset)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/on_policy_distillation/README.html">On-Policy Distillation Example</a></li>
+
+
+
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/strands_sglang/README.html">slime x Strands-SGLang</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/tau-bench/README.html">Tau bench</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/train_infer_mismatch_helper/README.html">Rollout Correction Methods</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">开发指南</span></p>
 <ul class="nav bd-sidenav">
@@ -254,6 +266,11 @@
 <li class="toctree-l1"><a class="reference internal" href="../developer_guide/debug.html">Debug 指南</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_guide/trace.html">Trace 可视化</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_guide/profiling.html">性能分析 (Profiling)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/install_flashqla.html">安装 FlashQLA</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">硬件平台</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../platform_support/amd_tutorial.html">AMD ROCm</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">博客</span></p>
 <ul class="nav bd-sidenav">
@@ -335,7 +352,7 @@
       
       
       
-      <li><a href="https://github.com/THUDM/slime/blob/main/examples/qwen3-next-80B-A3B.md?plain=1" target="_blank"
+      <li><a href="https://github.com/THUDM/slime/blob/main/docs/zh/examples/qwen3-next-80B-A3B.md?plain=1" target="_blank"
    class="btn btn-sm btn-source-file-button dropdown-item"
    title="Show source"
    data-bs-placement="left" data-bs-toggle="tooltip"
@@ -352,7 +369,7 @@
       
       
       
-      <li><a href="https://github.com/THUDM/slime/edit/main/examples/qwen3-next-80B-A3B.md" target="_blank"
+      <li><a href="https://github.com/THUDM/slime/edit/main/docs/zh/examples/qwen3-next-80B-A3B.md" target="_blank"
    class="btn btn-sm btn-source-edit-button dropdown-item"
    title="Suggest edit"
    data-bs-placement="left" data-bs-toggle="tooltip"
@@ -482,7 +499,7 @@
               
 
 <div id="jb-print-docs-body" class="onlyprint">
-    <h1>Qwen3-Next-80B-A3B 训练示例</h1>
+    <h1>Qwen3-Next-80B-A3B</h1>
     <!-- Table of contents -->
     <div id="print-main-content">
         <div id="jb-print-toc">
@@ -492,9 +509,9 @@
             </div>
             <nav aria-label="Page">
                 <ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">环境准备</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#optional-fix-a-bug-in-triton-compilation-on-blackwell-sm100">[Optional] Fix a bug in triton compilation on Blackwell (sm100)</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron">执行训练 (Megatron)</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">环境与数据</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">权重转换</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">执行训练</a></li>
 </ul>
             </nav>
         </div>
@@ -507,83 +524,41 @@
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="qwen3-next-80b-a3b">
-<h1>Qwen3-Next-80B-A3B 训练示例<a class="headerlink" href="#qwen3-next-80b-a3b" title="链接到此标题。">#</a></h1>
+<h1>Qwen3-Next-80B-A3B<a class="headerlink" href="#qwen3-next-80b-a3b" title="链接到此标题。">#</a></h1>
 <section id="id1">
-<h2>环境准备<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h2>
-<p>搭建环境、下载模型、数据与 ckpt 转换均与 Qwen3-4B 模型相同，可以参考 <a class="reference internal" href="qwen3-4B.html"><span class="std std-doc">示例：Qwen3-4B</span></a>，将文中 Qwen3-4B 的部分转换为
-Qwen3-next-80B-A3B-Instruct 即可。</p>
-<p>可以用如下完整方法把 huggingface checkpoint 转化为 torch_dist 格式：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">BASE_FOLDER</span><span class="o">=</span>./models/
-<span class="c1"># 下载模型权重 (Qwen3-Next-80B-A3B-Thinking)</span>
-hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen3-Next-80B-A3B-Thinking<span class="w"> </span>--local-dir<span class="w"> </span><span class="si">${</span><span class="nv">BASE_FOLDER</span><span class="si">}</span>/Qwen3-Next-80B-A3B-Thinking
-</pre></div>
-</div>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>slime/
-pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.<span class="w"> </span>--no-deps
-
-<span class="c1"># (for acceleration) </span>
-<span class="nb">cd</span><span class="w"> </span>..<span class="w"> </span><span class="c1"># and find a proper folder</span>
-git<span class="w"> </span>clone<span class="w"> </span>https://github.com/fla-org/flash-linear-attention
-<span class="nb">cd</span><span class="w"> </span>flash-linear-attention
-git<span class="w"> </span>checkout<span class="w"> </span>9714c595
-pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.<span class="w"> </span>--no-deps
-
-wget<span class="w"> </span>https://github.com/Dao-AILab/causal-conv1d/releases/download/v1.5.4/causal_conv1d-1.5.4+cu12torch2.8cxx11abiTRUE-cp312-cp312-linux_x86_64.whl
-pip<span class="w"> </span>install<span class="w"> </span>./causal_conv1d-1.5.4+cu12torch2.8cxx11abiTRUE-cp312-cp312-linux_x86_64.whl
+<h2>环境与数据<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h2>
+<p>按照<a class="reference internal" href="../get_started/quick_start.html"><span class="std std-doc">快速使用指南</span></a>选择 Docker 镜像，并下载 DAPO 训练集和 AIME 评估集。不使用 Docker 时，可通过 <code class="docutils literal notranslate"><span class="pre">build_conda.sh</span></code> 搭建 CUDA 12.9 环境。</p>
+<p>预置环境包含用于 Gated Delta Net 的 FLA。CUDA 12 环境还提供可选的 <a class="reference internal" href="../developer_guide/install_flashqla.html"><span class="std std-doc">FlashQLA 后端</span></a>，修改启动脚本时可通过 <code class="docutils literal notranslate"><span class="pre">--qwen-gdn-backend</span> <span class="pre">flashqla</span></code> 选择。CUDA 13 环境使用 FLA。</p>
+<p>将模型下载到与数据集相同的基础目录：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">BASE_FOLDER</span><span class="o">=</span>/root
+hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen3-Next-80B-A3B-Thinking<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--local-dir<span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">BASE_FOLDER</span><span class="si">}</span><span class="s2">/Qwen3-Next-80B-A3B-Thinking"</span>
 </pre></div>
 </div>
 </section>
-<section id="optional-fix-a-bug-in-triton-compilation-on-blackwell-sm100">
-<h2>[Optional] Fix a bug in triton compilation on Blackwell (sm100)<a class="headerlink" href="#optional-fix-a-bug-in-triton-compilation-on-blackwell-sm100" title="链接到此标题。">#</a></h2>
-<p>see discussion here https://github.com/triton-lang/triton/issues/8695
-and https://github.com/fla-org/flash-linear-attention/issues/638</p>
-<p>We need to apply a patch to fix the bug.
-Go to the flash-linear-attention folder you just installed, and apply the following patch:</p>
-<div class="highlight-diff notranslate"><div class="highlight"><pre><span></span><span class="gh">diff --git a/fla/ops/gated_delta_rule/wy_fast.py b/fla/ops/gated_delta_rule/wy_fast.py</span>
-<span class="gh">index c5119dcf..838f5e4e 100644</span>
-<span class="gd">--- a/fla/ops/gated_delta_rule/wy_fast.py</span>
-<span class="gi">+++ b/fla/ops/gated_delta_rule/wy_fast.py</span>
-<span class="gu">@@ -198,7 +198,14 @@ def prepare_wy_repr_bwd_kernel(</span>
-<span class="w"> </span>        b_A += tl.dot(b_kb, tl.trans(b_k))
-<span class="w"> </span>        b_dkb = tl.dot(b_dA, b_k)
-<span class="w"> </span>        b_db += tl.sum(b_dkb * b_k, 1)
-<span class="gd">-        b_dk += tl.dot(tl.trans(b_dA), b_kb)</span>
-<span class="gi">+        b_dk += tl.inline_asm_elementwise(</span>
-<span class="gi">+            asm="mov.f32 $0, $1;",</span>
-<span class="gi">+            constraints="=r,r",</span>
-<span class="gi">+            args=[tl.dot(tl.trans(b_dA), b_kb)],</span>
-<span class="gi">+            dtype=tl.float32,</span>
-<span class="gi">+            is_pure=True,</span>
-<span class="gi">+            pack=1,</span>
-<span class="gi">+        )</span>
-<span class="w"> </span>        b_dk += b_dkb * b_b[:, None]
-<span class="w"> </span>        tl.store(p_dk, b_dk.to(p_dk.dtype.element_ty), boundary_check=(0, 1))
-<span class="w"> </span>    tl.store(p_db, b_db.to(p_db.dtype.element_ty), boundary_check=(0,))
+<section id="id2">
+<h2>权重转换<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h2>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
+<span class="nb">source</span><span class="w"> </span>scripts/models/qwen3-next-80B-A3B.sh
+<span class="nv">PYTHONPATH</span><span class="o">=</span>/root/Megatron-LM<span class="w"> </span>torchrun<span class="w"> </span>--nproc-per-node<span class="w"> </span><span class="m">8</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>tools/convert_hf_to_torch_dist.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span><span class="s2">"</span><span class="si">${</span><span class="nv">MODEL_ARGS</span><span class="p">[@]</span><span class="si">}</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--hf-checkpoint<span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">BASE_FOLDER</span><span class="si">}</span><span class="s2">/Qwen3-Next-80B-A3B-Thinking"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--save<span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">BASE_FOLDER</span><span class="si">}</span><span class="s2">/Qwen3-Next-80B-A3B-Thinking_torch_dist"</span>
 </pre></div>
 </div>
-<p>save it as <code class="docutils literal notranslate"><span class="pre">patch.diff</span></code> (Please remember to copy the last empty line to the file!) and do <code class="docutils literal notranslate"><span class="pre">git</span> <span class="pre">apply</span> <span class="pre">patch.diff</span></code></p>
+<p>模型使用自定义的 Megatron 层配置。GDN 和注意力层的集成方式见<a class="reference internal" href="../advanced/arch-support-beyond-megatron.html"><span class="std std-doc">支持 Megatron 之外的模型架构</span></a>。</p>
 </section>
-<section id="megatron">
-<h2>执行训练 (Megatron)<a class="headerlink" href="#megatron" title="链接到此标题。">#</a></h2>
-<p><strong>当前暂不支持Blackwell</strong></p>
-<p>转换模型权重：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">source</span><span class="w"> </span>scripts/models/qwen3-next-80B-A3B.sh
-<span class="nv">PYTHONPATH</span><span class="o">=</span>/root/Megatron-LM/<span class="w"> </span>torchrun<span class="w"> </span>--nproc-per-node<span class="w"> </span><span class="m">8</span><span class="w"> </span><span class="se">\</span>
-<span class="w">   </span>tools/convert_hf_to_torch_dist.py<span class="w"> </span><span class="se">\</span>
-<span class="w">   </span><span class="si">${</span><span class="nv">MODEL_ARGS</span><span class="p">[@]</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
-<span class="w">   </span>--hf-checkpoint<span class="w"> </span>/root/Qwen3-Next-80B-A3B-Thinking/<span class="w"> </span><span class="se">\</span>
-<span class="w">   </span>--save<span class="w"> </span>/root/Qwen3-Next-80B-A3B-Thinking_torch_dist/
-</pre></div>
-</div>
-<p>单机8卡</p>
+<section id="id3">
+<h2>执行训练<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h2>
+<p>单机八卡：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
 <span class="nb">export</span><span class="w"> </span><span class="nv">BASE_FOLDER</span><span class="o">=</span>/root
 <span class="nb">export</span><span class="w"> </span><span class="nv">MASTER_ADDR</span><span class="o">=</span><span class="m">127</span>.0.0.1
 <span class="nv">ACTOR_NUM_NODES</span><span class="o">=</span><span class="m">1</span><span class="w"> </span><span class="nv">CP_SIZE</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>bash<span class="w"> </span>scripts/run-qwen3-next-80B-A3B.sh
 </pre></div>
 </div>
-<p>如果显存不够，考虑disable <code class="docutils literal notranslate"><span class="pre">--accumulate-allreduce-grads-in-fp32</span></code>，enable <code class="docutils literal notranslate"><span class="pre">--grad-reduce-in-bf16</span></code></p>
-<p>多机（4x8）</p>
+<p>四机、每机八卡时，请确保所有节点使用相同的模型和数据路径，并准备 hostfile：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
 <span class="nb">export</span><span class="w"> </span><span class="nv">BASE_FOLDER</span><span class="o">=</span>/root
 <span class="nb">export</span><span class="w"> </span><span class="nv">MASTER_ADDR</span><span class="o">=</span>your_master_addr
@@ -591,6 +566,8 @@ Go to the flash-linear-attention folder you just installed, and apply the follow
 bash<span class="w"> </span>scripts/run-qwen3-next-80B-A3B.sh
 </pre></div>
 </div>
+<p>启动脚本默认使用 <code class="docutils literal notranslate"><span class="pre">ACTOR_NUM_NODES=4</span></code>、<code class="docutils literal notranslate"><span class="pre">ACTOR_NUM_GPUS_PER_NODE=8</span></code> 和 <code class="docutils literal notranslate"><span class="pre">CP_SIZE=4</span></code>。修改节点数或并行方式时，请显式设置这些值。H100/H200 配方是参考配置；适配 Blackwell 时，需要验证所选 kernel 和并行配置。</p>
+<p>如果梯度累积占用过多显存，可在启动脚本中用 <code class="docutils literal notranslate"><span class="pre">--grad-reduce-in-bf16</span></code> 替换 <code class="docutils literal notranslate"><span class="pre">--accumulate-allreduce-grads-in-fp32</span></code>。</p>
 </section>
 </section>
 
@@ -605,6 +582,24 @@ bash<span class="w"> </span>scripts/run-qwen3-next-80B-A3B.sh
                 <footer class="prev-next-footer d-print-none">
                   
 <div class="prev-next-area">
+    <a class="left-prev"
+       href="qwen3-30B-A3B.html"
+       title="上一页">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">上一页</p>
+        <p class="prev-next-title">8xH100 训练 Qwen3-30B-A3B</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="glm5.2-744B-A40B.html"
+       title="下一页">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">下一页</p>
+        <p class="prev-next-title">256xH100 训练 GLM-5.2 744B-A40B</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
 </div>
                 </footer>
               
@@ -623,9 +618,9 @@ bash<span class="w"> </span>scripts/run-qwen3-next-80B-A3B.sh
   </div>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">环境准备</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#optional-fix-a-bug-in-triton-compilation-on-blackwell-sm100">[Optional] Fix a bug in triton compilation on Blackwell (sm100)</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron">执行训练 (Megatron)</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">环境与数据</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">权重转换</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">执行训练</a></li>
 </ul>
   </nav></div>
 
@@ -659,7 +654,7 @@ bash<span class="w"> </span>scripts/run-qwen3-next-80B-A3B.sh
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 10 月 07 日.
+  最后更新于 2026 年 10 月 09 日.
   <br/>
 </p>
   </div>

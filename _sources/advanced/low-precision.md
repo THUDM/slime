@@ -55,7 +55,7 @@ This is a rollout-side setting. It does not change Megatron training precision; 
 
 slime also supports experimental FP8 training paths. We observed that FP8 training plus FP8 inference can improve inference throughput and reduce training/inference mismatch in some settings. More details are available in [this blog](https://lmsys.org/blog/2025-11-25-fp8-rl/).
 
-### Quick Start
+### FP8 Quick Start
 
 1. Convert your Hugging Face model weights to FP8 format using `tools/convert_hf_to_fp8.py`.
 
@@ -96,7 +96,7 @@ Only `Linear` and `GroupLinear` layers in TransformerEngine use FP8. `embedding`
 
 INT4 STE (Straight-Through Estimator) training and INT4 inference can further reduce rollout memory and improve throughput. Treat this path as beta unless you have validated the target model and reward setup.
 
-### Quick Start
+### INT4 Quick Start
 
 1. Convert Hugging Face weights to INT4:
 
@@ -110,7 +110,7 @@ If you only need INT4 rollout, set `--hf-checkpoint` to the converted INT4 check
 
 2. Enable INT4 fake QAT:
 
-```json
+```bash
 RUNTIME_ENV_JSON="{
   \"env_vars\": {
     \"OPEN_TRAINING_INT4_FAKE_QAT_FLAG\": \"1\",

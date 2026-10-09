@@ -8,8 +8,8 @@ slime 的核心定位并不只是跑单轮 RL，而是把高性能训练、SGLan
 
 | 目标 | 推荐入口 |
 | :--- | :--- |
-| 给每条 sample 跑自定义 agent loop、tool call、RAG、browser/terminal/sandbox 交互 | [`--custom-generate-function-path`](customization.md#2-自定义生成函数---custom-generate-function-path)、[编写自定义生成函数](quick_start.md#编写自定义生成函数) |
-| 做 verifier reward、test-based reward、环境成功判定或外部 reward 服务 | [`--custom-rm-path`](customization.md#3-奖励模型---custom-rm-path)、[编写自定义奖励函数](quick_start.md#编写自定义奖励函数) |
+| 给每条 sample 跑自定义 agent loop、tool call、RAG、browser/terminal/sandbox 交互 | [`--custom-generate-function-path`](customization.md#--custom-generate-function-path)、[编写自定义生成函数](quick_start.md#编写自定义生成函数) |
+| 做 verifier reward、test-based reward、环境成功判定或外部 reward 服务 | [`--custom-rm-path`](customization.md#--custom-rm-path)、[编写自定义奖励函数](quick_start.md#编写自定义奖励函数) |
 | 一个 prompt 会产生多个训练样本，例如 subagent、multi-agent、context compact | [custom generate 的 fan-out 返回](customization.md#一个-prompt-产生多个训练样本)、[`examples/multi_agent`](../_examples_synced/multi_agent/README.md) |
 | agent rollout 有长尾耗时，希望训练不要被最慢样本卡住 | [`examples/fully_async`](../_examples_synced/fully_async/README.md) |
 | agent 需要 sandbox、真实代码修改、测试验证和完整端到端样例 | [`examples/coding_agent_rl`](../_examples_synced/coding_agent_rl/README.md) |

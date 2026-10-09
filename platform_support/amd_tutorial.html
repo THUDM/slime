@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>AMD &#8212; slime</title>
+    <title>AMD ROCm &#8212; slime</title>
   
   
   
@@ -41,7 +41,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
-    <script src="../_static/documentation_options.js?v=2f2e10e9"></script>
+    <script src="../_static/documentation_options.js?v=183391d5"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -50,16 +50,16 @@
     <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'platform_support/amd_tutorial';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
-    <script src="../_static/js/lang-toggle.js?v=8d03b7be"></script>
+    <script data-layout="root" src="../_static/js/lang-toggle.js?v=082004b6"></script>
     <link rel="icon" href="../_static/logo.ico"/>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="v0.1.0: Redefining High-Performance RL Training Frameworks" href="../blogs/release_v0.1.0.html" />
-    <link rel="prev" title="Profiling" href="../developer_guide/profiling.html" />
+    <link rel="prev" title="Installing FlashQLA" href="../developer_guide/install_flashqla.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-  <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="Oct 07, 2026"/>
+  <meta name="docsearch:version" content="0.4.0" />
+    <meta name="docbuild:last-update" content="Oct 09, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -219,6 +219,7 @@
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-30B-A3B.html">GLM-4.7-Flash with 8×H100</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-30B-A3B.html">Qwen3-30B-A3B with 8xH100</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-next-80B-A3B.html">Qwen3-Next-80B-A3B</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../examples/glm5.2-744B-A40B.html">GLM-5.2 744B-A40B with 256xH100</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-355B-A32B.html">GLM-4.7 with 64xH100</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../examples/deepseek-r1.html">DeepSeek R1 with 128xH100</a></li>
@@ -247,6 +248,17 @@
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/coding_agent_rl/README.html">Coding-Agent RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/delta_weight_sync/README.html">Delta Weight Sync</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/eval_multi_task/README.html">Multi-Task Evaluation Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/geo3k_vlm/README.html">VLM Single-Turn RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/geo3k_vlm_multi_turn/README.html">VLM Multi-Turn (geo3k dataset)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/on_policy_distillation/README.html">On-Policy Distillation Example</a></li>
+
+
+
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/strands_sglang/README.html">slime x Strands-SGLang</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/tau-bench/README.html">Tau bench</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/train_infer_mismatch_helper/README.html">Rollout Correction Methods</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Developer Guide</span></p>
 <ul class="nav bd-sidenav">
@@ -254,10 +266,11 @@
 <li class="toctree-l1"><a class="reference internal" href="../developer_guide/debug.html">Debugging</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_guide/trace.html">Trace Viewer</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_guide/profiling.html">Profiling</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/install_flashqla.html">Installing FlashQLA</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Hardware Platforms</span></p>
 <ul class="current nav bd-sidenav">
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">AMD</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">AMD ROCm</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Blogs</span></p>
 <ul class="nav bd-sidenav">
@@ -339,7 +352,7 @@
       
       
       
-      <li><a href="https://github.com/THUDM/slime/blob/main/platform_support/amd_tutorial.md?plain=1" target="_blank"
+      <li><a href="https://github.com/THUDM/slime/blob/main/docs/en/platform_support/amd_tutorial.md?plain=1" target="_blank"
    class="btn btn-sm btn-source-file-button dropdown-item"
    title="Show source"
    data-bs-placement="left" data-bs-toggle="tooltip"
@@ -356,7 +369,7 @@
       
       
       
-      <li><a href="https://github.com/THUDM/slime/edit/main/platform_support/amd_tutorial.md" target="_blank"
+      <li><a href="https://github.com/THUDM/slime/edit/main/docs/en/platform_support/amd_tutorial.md" target="_blank"
    class="btn btn-sm btn-source-edit-button dropdown-item"
    title="Suggest edit"
    data-bs-placement="left" data-bs-toggle="tooltip"
@@ -486,7 +499,7 @@
               
 
 <div id="jb-print-docs-body" class="onlyprint">
-    <h1>AMD</h1>
+    <h1>AMD ROCm</h1>
     <!-- Table of contents -->
     <div id="print-main-content">
         <div id="jb-print-toc">
@@ -518,13 +531,12 @@
 <div id="searchbox"></div>
                 <article class="bd-article">
                   
-  <section class="tex2jax_ignore mathjax_ignore" id="amd">
-<h1>AMD<a class="headerlink" href="#amd" title="Link to this heading">#</a></h1>
+  <section class="tex2jax_ignore mathjax_ignore" id="amd-rocm">
+<h1>AMD ROCm<a class="headerlink" href="#amd-rocm" title="Link to this heading">#</a></h1>
 <p>⚠️ If you encounter problems on AMD instinct, feel free to reach out <a class="reference external" href="https://yushengsu-thu.github.io/">Yusheng Su</a>.</p>
 <section id="introduction">
 <h2>Introduction<a class="headerlink" href="#introduction" title="Link to this heading">#</a></h2>
-<p>If you are running slime on AMD’s Instinct, please refer to the following materials. This tutorial will explain how to set up the development environment (Docker), use the modified ROCm dependencies, and provide an example for running the experiments. The current rocm docker only support AMD’s MI300 and MI325 GPUs.</p>
-<!-- First, you need to configure the slime runtime environment according to the [Readme](../../README.md) documentation and cd to the slime project directory. -->
+<p>If you are running slime on AMD’s Instinct, please refer to the following materials. This tutorial will explain how to set up the development environment (Docker), use the modified ROCm dependencies, and provide an example for running the experiments. The recipe below targets AMD MI300 and MI325 GPUs.</p>
 </section>
 <section id="docker">
 <h2>Docker<a class="headerlink" href="#docker" title="Link to this heading">#</a></h2>
@@ -595,11 +607,12 @@ hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class
 <span class="nv">PYTHONPATH</span><span class="o">=</span><span class="si">${</span><span class="nv">MEGATRON_LM_PATH</span><span class="si">}</span><span class="w"> </span>python<span class="w"> </span>tools/convert_hf_to_torch_dist.py<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span><span class="si">${</span><span class="nv">MODEL_ARGS</span><span class="p">[@]</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>--no-gradient-accumulation-fusion<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--use-cpu-initialization<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>--hf-checkpoint<span class="w"> </span>/root/Qwen3-4B<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>--save<span class="w"> </span>/root/Qwen3-4B_torch_dist
 </pre></div>
 </div>
-<p>Note: We implemented a dedicated AMD conversion script that forces a CPU-only conversion workflow using the Gloo backend to bypass hardware-specific issues. A GPU-based script for ROCm is currently in development.</p>
+<p>On ROCm, the shared conversion script requires <code class="docutils literal notranslate"><span class="pre">--use-cpu-initialization</span></code> so model weights are initialized and saved on CPU.</p>
 <p>⚠️ If you encounter an issue where slime cannot be found, please run <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">-e</span> <span class="pre">.</span> <span class="pre">--no-deps</span></code> in the slime directory.</p>
 </section>
 </section>
@@ -615,7 +628,7 @@ hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class
 bash<span class="w"> </span>scripts/run-qwen3-4B-amd.sh
 </pre></div>
 </div>
-<p>⚠️ TODO: ROCM seems to not support <code class="docutils literal notranslate"><span class="pre">apex</span></code> yet. Thus, we need to disable gradient accumulation fusionby adding the <code class="docutils literal notranslate"><span class="pre">--no-gradient-accumulation-fusion</span></code> flag in the training script currently. We will continue investigating how to enable this.</p>
+<p>This ROCm recipe disables gradient accumulation fusion with <code class="docutils literal notranslate"><span class="pre">--no-gradient-accumulation-fusion</span></code>. Keep that flag when adapting the launch script.</p>
 <p>⚠️ Note: The main difference between ROCm’s training script and NVIDIA’s script is that you need to set <code class="docutils literal notranslate"><span class="pre">RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES</span></code> and <code class="docutils literal notranslate"><span class="pre">HIP_VISIBLE_DEVICES</span></code> for ray to function properly on AMD GPUs.</p>
 <ul class="simple">
 <li><p>We show the training script below:</p></li>
@@ -814,12 +827,12 @@ pkill<span class="w"> </span>-9<span class="w"> </span>python
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="../developer_guide/profiling.html"
+       href="../developer_guide/install_flashqla.html"
        title="previous page">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">previous</p>
-        <p class="prev-next-title">Profiling</p>
+        <p class="prev-next-title">Installing FlashQLA</p>
       </div>
     </a>
     <a class="right-next"
@@ -893,7 +906,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Oct 07, 2026.
+  Last updated on Oct 09, 2026.
   <br/>
 </p>
   </div>

@@ -41,7 +41,7 @@ python $WORK_DIR/scripts/data_process/qa_search_test_merge.py \
     --data_sources $DATA
 ```
 
-**Note:** If you plan to use local search backend, see the [Appendix](#appendix-setting-up-local-retriever) for instructions on setting up the local retrieval server.
+**Note:** If you plan to use local search backend, see the [Appendix](README.md#appendix-setting-up-local-retriever) for instructions on setting up the local retrieval server.
 
 Initialize the Qwen2.5-3B model:
 

@@ -1,10 +1,11 @@
 // Inject a language toggle button into the topbar (sphinx-book-theme compatible)
 (function(){
   const STORAGE_KEY = 'slime-doc-lang';
+  const prefixedLayout = document.currentScript?.dataset.layout === 'prefix';
   // Default language EN has no URL prefix; Chinese uses '/zh/' inserted after optional repo root.
   function detectCurrent(){
     const { zhIndex } = analyzePath();
-    return zhIndex !== -1 ? 'zh' : 'en';
+    return zhIndex !== -1 || document.documentElement.lang.startsWith('zh') ? 'zh' : 'en';
   }
   function otherLang(lang){ return lang === 'zh' ? 'en' : 'zh'; }
   /**
@@ -22,16 +23,18 @@
     if(parts.length > 0 && (window.location.host.endsWith('github.io') || parts[0] === 'slime')){
       repoRoot = parts[0];
     }
-    let zhIndex = -1;
-    if(parts[0] === 'zh') zhIndex = 0; else if(parts[1] === 'zh') zhIndex = 1;
-    return { parts, repoRoot, zhIndex };
+    const languageIndex = repoRoot ? 1 : 0;
+    const zhIndex = parts[languageIndex] === 'zh' ? languageIndex : -1;
+    return { parts, repoRoot, zhIndex, languageIndex };
   }
 
   function buildTargetUrl(target){
     const url = new URL(window.location.href);
     const trailingSlash = url.pathname.endsWith('/') || url.pathname === '/';
-    const { parts, repoRoot, zhIndex } = analyzePath();
-    if(target === 'zh'){
+    const { parts, repoRoot, zhIndex, languageIndex } = analyzePath();
+    if(prefixedLayout){
+      parts[languageIndex] = target;
+    } else if(target === 'zh'){
       if(zhIndex === -1){
         if(repoRoot){
           if(parts.length === 1) parts.push('zh'); else parts.splice(1,0,'zh');
@@ -109,7 +112,7 @@
   document.addEventListener('DOMContentLoaded', ()=>{
     insert();
     // Observe for dynamic header injection
-  const obs = new MutationObserver(()=>{ insert(); });
+    const obs = new MutationObserver(()=>{ insert(); });
     obs.observe(document.body, {childList:true, subtree:true});
     // Stop observing after 5s
     setTimeout(()=>obs.disconnect(), 5000);

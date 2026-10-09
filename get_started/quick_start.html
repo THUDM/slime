@@ -41,7 +41,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
-    <script src="../_static/documentation_options.js?v=2f2e10e9"></script>
+    <script src="../_static/documentation_options.js?v=183391d5"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -50,7 +50,7 @@
     <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'get_started/quick_start';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
-    <script src="../_static/js/lang-toggle.js?v=8d03b7be"></script>
+    <script data-layout="root" src="../_static/js/lang-toggle.js?v=082004b6"></script>
     <link rel="icon" href="../_static/logo.ico"/>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
@@ -58,8 +58,8 @@
     <link rel="prev" title="slime Documentation" href="../index.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-  <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="Oct 07, 2026"/>
+  <meta name="docsearch:version" content="0.4.0" />
+    <meta name="docbuild:last-update" content="Oct 09, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -219,6 +219,7 @@
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-30B-A3B.html">GLM-4.7-Flash with 8×H100</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-30B-A3B.html">Qwen3-30B-A3B with 8xH100</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-next-80B-A3B.html">Qwen3-Next-80B-A3B</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../examples/glm5.2-744B-A40B.html">GLM-5.2 744B-A40B with 256xH100</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-355B-A32B.html">GLM-4.7 with 64xH100</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../examples/deepseek-r1.html">DeepSeek R1 with 128xH100</a></li>
@@ -247,6 +248,17 @@
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/coding_agent_rl/README.html">Coding-Agent RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/delta_weight_sync/README.html">Delta Weight Sync</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/eval_multi_task/README.html">Multi-Task Evaluation Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/geo3k_vlm/README.html">VLM Single-Turn RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/geo3k_vlm_multi_turn/README.html">VLM Multi-Turn (geo3k dataset)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/on_policy_distillation/README.html">On-Policy Distillation Example</a></li>
+
+
+
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/strands_sglang/README.html">slime x Strands-SGLang</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/tau-bench/README.html">Tau bench</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/train_infer_mismatch_helper/README.html">Rollout Correction Methods</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Developer Guide</span></p>
 <ul class="nav bd-sidenav">
@@ -254,10 +266,11 @@
 <li class="toctree-l1"><a class="reference internal" href="../developer_guide/debug.html">Debugging</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_guide/trace.html">Trace Viewer</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_guide/profiling.html">Profiling</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/install_flashqla.html">Installing FlashQLA</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Hardware Platforms</span></p>
 <ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../platform_support/amd_tutorial.html">AMD</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../platform_support/amd_tutorial.html">AMD ROCm</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Blogs</span></p>
 <ul class="nav bd-sidenav">
@@ -339,7 +352,7 @@
       
       
       
-      <li><a href="https://github.com/THUDM/slime/blob/main/get_started/quick_start.md?plain=1" target="_blank"
+      <li><a href="https://github.com/THUDM/slime/blob/main/docs/en/get_started/quick_start.md?plain=1" target="_blank"
    class="btn btn-sm btn-source-file-button dropdown-item"
    title="Show source"
    data-bs-placement="left" data-bs-toggle="tooltip"
@@ -356,7 +369,7 @@
       
       
       
-      <li><a href="https://github.com/THUDM/slime/edit/main/get_started/quick_start.md" target="_blank"
+      <li><a href="https://github.com/THUDM/slime/edit/main/docs/en/get_started/quick_start.md" target="_blank"
    class="btn btn-sm btn-source-edit-button dropdown-item"
    title="Suggest edit"
    data-bs-placement="left" data-bs-toggle="tooltip"
@@ -497,7 +510,7 @@
             <nav aria-label="Page">
                 <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#basic-environment-setup">Basic Environment Setup</a><ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#hardware-support">Hardware Support</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#hardware-and-image-selection">Hardware and Image Selection</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pull-and-start-docker-container">Pull and Start Docker Container</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#install-slime">Install slime</a></li>
 </ul>
@@ -553,23 +566,31 @@
 <p>This document will guide you through setting up the environment and getting started with slime within one hour, covering environment configuration, data preparation, training startup, and key code analysis and modifications.</p>
 <section id="basic-environment-setup">
 <h2>Basic Environment Setup<a class="headerlink" href="#basic-environment-setup" title="Link to this heading">#</a></h2>
-<p>Since slime may contain temporary patches for sglang/megatron, to avoid potential environment configuration issues, we strongly recommend <strong>users to use our latest Docker image</strong>, which comes pre-configured with all dependencies.</p>
-<section id="hardware-support">
-<h3>Hardware Support<a class="headerlink" href="#hardware-support" title="Link to this heading">#</a></h3>
-<p><strong>slime</strong> supports multiple NVIDIA GPU hardware platforms:</p>
-<ul class="simple">
-<li><p><strong>B200 Series</strong>: Fully supported with identical setup steps as H-series GPUs</p></li>
-<li><p><strong>H-Series (H100/H200)</strong>: Official support with comprehensive CI testing and stable performance</p></li>
-</ul>
-<p><strong>Important Notes</strong>:</p>
-<ul class="simple">
-<li><p>Latest Docker images are compatible with both B-series and H-series GPUs without additional configuration</p></li>
-<li><p>Megatron backend on H-series GPUs has CI protection, thoroughly validated, recommended for production environments</p></li>
-<li><p>B-series basic functionality is stable and suitable for development/testing, but currently lacks CI protection</p></li>
-<li><p>Both hardware platforms use identical installation and startup procedures</p></li>
-<li><p>For scenarios where Docker is not convenient, please refer to <a class="reference external" href="https://github.com/THUDM/slime/blob/main/build_conda.sh">build_conda.sh</a>;</p></li>
-<li><p>For AMD support, please refer to <a class="reference internal" href="../platform_support/amd_tutorial.html"><span class="std std-doc">AMD Usage Tutorial</span></a>.</p></li>
-</ul>
+<p>Use the provided Docker images to get a compatible SGLang, Megatron, and patch stack.</p>
+<section id="hardware-and-image-selection">
+<h3>Hardware and Image Selection<a class="headerlink" href="#hardware-and-image-selection" title="Link to this heading">#</a></h3>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Hardware</p></th>
+<th class="head"><p>Image</p></th>
+<th class="head"><p>CUDA</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>H100/H200</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">slimerl/slime:latest</span></code> or <code class="docutils literal notranslate"><span class="pre">slimerl/slime:latest-cu129</span></code></p></td>
+<td><p>12.9</p></td>
+</tr>
+<tr class="row-odd"><td><p>B200/B300 (Blackwell, x86)</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">slimerl/slime:latest-cu130</span></code></p></td>
+<td><p>13.0</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>The default <code class="docutils literal notranslate"><span class="pre">latest</span></code> tag follows the CUDA 12 image. For Blackwell, replace the image in the commands below with <code class="docutils literal notranslate"><span class="pre">slimerl/slime:latest-cu130</span></code>. The two variants use different kernel and Transformer Engine builds. See the <a class="reference external" href="https://github.com/THUDM/slime/blob/main/docker/README.md">Docker guide</a> for source pins and build options.</p>
+<p>GPU CI primarily covers H100/H200. Check each recipe’s hardware and parallelism requirements before running it on other platforms.</p>
+<p>For installation without Docker, use <a class="reference external" href="https://github.com/THUDM/slime/blob/main/build_conda.sh">build_conda.sh</a>, which builds a CUDA 12.9 environment. For AMD, see the <a class="reference internal" href="../platform_support/amd_tutorial.html"><span class="std std-doc">AMD tutorial</span></a>.</p>
 </section>
 <section id="pull-and-start-docker-container">
 <h3>Pull and Start Docker Container<a class="headerlink" href="#pull-and-start-docker-container" title="Link to this heading">#</a></h3>
@@ -616,7 +637,7 @@ hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class
 <section id="convert-from-hugging-face-format-to-megatron-format">
 <h3>Convert from Hugging Face Format to Megatron Format<a class="headerlink" href="#convert-from-hugging-face-format-to-megatron-format" title="Link to this heading">#</a></h3>
 <p>When using Megatron as the training backend, you need to first convert Hugging Face format model weights to Megatron <code class="docutils literal notranslate"><span class="pre">torch_dist</span></code> format.</p>
-<p>First, load the configuration file of the target model. The <code class="docutils literal notranslate"><span class="pre">slime/scripts/models</span></code> directory contains configuration files for supported models. You need to <code class="docutils literal notranslate"><span class="pre">source</span></code> the corresponding model script to load the configuration parameters into the current environment. Here we use GLM4-9B model as an example, and it’s similar for Qwen3-4B, Qwen3.5, Qwen3.6, GLM-4.7-Flash, Qwen3-30B-A3B, etc.</p>
+<p>First, load the configuration file of the target model. The <code class="docutils literal notranslate"><span class="pre">scripts/models</span></code> directory contains configuration files for supported models. You need to <code class="docutils literal notranslate"><span class="pre">source</span></code> the corresponding model script to load the configuration parameters into the current environment. Here we use GLM4-9B model as an example, and it’s similar for Qwen3-4B, Qwen3.5, Qwen3.6, GLM-4.7-Flash, Qwen3-30B-A3B, etc.</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
 <span class="nb">source</span><span class="w"> </span>scripts/models/glm4-9B.sh
 </pre></div>
@@ -654,7 +675,7 @@ Note: When converting the kimi-k2 model weights, you need to open config.json in
 bash<span class="w"> </span>scripts/run-glm4-9B.sh
 </pre></div>
 </div>
-<p>We still use the run-glm4-9B.sh script as an example to briefly analyze the main parameters.</p>
+<p>We still use the <a class="reference external" href="http://run-glm4-9B.sh">run-glm4-9B.sh</a> script as an example to briefly analyze the main parameters.</p>
 <section id="model-args-model-configuration-parameters">
 <h3>MODEL_ARGS: Model Configuration Parameters<a class="headerlink" href="#model-args-model-configuration-parameters" title="Link to this heading">#</a></h3>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">SCRIPT_DIR</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span><span class="nb">cd</span><span class="w"> </span>--<span class="w"> </span><span class="s2">"</span><span class="k">$(</span>dirname<span class="w"> </span>--<span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">BASH_SOURCE</span><span class="p">[0]</span><span class="si">}</span><span class="s2">"</span><span class="k">)</span><span class="s2">"</span><span class="w"> </span><span class="p">&amp;</span>&gt;/dev/null<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">pwd</span><span class="k">)</span><span class="s2">"</span>
@@ -1186,7 +1207,7 @@ export NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME=$(ip -o -4 addr show | awk '$4 ~ /^10\.
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#basic-environment-setup">Basic Environment Setup</a><ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#hardware-support">Hardware Support</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#hardware-and-image-selection">Hardware and Image Selection</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pull-and-start-docker-container">Pull and Start Docker Container</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#install-slime">Install slime</a></li>
 </ul>
@@ -1259,7 +1280,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Oct 07, 2026.
+  Last updated on Oct 09, 2026.
   <br/>
 </p>
   </div>

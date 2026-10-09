@@ -1,14 +1,12 @@
-# AMD
+# AMD ROCm
 
 ⚠️ If you encounter problems on AMD instinct, feel free to reach out [Yusheng Su](https://yushengsu-thu.github.io/).
 
 
 ## Introduction
 
-If you are running slime on AMD's Instinct, please refer to the following materials. This tutorial will explain how to set up the development environment (Docker), use the modified ROCm dependencies, and provide an example for running the experiments. The current rocm docker only support AMD's MI300 and MI325 GPUs.
+If you are running slime on AMD's Instinct, please refer to the following materials. This tutorial will explain how to set up the development environment (Docker), use the modified ROCm dependencies, and provide an example for running the experiments. The recipe below targets AMD MI300 and MI325 GPUs.
 
-
-<!-- First, you need to configure the slime runtime environment according to the [Readme](../../README.md) documentation and cd to the slime project directory. -->
 
 ## Docker
 
@@ -87,11 +85,12 @@ MEGATRON_LM_PATH=$(pip list | grep megatron-core | awk '{print $NF}')
 PYTHONPATH=${MEGATRON_LM_PATH} python tools/convert_hf_to_torch_dist.py \
     ${MODEL_ARGS[@]} \
     --no-gradient-accumulation-fusion \
+    --use-cpu-initialization \
     --hf-checkpoint /root/Qwen3-4B \
     --save /root/Qwen3-4B_torch_dist
 ```
 
-Note: We implemented a dedicated AMD conversion script that forces a CPU-only conversion workflow using the Gloo backend to bypass hardware-specific issues. A GPU-based script for ROCm is currently in development.
+On ROCm, the shared conversion script requires `--use-cpu-initialization` so model weights are initialized and saved on CPU.
 
 ⚠️ If you encounter an issue where slime cannot be found, please run `pip install -e . --no-deps` in the slime directory.
 
@@ -108,7 +107,7 @@ DATA_DIR=/root \
 bash scripts/run-qwen3-4B-amd.sh
 ``` 
 
-⚠️ TODO: ROCM seems to not support `apex` yet. Thus, we need to disable gradient accumulation fusionby adding the `--no-gradient-accumulation-fusion` flag in the training script currently. We will continue investigating how to enable this.
+This ROCm recipe disables gradient accumulation fusion with `--no-gradient-accumulation-fusion`. Keep that flag when adapting the launch script.
 
 ⚠️ Note: The main difference between ROCm's training script and NVIDIA's script is that you need to set `RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES` and `HIP_VISIBLE_DEVICES` for ray to function properly on AMD GPUs.
 

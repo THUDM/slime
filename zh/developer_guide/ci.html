@@ -41,7 +41,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
-    <script src="../_static/documentation_options.js?v=f9a8c948"></script>
+    <script src="../_static/documentation_options.js?v=ceb54874"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -50,16 +50,16 @@
     <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'developer_guide/ci';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
-    <script src="../_static/js/lang-toggle.js?v=8d03b7be"></script>
+    <script data-layout="root" src="../_static/js/lang-toggle.js?v=082004b6"></script>
     <link rel="icon" href="../_static/logo.ico"/>
     <link rel="index" title="索引" href="../genindex.html" />
     <link rel="search" title="搜索" href="../search.html" />
     <link rel="next" title="Debug 指南" href="debug.html" />
-    <link rel="prev" title="Coding-Agent RL" href="../_examples_synced/coding_agent_rl/README.html" />
+    <link rel="prev" title="Rollout Correction Methods" href="../_examples_synced/train_infer_mismatch_helper/README.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-  <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="2026 年 10 月 07 日"/>
+  <meta name="docsearch:version" content="0.4.0" />
+    <meta name="docbuild:last-update" content="2026 年 10 月 09 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -219,6 +219,7 @@
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-30B-A3B.html">8×H100 训练 GLM-4.7-Flash</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-30B-A3B.html">8xH100 训练 Qwen3-30B-A3B</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-next-80B-A3B.html">Qwen3-Next-80B-A3B</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../examples/glm5.2-744B-A40B.html">256xH100 训练 GLM-5.2 744B-A40B</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-355B-A32B.html">64xH100 训练 GLM-4.7</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../examples/deepseek-r1.html">128xH100 训练 DeepSeek R1</a></li>
@@ -247,6 +248,17 @@
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/coding_agent_rl/README.html">Coding-Agent RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/delta_weight_sync/README.html">Delta Weight Sync</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/eval_multi_task/README.html">Multi-Task Evaluation Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/geo3k_vlm/README.html">VLM Single-Turn RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/geo3k_vlm_multi_turn/README.html">VLM Multi-Turn (geo3k dataset)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/on_policy_distillation/README.html">On-Policy Distillation Example</a></li>
+
+
+
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/strands_sglang/README.html">slime x Strands-SGLang</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/tau-bench/README.html">Tau bench</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/train_infer_mismatch_helper/README.html">Rollout Correction Methods</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">开发指南</span></p>
 <ul class="current nav bd-sidenav">
@@ -254,6 +266,11 @@
 <li class="toctree-l1"><a class="reference internal" href="debug.html">Debug 指南</a></li>
 <li class="toctree-l1"><a class="reference internal" href="trace.html">Trace 可视化</a></li>
 <li class="toctree-l1"><a class="reference internal" href="profiling.html">性能分析 (Profiling)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="install_flashqla.html">安装 FlashQLA</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">硬件平台</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../platform_support/amd_tutorial.html">AMD ROCm</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">博客</span></p>
 <ul class="nav bd-sidenav">
@@ -335,7 +352,7 @@
       
       
       
-      <li><a href="https://github.com/THUDM/slime/blob/main/developer_guide/ci.md?plain=1" target="_blank"
+      <li><a href="https://github.com/THUDM/slime/blob/main/docs/zh/developer_guide/ci.md?plain=1" target="_blank"
    class="btn btn-sm btn-source-file-button dropdown-item"
    title="Show source"
    data-bs-placement="left" data-bs-toggle="tooltip"
@@ -352,7 +369,7 @@
       
       
       
-      <li><a href="https://github.com/THUDM/slime/edit/main/developer_guide/ci.md" target="_blank"
+      <li><a href="https://github.com/THUDM/slime/edit/main/docs/zh/developer_guide/ci.md" target="_blank"
    class="btn btn-sm btn-source-edit-button dropdown-item"
    title="Suggest edit"
    data-bs-placement="left" data-bs-toggle="tooltip"
@@ -507,8 +524,8 @@
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">添加测试</a><ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">CPU 测试</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">GPU 端到端测试</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">添加 CPU 测试</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">添加 GPU 端到端测试</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">生成工作流</a></li>
@@ -700,7 +717,7 @@ python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> <
 <section id="id5">
 <h2>添加测试<a class="headerlink" href="#id5" title="链接到此标题。">#</a></h2>
 <section id="id6">
-<h3>CPU 测试<a class="headerlink" href="#id6" title="链接到此标题。">#</a></h3>
+<h3>添加 CPU 测试<a class="headerlink" href="#id6" title="链接到此标题。">#</a></h3>
 <p>参考相邻文件，将测试放在 <code class="docutils literal notranslate"><span class="pre">tests/test_*.py</span></code>、<code class="docutils literal notranslate"><span class="pre">tests/utils/test_*.py</span></code> 或 <code class="docutils literal notranslate"><span class="pre">tests/plugin_contracts/test_*.py</span></code> 下。如果文件会被 <code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> 运行，需要声明顶层 <code class="docutils literal notranslate"><span class="pre">NUM_GPUS</span> <span class="pre">=</span> <span class="pre">0</span></code>。</p>
 <p>CI 会直接执行测试文件，因此使用 pytest 的文件需要提供入口：</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">"__main__"</span><span class="p">:</span>
@@ -710,7 +727,7 @@ python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> <
 <p>需要自动运行的测试，还应注册到 <code class="docutils literal notranslate"><span class="pre">.github/workflows/pr-test.yml.j2</span></code> 的 <code class="docutils literal notranslate"><span class="pre">cpu-unittest</span></code> 或 <code class="docutils literal notranslate"><span class="pre">agent-adapter-test</span></code> 列表中，再重新生成工作流。</p>
 </section>
 <section id="id7">
-<h3>GPU 端到端测试<a class="headerlink" href="#id7" title="链接到此标题。">#</a></h3>
+<h3>添加 GPU 端到端测试<a class="headerlink" href="#id7" title="链接到此标题。">#</a></h3>
 <ol class="arabic simple">
 <li><p>创建 <code class="docutils literal notranslate"><span class="pre">tests/test_&lt;your_test_name&gt;.py</span></code>，沿用现有的 <code class="docutils literal notranslate"><span class="pre">prepare()</span></code> / <code class="docutils literal notranslate"><span class="pre">execute()</span></code> 结构。</p></li>
 <li><p>用顶层 <code class="docutils literal notranslate"><span class="pre">NUM_GPUS</span> <span class="pre">=</span> <span class="pre">&lt;N&gt;</span></code> 声明所需 GPU 数量。</p></li>
@@ -775,12 +792,12 @@ python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> <
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="../_examples_synced/coding_agent_rl/README.html"
+       href="../_examples_synced/train_infer_mismatch_helper/README.html"
        title="上一页">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">上一页</p>
-        <p class="prev-next-title">Coding-Agent RL</p>
+        <p class="prev-next-title">Rollout Correction Methods</p>
       </div>
     </a>
     <a class="right-next"
@@ -825,8 +842,8 @@ python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> <
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">添加测试</a><ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">CPU 测试</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">GPU 端到端测试</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">添加 CPU 测试</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">添加 GPU 端到端测试</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">生成工作流</a></li>
@@ -864,7 +881,7 @@ python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> <
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 10 月 07 日.
+  最后更新于 2026 年 10 月 09 日.
   <br/>
 </p>
   </div>

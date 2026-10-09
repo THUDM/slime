@@ -55,7 +55,7 @@ python tools/convert_hf_to_fp8.py \
 
 slime 也支持 experimental 的 FP8 training 路径。我们观察到，在一些设置下同时使用 FP8 training 和 FP8 inference，可以提升推理吞吐并降低训推不一致。更多细节请参考 [这篇博客](https://lmsys.org/blog/2025-11-25-fp8-rl/)。
 
-### 快速开始
+### FP8 快速开始
 
 1. 使用 `tools/convert_hf_to_fp8.py` 将 Hugging Face 模型权重转换为 FP8 格式。
 
@@ -96,7 +96,7 @@ bash scripts/low_precision/run-qwen3-30b-a3b-fp8.sh
 
 INT4 STE（Straight-Through Estimator）训练和 INT4 inference 可以进一步降低 rollout 显存并提升吞吐。在目标模型和 reward setup 验证前，请把这条路径视作 beta。
 
-### 快速开始
+### INT4 快速开始
 
 1. 将 Hugging Face 权重转换为 INT4：
 
@@ -110,7 +110,7 @@ python tools/convert_hf_to_int4_direct.py \
 
 2. 开启 INT4 fake QAT：
 
-```json
+```bash
 RUNTIME_ENV_JSON="{
   \"env_vars\": {
     \"OPEN_TRAINING_INT4_FAKE_QAT_FLAG\": \"1\",

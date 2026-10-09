@@ -41,7 +41,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
-    <script src="../_static/documentation_options.js?v=f9a8c948"></script>
+    <script src="../_static/documentation_options.js?v=ceb54874"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -50,7 +50,7 @@
     <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'get_started/usage';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
-    <script src="../_static/js/lang-toggle.js?v=8d03b7be"></script>
+    <script data-layout="root" src="../_static/js/lang-toggle.js?v=082004b6"></script>
     <link rel="icon" href="../_static/logo.ico"/>
     <link rel="index" title="索引" href="../genindex.html" />
     <link rel="search" title="搜索" href="../search.html" />
@@ -58,8 +58,8 @@
     <link rel="prev" title="快速使用" href="quick_start.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-  <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="2026 年 10 月 07 日"/>
+  <meta name="docsearch:version" content="0.4.0" />
+    <meta name="docbuild:last-update" content="2026 年 10 月 09 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -219,6 +219,7 @@
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-30B-A3B.html">8×H100 训练 GLM-4.7-Flash</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-30B-A3B.html">8xH100 训练 Qwen3-30B-A3B</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-next-80B-A3B.html">Qwen3-Next-80B-A3B</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../examples/glm5.2-744B-A40B.html">256xH100 训练 GLM-5.2 744B-A40B</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-355B-A32B.html">64xH100 训练 GLM-4.7</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../examples/deepseek-r1.html">128xH100 训练 DeepSeek R1</a></li>
@@ -247,6 +248,17 @@
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/coding_agent_rl/README.html">Coding-Agent RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/delta_weight_sync/README.html">Delta Weight Sync</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/eval_multi_task/README.html">Multi-Task Evaluation Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/geo3k_vlm/README.html">VLM Single-Turn RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/geo3k_vlm_multi_turn/README.html">VLM Multi-Turn (geo3k dataset)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/on_policy_distillation/README.html">On-Policy Distillation Example</a></li>
+
+
+
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/strands_sglang/README.html">slime x Strands-SGLang</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/tau-bench/README.html">Tau bench</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/train_infer_mismatch_helper/README.html">Rollout Correction Methods</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">开发指南</span></p>
 <ul class="nav bd-sidenav">
@@ -254,6 +266,11 @@
 <li class="toctree-l1"><a class="reference internal" href="../developer_guide/debug.html">Debug 指南</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_guide/trace.html">Trace 可视化</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_guide/profiling.html">性能分析 (Profiling)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/install_flashqla.html">安装 FlashQLA</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">硬件平台</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../platform_support/amd_tutorial.html">AMD ROCm</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">博客</span></p>
 <ul class="nav bd-sidenav">
@@ -335,7 +352,7 @@
       
       
       
-      <li><a href="https://github.com/THUDM/slime/blob/main/get_started/usage.md?plain=1" target="_blank"
+      <li><a href="https://github.com/THUDM/slime/blob/main/docs/zh/get_started/usage.md?plain=1" target="_blank"
    class="btn btn-sm btn-source-file-button dropdown-item"
    title="Show source"
    data-bs-placement="left" data-bs-toggle="tooltip"
@@ -352,7 +369,7 @@
       
       
       
-      <li><a href="https://github.com/THUDM/slime/edit/main/get_started/usage.md" target="_blank"
+      <li><a href="https://github.com/THUDM/slime/edit/main/docs/zh/get_started/usage.md" target="_blank"
    class="btn btn-sm btn-source-edit-button dropdown-item"
    title="Suggest edit"
    data-bs-placement="left" data-bs-toggle="tooltip"
@@ -518,13 +535,13 @@
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">sglang 使用方法</a><ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">参数配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">SGLang 参数</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#router">router 使用方法</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-config">高级引擎配置（--sglang-config）</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id9">megatron 使用方法</a><ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id10">参数配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id10">Megatron 参数</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id11">自定义参数</a></li>
 </ul>
 </li>
@@ -559,7 +576,7 @@
 <li><p><code class="docutils literal notranslate"><span class="pre">--actor-num-gpus-per-node</span></code>：RL 的 actor 训练的每个节点有卡；</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus</span></code>：rollout （inference）一共需要多少卡。设置为 <code class="docutils literal notranslate"><span class="pre">0</span></code> 时，slime 仍会解析 SGLang 参数并启动 router，但不会启动本地 SGLang server；</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus-per-engine</span></code>：每个 inference engine 有多少卡，这个参数会比较像 sglang 的 <code class="docutils literal notranslate"><span class="pre">tp_size</span></code>，也就是在进行多机 serving 的时候，这个数值应该是总卡数，例如 2 机 16 卡 serving 一个模型，这里的值应该是 16。</p>
-<p>这里不像其他的 sglang 参数那样引入 <code class="docutils literal notranslate"><span class="pre">--sglang-tp-size</span></code> 是因为未来也许会考虑支持 sglang 的 dp_size 参数，也就是一个 engine 里面其实是有多个 sglang server 的（目前只支持 <code class="docutils literal notranslate"><span class="pre">--sglang-enable-dp-attention</span></code> 情况下的 <code class="docutils literal notranslate"><span class="pre">--sglang-dp-size</span></code>）。</p>
+<p>SGLang 的 DP 大小通过 <code class="docutils literal notranslate"><span class="pre">--sglang-dp-size</span></code> 单独传入。默认 TP 大小为 engine 的 GPU 总数除以 PP 大小；也可以通过 SGLang 配置覆盖某个 server group 的并行参数。</p>
 </li>
 </ul>
 <p>在默认的配置下，我们会根据这些参数，通过 ray 给训练部分分配 <code class="docutils literal notranslate"><span class="pre">actor_num_nodes</span> <span class="pre">*</span> <span class="pre">actor_num_gpus_per_node</span></code> 张 GPU，给推理分配 <code class="docutils literal notranslate"><span class="pre">rollout_num_gpus</span></code> 张 GPU，也就是实现了训推分离。</p>
@@ -609,7 +626,7 @@
 <span class="o">)</span>
 </pre></div>
 </div>
-<p>我们在 <a class="reference internal" href="#../../../scripts/models"><span class="xref myst">scripts/models</span></a> 提供了常用模型的配置，可以直接复用。如果你也在使用 megatron 进行 pretrain/sft 的话，可以直接复用 pretrain/sft 中的模型配置。</p>
+<p>我们在 <a class="reference external" href="https://github.com/THUDM/slime/tree/main/scripts/models">scripts/models</a> 提供了常用模型的配置，可以直接复用。如果你也在使用 megatron 进行 pretrain/sft 的话，可以直接复用 pretrain/sft 中的模型配置。</p>
 <p>注意：</p>
 <ul class="simple">
 <li><p>slime 会加载 <code class="docutils literal notranslate"><span class="pre">PYTHONPATH</span></code> 中的 megatron 的所有参数，所以可以在环境中的 megatron 里找参数以及参数的说明；</p></li>
@@ -647,7 +664,7 @@
 <li><p>现在推荐使用的 torch_dist 格式（对应  <code class="docutils literal notranslate"><span class="pre">--ckpt-format</span> <span class="pre">torch_dist</span></code>）</p></li>
 </ul>
 <p>torch 格式是 megatron 的老存储格式，里面的结构大约是一些 <code class="docutils literal notranslate"><span class="pre">mp_rank_xxx</span></code> 的文件夹，每个文件夹对应了在对应的并行划分下，每个 rank 存储的 ckpt。也是因为如此，在加载 torch 格式的 ckpt 的时候，需要保证 ckpt 的并行策略和训练任务的并行策略是相同的。</p>
-<p>我们推荐使用 torch_dist 格式 ckpt，因为 torch_dist 格式可以支持自动并行切分，也就是不同并行的训练任务都可以共用同一个 ckpt，会方便很多。torch_dist 这也是开源 megatron 目前的默认格式。torch_dist 格式的 ckpt 中一般是一堆 <code class="docutils literal notranslate"><span class="pre">.distcp</span></code> 文件。在使用 torch_dist 时，可以使用 <span class="xref myst">README</span> 中介绍的 ckpt 转化方法从 huggingface 转化为 torch_dist，反之亦然。</p>
+<p>我们推荐使用 torch_dist 格式 ckpt，因为 torch_dist 格式可以支持自动并行切分，也就是不同并行的训练任务都可以共用同一个 ckpt，会方便很多。torch_dist 这也是开源 megatron 目前的默认格式。torch_dist 格式的 ckpt 中一般是一堆 <code class="docutils literal notranslate"><span class="pre">.distcp</span></code> 文件。在使用 torch_dist 时，可以使用 <a class="reference external" href="https://github.com/THUDM/slime/blob/main/README_zh.md">README</a> 中介绍的 ckpt 转化方法从 huggingface 转化为 torch_dist，反之亦然。</p>
 <p>在存储结构上，megatron 的 ckpt 一般是这样的结构，这里假设存储的路径为 <code class="docutils literal notranslate"><span class="pre">/ckpt/</span></code>：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--/ckpt/
 <span class="w">    </span><span class="p">|</span>--<span class="w"> </span>latest_checkpointed_iteration.txt
@@ -730,16 +747,16 @@
 <ul>
 <li><p><code class="docutils literal notranslate"><span class="pre">--advantage-estimator</span></code>: 当前训练需要的 RL 算法，目前支持：</p>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">grpo</span></code>（https://arxiv.org/abs/2402.03300）；</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">gspo</span></code>（https://arxiv.org/abs/2507.18071）；</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">cispo</span></code>（https://arxiv.org/abs/2506.13585）；</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">reinforce_plus_plus</span></code> 与 <code class="docutils literal notranslate"><span class="pre">reinforce_plus_plus_baseline</span></code>（https://arxiv.org/abs/2501.03262）；</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">ppo</span></code>（https://arxiv.org/abs/1707.06347）。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">grpo</span></code>（<a class="reference external" href="https://arxiv.org/abs/2402.03300%EF%BC%89%EF%BC%9B">https://arxiv.org/abs/2402.03300）；</a></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">gspo</span></code>（<a class="reference external" href="https://arxiv.org/abs/2507.18071%EF%BC%89%EF%BC%9B">https://arxiv.org/abs/2507.18071）；</a></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">cispo</span></code>（<a class="reference external" href="https://arxiv.org/abs/2506.13585%EF%BC%89%EF%BC%9B">https://arxiv.org/abs/2506.13585）；</a></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">reinforce_plus_plus</span></code> 与 <code class="docutils literal notranslate"><span class="pre">reinforce_plus_plus_baseline</span></code>（<a class="reference external" href="https://arxiv.org/abs/2501.03262%EF%BC%89%EF%BC%9B">https://arxiv.org/abs/2501.03262）；</a></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">ppo</span></code>（<a class="reference external" href="https://arxiv.org/abs/1707.06347%EF%BC%89%E3%80%82">https://arxiv.org/abs/1707.06347）。</a></p></li>
 </ul>
 <p>注意：在策略蒸馏 (OPD) 现在与 advantage estimator 正交，使用 <code class="docutils literal notranslate"><span class="pre">--use-opd</span></code> 和 <code class="docutils literal notranslate"><span class="pre">--opd-kl-coef</span></code> 可以在任意 estimator 之上启用 OPD。</p>
 </li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--calculate-per-token-loss</span></code>：slime 中默认的方案是 per sample loss，即 <code class="docutils literal notranslate"><span class="pre">mean(sum(sample_i)</span> <span class="pre">/</span> <span class="pre">len(sample_i))</span></code>，如果需要计算 per token loss，即 <code class="docutils literal notranslate"><span class="pre">sum(sum(sample_i))</span> <span class="pre">/</span> <span class="pre">sum(len(sample_i))</span></code>，可以开启 <code class="docutils literal notranslate"><span class="pre">--calculate-per-token-loss</span></code>；</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">--use-tis</span></code>：如果需要开启 tis（https://fengyao.notion.site/off-policy-rl），可以开启这一设置；</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--use-tis</span></code>：如果需要开启 tis（<a class="reference external" href="https://fengyao.notion.site/off-policy-rl%EF%BC%89%EF%BC%8C%E5%8F%AF%E4%BB%A5%E5%BC%80%E5%90%AF%E8%BF%99%E4%B8%80%E8%AE%BE%E7%BD%AE%EF%BC%9B">https://fengyao.notion.site/off-policy-rl），可以开启这一设置；</a></p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--use-score-centering</span></code>：启用 <a class="reference external" href="https://arxiv.org/abs/2609.20807">Score Centering</a>，可与 TIS 组合使用，详见下方的 <a class="reference internal" href="#score-centering"><span class="std std-ref">Score Centering</span></a>。</p></li>
 </ul>
 <section id="grpo">
@@ -969,7 +986,7 @@ fully async worker 会将其重新排队生成。</p>
 <h2>sglang 使用方法<a class="headerlink" href="#id7" title="链接到此标题。">#</a></h2>
 <p>slime 通过 <code class="docutils literal notranslate"><span class="pre">HttpServerEngineAdapter</span></code> 作为中介，实现了基于 sglang 的 server based engine。</p>
 <section id="id8">
-<h3>参数配置<a class="headerlink" href="#id8" title="链接到此标题。">#</a></h3>
+<h3>SGLang 参数<a class="headerlink" href="#id8" title="链接到此标题。">#</a></h3>
 <p>slime 通过引入 sglang 的 <code class="docutils literal notranslate"><span class="pre">ServerArgs.add_cli_args</span></code>，从而引入了几乎所有的 sglang 参数，在设置一个 sglang 参数的时候，需要在参数前加上 <code class="docutils literal notranslate"><span class="pre">--sglang</span></code> 的前缀，例如：</p>
 <ul class="simple">
 <li><p>在训推一体的训练时，往往需要限制 <code class="docutils literal notranslate"><span class="pre">--mem-fraction-static</span></code>，这个参数需要转变为 <code class="docutils literal notranslate"><span class="pre">--sglang-mem-fraction-static</span></code>；</p></li>
@@ -1022,7 +1039,7 @@ fully async worker 会将其重新排队生成。</p>
 <h2>megatron 使用方法<a class="headerlink" href="#id9" title="链接到此标题。">#</a></h2>
 <p>slime 通过复用 <code class="docutils literal notranslate"><span class="pre">megatron.training</span></code> 目录下的常规函数，如 <code class="docutils literal notranslate"><span class="pre">parse_args</span></code>， <code class="docutils literal notranslate"><span class="pre">save_checkpoint</span></code>，<code class="docutils literal notranslate"><span class="pre">load_checkpoint</span></code>，从而实现对不同版本以及轻度魔改的 megatron 的支持。所以在使用时，需要保证 <code class="docutils literal notranslate"><span class="pre">PYTHONPATH</span></code> 中能访问到 megatron，例如在运行时加入 <code class="docutils literal notranslate"><span class="pre">export</span> <span class="pre">PYTHONPATH=/root/Megatron-LM</span></code>。</p>
 <section id="id10">
-<h3>参数配置<a class="headerlink" href="#id10" title="链接到此标题。">#</a></h3>
+<h3>Megatron 参数<a class="headerlink" href="#id10" title="链接到此标题。">#</a></h3>
 <p>slime 通过直接引入 <code class="docutils literal notranslate"><span class="pre">from</span> <span class="pre">megatron.training.arguments</span> <span class="pre">import</span> <span class="pre">parse_args</span></code> 引入了当前环境中 megatron 的所有参数。如果当前使用的 megatron 有在 <code class="docutils literal notranslate"><span class="pre">parse_args</span></code> 之外的参数，可以通过像 <a class="reference external" href="https://github.com/THUDM/slime/blob/main/train.py">train.py</a> 中传入参数来进行配置，例如：</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">"__main__"</span><span class="p">:</span>
     <span class="k">try</span><span class="p">:</span>
@@ -1119,13 +1136,13 @@ fully async worker 会将其重新排队生成。</p>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">sglang 使用方法</a><ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">参数配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">SGLang 参数</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#router">router 使用方法</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-config">高级引擎配置（--sglang-config）</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id9">megatron 使用方法</a><ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id10">参数配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id10">Megatron 参数</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id11">自定义参数</a></li>
 </ul>
 </li>
@@ -1162,7 +1179,7 @@ fully async worker 会将其重新排队生成。</p>
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 10 月 07 日.
+  最后更新于 2026 年 10 月 09 日.
   <br/>
 </p>
   </div>

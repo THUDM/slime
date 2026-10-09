@@ -41,7 +41,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
-    <script src="../_static/documentation_options.js?v=2f2e10e9"></script>
+    <script src="../_static/documentation_options.js?v=183391d5"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -50,7 +50,7 @@
     <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'advanced/arch-support-beyond-megatron';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
-    <script src="../_static/js/lang-toggle.js?v=8d03b7be"></script>
+    <script data-layout="root" src="../_static/js/lang-toggle.js?v=082004b6"></script>
     <link rel="icon" href="../_static/logo.ico"/>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
@@ -58,8 +58,8 @@
     <link rel="prev" title="Megatron Config: Role-Based Training Overrides" href="megatron-config.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-  <meta name="docsearch:version" content="0.3.2" />
-    <meta name="docbuild:last-update" content="Oct 07, 2026"/>
+  <meta name="docsearch:version" content="0.4.0" />
+    <meta name="docbuild:last-update" content="Oct 09, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -219,6 +219,7 @@
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-30B-A3B.html">GLM-4.7-Flash with 8×H100</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-30B-A3B.html">Qwen3-30B-A3B with 8xH100</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-next-80B-A3B.html">Qwen3-Next-80B-A3B</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../examples/glm5.2-744B-A40B.html">GLM-5.2 744B-A40B with 256xH100</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-355B-A32B.html">GLM-4.7 with 64xH100</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../examples/deepseek-r1.html">DeepSeek R1 with 128xH100</a></li>
@@ -247,6 +248,17 @@
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/coding_agent_rl/README.html">Coding-Agent RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/delta_weight_sync/README.html">Delta Weight Sync</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/eval_multi_task/README.html">Multi-Task Evaluation Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/geo3k_vlm/README.html">VLM Single-Turn RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/geo3k_vlm_multi_turn/README.html">VLM Multi-Turn (geo3k dataset)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/on_policy_distillation/README.html">On-Policy Distillation Example</a></li>
+
+
+
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/strands_sglang/README.html">slime x Strands-SGLang</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/tau-bench/README.html">Tau bench</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/train_infer_mismatch_helper/README.html">Rollout Correction Methods</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Developer Guide</span></p>
 <ul class="nav bd-sidenav">
@@ -254,10 +266,11 @@
 <li class="toctree-l1"><a class="reference internal" href="../developer_guide/debug.html">Debugging</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_guide/trace.html">Trace Viewer</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_guide/profiling.html">Profiling</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/install_flashqla.html">Installing FlashQLA</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Hardware Platforms</span></p>
 <ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../platform_support/amd_tutorial.html">AMD</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../platform_support/amd_tutorial.html">AMD ROCm</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Blogs</span></p>
 <ul class="nav bd-sidenav">
@@ -339,7 +352,7 @@
       
       
       
-      <li><a href="https://github.com/THUDM/slime/blob/main/advanced/arch-support-beyond-megatron.md?plain=1" target="_blank"
+      <li><a href="https://github.com/THUDM/slime/blob/main/docs/en/advanced/arch-support-beyond-megatron.md?plain=1" target="_blank"
    class="btn btn-sm btn-source-file-button dropdown-item"
    title="Show source"
    data-bs-placement="left" data-bs-toggle="tooltip"
@@ -356,7 +369,7 @@
       
       
       
-      <li><a href="https://github.com/THUDM/slime/edit/main/advanced/arch-support-beyond-megatron.md" target="_blank"
+      <li><a href="https://github.com/THUDM/slime/edit/main/docs/en/advanced/arch-support-beyond-megatron.md" target="_blank"
    class="btn btn-sm btn-source-edit-button dropdown-item"
    title="Suggest edit"
    data-bs-placement="left" data-bs-toggle="tooltip"
@@ -511,43 +524,21 @@
                   
   <section class="tex2jax_ignore mathjax_ignore" id="supporting-model-architectures-beyond-megatron-lm">
 <h1>Supporting Model Architectures Beyond Megatron-LM<a class="headerlink" href="#supporting-model-architectures-beyond-megatron-lm" title="Link to this heading">#</a></h1>
-<p>While the Megatron-LM framework is highly efficient for parallel training, it can lack the flexibility to support rapidly evolving model architectures like Qwen3Next. Natively supporting the unique structures of these models, such as Gated-Delta-Net, often requires invasive and time-consuming modifications to Megatron’s core codebase.</p>
-<p>To accelerate the adoption of these cutting-edge models, slime introduces a more agile approach: <strong>instead of deeply re-engineering Megatron, we directly import and wrap the model’s official HuggingFace implementation</strong>, embedding it as a “black-box” module into Megatron’s parallel training pipeline.</p>
-<p>This document uses Qwen3Next 80B-A3B as an example to illustrate this concept.</p>
+<p>slime can extend a Megatron model by replacing selected layer specifications (<code class="docutils literal notranslate"><span class="pre">ModuleSpec</span></code>) with a custom implementation. Qwen3-Next 80B-A3B uses this approach for its Gated DeltaNet (GDN) layers, while retaining Megatron’s full-attention layers, MoE blocks, and pipeline scheduling.</p>
 <section id="principle-and-core-components">
 <h2>Principle and Core Components<a class="headerlink" href="#principle-and-core-components" title="Link to this heading">#</a></h2>
-<p>Megatron’s model instantiation is a two-step process: first, it generates a “layer specification” (<code class="docutils literal notranslate"><span class="pre">ModuleSpec</span></code>) based on the configuration, and then it instantiates the actual PyTorch modules according to that spec.</p>
-<p>slime leverages this mechanism by <strong>hijacking the spec generation stage to replace Megatron’s native modules</strong> with an external implementation (in this case, from HuggingFace). This process involves the coordination of three core components:</p>
+<p>The Qwen3-Next integration has three parts:</p>
 <ol class="arabic simple">
-<li><p><strong>Replacing the Megatron Module Spec</strong>
-This is the entry point for our solution. We use a custom function (e.g., <code class="docutils literal notranslate"><span class="pre">get_qwen3_next_spec</span></code>) to modify the standard <code class="docutils literal notranslate"><span class="pre">ModuleSpec</span></code>, swapping out Megatron’s native Attention layer with our custom wrapper.</p>
-<ul class="simple">
-<li><p><strong>Implementation</strong>: It retrieves the standard Decoder Block Spec, points its <code class="docutils literal notranslate"><span class="pre">self_attention</span></code> field to our custom module, and enables model-specific configurations like <code class="docutils literal notranslate"><span class="pre">qk_layernorm</span></code> as needed.</p></li>
-<li><p><strong>Corresponding File</strong>: <code class="docutils literal notranslate"><span class="pre">slime_plugins/models/qwen3_next.py</span></code></p></li>
-</ul>
-</li>
-<li><p><strong>Wrapping the HuggingFace Implementation</strong>
-The spec modified in the previous step now points to a wrapper layer, such as <code class="docutils literal notranslate"><span class="pre">HuggingfaceAttention</span></code>. This layer inherits from Megatron’s <code class="docutils literal notranslate"><span class="pre">MegatronModule</span></code>. Its core responsibility is to act as a bridge, handling the data alignment required by parallelism strategies (like sequence parallelism), and then internally calling the native <code class="docutils literal notranslate"><span class="pre">Qwen3NextAttention</span></code> module loaded from HuggingFace.</p>
-<ul class="simple">
-<li><p><strong>Corresponding File</strong>: <code class="docutils literal notranslate"><span class="pre">slime_plugins/models/hf_attention.py</span></code></p></li>
-</ul>
-</li>
-<li><p><strong>Aligning Model Weights</strong>
-Once the model architecture is integrated, we must ensure that the weights can be loaded correctly. slime keeps the HuggingFace-to-Megatron name mapping and tensor transforms next to its checkpoint loader.</p>
-<ul class="simple">
-<li><p><strong>Corresponding File</strong>: <code class="docutils literal notranslate"><span class="pre">slime/backends/megatron_utils/hf_to_megatron/qwen3_next.py</span></code></p></li>
-</ul>
-</li>
+<li><p><strong>Select the layers to replace.</strong> <code class="docutils literal notranslate"><span class="pre">get_qwen3_next_spec</span></code> starts from Megatron’s decoder block specification and replaces only the layers marked <code class="docutils literal notranslate"><span class="pre">linear_attention</span></code> in the Hugging Face configuration. It accounts for the layer offset of each pipeline stage. See <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime_plugins/models/qwen3_next.py">qwen3_next.py</a>.</p></li>
+<li><p><strong>Run GDN within Megatron.</strong> The GDN implementation adapts the Hugging Face model layout and uses FLA or the optional FlashQLA backend for the recurrent attention kernel. <code class="docutils literal notranslate"><span class="pre">HuggingfaceAttention</span></code> gathers sequence and context partitions before the replicated computation, then returns the local output partition. See <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime_plugins/models/hf_attention.py">hf_attention.py</a>.</p></li>
+<li><p><strong>Load the model weights.</strong> The checkpoint loader maps Hugging Face parameter names and tensor layouts to the custom modules and the retained Megatron layers. See <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/backends/megatron_utils/hf_to_megatron/qwen3_next.py">the Qwen3-Next weight loader</a>.</p></li>
 </ol>
-<p>Through the coordination of these three components, we can successfully run a complex model architecture not natively supported by Megatron—using its HuggingFace implementation as the vehicle—on top of Megatron’s parallel framework. This is achieved while fully retaining all key capabilities like model parallelism, MoE acceleration, and pipeline scheduling.</p>
+<p>The <a class="reference internal" href="../examples/qwen3-next-80B-A3B.html"><span class="std std-doc">Qwen3-Next example</span></a> contains the launch configuration and backend options.</p>
 </section>
 <section id="current-limitations">
 <h2>Current Limitations<a class="headerlink" href="#current-limitations" title="Link to this heading">#</a></h2>
-<ul class="simple">
-<li><p>This approach does not currently support Tensor Parallelism (TP) within the replaced module itself (e.g., the Attention layer in this case).</p></li>
-<li><p><strong>Impact</strong>: In most large-scale MoE models, the parameter count of the Attention layer is relatively small, so this limitation typically has a minimal effect on memory footprint and training throughput.</p></li>
-<li><p><strong>Alternative</strong>: If TP for the module is critical, the only alternative is to revert to the more invasive approach of modifying Megatron’s native implementation.</p></li>
-</ul>
+<p>The custom GDN module supports jobs using TP and CP, but its parameters and gathered computation are replicated across those ranks. Its projections are not sharded by TP, so increasing TP does not reduce that module’s parameter memory or computation in the same way as a native tensor-parallel layer.</p>
+<p>The current spec supports pipeline stage offsets, but rejects a custom <code class="docutils literal notranslate"><span class="pre">pipeline_model_parallel_layout</span></code>. A native parallel GDN implementation would be needed to remove the replication cost.</p>
 </section>
 </section>
 
@@ -633,7 +624,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Oct 07, 2026.
+  Last updated on Oct 09, 2026.
   <br/>
 </p>
   </div>
