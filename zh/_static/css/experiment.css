@@ -2550,15 +2550,170 @@ button,
 
 .bit-bar {
   display: flex;
-  width: calc(var(--bits) / 16 * 100%);
-  gap: 2px;
+  width: calc(var(--bits) / var(--max-bits, 16) * 100%);
+  gap: 1px;
   height: 30px;
 }
 
 .bit-bar i {
   flex: 1;
+  min-width: 0;
   background: #a4dce6;
-  border: 1px solid #5c8f9a;
+  box-shadow: inset 0 0 0 .5px #5c8f9a;
+}
+
+.hybrid-cache-map {
+  display: grid;
+  gap: 12px;
+}
+
+.hybrid-cache-map>div {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid #b7d5d8;
+  border-radius: 8px;
+  background: #e6f3f4;
+  font-size: 16px;
+}
+
+.hybrid-cache-map>div+div {
+  border-color: #d7cb83;
+  background: #fbf4ce;
+}
+
+.serving-scene {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.serving-prompt,
+.serving-connector,
+.serving-transfer {
+  text-align: center;
+  color: var(--muted);
+}
+
+.serving-pool {
+  border: 2px solid #80a3ae;
+  border-radius: 12px;
+  background: #eff8fa;
+  padding: 12px;
+  min-width: 0;
+}
+
+.decode-pool {
+  border-color: #8ba885;
+  background: #f0f6ed;
+}
+
+.serving-pool-label {
+  font-size: 15px;
+  font-weight: 700;
+  padding-bottom: 10px;
+}
+
+.serving-stage,
+.draft-stage,
+.verify-stage,
+.commit-stage {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #ccdad1;
+  border-radius: 8px;
+  background: #fffdf7;
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+
+.serving-stage h5 {
+  margin: 0 0 10px;
+  font-size: 17px;
+}
+
+.serving-stage p {
+  margin: 8px 0;
+}
+
+.draft-stage {
+  background: #fff3c0;
+  border-style: dashed;
+  border-color: #b29b3b;
+}
+
+.commit-stage {
+  background: #e9f4e8;
+}
+
+.serving-cache {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 20px minmax(0, 1fr);
+  align-items: center;
+  gap: 5px;
+  margin: 12px 0;
+}
+
+.serving-cache[data-hicache=false] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.serving-cache>div {
+  display: grid;
+  gap: 7px;
+  justify-items: center;
+  text-align: center;
+  padding: 8px;
+  background: #e8f3f5;
+  border-radius: 8px;
+}
+
+.serving-cache>[data-cache-tier=cpu] {
+  background: #fff2c3;
+}
+
+.serving-connector,
+.serving-transfer {
+  padding: 10px 0;
+}
+
+.serving-transfer {
+  display: grid;
+  gap: 5px;
+  border-block: 1px dashed #a4b8ae;
+}
+
+.serving-tokens {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 0;
+}
+
+.diagram-chip.rejected {
+  background: #f8ddda;
+  border-color: #c5887e;
+}
+
+.world.running [data-serving-phase].active {
+  outline: 3px solid #c39819;
+  outline-offset: 2px;
+}
+
+@media (max-width: 400px) {
+  .serving-pool,
+  .serving-stage {
+    padding: 8px;
+  }
+
+  .serving-cache {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .serving-cache>b {
+    text-align: center;
+    transform: rotate(90deg);
+  }
 }
 
 .probability-demo>div {

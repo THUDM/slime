@@ -461,7 +461,10 @@
                 <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#placement">Placement</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#async">Async</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#precision">Precision</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#precision">Precision</a><ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#hybrid-cache">Hybrid cache</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#deterministic">Deterministic</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#pd">PD</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#hicache">HiCache</a></li>
@@ -520,8 +523,53 @@
 \[\log q_a-\log p_a\approx\delta_a-\sum_jp_j\delta_j.\]</div>
 <p>所有 token 相同的平移被消去，token 相关的扰动则改变概率。量化、kernel 差异和累加顺序都可能产生扰动；专家选择等不连续位置可能使一阶近似失效。</p>
 <p><span class="math notranslate nohighlight">\(P\)</span> 个元素、每元素 <span class="math notranslate nohighlight">\(b\)</span> bits 的原始存储约为 <span class="math notranslate nohighlight">\(Pb/8\)</span> 字节，不含 scales、元数据、padding 和副本。位宽减半，只代表这个张量的原始存储减半，不代表整个 GPU 的显存占用减半。优化器状态、激活和 KV cache 是独立预算。</p>
-<p>向导提供 BF16 训练搭配 BF16 / FP8 rollout、实验性 FP8 训练和 beta INT4 rollout。BF16 训练使用转换后的 <code class="docutils literal notranslate"><span class="pre">torch_dist</span></code>；FP8 rollout 使用独立的 block-quantized HF checkpoint，其 <code class="docutils literal notranslate"><span class="pre">quantization_config</span></code> 决定在线更新时的量化。FP8 KV cache 与权重精度独立。FP8 训练采用 TE blockwise 配置，因 CPU Adam 不兼容而不启用 <code class="docutils literal notranslate"><span class="pre">fp8-param-gather</span></code>。</p>
+<p>向导提供 BF16 训练搭配 BF16 / FP8 rollout、实验性 FP8 训练和 beta INT4 rollout。BF16 训练使用转换后的 <code class="docutils literal notranslate"><span class="pre">torch_dist</span></code>；FP8 rollout 使用独立的 block-quantized HF checkpoint，其 <code class="docutils literal notranslate"><span class="pre">quantization_config</span></code> 决定在线更新时的量化。Attention KV、hybrid 递归状态与权重的精度分别配置。FP8 训练采用 TE blockwise 配置，因 CPU Adam 不兼容而不启用 <code class="docutils literal notranslate"><span class="pre">fp8-param-gather</span></code>。</p>
 <p>格式参考：<a class="reference external" href="https://arxiv.org/abs/2209.05433">FP8 Formats for Deep Learning</a>。支持状态见<a class="reference internal" href="low-precision.html"><span class="std std-doc">低精度指南</span></a>。INT4 仍需模型和 kernel 验证，向导不承诺 GLM INT4 的性能。</p>
+<section id="hybrid-cache">
+<h3>Hybrid cache<a class="headerlink" href="#hybrid-cache" title="Link to this heading">#</a></h3>
+<p>Hybrid 模型有两类不同的推理缓存。<a class="reference external" href="https://huggingface.co/Qwen/Qwen3.8-27B/blob/main/config.json">Qwen3.8-27B 配置</a>有 48 层线性注意力和 16 层 full attention，递归状态使用 FP32；<a class="reference external" href="https://huggingface.co/zai-org/GLM-5.3-Flash/blob/main/config.json">GLM-5.3-Flash 配置</a>则组合 34 层 KDA 线性注意力与 11 层 DSA。它们的 attention 架构不同；SGLang 的 <strong>Mamba cache</strong> 是递归状态存储的统一名称，不代表这些模型使用完全相同的架构。递归更新机制可参考 <a class="reference external" href="https://arxiv.org/abs/2412.06464">Gated DeltaNet 论文</a>。</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>缓存</p></th>
+<th class="head"><p>保存什么</p></th>
+<th class="head"><p>独立的 slime 配置</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Attention KV</p></td>
+<td><p>attention 层的逐 token 缓存</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--sglang-kv-cache-dtype</span></code>；FP8 需目标模型、后端与 GPU 支持</p></td>
+</tr>
+<tr class="row-odd"><td><p>Mamba / 线性注意力状态</p></td>
+<td><p>递归状态与缓存快照</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--sglang-mamba-ssm-dtype</span></code>，与 KV dtype 分开</p></td>
+</tr>
+<tr class="row-even"><td><p>卷积状态</p></td>
+<td><p>线性注意力层的短程历史</p></td>
+<td><p>使用独立的卷积 dtype；SSM dtype 参数不改变它</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>向导给递归状态提供模型默认、FP32、BF16 三个选项。默认不传 SSM 参数，Qwen3.8-27B 发布的配置采用 FP32。选 FP8 attention KV 不会把递归状态也变成 FP8。参数定义见 <a class="reference external" href="https://docs.sglang.io/docs/advanced_features/server_arguments#mamba-cache">SGLang 文档</a>，<a class="reference external" href="https://github.com/sgl-project/sglang/blob/v0.5.15.post1/python/sglang/srt/configs/mamba_utils.py">状态 dtype 与大小的实现</a>分别计算递归与卷积张量。</p>
+<p>设缓存中有 <span class="math notranslate nohighlight">\(N\)</span> 个 token 位置，以及 <span class="math notranslate nohighlight">\(K\)</span> 个递归状态 slot（包含快照、调度缓冲）；每个 attention token 占 <span class="math notranslate nohighlight">\(c_A\)</span> 字节，每个状态 slot 占 <span class="math notranslate nohighlight">\(c_R\)</span> 字节，则：</p>
+<div class="math notranslate nohighlight">
+\[B_{\rm cache}\approx N c_A + K c_R.\]</div>
+<p>对普通 GQA 层集合 <span class="math notranslate nohighlight">\(\mathcal A\)</span>，逐层计算每个 token 的 K、V 元素；对线性注意力层集合 <span class="math notranslate nohighlight">\(\mathcal R\)</span>，计算每个 slot 的递归状态和卷积状态元素：</p>
+<div class="math notranslate nohighlight">
+\[
+c_A=\sum_{\ell\in\mathcal A}2H^{KV}_\ell d_\ell\frac{b_{KV}}8,
+\qquad
+c_R=\sum_{\ell\in\mathcal R}\left(P^{SSM}_\ell\frac{b_{SSM}}8+P^{conv}_\ell\frac{b_{conv}}8\right).
+\]</div>
+<p>估计每卡占用时，用分片后的实际张量维度。DSA / MLA 的缓存张量不同，应测量其真实字节数，不能套用 GQA 维度。单个递归状态 slot 的形状固定，但 <strong>slot 数量</strong>会随并发、prefix 快照和调度缓冲增加。</p>
+<p>只把 BF16 attention KV 改成 FP8 时，<span class="math notranslate nohighlight">\(B'\approx Nc_A/2+Kc_R\)</span>，因此总缓存通常不会减半。同理，BF16 SSM 只改变递归状态项，卷积状态保持自身的 dtype。</p>
+<p>可选的内存比例通过 <code class="docutils literal notranslate"><span class="pre">--sglang-mamba-full-memory-ratio</span></code> 设置 <span class="math notranslate nohighlight">\(r=B_R/B_A\)</span>。理想化地给两个池分配预算 <span class="math notranslate nohighlight">\(B\)</span>，联立 <span class="math notranslate nohighlight">\(B_A+B_R=B\)</span> 与 <span class="math notranslate nohighlight">\(B_R=rB_A\)</span>，得到：</p>
+<div class="math notranslate nohighlight">
+\[B_A=\frac{B}{1+r},\qquad B_R=\frac{rB}{1+r}.\]</div>
+<p>这不是总 GPU 显存的百分比。调大它，会给递归状态 slot 更多空间、给 attention token 更少空间；应结合分配日志和实际负载选择。留空沿用推理栈默认值。外部引擎的参数写入 <code class="docutils literal notranslate"><span class="pre">serving-reference.sh</span></code>，slime 托管的引擎则使用 <code class="docutils literal notranslate"><span class="pre">--sglang-</span></code> 参数。</p>
+<p>向导里可运行的 Flash 起点是 <strong>GLM-4.7-Flash</strong>。上面的 GLM-5.3-Flash hybrid 结构不能直接套用该起点或 GLM-5.3 的 DSA 配方。</p>
+</section>
 </section>
 <section id="deterministic">
 <h2>Deterministic<a class="headerlink" href="#deterministic" title="Link to this heading">#</a></h2>
@@ -605,7 +653,10 @@
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#placement">Placement</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#async">Async</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#precision">Precision</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#precision">Precision</a><ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#hybrid-cache">Hybrid cache</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#deterministic">Deterministic</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#pd">PD</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#hicache">HiCache</a></li>

@@ -18,8 +18,8 @@
     [t('Placement', '训推布局'), t('Give your model a home.', '让训练与推理各就各位。'), t(
       'GPU ownership and scheduling are two separate choices.', 'GPU 如何分配，和任务如何调度，是两个独立选择。')],
     [t('Precision', '精度'), t('Find your precision sweet spot.', '找到精度与效率的平衡。'), t(
-      'Training weights, rollout weights, and KV cache need not use the same precision.',
-      '训练权重、推理权重和 KV cache 可以使用不同精度。')],
+      'Choose precision for weights, attention KV, and hybrid recurrent state separately.',
+      '分别选择权重、attention KV 与 hybrid 递归状态的精度。')],
     [t('Consistency', '训推一致'), t('Keep the two worlds in tune.', '让两个世界保持合拍。'), t(
       'Reduce numerical mismatch, correct its effect, or combine the two.', '可以减少数值差异，也可以修正它对训练的影响。')],
     [t('Serving', '推理引擎'), t('Build your rollout engine.', '搭好你的 rollout 引擎。'), t(
@@ -90,8 +90,8 @@
       title: t('Precision & quantization', '精度与量化'),
       formula: 'q(a | h) = softmax(f_quantized(h))ₐ',
       text: t(
-        'Lower precision reduces storage and bandwidth, but changes the rollout distribution. BF16 training + FP8 rollout is the maintained large-MoE path. FP8 training is experimental; INT4 rollout is beta. FP8 KV cache is a separate choice and depends on your GPU and SGLang stack.',
-        '低精度减少存储和带宽，但会改变 rollout 分布。BF16 训练 + FP8 rollout 是大 MoE 的维护路径；FP8 训练为实验性、INT4 rollout 为 beta。FP8 KV cache 独立选择，取决于 GPU 和 SGLang 栈。'
+        'Lower precision changes the rollout distribution. Weight precision, attention KV dtype and hybrid recurrent-state dtype are independent choices. FP8 attention KV requires model/backend support; Mamba SSM state and convolution state have separate storage. Compare the two cache pools below.',
+        '低精度会改变 rollout 分布。权重、attention KV 和 hybrid 递归状态分别选择精度。FP8 attention KV 需模型与后端支持；Mamba SSM 和卷积状态各有独立存储。下面分别说明两类缓存。'
       ),
       paper: 'https://arxiv.org/abs/2209.05433',
       page: 'advanced/rl-systems.html#precision'
@@ -124,6 +124,14 @@
         ),
       paper: 'https://arxiv.org/abs/2401.09670',
       page: 'advanced/rl-systems.html#pd'
+    },
+    eagle: {
+      title: 'EAGLE · ' + t('Speculative decoding', '投机采样'),
+      text: t(
+        'A draft head proposes candidates; the target model verifies them and commits an accepted prefix. A separate head must match the target model. Monitor acceptance and rollout time as RL updates the target.',
+        '投机头提出候选，目标模型验证并提交接受的前缀。独立投机头必须匹配目标模型；随 RL 更新，观察接受率和 rollout 耗时。'),
+      paper: 'https://arxiv.org/abs/2401.15077',
+      page: 'advanced/speculative-decoding.html'
     },
     hicache: {
       title: 'HiCache',
@@ -267,19 +275,40 @@
           parallelPanel();
       case 2:
         return options('precision', t('Training → rollout weights', '训练 → 推理权重'), [
-          ['bf16', 'BF16 → BF16', t('An easy baseline for measuring mismatch.', '适合建立基线，先测量训推差异。')],
-          ['fp8', 'BF16 → FP8', t('Maintained large-MoE path. Convert the HF checkpoint.',
-            '大 MoE 维护路径，需转换 HF checkpoint。')],
-          ['fp8train', 'FP8 → FP8', t('Experimental. Changes the training numerical path.',
-            '实验性，改变训练侧数值路径。')],
-          ['int4', 'BF16 → INT4', t('Beta. Validate GLM kernel support first.',
-            'Beta，先验证 GLM kernel 支持。')]
-        ]) + options('kv', t('Rollout KV cache', 'Rollout KV cache'), [
-          ['auto', t('Model default', '模型默认'), t('Use the serving stack’s default KV dtype.',
-            '沿用推理栈默认 KV dtype。')],
-          ['fp8', 'FP8 E4M3', t('More cache capacity; verify accuracy and GPU support.',
-            '增大 cache 容量，验证精度与硬件支持。')]
-        ]);
+            ['bf16', 'BF16 → BF16', t('An easy baseline for measuring mismatch.', '适合建立基线，先测量训推差异。')],
+            ['fp8', 'BF16 → FP8', t('Maintained large-MoE path. Convert the HF checkpoint.',
+              '大 MoE 维护路径，需转换 HF checkpoint。')],
+            ['fp8train', 'FP8 → FP8', t('Experimental. Changes the training numerical path.',
+              '实验性，改变训练侧数值路径。')],
+            ['int4', 'BF16 → INT4', t('Beta. Validate GLM kernel support first.',
+              'Beta，先验证 GLM kernel 支持。')]
+          ]) + (m.hybrid ?
+            `<p class="notice">${t(
+          'This hybrid model has 16 attention layers and 48 Gated DeltaNet layers. Their caches use separate settings.',
+          '这个 hybrid 模型有 16 层 attention 和 48 层 Gated DeltaNet，两类缓存分别配置。')}
+          <a href="advanced/rl-systems.html#hybrid-cache">${t('How the two caches work →', '看懂两类缓存 →')}</a></p>` : '') +
+          options('kv', t('Rollout attention KV cache', 'Rollout attention 层 KV cache'), [
+            ['auto', t('Model default', '模型默认'), t('Use the serving stack’s default KV dtype.',
+              '沿用推理栈默认 KV dtype。')],
+            ['fp8', 'FP8 E4M3', t(
+              'Attention KV only. Requires support from this model’s attention backend and GPU.',
+              '只作用于 attention KV，需当前模型的 attention 后端与 GPU 支持。')]
+          ]) + (m.hybrid ? options('mambaDtype', t('Mamba / linear-attention recurrent state',
+            'Mamba / 线性注意力递归状态'), [
+            ['auto', t('Model default · FP32', '模型默认 · FP32'), t(
+              'Qwen3.8-27B config selects FP32 SSM state. Independent of attention KV.',
+              'Qwen3.8-27B 配置采用 FP32 SSM 状态，与 attention KV 独立。')],
+            ['float32', 'FP32', t(
+              'Explicit 32-bit recurrent state; convolution state keeps its own dtype.',
+              '显式使用 32 bit 递归状态；卷积状态保留自身的 dtype。')],
+            ['bfloat16', 'BF16', t(
+              'Smaller recurrent state. Validate long-sequence accuracy and kernel support.',
+              '减少递归状态存储；验证长序列精度与 kernel 支持。')]
+          ]) + input('mambaRatio', t('Mamba / attention KV memory ratio (optional)',
+              'Mamba / attention KV 内存比例（选填）'),
+            'text', t(
+              'State-pool bytes ÷ attention-KV-pool bytes, e.g. 0.9. Leave blank for the serving default; this is not a percentage of all GPU memory.',
+              '状态池字节数 ÷ attention KV 池字节数，例如 0.9。留空沿用推理栈默认值；这不是总显存百分比。')) : '');
       case 3:
         return options('correction', t('Importance correction', '重要性修正'), [
             ['none', t('Observe only', '暂不修正'), t('Baseline. Watch log-prob mismatch and reward.',
@@ -301,6 +330,21 @@
             '拆分推理阶段，适合 prefill 干扰 decode 的场景。')) + toggle('hicache', 'HiCache', t(
             'Reuse repeated prefixes in host RAM. Extra memory and I/O budget.',
             '在主机内存复用重复前缀，需要额外内存与 I/O 预算。')) +
+          toggle('speculative', 'EAGLE · ' + t('Speculative decoding', '投机采样'), t(
+            'Draft several candidates, then verify them together with the target model.',
+            '先提出多个候选 token，再由目标模型一起验证。')) +
+          (state.speculative ? options('draftSource', t('Draft head', '投机采样头'), [
+            ...(m.mtp ? [['builtin', t('Checkpoint MTP head', 'Checkpoint 内置 MTP 头'), t(
+              'Use the target checkpoint’s supported prediction layers.', '使用目标 checkpoint 自带的预测层。')]] : []),
+            ['external', t('Separate EAGLE head', '独立 EAGLE 头'), t(
+              'Load a compatible head from a local path or Hugging Face model ID.',
+              '从本地路径或 Hugging Face 模型 ID 加载匹配的投机头。')]
+          ]) + (state.draftSource === 'external' ? input('draft', t('EAGLE head checkpoint', 'EAGLE 投机头 checkpoint'),
+            'text', t('Path or model ID, available on every serving host. The head is loaded for inference.',
+              '路径或模型 ID，需供每台推理主机访问；投机头用于推理加载。'), true) : '') +
+          input('specSteps', t('Draft steps', '投机步数'), 'number', t(
+            'Top-k is fixed to 1; verification budget is steps + 1. Start small and measure acceptance.',
+            'Top-k 固定为 1，验证 token 预算为步数 + 1；先从小值开始测量接受率。')) : '') +
           `<div class="inputs-grid">${state.pd&&state.layout!=='external'?input('prefill',t(`Prefill GPUs (engine = ${m.engine})`,`Prefill GPU（每引擎 ${m.engine}）`),'number'):''}${state.pd?input('ib',t('RDMA devices','RDMA 网卡'),'text','mlx5_0,mlx5_1'):''}${input('concurrency',t('Concurrency per engine (global budget basis)','每引擎并发（全局预算基数）'),'number')}${input('response',t('Max response tokens','最大回复 token 数'),'number')}</div>` +
           (state.layout !== 'colocate' ? options('transport', t('Weight updates', '权重更新'), [
             ['nccl', 'NCCL', t('Reachable, compatible GPU communication group.', '可建立兼容的 GPU 通信组。')],
@@ -319,7 +363,7 @@
     ['placement', 'async', 'partial', 'straw', 'parallel'],
     ['precision'],
     ['tis', 'icepop', 'r3', 'sc', 'deterministic'],
-    ['pd', 'hicache'],
+    ['pd', 'hicache', 'eagle'],
     ['placement']
   ];
 
@@ -529,6 +573,27 @@
     $('play').setAttribute('aria-pressed', 'true');
     $('play').textContent = 'Ⅱ ' + t('Pause', '暂停');
     const advance = () => {
+      if (state.step === 4) {
+        const stages = [
+          ['prefill', state.hicache ? t('Look up prefixes in GPU / CPU cache, then process uncached tokens.',
+            '在 GPU / CPU cache 查找前缀，再处理未命中的 token。') : t('Read the prompt using the engine’s GPU cache.',
+            '读取 prompt，使用引擎内的 GPU cache。')],
+          ...(state.speculative ? [
+            ['draft', t('The EAGLE head proposes candidate tokens.', 'EAGLE 投机头提出候选 token。')],
+            ['verify', t('The target model verifies the candidate block.', '目标模型批量验证候选 token。')],
+            ['commit', t('Commit the accepted prefix and a corrected or bonus token, then continue.',
+              '提交接受的前缀与修正或额外 token，然后继续生成。')]
+          ] : [['decode', t('The target model decodes one token, then repeats.', '目标模型解码一个 token，再继续下一步。')]])
+        ];
+        if (state.pd) stages.splice(1, 0, ['transfer', t('Transfer the prefill cache to the decode engine.',
+          '将 prefill 缓存传输给 decode 引擎。')]);
+        const [stage, label] = stages[phase % stages.length];
+        $('simulation-status').textContent = label;
+        document.querySelectorAll('[data-serving-phase]').forEach(node =>
+          node.classList.toggle('active', node.dataset.servingPhase === stage));
+        phase++;
+        return;
+      }
       const async = state.schedule === 'async';
       const labels = async ? [t('Rollouts enter the warm queue; new generations keep running.',
         'Rollout 进入预热队列；新的生成持续运行。'), t(
@@ -703,7 +768,7 @@
       ...state
     };
     for (const key of ['hf', 'train', 'data', 'save', 'megatron', 'endpoints', 'shared', 'local', 'ib',
-        'generate', 'reward', 'queueDir', 'queueRun', 'declaration'
+        'generate', 'reward', 'queueDir', 'queueRun', 'declaration', 'draft'
       ]) delete shared[key];
     const url = new URL(location.href);
     url.hash = new URLSearchParams({

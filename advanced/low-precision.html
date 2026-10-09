@@ -501,9 +501,9 @@
 <td><p>Stable</p></td>
 <td><p>Default path for large MoE RL recipes. Keeps training stable while reducing rollout memory and bandwidth.</p></td>
 </tr>
-<tr class="row-odd"><td><p>FP8 KV cache in SGLang rollout</p></td>
-<td><p>Stable when supported by your SGLang version/GPU stack</p></td>
-<td><p>Increase KV cache capacity for long-context or agentic rollout by passing <code class="docutils literal notranslate"><span class="pre">--sglang-kv-cache-dtype</span> <span class="pre">fp8_e4m3</span></code>.</p></td>
+<tr class="row-odd"><td><p>FP8 attention KV cache in SGLang rollout</p></td>
+<td><p>Requires model, attention backend and GPU support</p></td>
+<td><p>Increase attention KV capacity with <code class="docutils literal notranslate"><span class="pre">--sglang-kv-cache-dtype</span> <span class="pre">fp8_e4m3</span></code>; hybrid recurrent state is configured separately.</p></td>
 </tr>
 <tr class="row-even"><td><p>INT4 rollout / INT4 QAT</p></td>
 <td><p>Beta</p></td>
@@ -545,6 +545,7 @@
 </pre></div>
 </div>
 <p>This is a rollout-side setting. It does not change Megatron training precision; it increases effective SGLang KV cache capacity and can allow longer contexts or higher concurrency, subject to the accuracy/performance behavior of your SGLang version and GPU stack.</p>
+<p>For hybrid models such as Qwen3.8-27B and GLM-5.3-Flash, this flag applies only to attention-layer KV. Linear-attention recurrent state uses <code class="docutils literal notranslate"><span class="pre">--sglang-mamba-ssm-dtype</span></code>, while <code class="docutils literal notranslate"><span class="pre">--sglang-mamba-full-memory-ratio</span></code> controls the state-pool / attention-KV-pool memory ratio. FP8 KV does not imply FP8 recurrent or convolution state. The builder leaves these overrides unset by default, and offers FP32/BF16 recurrent state for Qwen3.8-27B. See <a class="reference internal" href="rl-systems.html#hybrid-cache"><span class="std std-ref">hybrid cache settings, architecture sources and memory derivation</span></a>.</p>
 </section>
 <section id="fp8-training-with-fp8-rollout">
 <h2>FP8 Training with FP8 Rollout<a class="headerlink" href="#fp8-training-with-fp8-rollout" title="Link to this heading">#</a></h2>

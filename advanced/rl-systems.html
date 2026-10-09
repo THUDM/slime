@@ -461,7 +461,10 @@
                 <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#placement">Placement</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#async">Async</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#precision">Precision</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#precision">Precision</a><ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#hybrid-cache">Hybrid cache</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#deterministic">Deterministic</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#pd">PD</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#hicache">HiCache</a></li>
@@ -523,8 +526,53 @@
 \[\log q_a-\log p_a\approx\delta_a-\sum_jp_j\delta_j.\]</div>
 <p>A common shift cancels, while token-dependent perturbations change probabilities. Quantization, differing kernels, and accumulation order all contribute; this approximation can fail near discontinuities such as expert selection.</p>
 <p>A tensor with <span class="math notranslate nohighlight">\(P\)</span> elements needs approximately <span class="math notranslate nohighlight">\(Pb/8\)</span> bytes at <span class="math notranslate nohighlight">\(b\)</span> bits, excluding scales, metadata, padding, and replicated copies. Halving the bit width halves the raw tensor storage, not necessarily total GPU memory. Optimizer state, activations, and KV cache remain separate budgets.</p>
-<p>The lab offers BF16 training + BF16 or FP8 rollout, experimental FP8 training, and beta INT4 rollout. BF16 training uses a converted <code class="docutils literal notranslate"><span class="pre">torch_dist</span></code> checkpoint. FP8 rollout uses a separate block-quantized HF checkpoint whose <code class="docutils literal notranslate"><span class="pre">quantization_config</span></code> controls online weight conversion. FP8 KV cache is independent of weight precision. FP8 training uses blockwise TE settings; it omits <code class="docutils literal notranslate"><span class="pre">fp8-param-gather</span></code> because of CPU Adam incompatibility.</p>
+<p>The lab offers BF16 training + BF16 or FP8 rollout, experimental FP8 training, and beta INT4 rollout. BF16 training uses a converted <code class="docutils literal notranslate"><span class="pre">torch_dist</span></code> checkpoint. FP8 rollout uses a separate block-quantized HF checkpoint whose <code class="docutils literal notranslate"><span class="pre">quantization_config</span></code> controls online weight conversion. Attention KV precision and hybrid recurrent-state precision are independent of weight precision and of each other. FP8 training uses blockwise TE settings; it omits <code class="docutils literal notranslate"><span class="pre">fp8-param-gather</span></code> because of CPU Adam incompatibility.</p>
 <p>Format reference: <a class="reference external" href="https://arxiv.org/abs/2209.05433">FP8 Formats for Deep Learning</a>. See <a class="reference internal" href="low-precision.html"><span class="std std-doc">slime precision support and caveats</span></a>. The lab’s INT4 options require model/kernel validation; no GLM INT4 performance claim is made.</p>
+<section id="hybrid-cache">
+<h3>Hybrid cache<a class="headerlink" href="#hybrid-cache" title="Link to this heading">#</a></h3>
+<p>Hybrid models have two different kinds of serving cache. <a class="reference external" href="https://huggingface.co/Qwen/Qwen3.8-27B/blob/main/config.json">Qwen3.8-27B’s config</a> specifies 48 linear-attention layers and 16 full-attention layers, with FP32 recurrent state. <a class="reference external" href="https://huggingface.co/zai-org/GLM-5.3-Flash/blob/main/config.json">GLM-5.3-Flash’s config</a> combines 34 KDA linear-attention layers with 11 DSA layers. These are different attention architectures; the shared SGLang <strong>Mamba cache</strong> name describes their recurrent-state storage, not an identical model architecture. See the <a class="reference external" href="https://arxiv.org/abs/2412.06464">Gated DeltaNet paper</a> for the recurrent update mechanism.</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Cache</p></th>
+<th class="head"><p>What it stores</p></th>
+<th class="head"><p>Independent slime setting</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Attention KV</p></td>
+<td><p>Per-token cache for attention layers</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--sglang-kv-cache-dtype</span></code>; FP8 requires the selected model, backend and GPU to support it</p></td>
+</tr>
+<tr class="row-odd"><td><p>Mamba / linear-attention state</p></td>
+<td><p>Recurrent state and cached snapshots</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--sglang-mamba-ssm-dtype</span></code>, separately from KV dtype</p></td>
+</tr>
+<tr class="row-even"><td><p>Convolution state</p></td>
+<td><p>Short local history in linear-attention layers</p></td>
+<td><p>Separate convolution dtype; the SSM dtype flag does not change it</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>The builder exposes model default, FP32 and BF16 for recurrent state. Default leaves the SSM flag unset; Qwen3.8-27B’s published config selects FP32. Selecting FP8 attention KV never turns recurrent state into FP8. The <a class="reference external" href="https://docs.sglang.io/docs/advanced_features/server_arguments#mamba-cache">SGLang argument reference</a> documents the independent controls; <a class="reference external" href="https://github.com/sgl-project/sglang/blob/v0.5.15.post1/python/sglang/srt/configs/mamba_utils.py">state dtype and size implementation</a> separates recurrent and convolution tensors.</p>
+<p>To account for memory, let <span class="math notranslate nohighlight">\(N\)</span> be stored token positions and <span class="math notranslate nohighlight">\(K\)</span> be allocated recurrent-state slots, including snapshots and scheduler buffers. With <span class="math notranslate nohighlight">\(c_A\)</span> bytes per attention token and <span class="math notranslate nohighlight">\(c_R\)</span> bytes per recurrent slot,</p>
+<div class="math notranslate nohighlight">
+\[B_{\rm cache}\approx N c_A + K c_R.\]</div>
+<p>For conventional GQA attention layers <span class="math notranslate nohighlight">\(\mathcal A\)</span>, count K and V elements at each token. For linear layers <span class="math notranslate nohighlight">\(\mathcal R\)</span>, count recurrent and convolution elements per slot:</p>
+<div class="math notranslate nohighlight">
+\[
+c_A=\sum_{\ell\in\mathcal A}2H^{KV}_\ell d_\ell\frac{b_{KV}}8,
+\qquad
+c_R=\sum_{\ell\in\mathcal R}\left(P^{SSM}_\ell\frac{b_{SSM}}8+P^{conv}_\ell\frac{b_{conv}}8\right).
+\]</div>
+<p>Use tensor dimensions after sharding for a per-GPU estimate. DSA/MLA uses different cache tensors: measure their bytes instead of substituting GQA dimensions. A recurrent slot has a fixed shape, but the <strong>number of slots</strong> can grow with concurrency, prefix snapshots and scheduler buffering.</p>
+<p>Changing only BF16 attention KV to FP8 yields <span class="math notranslate nohighlight">\(B'\approx Nc_A/2+Kc_R\)</span>, so total cache memory does not generally halve. Similarly, BF16 SSM affects only the recurrent term, leaving convolution state untouched.</p>
+<p>The optional memory control sets <span class="math notranslate nohighlight">\(r=B_R/B_A\)</span> through <code class="docutils literal notranslate"><span class="pre">--sglang-mamba-full-memory-ratio</span></code>. For an ideal two-pool budget <span class="math notranslate nohighlight">\(B\)</span>, solve <span class="math notranslate nohighlight">\(B_A+B_R=B\)</span> and <span class="math notranslate nohighlight">\(B_R=rB_A\)</span>:</p>
+<div class="math notranslate nohighlight">
+\[B_A=\frac{B}{1+r},\qquad B_R=\frac{rB}{1+r}.\]</div>
+<p>This ratio is not a fraction of total GPU memory. Increasing it reserves more space for recurrent slots and less for attention tokens; use allocation logs and workload measurements to choose it. Leaving the field blank keeps the serving default. External deployments receive these options in <code class="docutils literal notranslate"><span class="pre">serving-reference.sh</span></code>; managed engines receive the <code class="docutils literal notranslate"><span class="pre">--sglang-</span></code> flags.</p>
+<p>The runnable Flash preset is <strong>GLM-4.7-Flash</strong>. GLM-5.3-Flash’s hybrid design above does not make it interchangeable with that preset or with the GLM-5.3 DSA recipe.</p>
+</section>
 </section>
 <section id="deterministic">
 <h2>Deterministic<a class="headerlink" href="#deterministic" title="Link to this heading">#</a></h2>
@@ -608,7 +656,10 @@
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#placement">Placement</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#async">Async</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#precision">Precision</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#precision">Precision</a><ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#hybrid-cache">Hybrid cache</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#deterministic">Deterministic</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#pd">PD</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#hicache">HiCache</a></li>

@@ -48,6 +48,8 @@
     <script src="../_static/copybutton.js?v=ccdb6887"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?v=fab101a9"></script>
     <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+    <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'advanced/speculative-decoding';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
     <script data-layout="root" src="../_static/js/lang-toggle.js?v=9e8f3a3a"></script>
@@ -458,6 +460,8 @@
             <nav aria-label="Page">
                 <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#accelerating-inference-with-speculative-decoding">Accelerating Inference with Speculative Decoding</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#configure-eagle-in-the-interactive-builder">Configure EAGLE in the interactive builder</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#why-verification-is-needed">Why verification is needed</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#online-sft-for-the-draft-model">Online SFT for the Draft Model</a></li>
 </ul>
             </nav>
@@ -487,6 +491,32 @@
 </pre></div>
 </div>
 <p>For detailed parameter meanings and configuration, see SGLang’s speculative decoding <a class="reference external" href="https://docs.sglang.ai/advanced_features/speculative_decoding.html">documentation</a>.</p>
+</section>
+<section id="configure-eagle-in-the-interactive-builder">
+<h2>Configure EAGLE in the interactive builder<a class="headerlink" href="#configure-eagle-in-the-interactive-builder" title="Link to this heading">#</a></h2>
+<p>In the homepage’s <strong>Serving</strong> step, enable <strong>EAGLE · Speculative decoding</strong>. Choose the checkpoint’s built-in MTP head where supported, or <strong>Separate EAGLE head</strong> and enter its checkpoint directory or Hugging Face model ID. The separate head must be compatible with the target model; an arbitrary smaller language model is not an EAGLE head. Make its weights accessible to every serving host.</p>
+<p>The builder uses <code class="docutils literal notranslate"><span class="pre">EAGLE</span></code>, fixes <code class="docutils literal notranslate"><span class="pre">speculative-eagle-topk</span></code> to 1, and lets you choose the drafting depth. For depth <span class="math notranslate nohighlight">\(\gamma\)</span>, it exports <code class="docutils literal notranslate"><span class="pre">speculative-num-steps</span> <span class="pre">=</span> <span class="pre">γ</span></code> and <code class="docutils literal notranslate"><span class="pre">speculative-num-draft-tokens</span> <span class="pre">=</span> <span class="pre">γ</span> <span class="pre">+</span> <span class="pre">1</span></code>. The default depth is 3 (4 for the GLM-5.3 recipe). These are starting settings, not measured optimal values. GLM-5.3’s built-in MTP path also uses the recipe’s <code class="docutils literal notranslate"><span class="pre">nsa</span></code> draft attention backend; selecting a separate head leaves its backend selection to SGLang.</p>
+<p>The <strong>Your little RL world</strong> diagram shows all eight PD / HiCache / EAGLE combinations. PD separates prefill and decode engine pools and adds cache transfer. HiCache adds a CPU cache tier; in this recipe, PD attaches it only to prefill. EAGLE adds a draft head, candidate tokens, target verification and committed output. With EAGLE off, the target decodes one token per step. <strong>Play a round</strong> highlights these stages in order; the acceptance example is illustrative.</p>
+<p>Managed deployments receive <code class="docutils literal notranslate"><span class="pre">--sglang-speculative-*</span></code> arguments in <code class="docutils literal notranslate"><span class="pre">experiment.sh</span></code>. External deployments must apply the corresponding <code class="docutils literal notranslate"><span class="pre">--speculative-*</span></code> arguments from <code class="docutils literal notranslate"><span class="pre">serving-reference.sh</span></code> when launching their engines. Training-side flags also enable slime’s speculation metrics; they cannot reconfigure a running external engine. The draft path is retained locally and in the downloaded configuration, but omitted from share links. Switching target models clears it so a head is not accidentally reused for another target.</p>
+<p>The builder configures inference. It does not enable online MTP or separate-head training. As the target changes during RL, monitor <code class="docutils literal notranslate"><span class="pre">spec_accept_rate</span></code>, <code class="docutils literal notranslate"><span class="pre">spec_accept_length</span></code> and rollout latency. Extra draft weights, verification buffers and hybrid recurrent-state snapshots also consume memory.</p>
+</section>
+<section id="why-verification-is-needed">
+<h2>Why verification is needed<a class="headerlink" href="#why-verification-is-needed" title="Link to this heading">#</a></h2>
+<p><a class="reference external" href="https://arxiv.org/abs/2401.15077">EAGLE</a> uses a lightweight head to propose candidates using target-model features. The target then verifies them. The probability argument below is the standard single-path rejection-sampling construction from <a class="reference external" href="https://arxiv.org/abs/2302.01318">Accelerating Large Language Model Decoding with Speculative Sampling</a>; it describes the ideal sampler, not a claim that every backend uses identical kernels.</p>
+<p>At a fixed prefix, let <span class="math notranslate nohighlight">\(p(a)\)</span> be the target distribution and <span class="math notranslate nohighlight">\(q(a)\)</span> the draft distribution. For a proposed <span class="math notranslate nohighlight">\(a\sim q\)</span>, accept with probability</p>
+<div class="math notranslate nohighlight">
+\[\alpha(a)=\min\left(1,\frac{p(a)}{q(a)}\right).\]</div>
+<p>The accepted probability mass for token <span class="math notranslate nohighlight">\(a\)</span> is <span class="math notranslate nohighlight">\(q(a)\alpha(a)=\min(p(a),q(a))\)</span>. Total rejection probability is</p>
+<div class="math notranslate nohighlight">
+\[Z=1-\sum_a\min(p(a),q(a))=\sum_a[p(a)-q(a)]_+.\]</div>
+<p>After rejection, draw a correction from <span class="math notranslate nohighlight">\(r(a)=[p(a)-q(a)]_+/Z\)</span>. Combining accepted and corrected mass gives</p>
+<div class="math notranslate nohighlight">
+\[\Pr(\text{output}=a)=\min(p(a),q(a))+Zr(a)=p(a).\]</div>
+<p>When <span class="math notranslate nohighlight">\(Z=0\)</span>, rejection never occurs. Apply the construction at successive accepted prefixes; after the first rejection, discard the remaining candidates and continue from the corrected prefix. If all candidates pass, an additional target token can be emitted. Thus the diagram marks an accepted prefix and a correction, rather than training directly on unchecked draft tokens.</p>
+<p>For a simple cost model, let <span class="math notranslate nohighlight">\(A\)</span> be the number of accepted draft tokens, <span class="math notranslate nohighlight">\(t_d\)</span> the per-step draft cost, <span class="math notranslate nohighlight">\(t_v\)</span> the batched target verification cost, and <span class="math notranslate nohighlight">\(t_o\)</span> cache/scheduling overhead. If an ordinary target step costs <span class="math notranslate nohighlight">\(t_t\)</span>,</p>
+<div class="math notranslate nohighlight">
+\[\text{speedup}\approx\frac{(\mathbb E[A]+1)t_t}{\gamma t_d+t_v+t_o}.\]</div>
+<p>More draft steps help only when the additional accepted tokens repay the extra work. This is why the builder exposes depth and acceptance metrics rather than promising a fixed speedup.</p>
 </section>
 <section id="online-sft-for-the-draft-model">
 <h2>Online SFT for the Draft Model<a class="headerlink" href="#online-sft-for-the-draft-model" title="Link to this heading">#</a></h2>
@@ -550,6 +580,8 @@
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#accelerating-inference-with-speculative-decoding">Accelerating Inference with Speculative Decoding</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#configure-eagle-in-the-interactive-builder">Configure EAGLE in the interactive builder</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#why-verification-is-needed">Why verification is needed</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#online-sft-for-the-draft-model">Online SFT for the Draft Model</a></li>
 </ul>
   </nav></div>
