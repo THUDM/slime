@@ -24,6 +24,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate experiment generator
+        run: node --test docs/tests/experiment.test.cjs
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
@@ -37,8 +42,8 @@ jobs:
       - name: Build documentation
         run: |
           cd docs
-          bash ./build.sh en
-          bash ./build.sh zh
+          bash ./build.sh en -W --keep-going
+          bash ./build.sh zh -W --keep-going
           mv ./build/zh ./build/en/
         env:
           LC_ALL: "en_US.UTF-8"

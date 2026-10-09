@@ -10,7 +10,7 @@ Qwen3-Next 的集成包含三个部分：
 2. **在 Megatron 中执行 GDN。** GDN 实现沿用 Hugging Face 模型的参数布局，使用 FLA 或可选的 FlashQLA 后端执行递归注意力内核。`HuggingfaceAttention` 先收集序列并行和上下文并行的输入分片，在各 rank 上执行同一计算，再返回本地输出分片。参见 [hf_attention.py](https://github.com/THUDM/slime/blob/main/slime_plugins/models/hf_attention.py)。
 3. **加载模型权重。** checkpoint loader 将 Hugging Face 的参数名称和 tensor 布局映射到自定义模块及保留的 Megatron 层。参见 [Qwen3-Next 权重加载器](https://github.com/THUDM/slime/blob/main/slime/backends/megatron_utils/hf_to_megatron/qwen3_next.py)。
 
-启动配置和后端选项见 [Qwen3-Next 示例](../examples/qwen3-next-80B-A3B.md)。
+模型选择和启动配置见[实验 tutorial](../get_started/experiment-guide.md)。现有架构 launcher 保留在 `scripts/`。
 
 ## 当前限制
 

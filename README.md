@@ -6,9 +6,14 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/THUDM/slime/pr-test.yml?branch=main&event=push&label=CI&logo=github)](https://github.com/THUDM/slime/actions/workflows/pr-test.yml)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/THUDM/slime)
 
-**slime** is an LLM post-training framework for RL scaling. It combines Megatron training with SGLang rollout and exposes custom interfaces for data generation and rewards.
+**slime** is an LLM post-training framework for RL scaling, providing two core capabilities:
 
-Training, rollout, the data buffer, and environment feedback share one dataflow. This supports math, code, search, tool use, and long-horizon agent workflows within the same training loop.
+1.  **High-Performance Training**: Supports efficient training in various modes by connecting Megatron with SGLang;
+2.  **Flexible Data Generation**: Enables arbitrary training data generation workflows through custom data generation interfaces and server-based engines.
+
+slime's design goal is to make these two capabilities reinforce each other without turning the system into a heavy stack of disconnected trainers, rollout services, and agent frameworks. Megatron training, SGLang rollout, custom data generation, reward computation, verifier feedback, and environment interaction all flow through the same training / rollout / Data Buffer path.
+
+This makes slime one of the most battle-tested open RL post-training frameworks: small enough to understand and extend, but validated through complete training loops behind SOTA-level model releases.
 
 ## Why This Design Matters
 

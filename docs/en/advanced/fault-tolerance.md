@@ -1,6 +1,6 @@
 # Fault Tolerance
 
-slime checks SGLang engines, removes failed engines from service, and restarts them before the next weight update. When you use Straw transport or save rollout debug data, you can also retain the serving cluster after a Megatron failure, adjust the training configuration, and resume training.
+slime checks SGLang engines, removes failed engines from service, and restarts them before the next weight update. When you use straw transport or save rollout debug data, you can also retain the serving cluster after a Megatron failure, adjust the training configuration, and resume training.
 
 These features are enabled by default for serving clusters started by slime. You do not need `--use-fault-tolerance`; the flag remains for compatibility with older commands. External serving clusters retain their existing policy.
 
@@ -12,7 +12,7 @@ This recovery workflow requires the **Ray cluster to remain running**. Losing th
 
 Choose either option below. slime automatically persists recovery data in these modes, independently of `--use-fault-tolerance`.
 
-Use Straw to store rollout and training data:
+Use straw to store rollout and training data:
 
 ```bash
 --rollout-data-transport straw --rollout-data-dir /shared/my-run/queue
@@ -60,7 +60,7 @@ slime manages the serving cluster through a named Ray actor. A new job looks up 
 
 Set `--rollout-session-id` to choose a session identity explicitly. Otherwise, slime selects an identity in the following order and hashes it to produce a stable name:
 
-1. With Straw, use the absolute storage directory path and `--rollout-queue-run-id`.
+1. With straw, use the absolute storage directory path and `--rollout-queue-run-id`.
 2. Otherwise, use the absolute path template from `--save-debug-rollout-data`.
 3. If debug data is not saved, use the absolute `--save` directory path.
 4. If none of these is configured, use the model and rollout configuration.
@@ -69,9 +69,9 @@ Use the same identity for both attempts of a training run. Independent runs shou
 
 Three components handle recovery:
 
-- `ServingCluster` manages routers, SGLang engines, GPU resources, the Straw queue controller, and the weight-update lock. It is a named, detached Ray actor that survives the job that created it.
+- `ServingCluster` manages routers, SGLang engines, GPU resources, the straw queue controller, and the weight-update lock. It is a named, detached Ray actor that survives the job that created it.
 - `RolloutManager` handles generation, data reading, sample conversion, and training-data partitioning. It can be reused or recreated after it exits; recreating it does not destroy resources held by `ServingCluster`.
-- `TrainingRecovery` owns the model checkpoint boundary and retains the batches needed after it. The Straw accepted log owns raw and converted batch receipts; recovery reconciles those receipts if a manager or RPC fails before the journal is updated. A converted batch is stored once, and each DP rank receives an index view that can be rebuilt for a new parallel configuration.
+- `TrainingRecovery` owns the model checkpoint boundary and retains the batches needed after it. The straw accepted log owns raw and converted batch receipts; recovery reconciles those receipts if a manager or RPC fails before the journal is updated. A converted batch is stored once, and each DP rank receives an index view that can be rebuilt for a new parallel configuration.
 
 If `RolloutManager` survives, it pauses admission of new generation tasks. If it exits, its replacement reconnects to `ServingCluster`, restores data-source progress, and uses the queue controller to prevent old readers from taking more tasks. Completed prefetch results that have not reached training remain available. Trainer processes are also registered with `ServingCluster`, so it can clean up old trainers even after the manager exits.
 
@@ -120,7 +120,7 @@ For slow generation requests, use [Trace Viewer](../developer_guide/trace.md) to
 
 ## Recovery Scope and Limitations
 
-Without Straw or rollout debug dumps, you can still retain the serving cluster, but you cannot replay training batches after the last checkpoint.
+Without straw or rollout debug dumps, you can still retain the serving cluster, but you cannot replay training batches after the last checkpoint.
 
 Recreating `RolloutManager` supports the built-in data sources. Custom sources need compatible `state_dict` / `load_state_dict` methods and queue controllers that survive independently of the manager. Data-source constructors and rollout hook signatures are unchanged.
 
