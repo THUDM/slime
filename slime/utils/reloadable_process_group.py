@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import timedelta
@@ -149,6 +150,8 @@ def monkey_patch_torch_dist():
         return
 
     logger.info("Applying monkey patch to torch.distributed")
+    # Snapshot before patching so import-time copies of these functions can be redirected afterwards.
+    unpatched_dist_attributes = dict(vars(dist))
 
     old_new_group = dist.new_group
     old_new_group_dict[pid] = old_new_group
@@ -280,6 +283,34 @@ def monkey_patch_torch_dist():
 
     dist.P2POp.__new__ = get_new_p2pop_function(dist.P2POp.__new__)
     dist.P2POp.__init__ = get_new_p2pop_function(dist.P2POp.__init__)
+
+    replacements = {
+        id(original): getattr(dist, name)
+        for name, original in unpatched_dist_attributes.items()
+        if getattr(dist, name, original) is not original
+    }
+    _rebind_imported_collectives(replacements)
+
+
+def _rebind_imported_collectives(replacements: dict[int, Any]) -> None:
+    """Redirect Megatron's import-time copies of patched ``torch.distributed`` functions to the wrappers.
+
+    Megatron binds ``torch.distributed.reduce_scatter_tensor``, ``all_gather_into_tensor`` and
+    ``_coalescing_manager`` at import time (``megatron.core.distributed.param_and_grad_buffer``,
+    ``megatron.core.tensor_parallel.mappings``, ``megatron.core.timers``), and Megatron is imported
+    before ``monkey_patch_torch_dist`` runs. Those copies would pass ``ReloadableProcessGroup`` objects
+    straight to torch, which then dispatches through its Python process-group trampoline instead of the
+    inner communicator. torch 2.11 tolerates that detour; torch 2.13 segfaults in ``PyWorkHolder::wait``
+    at the first optimizer step. Rebinding makes every Megatron collective unwrap the group like the
+    patched functions do. Modules imported after the patch bind the wrappers directly.
+    """
+    for module_name, module in list(sys.modules.items()):
+        if module is None or not (module_name == "megatron" or module_name.startswith("megatron.")):
+            continue
+        for attribute, value in list(vars(module).items()):
+            replacement = replacements.get(id(value))
+            if replacement is not None:
+                setattr(module, attribute, replacement)
 
 
 class ReloadableProcessGroup(torch.distributed.ProcessGroup):
