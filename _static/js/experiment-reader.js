@@ -28,6 +28,11 @@
               inlineMath: [
                 ['\\(', '\\)']
               ]
+            },
+            options: {
+              // MyST skips article prose, then opts formula nodes back into processing.
+              ignoreHtmlClass: 'tex2jax_ignore|mathjax_ignore',
+              processHtmlClass: 'tex2jax_process|mathjax_process|math'
             }
           };
           const script = document.createElement('script');
@@ -74,6 +79,7 @@
       dialog.showModal();
     }
     title.textContent = info?.title || (zh ? '页内阅读' : 'Read in place');
+    window.MathJax?.typesetClear?.([content]);
     content.replaceChildren();
     const status = document.createElement('p');
     status.setAttribute('role', 'status');

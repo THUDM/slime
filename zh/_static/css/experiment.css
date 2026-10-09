@@ -2757,7 +2757,7 @@ button,
   }
 
   .workbench>.preview {
-    display: none;
+    grid-row: 1;
   }
 
   #mobile-preview {
