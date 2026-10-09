@@ -50,7 +50,7 @@ Partial rollout keeps unfinished prefixes for later continuation, including unde
 
 ## 3. Choose numerical behavior
 
-Start with BF16 on both sides to establish a baseline, or the maintained BF16-training / FP8-rollout path for large MoE. The latter keeps a BF16 training checkpoint and uses a separately quantized HF checkpoint for serving. KV cache precision is another independent choice.
+Start with BF16 on both sides to establish a baseline, or the maintained BF16-training / FP8-rollout path for large MoE. The latter keeps a BF16 training checkpoint and uses a separately quantized HF checkpoint for serving. Attention KV precision is another independent choice. Hybrid models also need a separate recurrent-state dtype: Qwen3.8-27B exposes attention KV, Mamba SSM state, and an optional state/KV memory ratio. The diagram shows the two pools separately. See [hybrid cache accounting](../advanced/rl-systems.md#hybrid-cache), including GLM-5.3-Flash's distinct architecture.
 
 FP8 training is experimental; INT4 rollout is beta. Every lower-precision path needs a compatible GPU/kernel stack. See [precision and memory derivation](../advanced/rl-systems.md#precision).
 
@@ -61,6 +61,8 @@ Then choose corrections deliberately. TIS clips importance weights; IcePop masks
 Keep ordinary serving as a baseline. Enable PD when measurements show prefill and decode need independent resources. The lab requires both groups to contain whole engines and uses Mooncake/RDMA; fill in actual device names. `sglang.yaml` is embedded inside `experiment.sh`, so a separate manual file copy is unnecessary.
 
 Enable HiCache for reused prefixes after budgeting host RAM and I/O. Under PD this recipe enables it on prefill only. Tune concurrency and response-token limits against actual memory and latency. See [the serving cost models](../advanced/rl-systems.md#pd).
+
+Enable **EAGLE** to add speculative decoding. Select a checkpoint MTP head or provide a separate compatible EAGLE head, then choose the draft depth. The serving diagram changes with PD, HiCache and EAGLE, showing candidate generation and target verification when enabled. See [configuration, acceptance derivation and metrics](../advanced/speculative-decoding.md).
 
 ## 5. Prepare once, convert, then run
 

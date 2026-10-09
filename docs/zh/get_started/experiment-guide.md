@@ -50,7 +50,7 @@ Partial rollout 保存未完成前缀以便之后续跑，也可以用于同步�
 
 ## 3. 选择数值行为
 
-可以先用 BF16 / BF16 建立基线，大 MoE 也可以从维护中的 BF16 训练 + FP8 rollout 路径开始。后者保留 BF16 训练 checkpoint，推理使用独立量化的 HF checkpoint。KV cache 精度又是另一个维度。
+可以先用 BF16 / BF16 建立基线，大 MoE 也可以从维护中的 BF16 训练 + FP8 rollout 路径开始。后者保留 BF16 训练 checkpoint，推理使用独立量化的 HF checkpoint。Attention KV 精度又是另一个维度；hybrid 模型还需单独选择递归状态 dtype。Qwen3.8-27B 提供 attention KV、Mamba SSM 状态和可选的状态 / KV 内存比例，配图分别展示两个池。见 [hybrid 缓存账本](../advanced/rl-systems.md#hybrid-cache)，其中也说明 GLM-5.3-Flash 的不同架构。
 
 FP8 训练仍为实验性，INT4 rollout 为 beta；低精度都需要匹配 GPU / kernel 栈。见[精度与内存推导](../advanced/rl-systems.md#precision)。
 
@@ -61,6 +61,8 @@ FP8 训练仍为实验性，INT4 rollout 为 beta；低精度都需要匹配 GPU
 普通 serving 是基线；测量表明 prefill / decode 需要不同资源时再尝试 PD。向导要求两组都是完整引擎，使用 Mooncake / RDMA，需要填写真实网卡名。`sglang.yaml` 已嵌入 `experiment.sh`，不必再手工复制单独配置文件。
 
 重复 prefix 较多时，可在预算主机内存和 I/O 后启用 HiCache；PD 下此配方仅在 prefill 开启。并发数和 response token 上限根据真实显存与延迟调整，见[推理成本模型](../advanced/rl-systems.md#pd)。
+
+开启 **EAGLE** 可加入投机采样：选择 checkpoint 内置 MTP 头或填写匹配的独立 EAGLE 头，再设置投机深度。配图会随 PD、HiCache、EAGLE 三个开关变化，展示候选生成与目标模型验证。见[配置、接受概率推导与指标](../advanced/speculative-decoding.md)。
 
 ## 5. 准备一次、转换，然后运行
 

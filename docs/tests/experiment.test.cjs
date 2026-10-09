@@ -204,6 +204,110 @@ test('cache, routing replay, and precision settings survive export at the right 
   assert.match(pd.files['sglang.yaml'], /enable_hierarchical_cache: false/);
 });
 
+test('hybrid attention KV and recurrent state export independently to each engine owner', () => {
+  const hybrid = E.change(E.change(E.defaults, 'model', 'glm5'), 'model', 'qwen38');
+  assert.equal(hybrid.kv, 'auto');
+  assert.equal(hybrid.mambaDtype, 'auto');
+  assert.doesNotMatch(shell(hybrid), /--sglang-(kv-cache-dtype|mamba-ssm-dtype|mamba-full-memory-ratio)/);
+  for (const layout of ['colocate', 'separate', 'external']) {
+    for (const kv of E.enums.kv) {
+      for (const mambaDtype of E.enums.mambaDtype) {
+        const state = {
+          ...hybrid,
+          layout,
+          kv,
+          mambaDtype,
+          mambaRatio: '1.5',
+          endpoints: 'node:30000',
+          transport: layout === 'external' ? 'disk' : 'nccl'
+        };
+        const generated = E.generate(state);
+        assert.deepEqual(generated.validation.errors, []);
+        const file = generated.files[layout === 'external' ? 'serving-reference.sh' : 'experiment.sh'];
+        const prefix = layout === 'external' ? '--' : '--sglang-';
+        assert.equal(file.includes(`${prefix}kv-cache-dtype fp8_e4m3`), kv === 'fp8');
+        assert.equal(file.includes(`${prefix}mamba-ssm-dtype`), mambaDtype !== 'auto');
+        if (mambaDtype !== 'auto') assert.ok(file.includes(`${prefix}mamba-ssm-dtype ${mambaDtype}`));
+        assert.ok(file.includes(`${prefix}mamba-full-memory-ratio '1.5'`));
+        assert.equal(spawnSync('bash', ['-n'], {
+          input: file
+        }).status, 0);
+      }
+    }
+  }
+  for (const ratio of ['0', '-1', 'NaN', 'Infinity', '0x10', '$(false)']) {
+    assert.ok(E.generate({
+      ...hybrid,
+      mambaRatio: ratio
+    }).validation.errors.some(e => e.includes('ratio')));
+  }
+  assert.equal(E.sanitize({
+    ...hybrid,
+    mambaDtype: 'fp8'
+  }).mambaDtype, 'auto');
+  const conventional = E.sanitize({
+    ...hybrid,
+    model: 'dense',
+    mambaDtype: 'bfloat16',
+    mambaRatio: '1.5'
+  });
+  assert.equal(conventional.mambaDtype, 'auto');
+  assert.equal(conventional.mambaRatio, '');
+  assert.doesNotMatch(shell(conventional), /--sglang-mamba/);
+});
+
+test('EAGLE exports a separate draft head or a supported checkpoint MTP head', () => {
+  const separate = {...E.defaults, speculative: true, draftSource: 'external', draft: '/models/my eagle head', specSteps: 5};
+  for (const layout of ['colocate', 'separate', 'external']) {
+    const s = {...separate, layout, transport: layout === 'external' ? 'disk' : 'nccl', endpoints: 'node:30000'};
+    const result = E.generate(s);
+    assert.deepEqual(result.validation.errors, []);
+    for (const [name, prefix] of [['experiment.sh', '--sglang-'], ...(layout === 'external' ? [['serving-reference.sh', '--']] : [])]) {
+      const output = result.files[name];
+      assert.ok(output.includes(`${prefix}speculative-algorithm EAGLE`));
+      assert.ok(output.includes(`${prefix}speculative-draft-model-path '/models/my eagle head'`));
+      assert.ok(output.includes(`${prefix}speculative-num-steps 5`));
+      assert.ok(output.includes(`${prefix}speculative-eagle-topk 1`));
+      assert.ok(output.includes(`${prefix}speculative-num-draft-tokens 6`));
+      assert.doesNotMatch(output, /--enable-mtp-training/);
+      assert.equal(spawnSync('bash', ['-n'], {input: output}).status, 0);
+    }
+    assert.doesNotMatch(shell({...s, speculative: false}), /--sglang-speculative-/);
+  }
+  assert.ok(E.generate({...separate, draft: ''}).validation.errors.some(e => e.includes('EAGLE head')));
+  const glm = {...E.change(separate, 'model', 'glm5'), speculative: true};
+  assert.equal(glm.draft, '');
+  assert.equal(glm.draftSource, 'builtin');
+  assert.match(shell(glm), /--sglang-speculative-draft-attention-backend nsa/);
+  assert.doesNotMatch(shell(glm), /--sglang-speculative-draft-model-path/);
+  assert.doesNotMatch(shell({...glm, draftSource: 'external', draft: 'org/compatible-eagle'}), /--sglang-speculative-draft-attention-backend nsa/);
+  const dense = E.change(separate, 'model', 'dense');
+  assert.equal(dense.draftSource, 'external');
+  assert.ok(E.generate({...dense, draftSource: 'builtin'}).validation.errors.some(e => e.includes('MTP')));
+  assert.deepEqual(E.generate({...separate, pd: true, rollout: 16, layout: 'separate', ib: 'mlx5_0'}).validation.errors, []);
+});
+
+test('all eight serving combinations have different PD, cache and decoding structures', () => {
+  const D = require('../_static/js/experiment-diagrams.js');
+  const scenes = new Set();
+  for (const pd of [false, true]) for (const hicache of [false, true]) for (const speculative of [false, true]) {
+    const s = {...E.defaults, step: 4, pd, hicache, speculative};
+    const picture = D.render(s, E.models[s.model], E.validate(s), 'en');
+    scenes.add(picture);
+    assert.equal(picture.includes('class="serving-pool combined-pool"'), !pd);
+    assert.equal(picture.includes('class="serving-pool prefill-pool"'), pd);
+    assert.equal(picture.includes('class="serving-pool decode-pool"'), pd);
+    assert.equal(picture.includes('data-serving-phase="transfer"'), pd);
+    assert.equal(picture.includes('data-cache-tier="cpu"'), hicache);
+    assert.equal(picture.includes('data-serving-phase="draft"'), speculative);
+    assert.equal(picture.includes('data-serving-phase="verify"'), speculative);
+    assert.equal(picture.includes('data-serving-phase="commit"'), speculative);
+    assert.equal(picture.includes('data-serving-phase="decode"'), !speculative);
+    assert.ok(picture.indexOf('serving-scene') < picture.indexOf('world-node trainer'));
+  }
+  assert.equal(scenes.size, 8);
+});
+
 test('all generated recipe variants are syntactically valid bash', () => {
   let count = 0;
   for (const model of Object.keys(E.models))
@@ -277,6 +381,9 @@ test('exported shell preserves literal user paths and submits the complete confi
     });
     const s = {
       ...E.defaults,
+      speculative: true,
+      draftSource: 'external',
+      draft: hf,
       hf,
       train,
       data,
@@ -295,6 +402,7 @@ test('exported shell preserves literal user paths and submits the complete confi
     assert.equal(result.status, 0, result.stderr);
     const args = fs.readFileSync(path.join(dir, 'args'), 'utf8').split('\0');
     assert.equal(args[args.indexOf('--hf-checkpoint') + 1], hf);
+    assert.equal(args[args.indexOf('--sglang-speculative-draft-model-path') + 1], hf);
     assert.equal(args[args.indexOf('--ref-load') + 1], train);
     assert.ok(args.includes('train.py'));
     assert.ok(args.includes('--num-layers'));
@@ -351,6 +459,24 @@ test('diagrams explain distinct signal paths, ownership, precision and correctio
     step: 2,
     precision: 'int4'
   }), /--bits:4/);
+  const hybrid = draw({
+    model: 'qwen38',
+    step: 2,
+    kv: 'fp8',
+    mambaDtype: 'auto'
+  });
+  assert.match(hybrid, /data-cache="attention"[^]*?--bits:8/);
+  assert.match(hybrid, /data-cache="ssm"[^]*?--bits:32/);
+  assert.match(hybrid, /16 × Attention/);
+  assert.match(hybrid, /48 × Gated DeltaNet/);
+  assert.match(draw({
+    model: 'qwen38',
+    step: 2,
+    mambaDtype: 'bfloat16'
+  }), /data-cache="ssm"[^]*?--bits:16/);
+  assert.doesNotMatch(draw({
+    step: 2
+  }), /data-cache="ssm"/);
   assert.match(draw({
     step: 3,
     correction: 'tis'

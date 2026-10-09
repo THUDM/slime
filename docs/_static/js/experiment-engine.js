@@ -4,6 +4,7 @@
   const models = {
     qwen38: {
       name: 'Qwen3.8-27B',
+      mtp: true,
       size: '27B · Hybrid Dense',
       repo: 'Qwen/Qwen3.8-27B',
       model: 'qwen3.5-27B',
@@ -16,11 +17,18 @@
       ep: 1,
       dp: 1,
       moe: false,
+      hybrid: {
+        linear: 'Gated DeltaNet',
+        linearLayers: 48,
+        attentionLayers: 16,
+        ssmDtype: 'float32'
+      },
       maxTokens: 8192,
       extra: ['--decoder-last-pipeline-num-layers 30']
     },
     deepseek: {
       name: 'DeepSeek-R1',
+      mtp: true,
       size: '671B · A37B · MoE',
       repo: 'deepseek-ai/DeepSeek-R1',
       model: 'deepseek-v3',
@@ -38,6 +46,7 @@
     },
     flash: {
       name: 'GLM-4.7-Flash',
+      mtp: true,
       size: '30B · A3B · MoE',
       repo: 'zai-org/GLM-4.7-Flash',
       model: 'glm4.7-30B-A3B',
@@ -72,6 +81,7 @@
     },
     glm47: {
       name: 'GLM-4.7',
+      mtp: true,
       size: '355B · A32B · MoE',
       repo: 'zai-org/GLM-4.7',
       model: 'glm4.5-355B-A32B',
@@ -89,6 +99,7 @@
     },
     glm5: {
       name: 'GLM-5.3',
+      mtp: true,
       size: '744B · A40B · MoE',
       repo: 'zai-org/GLM-5.3',
       model: 'glm5.2-744B-A40B',
@@ -122,12 +133,18 @@
     schedule: 'sync',
     precision: 'bf16',
     kv: 'auto',
+    mambaDtype: 'auto',
+    mambaRatio: '',
     correction: 'tis',
     r3: false,
     sc: false,
     deterministic: false,
     pd: false,
     hicache: false,
+    speculative: false,
+    draftSource: 'builtin',
+    draft: '',
+    specSteps: 3,
     nodes: 1,
     rollout: 8,
     prefill: 8,
@@ -155,6 +172,8 @@
     schedule: ['sync', 'async'],
     precision: ['bf16', 'fp8', 'fp8train', 'int4'],
     kv: ['auto', 'fp8'],
+    mambaDtype: ['auto', 'float32', 'bfloat16'],
+    draftSource: ['builtin', 'external'],
     correction: ['none', 'tis', 'icepop'],
     transport: ['nccl', 'disk', 'delta']
   };
@@ -165,10 +184,12 @@
     concurrency: [1, 8192],
     response: [128, 131072],
     rounds: [1, 100000],
+    specSteps: [1, 8],
     step: [0, 5]
   };
-  const textKeys = ['hf', 'train', 'data', 'save', 'megatron', 'endpoints', 'shared', 'local', 'ib', 'generate',
-    'reward', 'queueDir', 'queueRun', 'declaration'
+  const textKeys = ['hf', 'train', 'data', 'save', 'megatron', 'endpoints', 'shared', 'local', 'ib',
+    'generate',
+    'reward', 'queueDir', 'queueRun', 'declaration', 'mambaRatio', 'draft'
   ];
 
   function sanitize(input) {
@@ -181,6 +202,8 @@
         nodes: m.nodes,
         rollout: m.nodes * 8,
         prefill: m.engine,
+        draftSource: m.mtp ? 'builtin' : 'external',
+        specSteps: input.model === 'glm5' ? 4 : 3,
         hf: '/data/' + m.name,
         train: '/data/' + m.name + '_torch_dist'
       });
@@ -196,6 +219,10 @@
     for (const key of textKeys)
       if (typeof input[key] === 'string' && input[key].length <= 2048) s[key] = input[key].replace(/[\x00-\x1f\x7f]/g,
         '').trim();
+    if (!models[s.model].hybrid) {
+      s.mambaDtype = 'auto';
+      s.mambaRatio = '';
+    }
     return s;
   }
 
@@ -212,6 +239,12 @@
       s.cpuAdam = m.moe || value === 'qwen38';
       s.hf = '/data/' + m.name;
       s.train = s.hf + '_torch_dist';
+      s.kv = 'auto';
+      s.mambaDtype = 'auto';
+      s.mambaRatio = '';
+      s.draftSource = m.mtp ? 'builtin' : 'external';
+      s.draft = '';
+      s.specSteps = value === 'glm5' ? 4 : 3;
       if (!m.moe) s.r3 = false;
       if (value === 'glm5' || value === 'deepseek') {
         s.precision = 'fp8';
@@ -312,6 +345,17 @@
     if (s.pd && !s.ib) errors.push(t(
       'Enter the RDMA device(s) for this Mooncake PD recipe, e.g. mlx5_0. Check these names on every host.',
       '此 Mooncake PD 配方需要 RDMA 网卡名，例如 mlx5_0；请核对每台主机。'));
+    if (s.speculative) {
+      if (s.draftSource === 'builtin' && !m.mtp) errors.push(t(
+        'This model has no built-in MTP recipe here. Select a separate EAGLE head and provide its checkpoint.',
+        '此模型没有内置 MTP 配方，请选择独立 EAGLE 头并填写 checkpoint。'));
+      if (s.draftSource === 'external' && !s.draft) errors.push(t(
+        'Enter the separate EAGLE head checkpoint path or Hugging Face model ID.',
+        '请填写独立 EAGLE 投机头的 checkpoint 路径或 Hugging Face 模型 ID。'));
+      notes.push(t(
+        'EAGLE proposes tokens, then the target verifies them. Use a compatible draft head, with its weights available on every serving host. The builder configures inference only; separate draft-head training is not enabled. Track spec_accept_rate, spec_accept_length and rollout time as RL changes the target.',
+        'EAGLE 先提出候选 token，再由目标模型验证。投机头须与目标模型匹配，且权重需供所有推理主机访问。向导只配置推理，不开启独立投机头训练。随 RL 更新，观察 spec_accept_rate、spec_accept_length 和 rollout 耗时。'));
+    }
     if (s.straw) {
       if (!s.queueDir || !s.queueDir.startsWith('/')) errors.push(t(
         'straw needs an absolute shared JuiceFS data directory.', 'straw 需要绝对路径的共享 JuiceFS 数据目录。'));
@@ -339,6 +383,16 @@
     if (s.model === 'qwen38') notes.push(t(
       'Qwen3.8-27B uses the qwen3_5 architecture and matches the existing 27B model dimensions. This text-RL recipe reuses that backend; the checkpoint still needs GPU validation.',
       'Qwen3.8-27B 使用 qwen3_5 架构，尺寸匹配现有 27B 配置。此文本 RL 配方复用该后端，checkpoint 仍需 GPU 验证。'));
+    if (m.hybrid) {
+      notes.push(t(
+        'Hybrid cache has two pools: attention KV and recurrent state. KV dtype applies only to attention layers. Mamba SSM dtype and its memory ratio are independent; convolution state is separate again. Check backend support and log-prob accuracy for each change.',
+        'Hybrid cache 分为 attention KV 和递归状态两个池。KV dtype 只作用于 attention 层；Mamba SSM 精度与内存比例独立，卷积状态又是另一部分。每项调整都需核对后端支持与 log-prob 精度。'
+        ));
+      if (s.mambaRatio && (!/^(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(s.mambaRatio) ||
+          !Number.isFinite(Number(s.mambaRatio)) || Number(s.mambaRatio) <= 0)) errors.push(t(
+        'Mamba / attention KV memory ratio must be a positive number, or left blank for the serving default.',
+        'Mamba / attention KV 内存比例须为正数，或留空沿用推理栈默认值。'));
+    }
     if (s.sc) notes.push(t(
       'SC selects REINFORCE with GRPO advantages and no standard-deviation normalization. Sampling is fixed to temperature=1, top_p=1, top_k=-1, without penalties, constraints, or streaming.',
       'SC 使用 REINFORCE、GRPO advantage，关闭标准差归一化。采样固定为 temperature=1、top_p=1、top_k=-1，不使用惩罚、约束解码或 streaming。'));
@@ -375,13 +429,23 @@
     if (m.dp > 1) args.push('--sglang-enable-dp-attention', `--sglang-dp-size ${m.dp}`, '--sglang-enable-dp-lm-head',
       '--sglang-moe-dense-tp-size 1');
     if (['glm47', 'glm5', 'deepseek'].includes(s.model)) args.push(`--sglang-ep-size ${m.engine}`);
-    if (s.model === 'qwen38') args.push('--sglang-mamba-scheduler-strategy extra_buffer');
+    if (m.hybrid) {
+      args.push('--sglang-mamba-scheduler-strategy extra_buffer');
+      if (s.mambaDtype !== 'auto') args.push(`--sglang-mamba-ssm-dtype ${s.mambaDtype}`);
+      if (s.mambaRatio) args.push(`--sglang-mamba-full-memory-ratio ${quote(s.mambaRatio)}`);
+    }
     if (s.model === 'deepseek') args.push('--sglang-moe-a2a-backend deepep', '--sglang-deepep-mode auto');
     if (s.model === 'glm5') args.push('--sglang-moe-a2a-backend deepep', '--sglang-deepep-mode auto',
       '--sglang-page-size 64', '--sglang-nsa-decode-backend flashmla_kv',
       '--sglang-nsa-prefill-backend flashmla_sparse', '--sglang-attention-backend nsa',
       '--sglang-disable-overlap-schedule');
     if (s.kv === 'fp8') args.push('--sglang-kv-cache-dtype fp8_e4m3');
+    if (s.speculative) {
+      args.push('--sglang-speculative-algorithm EAGLE', `--sglang-speculative-num-steps ${s.specSteps}`,
+        '--sglang-speculative-eagle-topk 1', `--sglang-speculative-num-draft-tokens ${s.specSteps + 1}`);
+      if (s.draftSource === 'external') args.push(`--sglang-speculative-draft-model-path ${quote(s.draft)}`);
+      else if (s.model === 'glm5') args.push('--sglang-speculative-draft-attention-backend nsa');
+    }
     if (s.deterministic) {
       args.push('--sglang-enable-deterministic-inference');
       if (s.model === 'dense') args.push('--sglang-attention-backend flashinfer');

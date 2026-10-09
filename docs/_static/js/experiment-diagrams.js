@@ -47,10 +47,13 @@
         break;
       case 2: {
         title = t('Different tensors, different precision', '不同张量，各选精度');
-        const bar = (label, bits, format) =>
-          `<div class="bit-row"><span>${label}</span><div class="bit-bar" style="--bits:${bits}">${'<i></i>'.repeat(bits)}</div><b>${format}</b></div>`;
+        const bar = (label, bits, format, cache = '') =>
+          `<div class="bit-row"${cache ? ` data-cache="${cache}"` : ''}><span>${label}</span><div class="bit-bar" style="--bits:${bits};--max-bits:${m.hybrid ? 32 : 16}">${'<i></i>'.repeat(bits)}</div><b>${format}</b></div>`;
+        const ssm = s.mambaDtype === 'auto' ? m.hybrid?.ssmDtype : s.mambaDtype;
         lesson =
-          `<div data-precision="${s.precision}">${bar('Train', s.precision === 'fp8train' ? 8 : 16, s.precision === 'fp8train' ? 'FP8' : 'BF16')}${bar('Rollout', precision === 'BF16' ? 16 : precision === 'FP8' ? 8 : 4, precision)}${bar('KV cache', s.kv === 'fp8' ? 8 : 16, s.kv === 'fp8' ? 'FP8' : 'auto*')}</div><p>${t('Each cell represents one bit per element, before scales and metadata. *Auto follows the serving stack; the 16-bit row is illustrative. Optimizer and accumulation precision are separate.', '每格表示每元素一 bit，不含 scale 和元数据。*Auto 由推理栈决定，图中以 16 bit 为例。优化器与累加精度需另外考虑。')}</p>`;
+          `<div data-precision="${s.precision}">${bar('Train', s.precision === 'fp8train' ? 8 : 16, s.precision === 'fp8train' ? 'FP8' : 'BF16')}${bar('Rollout', precision === 'BF16' ? 16 : precision === 'FP8' ? 8 : 4, precision)}${bar('Attn KV', s.kv === 'fp8' ? 8 : 16, s.kv === 'fp8' ? 'FP8' : 'auto*', 'attention')}${m.hybrid ? bar('SSM', ssm === 'float32' ? 32 : 16, ssm === 'float32' ? 'FP32' : 'BF16', 'ssm') : ''}</div><p>${t('Each cell represents one bit per element, before scales and metadata. *Auto KV follows the serving stack; the 16-bit row is illustrative. These rows show dtype, not total pool memory.', '每格表示每元素一 bit，不含 scale 和元数据。*Auto KV 由推理栈决定，图中以 16 bit 为例。各行展示 dtype，不代表整个缓存池大小。')}</p>`;
+        if (m.hybrid) lesson +=
+          `<div class="hybrid-cache-map"><div><strong>${m.hybrid.attentionLayers} × Attention</strong><span>${t('More tokens → more KV entries', 'token 增多 → KV 条目增多')}</span></div><div><strong>${m.hybrid.linearLayers} × ${esc(m.hybrid.linear)}</strong><span>hₜ₋₁ → hₜ</span><small>${t('Recurrent state + convolution state', '递归状态 + 卷积状态')}</small></div></div><p>${t('Mamba cache keeps recurrent states and snapshots, with a fixed state shape per slot. Its SSM dtype does not change with FP8 attention KV; convolution state has its own dtype.', 'Mamba cache 保存递归状态与快照，每个 slot 的状态形状固定。SSM 精度不跟随 attention KV 的 FP8 开关改变；卷积状态也有自己的 dtype。')}</p><p>${t('State / attention KV memory ratio', '状态 / attention KV 内存比例')}: ${esc(s.mambaRatio || t('serving default', '推理栈默认'))}</p>`;
         break;
       }
       case 3: {
@@ -64,18 +67,33 @@
           `<div class="score-demo" data-sc="${s.sc}">${s.sc ? row(chip('score'), chip('− E_q[score]', 'yellow'), chip(t('zero mean', '均值为零'), 'green')) : row(chip('PPO ratio'), chip(t('clipped objective', '裁剪目标'), 'blue'))}</div><p>${s.sc ? t('SC centers the weighted score per prefix; it uses REINFORCE and a top-128 sampler approximation.', 'SC 在每个 prefix 中心化加权 score，使用 REINFORCE 与 sampler top-128 近似。') : t('PPO clipping controls policy changes; TIS / ICE-POP correct a different ratio, between trainer and sampler.', 'PPO clipping 控制策略更新幅度；TIS / ICE-POP 修正训练器与采样器之间的另一种比率。')}</p><div class="determinism-demo">${chip(s.deterministic ? 'run A = run B*' : 'run A ≈ run B', s.deterministic ? 'green' : '')}<small>${t('*Repeatability is scoped to supported kernels; it does not imply equality across engines.', '*可重复性取决于支持的 kernel，不代表跨引擎数值相等。')}</small></div>`;
         break;
       }
-      case 4:
+      case 4: {
         title = t('Inside the serving fleet', '走进推理集群内部');
+        const cache = `<div class="serving-cache" data-hicache="${s.hicache}"><div data-cache-tier="gpu">${chip('GPU', 'blue')}<span>${t('Prefix cache', '前缀缓存')}</span></div>${s.hicache ? `<b aria-hidden="true">⇄</b><div data-cache-tier="cpu">${chip('CPU', 'yellow')}<span>HiCache</span></div>` : ''}</div><small>${s.hicache ? (s.pd ? t('Enabled on prefill workers only.', '仅在 prefill worker 启用。') : t('Reuse prefixes through GPU ↔ host RAM.', '通过 GPU ↔ 主机内存复用前缀。')) : t('GPU prefix cache only; no host cache tier.', '只有 GPU 前缀缓存，无主机缓存层。')}</small>`;
+        const prefill = `<div class="serving-stage" data-serving-phase="prefill"><h5>Prefill</h5><p>${t('Read the prompt; reuse cached prefixes.', '读取 prompt，复用已缓存的前缀。')}</p>${cache}</div>`;
+        const shownDrafts = Math.min(s.specSteps, 3);
+        const proposed = Array.from({length: shownDrafts}, (_, i) => chip('d' + (i + 1), 'yellow')).join(' ');
+        const accepted = Array.from({length: Math.max(0, shownDrafts - 1)}, (_, i) => chip('✓ d' + (i + 1), 'green')).join(' ');
+        const decoding = s.speculative ?
+          `<div class="draft-stage" data-serving-phase="draft"><strong>${s.draftSource === 'external' ? t('Separate EAGLE head', '独立 EAGLE 头') : t('Checkpoint MTP head', 'Checkpoint MTP 头')}</strong><small>${t('Propose', '提出候选')} · ${s.specSteps} ${t('steps', '步')} · top-k 1</small><div class="serving-tokens">${proposed}${s.specSteps > shownDrafts ? chip('…') : ''}</div></div><div class="serving-connector" aria-hidden="true">↓</div><div class="verify-stage" data-serving-phase="verify"><strong>${t('Target model · batch verification', '目标模型 · 批量验证')}</strong><div class="serving-tokens">${accepted} ${chip('× d' + shownDrafts, 'rejected')}</div></div><div class="serving-connector" aria-hidden="true">↓</div><div class="commit-stage" data-serving-phase="commit"><strong>${t('Commit accepted prefix + corrected token', '提交接受的前缀 + 修正 token')}</strong><div class="serving-tokens">${accepted} ${chip('c', 'blue')}</div><small>${t('Illustrative rejection round; acceptance varies by request. All-accepted rounds can emit a bonus token.', '图示为一次拒绝示例，接受长度随请求变化；全部接受时可多输出一个 token。')}</small></div>` :
+          `<div class="verify-stage" data-serving-phase="decode"><strong>${t('Target model · one token at a time', '目标模型 · 逐 token 解码')}</strong>${row(chip('t₁', 'green'), chip('t₂', 'green'), chip('t₃', 'green'))}<small>${t('One target decoding step for each new token.', '每产生一个新 token，执行一次目标模型解码。')}</small></div>`;
+        const decode = `<div class="serving-stage"><h5>Decode ${s.speculative ? '· EAGLE' : ''}</h5>${decoding}</div>`;
+        const pools = s.pd ?
+          `<div class="serving-pool prefill-pool"><div class="serving-pool-label">${t('Prefill engine pool', 'Prefill 引擎池')}</div>${prefill}</div><div class="serving-transfer" data-serving-phase="transfer"><span>↓</span><strong>${m.hybrid ? t('KV + recurrent state transfer', 'KV + 递归状态传输') : 'KV transfer'}</strong><small>Mooncake · RDMA</small></div><div class="serving-pool decode-pool"><div class="serving-pool-label">${t('Decode engine pool', 'Decode 引擎池')}</div>${decode}</div>` :
+          `<div class="serving-pool combined-pool"><div class="serving-pool-label">${t('One engine · prefill + decode', '同一引擎 · prefill + decode')}</div>${prefill}<div class="serving-connector">↓ ${t('Cache stays in the engine', '缓存在引擎内复用')}</div>${decode}</div>`;
         lesson =
-          `<div data-pd="${s.pd}">${s.pd ? row(chip('Prompt'), chip('Prefill · '+s.prefill+' GPU', 'blue'), chip('KV transfer', 'yellow'), chip('Decode', 'green')) : row(chip('Prompt'), chip('Prefill + Decode', 'blue'), chip('Tokens', 'green'))}</div>${s.hicache ? `<div class="cache-hierarchy">${row(chip('GPU prefix cache', 'blue'), chip('CPU HiCache', 'yellow'))}<small>${s.pd ? t('Enabled on prefill workers only.', '仅在 prefill worker 启用。') : t('Reuse repeated prefixes in the host cache.', '在主机缓存中复用重复前缀。')}</small></div>` : `<p>${t('Prefix reuse stays within the engine’s default cache.', '前缀复用采用引擎默认缓存。')}</p>`}${row(chip('θ new', 'green'), chip(s.transport === 'nccl' ? 'NCCL' : s.transport === 'disk' ? t('full checkpoint · disk', '完整 checkpoint · 磁盘') : t('changed bytes · disk', '变化字节 · 磁盘'), 'yellow'), chip('SGLang'))}<p>${t('Concurrency', '并发上限')}: ${s.concurrency} · ${t('Response limit', '回复上限')}: ${s.response} tokens</p>`;
+          `<div class="serving-scene" data-pd="${s.pd}" data-speculative="${s.speculative}"><div class="serving-prompt">${chip('Prompt', 'blue')} ↓</div>${pools}</div><p>${t('Concurrency', '并发上限')}: ${s.concurrency} · ${t('Response limit', '回复上限')}: ${s.response} tokens</p>`;
         break;
+      }
       default:
         title = t('Your path to a running experiment', '让实验真正跑起来');
         lesson = row(chip('prepare', 'blue'), chip('convert', 'yellow'), chip('check'), chip('train',
             'green')) +
           `<p>${v.errors.length ? t('Complete the highlighted settings before exporting the shell.', '补齐标出的配置后即可导出 shell。') : t('Export experiment.sh, then run these stages in your prepared environment.', '导出 experiment.sh，在准备好的环境中依次运行这些步骤。')}</p><div class="diagram-files">${chip('experiment.sh')}${s.pd ? chip('sglang.yaml') : ''}${s.layout === 'external' ? chip('serving-reference.sh') : ''}${chip('experiment.json')}</div>`;
     }
-    return `<div class="world-top">${esc(m.name)} · ${esc(m.size)}</div>${topology}${s.straw ? `<div class="queue-pool"><strong>straw</strong> · ${s.schedule === 'async' ? 'worker 0 / 1 / … → ' : ''}partial → ready → batch <small>JuiceFS · ${t('persistent payloads + queues', '持久数据 + 队列')}</small></div>` : ''}<section class="world-lesson" data-lesson="${s.step}"><h4>${title}</h4>${lesson}</section>`;
+    const explanation = `<section class="world-lesson" data-lesson="${s.step}"><h4>${title}</h4>${lesson}</section>`;
+    const placement = `${topology}${s.straw ? `<div class="queue-pool"><strong>straw</strong> · ${s.schedule === 'async' ? 'worker 0 / 1 / … → ' : ''}partial → ready → batch <small>JuiceFS · ${t('persistent payloads + queues', '持久数据 + 队列')}</small></div>` : ''}`;
+    return `<div class="world-top">${esc(m.name)} · ${esc(m.size)}</div>${s.step === 4 ? explanation + placement : placement + explanation}`;
   }
   const api = {
     render

@@ -11,7 +11,7 @@ Megatron 侧保持 BF16/torch_dist 的可训练 checkpoint；SGLang 侧使用 FP
 | 功能 | 状态 | 推荐用法 |
 |---|---|---|
 | BF16 training + FP8 rollout/inference | Stable | 大规模 MoE RL 的默认推荐路径。训练保持稳定，rollout 降低显存和带宽开销。 |
-| SGLang rollout FP8 KV cache | Stable，取决于当前 SGLang 版本和 GPU stack 支持 | 通过 `--sglang-kv-cache-dtype fp8_e4m3` 提升 long-context 或 agentic rollout 的 KV cache 容量。 |
+| SGLang rollout FP8 attention KV cache | 需目标模型、attention 后端与 GPU 支持 | 通过 `--sglang-kv-cache-dtype fp8_e4m3` 提升 attention KV 容量；hybrid 递归状态单独配置。 |
 | INT4 rollout / INT4 QAT | Beta | 当 rollout 显存或吞吐压力很高，并且目标模型路径已经验证时使用。 |
 | FP8 training + FP8 rollout | Experimental | 适合研究训推不一致和吞吐优化，但仍有 optimizer/checkpoint 相关限制。 |
 
@@ -50,6 +50,8 @@ python tools/convert_hf_to_fp8.py \
 ```
 
 这是 rollout 侧配置，不会改变 Megatron 的训练精度。它可以提升 SGLang 的有效 KV cache 容量，从而支持更长 context 或更高并发；实际精度和性能表现取决于当前 SGLang 版本与 GPU stack。
+
+对 Qwen3.8-27B、GLM-5.3-Flash 等 hybrid 模型，这个参数只作用于 attention 层 KV。线性注意力的递归状态使用 `--sglang-mamba-ssm-dtype`，状态池 / attention KV 池的内存比例使用 `--sglang-mamba-full-memory-ratio`。FP8 KV 不代表递归状态或卷积状态也用 FP8。向导默认不覆盖这些参数，为 Qwen3.8-27B 另外提供 FP32 / BF16 递归状态选项。见 [hybrid 缓存配置、架构来源与内存推导](rl-systems.md#hybrid-cache)。
 
 ## FP8 训练 + FP8 Rollout
 
