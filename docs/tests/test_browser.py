@@ -25,6 +25,14 @@ class QuietHandler(SimpleHTTPRequestHandler):
             pass  # Navigation can cancel an in-flight asset request.
 
 
+def expect_rendered_math(page):
+    # Raw TeX is also visible: require MathJax output for every formula, including
+    # nodes nested inside MyST's tex2jax_ignore / mathjax_ignore article wrapper.
+    expect(page.locator(".reader-article .math").first).to_be_visible()
+    expect(page.locator(".reader-article .math:not(:has(mjx-container))")).to_have_count(0, timeout=30000)
+    expect(page.locator(".reader-article mjx-merror")).to_have_count(0)
+
+
 def run():
     build = Path(__file__).resolve().parents[1] / "build"
     server = ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(QuietHandler, directory=str(build)))
@@ -60,6 +68,10 @@ def run():
                 expect(page.locator(".reader-article .mermaid")).to_be_visible()
                 assert page.url == f"{base}/{lang}/"
                 page.keyboard.press("Escape")
+                for guide in ("policy-mismatch", "rl-systems"):
+                    page.locator(f'.library-teaser a[href="advanced/{guide}.html"]').click()
+                    expect_rendered_math(page)
+                    page.keyboard.press("Escape")
                 expect(page.locator("#download")).to_be_enabled()
                 page.locator('[data-step="1"]').click()
                 page.locator('[name="layout"][value="external"]').check()
@@ -104,7 +116,7 @@ def run():
                 expect(page.locator(".reader-sources a")).to_have_count(2)
                 assert len(page.locator(".reader-article").inner_text()) > 500
                 assert page.url == f"{base}/{lang}/"
-                expect(page.locator(".reader-article .math").first).to_be_visible()
+                expect_rendered_math(page)
                 page.keyboard.press("Escape")
                 expect(page.locator('[data-learn="partial"]')).to_be_focused()
                 page.reload(wait_until="networkidle")
@@ -155,6 +167,13 @@ def run():
                         page.locator(f'[data-step="{step}"]').click()
                         assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), (lang, width, step)
                         if width <= 720:
+                            # The main illustration must be visible in the page, without
+                            # discovering or opening the floating preview button first.
+                            expect(page.locator(".workbench > .preview #world")).to_be_visible()
+                            expect(page.locator("#world .world-lesson")).to_have_attribute("data-lesson", str(step))
+                            preview_box = page.locator(".workbench > .preview").bounding_box()
+                            builder_box = page.locator(".builder-panel").bounding_box()
+                            assert preview_box["y"] + preview_box["height"] <= builder_box["y"]
                             page.locator("#mobile-preview").click()
                             expect(page.locator("#mobile-preview-dialog")).to_be_visible()
                             expect(page.locator("#world")).to_be_visible()
@@ -163,6 +182,12 @@ def run():
                             ), (width, step)
                             page.locator("#close-preview").click()
                             expect(page.locator("#mobile-preview-dialog")).not_to_be_visible()
+                            expect(page.locator(".workbench > .preview #world")).to_be_visible()
+                page.locator('[data-step="0"]').click()
+                page.locator('[name="task"][value="custom"]').check()
+                expect(page.locator('.workbench [data-signal="custom"]')).to_be_visible()
+                page.locator("#undo").click()
+                expect(page.locator('.workbench [data-signal="math"]')).to_be_visible()
                 # External fleets with PD/cache must also fit narrow preview panels.
                 page.locator('[data-step="1"]').click()
                 page.locator('[name="layout"][value="external"]').check()
@@ -177,6 +202,12 @@ def run():
                 )
                 assert clusters[0]["bottom"] < clusters[1]["top"] < clusters[1]["bottom"] < clusters[2]["top"]
                 page.locator("#close-preview").click()
+                expect(page.locator(".workbench .external-map .sampler")).to_have_count(3)
+                for guide in ("policy-mismatch", "rl-systems"):
+                    page.locator(f'.library-teaser a[href="advanced/{guide}.html"]').click()
+                    expect_rendered_math(page)
+                    assert page.locator("#learn-dialog").evaluate("el => el.scrollWidth <= el.clientWidth")
+                    page.keyboard.press("Escape")
                 # Check local page/anchor targets from the new landing page and guides.
                 for doc in (
                     "index",
@@ -261,12 +292,12 @@ def run():
                     page.goto(f"https://thudm.github.io{prefix}#lab", wait_until="networkidle")
                     expect(page.locator('[name="model"]')).to_have_count(6)
                     page.locator('[data-learn="grpo"]').click()
-                    expect(page.locator(".reader-article .math").first).to_be_visible()
+                    expect_rendered_math(page)
                     page.keyboard.press("Escape")
                     page.locator(".lang-toggle-btn").click()
                     page.wait_for_url(f"https://thudm.github.io{prefix}zh/#lab")
                     page.locator('[data-learn="grpo"]').click()
-                    expect(page.locator(".reader-article .math").first).to_be_visible()
+                    expect_rendered_math(page)
                     page.keyboard.press("Escape")
                     page.locator(".lang-toggle-btn").click()
                     page.wait_for_url(f"https://thudm.github.io{prefix}#lab")
