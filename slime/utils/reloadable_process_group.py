@@ -293,16 +293,12 @@ def monkey_patch_torch_dist():
 
 
 def _rebind_imported_collectives(replacements: dict[int, Any]) -> None:
-    """Redirect Megatron's import-time copies of patched ``torch.distributed`` functions to the wrappers.
+    """Point Megatron's import-time copies of patched ``torch.distributed`` functions at the wrappers.
 
-    Megatron binds ``torch.distributed.reduce_scatter_tensor``, ``all_gather_into_tensor`` and
-    ``_coalescing_manager`` at import time (``megatron.core.distributed.param_and_grad_buffer``,
-    ``megatron.core.tensor_parallel.mappings``, ``megatron.core.timers``), and Megatron is imported
-    before ``monkey_patch_torch_dist`` runs. Those copies would pass ``ReloadableProcessGroup`` objects
-    straight to torch, which then dispatches through its Python process-group trampoline instead of the
-    inner communicator. torch 2.11 tolerates that detour; torch 2.13 segfaults in ``PyWorkHolder::wait``
-    at the first optimizer step. Rebinding makes every Megatron collective unwrap the group like the
-    patched functions do. Modules imported after the patch bind the wrappers directly.
+    Megatron binds ``reduce_scatter_tensor``, ``all_gather_into_tensor`` and ``_coalescing_manager``
+    when its modules are imported, before this patch runs. Left alone, those copies hand
+    ``ReloadableProcessGroup`` objects to torch, which dispatches them through its Python process-group
+    trampoline; torch 2.13 segfaults there in ``PyWorkHolder::wait``.
     """
     for module_name, module in list(sys.modules.items()):
         if module is None or not (module_name == "megatron" or module_name.startswith("megatron.")):
