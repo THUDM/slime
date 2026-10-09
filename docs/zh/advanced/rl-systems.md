@@ -55,9 +55,45 @@ $$\log q_a-\log p_a\approx\delta_a-\sum_jp_j\delta_j.$$
 
 $P$ 个元素、每元素 $b$ bits 的原始存储约为 $Pb/8$ 字节，不含 scales、元数据、padding 和副本。位宽减半，只代表这个张量的原始存储减半，不代表整个 GPU 的显存占用减半。优化器状态、激活和 KV cache 是独立预算。
 
-向导提供 BF16 训练搭配 BF16 / FP8 rollout、实验性 FP8 训练和 beta INT4 rollout。BF16 训练使用转换后的 `torch_dist`；FP8 rollout 使用独立的 block-quantized HF checkpoint，其 `quantization_config` 决定在线更新时的量化。FP8 KV cache 与权重精度独立。FP8 训练采用 TE blockwise 配置，因 CPU Adam 不兼容而不启用 `fp8-param-gather`。
+向导提供 BF16 训练搭配 BF16 / FP8 rollout、实验性 FP8 训练和 beta INT4 rollout。BF16 训练使用转换后的 `torch_dist`；FP8 rollout 使用独立的 block-quantized HF checkpoint，其 `quantization_config` 决定在线更新时的量化。Attention KV、hybrid 递归状态与权重的精度分别配置。FP8 训练采用 TE blockwise 配置，因 CPU Adam 不兼容而不启用 `fp8-param-gather`。
 
 格式参考：[FP8 Formats for Deep Learning](https://arxiv.org/abs/2209.05433)。支持状态见[低精度指南](low-precision.md)。INT4 仍需模型和 kernel 验证，向导不承诺 GLM INT4 的性能。
+
+### Hybrid cache
+
+Hybrid 模型有两类不同的推理缓存。[Qwen3.8-27B 配置](https://huggingface.co/Qwen/Qwen3.8-27B/blob/main/config.json)有 48 层线性注意力和 16 层 full attention，递归状态使用 FP32；[GLM-5.3-Flash 配置](https://huggingface.co/zai-org/GLM-5.3-Flash/blob/main/config.json)则组合 34 层 KDA 线性注意力与 11 层 DSA。它们的 attention 架构不同；SGLang 的 **Mamba cache** 是递归状态存储的统一名称，不代表这些模型使用完全相同的架构。递归更新机制可参考 [Gated DeltaNet 论文](https://arxiv.org/abs/2412.06464)。
+
+| 缓存 | 保存什么 | 独立的 slime 配置 |
+|---|---|---|
+| Attention KV | attention 层的逐 token 缓存 | `--sglang-kv-cache-dtype`；FP8 需目标模型、后端与 GPU 支持 |
+| Mamba / 线性注意力状态 | 递归状态与缓存快照 | `--sglang-mamba-ssm-dtype`，与 KV dtype 分开 |
+| 卷积状态 | 线性注意力层的短程历史 | 使用独立的卷积 dtype；SSM dtype 参数不改变它 |
+
+向导给递归状态提供模型默认、FP32、BF16 三个选项。默认不传 SSM 参数，Qwen3.8-27B 发布的配置采用 FP32。选 FP8 attention KV 不会把递归状态也变成 FP8。参数定义见 [SGLang 文档](https://docs.sglang.io/docs/advanced_features/server_arguments#mamba-cache)，[状态 dtype 与大小的实现](https://github.com/sgl-project/sglang/blob/v0.5.15.post1/python/sglang/srt/configs/mamba_utils.py)分别计算递归与卷积张量。
+
+设缓存中有 $N$ 个 token 位置，以及 $K$ 个递归状态 slot（包含快照、调度缓冲）；每个 attention token 占 $c_A$ 字节，每个状态 slot 占 $c_R$ 字节，则：
+
+$$B_{\rm cache}\approx N c_A + K c_R.$$
+
+对普通 GQA 层集合 $\mathcal A$，逐层计算每个 token 的 K、V 元素；对线性注意力层集合 $\mathcal R$，计算每个 slot 的递归状态和卷积状态元素：
+
+$$
+c_A=\sum_{\ell\in\mathcal A}2H^{KV}_\ell d_\ell\frac{b_{KV}}8,
+\qquad
+c_R=\sum_{\ell\in\mathcal R}\left(P^{SSM}_\ell\frac{b_{SSM}}8+P^{conv}_\ell\frac{b_{conv}}8\right).
+$$
+
+估计每卡占用时，用分片后的实际张量维度。DSA / MLA 的缓存张量不同，应测量其真实字节数，不能套用 GQA 维度。单个递归状态 slot 的形状固定，但 **slot 数量**会随并发、prefix 快照和调度缓冲增加。
+
+只把 BF16 attention KV 改成 FP8 时，$B'\approx Nc_A/2+Kc_R$，因此总缓存通常不会减半。同理，BF16 SSM 只改变递归状态项，卷积状态保持自身的 dtype。
+
+可选的内存比例通过 `--sglang-mamba-full-memory-ratio` 设置 $r=B_R/B_A$。理想化地给两个池分配预算 $B$，联立 $B_A+B_R=B$ 与 $B_R=rB_A$，得到：
+
+$$B_A=\frac{B}{1+r},\qquad B_R=\frac{rB}{1+r}.$$
+
+这不是总 GPU 显存的百分比。调大它，会给递归状态 slot 更多空间、给 attention token 更少空间；应结合分配日志和实际负载选择。留空沿用推理栈默认值。外部引擎的参数写入 `serving-reference.sh`，slime 托管的引擎则使用 `--sglang-` 参数。
+
+向导里可运行的 Flash 起点是 **GLM-4.7-Flash**。上面的 GLM-5.3-Flash hybrid 结构不能直接套用该起点或 GLM-5.3 的 DSA 配方。
 
 ## Deterministic
 

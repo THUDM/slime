@@ -58,9 +58,45 @@ A common shift cancels, while token-dependent perturbations change probabilities
 
 A tensor with $P$ elements needs approximately $Pb/8$ bytes at $b$ bits, excluding scales, metadata, padding, and replicated copies. Halving the bit width halves the raw tensor storage, not necessarily total GPU memory. Optimizer state, activations, and KV cache remain separate budgets.
 
-The lab offers BF16 training + BF16 or FP8 rollout, experimental FP8 training, and beta INT4 rollout. BF16 training uses a converted `torch_dist` checkpoint. FP8 rollout uses a separate block-quantized HF checkpoint whose `quantization_config` controls online weight conversion. FP8 KV cache is independent of weight precision. FP8 training uses blockwise TE settings; it omits `fp8-param-gather` because of CPU Adam incompatibility.
+The lab offers BF16 training + BF16 or FP8 rollout, experimental FP8 training, and beta INT4 rollout. BF16 training uses a converted `torch_dist` checkpoint. FP8 rollout uses a separate block-quantized HF checkpoint whose `quantization_config` controls online weight conversion. Attention KV precision and hybrid recurrent-state precision are independent of weight precision and of each other. FP8 training uses blockwise TE settings; it omits `fp8-param-gather` because of CPU Adam incompatibility.
 
 Format reference: [FP8 Formats for Deep Learning](https://arxiv.org/abs/2209.05433). See [slime precision support and caveats](low-precision.md). The lab's INT4 options require model/kernel validation; no GLM INT4 performance claim is made.
+
+### Hybrid cache
+
+Hybrid models have two different kinds of serving cache. [Qwen3.8-27B's config](https://huggingface.co/Qwen/Qwen3.8-27B/blob/main/config.json) specifies 48 linear-attention layers and 16 full-attention layers, with FP32 recurrent state. [GLM-5.3-Flash's config](https://huggingface.co/zai-org/GLM-5.3-Flash/blob/main/config.json) combines 34 KDA linear-attention layers with 11 DSA layers. These are different attention architectures; the shared SGLang **Mamba cache** name describes their recurrent-state storage, not an identical model architecture. See the [Gated DeltaNet paper](https://arxiv.org/abs/2412.06464) for the recurrent update mechanism.
+
+| Cache | What it stores | Independent slime setting |
+|---|---|---|
+| Attention KV | Per-token cache for attention layers | `--sglang-kv-cache-dtype`; FP8 requires the selected model, backend and GPU to support it |
+| Mamba / linear-attention state | Recurrent state and cached snapshots | `--sglang-mamba-ssm-dtype`, separately from KV dtype |
+| Convolution state | Short local history in linear-attention layers | Separate convolution dtype; the SSM dtype flag does not change it |
+
+The builder exposes model default, FP32 and BF16 for recurrent state. Default leaves the SSM flag unset; Qwen3.8-27B's published config selects FP32. Selecting FP8 attention KV never turns recurrent state into FP8. The [SGLang argument reference](https://docs.sglang.io/docs/advanced_features/server_arguments#mamba-cache) documents the independent controls; [state dtype and size implementation](https://github.com/sgl-project/sglang/blob/v0.5.15.post1/python/sglang/srt/configs/mamba_utils.py) separates recurrent and convolution tensors.
+
+To account for memory, let $N$ be stored token positions and $K$ be allocated recurrent-state slots, including snapshots and scheduler buffers. With $c_A$ bytes per attention token and $c_R$ bytes per recurrent slot,
+
+$$B_{\rm cache}\approx N c_A + K c_R.$$
+
+For conventional GQA attention layers $\mathcal A$, count K and V elements at each token. For linear layers $\mathcal R$, count recurrent and convolution elements per slot:
+
+$$
+c_A=\sum_{\ell\in\mathcal A}2H^{KV}_\ell d_\ell\frac{b_{KV}}8,
+\qquad
+c_R=\sum_{\ell\in\mathcal R}\left(P^{SSM}_\ell\frac{b_{SSM}}8+P^{conv}_\ell\frac{b_{conv}}8\right).
+$$
+
+Use tensor dimensions after sharding for a per-GPU estimate. DSA/MLA uses different cache tensors: measure their bytes instead of substituting GQA dimensions. A recurrent slot has a fixed shape, but the **number of slots** can grow with concurrency, prefix snapshots and scheduler buffering.
+
+Changing only BF16 attention KV to FP8 yields $B'\approx Nc_A/2+Kc_R$, so total cache memory does not generally halve. Similarly, BF16 SSM affects only the recurrent term, leaving convolution state untouched.
+
+The optional memory control sets $r=B_R/B_A$ through `--sglang-mamba-full-memory-ratio`. For an ideal two-pool budget $B$, solve $B_A+B_R=B$ and $B_R=rB_A$:
+
+$$B_A=\frac{B}{1+r},\qquad B_R=\frac{rB}{1+r}.$$
+
+This ratio is not a fraction of total GPU memory. Increasing it reserves more space for recurrent slots and less for attention tokens; use allocation logs and workload measurements to choose it. Leaving the field blank keeps the serving default. External deployments receive these options in `serving-reference.sh`; managed engines receive the `--sglang-` flags.
+
+The runnable Flash preset is **GLM-4.7-Flash**. GLM-5.3-Flash's hybrid design above does not make it interchangeable with that preset or with the GLM-5.3 DSA recipe.
 
 ## Deterministic
 
