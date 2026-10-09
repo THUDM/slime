@@ -120,7 +120,7 @@ Both cases omit `--use-fault-tolerance` and set the background interval and init
 
 ## Adding Tests
 
-### CPU Tests
+### Adding CPU Tests
 
 Follow nearby examples and place tests under `tests/test_*.py`, `tests/utils/test_*.py`, or `tests/plugin_contracts/test_*.py`. Declare a top-level `NUM_GPUS = 0` if the file will be run by `run-ci-changed`.
 
@@ -133,7 +133,7 @@ if __name__ == "__main__":
 
 To run a test automatically, register it in the `cpu-unittest` or `agent-adapter-test` list in `.github/workflows/pr-test.yml.j2`, then regenerate the workflow.
 
-### GPU End-to-End Tests
+### Adding GPU End-to-End Tests
 
 1. Create `tests/test_<your_test_name>.py` using the existing `prepare()` / `execute()` structure.
 2. Declare the required GPU count with a top-level `NUM_GPUS = <N>`.

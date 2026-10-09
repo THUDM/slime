@@ -29,7 +29,7 @@ The slime training stack itself follows the standard setup. On top of that you n
 
 Standard slime JSONL with three keys:
 
-```jsonc
+```javascript
 {
   "prompt": "<falls back here if metadata.problem_statement is missing>",
   "label": "<instance_id or grader label>",

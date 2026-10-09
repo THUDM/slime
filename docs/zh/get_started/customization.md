@@ -469,7 +469,7 @@ def custom_hook(args, rollout_id, step_id, model, optimizer, opt_param_scheduler
 
 ---
 
-### 18. MoE 路由重放
+### MoE 路由重放
 
 通过记录和重放专家路由决策来稳定 MoE RL 训练。
 
@@ -480,7 +480,7 @@ def custom_hook(args, rollout_id, step_id, model, optimizer, opt_param_scheduler
 
 ---
 
-### 19. Disk 权重同步 Post-Write Hook（`--custom-update-weight-post-write-path`）
+### Disk 权重同步 Post-Write Hook（`--custom-update-weight-post-write-path`）
 
 **签名**：
 ```python

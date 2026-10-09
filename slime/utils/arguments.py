@@ -107,6 +107,16 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
 
         def add_train_arguments(parser):
             # --train-backend is parsed early in _pre_parse_mode() and merged later.
+            reset_arg(parser, "--post-self-attn-layernorm", action="store_true", default=False)
+            reset_arg(parser, "--post-mlp-layernorm", action="store_true", default=False)
+            if "--use-gated-attention" not in parser._option_string_actions:
+                parser.add_argument(
+                    "--use-gated-attention",
+                    dest="attention_output_gate",
+                    action="store_true",
+                    default=argparse.SUPPRESS,
+                    help="Alias for --attention-output-gate.",
+                )
             parser.add_argument(
                 "--qwen-gdn-backend",
                 type=str,
@@ -1675,6 +1685,11 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             help="Path to the YAML config for custom function arguments.",
         )
         reset_arg(parser, "--padded-vocab-size", type=int, default=None)
+        # New Megatron versions default to NVRX, which requires an optional
+        # dependency. Keep native async checkpointing as the default while
+        # allowing an explicit --async-strategy choice on versions that support it.
+        if parser.get_default("async_strategy") is not None:
+            parser.set_defaults(async_strategy="mcore")
 
         return parser
 

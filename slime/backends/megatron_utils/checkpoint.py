@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 import torch
@@ -94,9 +95,33 @@ logger = logging.getLogger(__name__)
 __all__ = ["save_checkpoint"]
 
 
+@contextmanager
+def _stage_async_save_on_cpu():
+    from megatron.core.dist_checkpointing.strategies.filesystem_async import FileSystemWriterAsync
+
+    get_save_function_and_args = FileSystemWriterAsync.get_save_function_and_args
+
+    def get_cpu_save_function_and_args(writer):
+        save_fn, preload_fn, save_args = get_save_function_and_args(writer)
+        if preload_fn is not None:
+            # TMS allocations cannot be sent through CUDA IPC. Stage them in the
+            # trainer before the persistent worker receives the request; disk
+            # writes and distributed finalization still run asynchronously.
+            save_args[1] = preload_fn()
+        return save_fn, None, save_args
+
+    FileSystemWriterAsync.get_save_function_and_args = get_cpu_save_function_and_args
+    try:
+        yield
+    finally:
+        FileSystemWriterAsync.get_save_function_and_args = get_save_function_and_args
+
+
 def save_checkpoint(iteration, model, optimizer, opt_param_scheduler, **kwargs):
-    _save_checkpoint_megatron(iteration, model, optimizer, opt_param_scheduler, **kwargs)
     args = get_args()
+    stage_on_cpu = args.async_save and args.offload_train and getattr(args, "async_strategy", "mcore") == "mcore"
+    with _stage_async_save_on_cpu() if stage_on_cpu else nullcontext():
+        _save_checkpoint_megatron(iteration, model, optimizer, opt_param_scheduler, **kwargs)
     if getattr(args, "use_stateless_adam", False) and opt_param_scheduler is not None and dist.get_rank() == 0:
         # Megatron omits the scheduler together with --no-save-optim. Stateless
         # Adam needs no moments, but LR/WD progress must share the model's commit

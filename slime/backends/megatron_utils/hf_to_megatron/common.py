@@ -60,7 +60,7 @@ class SafetensorReader:
 def strip_mcore_wrappers(name: str) -> str:
     while name.startswith("module."):
         name = name.removeprefix("module.")
-    return name.removeprefix("language_model.")
+    return name.removeprefix("language_model.").replace(".mtp_model_layer.", ".transformer_layer.")
 
 
 def text_config(config):

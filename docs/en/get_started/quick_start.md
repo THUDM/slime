@@ -1,27 +1,23 @@
 # Quick Start
 
-
 This document will guide you through setting up the environment and getting started with slime within one hour, covering environment configuration, data preparation, training startup, and key code analysis and modifications.
 
 ## Basic Environment Setup
 
-Since slime may contain temporary patches for sglang/megatron, to avoid potential environment configuration issues, we strongly recommend **users to use our latest Docker image**, which comes pre-configured with all dependencies.
+Use the provided Docker images to get a compatible SGLang, Megatron, and patch stack.
 
-### Hardware Support
+### Hardware and Image Selection
 
-**slime** supports multiple NVIDIA GPU hardware platforms:
+| Hardware | Image | CUDA |
+| --- | --- | --- |
+| H100/H200 | `slimerl/slime:latest` or `slimerl/slime:latest-cu129` | 12.9 |
+| B200/B300 (Blackwell, x86) | `slimerl/slime:latest-cu130` | 13.0 |
 
-- **B200 Series**: Fully supported with identical setup steps as H-series GPUs
-- **H-Series (H100/H200)**: Official support with comprehensive CI testing and stable performance
+The default `latest` tag follows the CUDA 12 image. For Blackwell, replace the image in the commands below with `slimerl/slime:latest-cu130`. The two variants use different kernel and Transformer Engine builds. See the [Docker guide](https://github.com/THUDM/slime/blob/main/docker/README.md) for source pins and build options.
 
-**Important Notes**:
-- Latest Docker images are compatible with both B-series and H-series GPUs without additional configuration
-- Megatron backend on H-series GPUs has CI protection, thoroughly validated, recommended for production environments
-- B-series basic functionality is stable and suitable for development/testing, but currently lacks CI protection
-- Both hardware platforms use identical installation and startup procedures
+GPU CI primarily covers H100/H200. Check each recipe's hardware and parallelism requirements before running it on other platforms.
 
-- For scenarios where Docker is not convenient, please refer to [build_conda.sh](https://github.com/THUDM/slime/blob/main/build_conda.sh);
-- For AMD support, please refer to [AMD Usage Tutorial](../platform_support/amd_tutorial.md).
+For installation without Docker, use [build_conda.sh](https://github.com/THUDM/slime/blob/main/build_conda.sh), which builds a CUDA 12.9 environment. For AMD, see the [AMD tutorial](../platform_support/amd_tutorial.md).
 
 ### Pull and Start Docker Container
 
@@ -71,7 +67,7 @@ hf download --repo-type dataset zhuzilin/aime-2024 \
 
 When using Megatron as the training backend, you need to first convert Hugging Face format model weights to Megatron `torch_dist` format.
 
-First, load the configuration file of the target model. The `slime/scripts/models` directory contains configuration files for supported models. You need to `source` the corresponding model script to load the configuration parameters into the current environment. Here we use GLM4-9B model as an example, and it's similar for Qwen3-4B, Qwen3.5, Qwen3.6, GLM-4.7-Flash, Qwen3-30B-A3B, etc.
+First, load the configuration file of the target model. The `scripts/models` directory contains configuration files for supported models. You need to `source` the corresponding model script to load the configuration parameters into the current environment. Here we use GLM4-9B model as an example, and it's similar for Qwen3-4B, Qwen3.5, Qwen3.6, GLM-4.7-Flash, Qwen3-30B-A3B, etc.
 
 ```bash
 cd /root/slime

@@ -73,11 +73,11 @@ def main() -> int:
             f"conda SGLang={conda_sglang_version or '<missing>'}"
         )
 
-    stable_match = re.search(r"current stable version is:\s*\n- sglang (v\S+)", readme_text)
-    readme_sglang_version = stable_match.group(1) if stable_match else ""
+    build_match = re.search(r"Current build configuration:\s*\n- sglang (v\S+)", readme_text)
+    readme_sglang_version = build_match.group(1) if build_match else ""
     if readme_sglang_version != conda_sglang_version:
         errors.append(
-            f"README stable SGLang={readme_sglang_version or '<missing>'}, "
+            f"README SGLang={readme_sglang_version or '<missing>'}, "
             f"conda SGLang={conda_sglang_version or '<missing>'}"
         )
 
@@ -85,13 +85,38 @@ def main() -> int:
         if re.sub(r"-cu\d+$", "", tag) != conda_sglang_version:
             errors.append(f"docker/justfile uses inconsistent SGLang tag {tag}")
 
-    for pin in ("MEGATRON_COMMIT", "TMS_COMMIT", "FLASH_QLA_COMMIT"):
+    for pin in ("MEGATRON_COMMIT", "TMS_COMMIT", "FLASH_QLA_COMMIT", "TRANSFORMER_ENGINE_VERSION", "NCCL_VERSION"):
         if docker_args.get(pin) != conda_exports.get(pin):
             errors.append(
                 f"{pin}: Docker={docker_args.get(pin, '<missing>')}, conda={conda_exports.get(pin, '<missing>')}"
             )
 
+    for package in (
+        "flash-linear-attention",
+        "tilelang",
+        "numpy",
+        "scipy",
+        "kernels",
+    ):
+        pattern = rf"{re.escape(package)}([<>=]+[0-9.]+)"
+        docker_pins = set(re.findall(pattern, docker_text))
+        conda_pins = set(re.findall(pattern, conda_text))
+        if not docker_pins or docker_pins != conda_pins:
+            errors.append(f"{package} pins differ: Docker={sorted(docker_pins)}, conda={sorted(conda_pins)}")
+
+    router_pattern = r"https://github.com/zhuzilin/sgl-router/releases/download/\S+\.whl"
+    if re.findall(router_pattern, docker_text) != re.findall(router_pattern, conda_text):
+        errors.append("Docker and conda router wheels differ")
+    for label, source in (("Docker", docker_text), ("conda", conda_text)):
+        router_install = next((line for line in source.splitlines() if re.search(router_pattern, line)), "")
+        if "--no-deps" not in router_install:
+            errors.append(f"{label} router replacement must use --no-deps")
+        if source.rfind("pip install -r") > source.find(router_install):
+            errors.append(f"{label} runtime dependencies are installed after the router fork")
+
     patch_version = conda_exports.get("PATCH_VERSION", "")
+    if docker_args.get("PATCH_VERSION") != patch_version:
+        errors.append("Docker and conda PATCH_VERSION differs")
     if patch_version != conda_sglang_version:
         errors.append(f"PATCH_VERSION={patch_version or '<missing>'}, expected {conda_sglang_version}")
 
@@ -119,7 +144,8 @@ def main() -> int:
     if set(docker_sglang_order) != expected_sglang:
         errors.append("Docker/conda SGLang patch loop does not cover the latest patch set")
 
-    docker_megatron_order = re.findall(r"git apply (megatron[^ ]*\.patch)", docker_text)
+    docker_megatron_loops = _loop_items(docker_text, "patch_name")
+    docker_megatron_order = docker_megatron_loops[0] if docker_megatron_loops else []
     conda_megatron_order = conda_loops[1] if len(conda_loops) > 1 else []
     expected_megatron = {name for name in latest if name.startswith("megatron")}
     if docker_megatron_order != conda_megatron_order:

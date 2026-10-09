@@ -8,8 +8,8 @@ This page is a roadmap: use it to decide which docs and examples to read when pl
 
 | Goal | Recommended entry point |
 | :--- | :--- |
-| Run a custom agent loop, tool calls, RAG, browser/terminal/sandbox interaction for each sample | [`--custom-generate-function-path`](customization.md#2-custom-generate-function---custom-generate-function-path), [writing a custom generation function](quick_start.md#writing-custom-generation-function) |
-| Implement verifier rewards, test-based rewards, environment success checks, or an external reward service | [`--custom-rm-path`](customization.md#3-reward-model---custom-rm-path), [writing a custom reward function](quick_start.md#writing-custom-reward-function) |
+| Run a custom agent loop, tool calls, RAG, browser/terminal/sandbox interaction for each sample | [`--custom-generate-function-path`](customization.md#--custom-generate-function-path), [writing a custom generation function](quick_start.md#writing-custom-generation-function) |
+| Implement verifier rewards, test-based rewards, environment success checks, or an external reward service | [`--custom-rm-path`](customization.md#--custom-rm-path), [writing a custom reward function](quick_start.md#writing-custom-reward-function) |
 | Return multiple training samples from one prompt, such as subagent, multi-agent, or context-compaction segments | [fan-out return from custom generate](customization.md#returning-multiple-training-samples-for-one-prompt), [`examples/multi_agent`](../_examples_synced/multi_agent/README.md) |
 | Avoid blocking training on long-tail agent rollouts | [`examples/fully_async`](../_examples_synced/fully_async/README.md) |
 | Study a full end-to-end agent example with sandboxing, real code edits, and test-based grading | [`examples/coding_agent_rl`](../_examples_synced/coding_agent_rl/README.md) |

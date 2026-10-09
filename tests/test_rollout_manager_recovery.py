@@ -237,13 +237,20 @@ def test_manager_failure_replays_accepted_batch_with_new_dp(tmp_path, cluster, p
 
 @ray.remote(num_cpus=0)
 class _ResetPeer:
-    def __init__(self, wedged):
+    def __init__(self, wedged, blocked_peer=None):
         self.wedged = wedged
+        self.blocked_peer = blocked_peer
 
     def pid(self):
         return os.getpid()
 
+    def get_url(self):
+        return "http://engine"
+
     def reset_weights_update_groups(self):
+        if self.blocked_peer is not None:
+            with pytest.raises(ray.exceptions.RayActorError):
+                ray.get(self.blocked_peer.pid.remote(), timeout=1)
         if self.wedged:
             import time
 
@@ -253,13 +260,27 @@ class _ResetPeer:
         pass
 
 
-def test_serving_reset_retires_blocked_actor_and_keeps_healthy_peer(cluster, monkeypatch):
+@pytest.mark.parametrize("block_actor", [False, True])
+def test_serving_reset_retires_blocked_actor_and_keeps_healthy_peer(cluster, monkeypatch, tmp_path, block_actor):
     import time
     from types import SimpleNamespace
     from slime.backends.sglang_utils import engine_group
 
-    blocked, healthy = _ResetPeer.remote(True), _ResetPeer.remote(False)
+    blocked = _ResetPeer.remote(True)
+    healthy = _ResetPeer.remote(False, blocked if block_actor else None)
     pids = ray.get([blocked.pid.remote(), healthy.pid.remote()], timeout=30)
+    if block_actor:
+        marker = tmp_path / "blocked"
+
+        def block(actor):
+            marker.touch()
+            time.sleep(300)
+
+        blocked.__ray_call__.remote(block)
+        deadline = time.monotonic() + 10
+        while not marker.exists():
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
     removed = []
     monkeypatch.setattr(engine_group, "unregister_worker", lambda router, url, **kw: removed.append(url))
     group = engine_group.ServerGroup(
@@ -330,6 +351,9 @@ class _PDResetPeer:
 
     def ready(self):
         return True
+
+    def get_url(self):
+        return self.name
 
 
 def test_prefill_and_decode_enter_group_reset_together(cluster):

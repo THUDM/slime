@@ -71,13 +71,13 @@ class RolloutManager:
             check_rollout_storage(args)
 
         rollout_init_handles: list[Any] = []
-        if deployment is not None:
+        if self.args.debug_train_only:
+            self.servers: dict[str, Any] = {}
+        elif deployment is not None:
             # This is a handle snapshot; the serving owner remains responsible
             # for topology changes and survives replacement of this manager.
             self.servers = deployment.servers
             init_http_client(args)
-        elif self.args.debug_train_only:
-            self.servers: dict[str, Any] = {}
         else:
             from slime.backends.sglang_utils.deployment import start_rollout_servers
 

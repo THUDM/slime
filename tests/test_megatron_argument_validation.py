@@ -1,4 +1,5 @@
 import argparse
+import ast
 import importlib.util
 import runpy
 import shlex
@@ -9,6 +10,60 @@ from pathlib import Path
 import pytest
 
 NUM_GPUS = 0
+
+
+@pytest.mark.parametrize("legacy_parser", [False, True])
+def test_checkpoint_conversion_accepts_legacy_model_flags(legacy_parser):
+    path = Path(__file__).resolve().parents[1] / "tools/convert_hf_to_torch_dist.py"
+    function = next(
+        node
+        for node in ast.parse(path.read_text()).body
+        if isinstance(node, ast.FunctionDef) and node.name == "add_convertion_args"
+    )
+    namespace = {}
+    exec(
+        compile(ast.fix_missing_locations(ast.Module(body=[function], type_ignores=[])), str(path), "exec"), namespace
+    )
+    parser = argparse.ArgumentParser()
+    flags = ["--use-gated-attention", "--post-self-attn-layernorm", "--post-mlp-layernorm"]
+    if legacy_parser:
+        for flag in flags:
+            parser.add_argument(flag, action="store_true")
+    parser = namespace["add_convertion_args"](parser)
+    args = parser.parse_args(["--hf-checkpoint", "model", *flags])
+    assert args.use_gated_attention and args.post_self_attn_layernorm and args.post_mlp_layernorm
+    assert args.hf_checkpoint == "model"
+
+
+def test_parallel_check_replays_the_same_rollout_for_all_gradient_comparisons(monkeypatch):
+    from slime.utils import external_utils
+
+    commands = []
+    launcher = types.ModuleType("slime.utils.external_utils.command_utils")
+    launcher.execute_train = lambda **kwargs: commands.append(kwargs["train_args"])
+    launcher.get_default_wandb_args = lambda _: ""
+    monkeypatch.setitem(sys.modules, launcher.__name__, launcher)
+    monkeypatch.setattr(external_utils, "command_utils", launcher, raising=False)
+    test = runpy.run_path(str(Path(__file__).with_name("test_qwen3_0.6B_parallel_check.py")))
+    test["execute"]()
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--save-debug-rollout-data")
+    parser.add_argument("--load-debug-rollout-data")
+    parser.add_argument("--ci-save-grad-norm")
+    parser.add_argument("--ci-load-grad-norm")
+    parsed = [parser.parse_known_args(shlex.split(command))[0] for command in commands]
+    assert len(parsed) == 2 * (1 + len(test["PARALLEL_CONFIGS"]))
+    template = parsed[0].save_debug_rollout_data
+    assert template.format(rollout_id=0) != template.format(rollout_id=1)
+    for index, args in enumerate(parsed):
+        if index == 0:
+            assert args.load_debug_rollout_data is None
+        else:
+            assert args.load_debug_rollout_data == template
+        if args.ci_load_grad_norm:
+            reference_index = 0 if index <= len(test["PARALLEL_CONFIGS"]) else 1
+            assert args.ci_load_grad_norm == f"grad_norms-{reference_index}.pt"
 
 
 @pytest.mark.parametrize("mode", ["save", "async_save", "load"])
@@ -103,6 +158,84 @@ def load_slime_arguments_module(monkeypatch):
     assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.mark.parametrize("strategy", [None, "mcore", "nvrx"])
+def test_native_async_checkpoint_default_preserves_explicit_strategy(monkeypatch, strategy):
+    module = load_slime_arguments_module(monkeypatch)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--async-strategy", choices=["mcore", "nvrx"], default="nvrx")
+    module.get_slime_extra_args_provider()(parser)
+    command = ["--rollout-batch-size", "1"]
+    if strategy is not None:
+        command += ["--async-strategy", strategy]
+    assert parser.parse_args(command).async_strategy == (strategy or "mcore")
+
+
+def test_legacy_megatron_parser_does_not_gain_async_strategy(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    parser = argparse.ArgumentParser()
+    module.get_slime_extra_args_provider()(parser)
+    assert not hasattr(parser.parse_args(["--rollout-batch-size", "1"]), "async_strategy")
+
+
+@pytest.mark.parametrize(
+    "legacy_rope,position_type,expected",
+    [(True, "learned_absolute", "rope"), (False, "learned_absolute", "learned_absolute"), (False, "none", "none")],
+)
+def test_legacy_rope_is_resolved_before_mtp_validation(monkeypatch, legacy_rope, position_type, expected):
+    module = load_arguments_module(monkeypatch)
+    args = argparse.Namespace(
+        use_rotary_position_embeddings=legacy_rope,
+        position_embedding_type=position_type,
+        mtp_num_layers=1,
+        fp16=False,
+        seq_length=None,
+        max_position_embeddings=None,
+        vocab_size=None,
+        padded_vocab_size=None,
+        tokenizer_model=None,
+        tokenizer_type=None,
+        hf_checkpoint="model",
+    )
+    module.set_default_megatron_args(args)
+    assert args.position_embedding_type == expected
+
+
+@pytest.mark.parametrize("explicit_path", [False, True])
+def test_pd_mooncake_debug_dump_keeps_each_rollout(monkeypatch, tmp_path, explicit_path):
+    from slime.utils import external_utils
+
+    commands = []
+    launcher = types.ModuleType("slime.utils.external_utils.command_utils")
+    launcher.execute_train = lambda **kwargs: commands.append(kwargs["train_args"])
+    launcher.get_default_wandb_args = lambda _: ""
+    monkeypatch.setitem(sys.modules, launcher.__name__, launcher)
+    monkeypatch.setattr(external_utils, "command_utils", launcher, raising=False)
+    if explicit_path:
+        monkeypatch.setenv("DEBUG_ROLLOUT_DATA", str(tmp_path / "debug data" / "rollout_{rollout_id}.pt"))
+    else:
+        monkeypatch.delenv("DEBUG_ROLLOUT_DATA", raising=False)
+    test = runpy.run_path(str(Path(__file__).with_name("test_qwen3.6_35B_A3B_pd_mooncake.py")))
+    test["execute"]()
+    [command] = commands
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--save-debug-rollout-data")
+    args, _ = parser.parse_known_args(shlex.split(command))
+
+    module = load_slime_arguments_module(monkeypatch)
+    module.slime_validate_args(
+        make_slime_validate_args(
+            rollout_data_transport="straw",
+            rollout_data_dir=str(tmp_path / "rollout_data"),
+            ckpt_format="torch_dist",
+            save_debug_rollout_data=args.save_debug_rollout_data,
+        )
+    )
+    paths = [args.save_debug_rollout_data.format(rollout_id=rollout_id) for rollout_id in range(2)]
+    assert paths[0] != paths[1]
+    if explicit_path:
+        assert paths[0] == str(tmp_path / "debug data" / "rollout_0.pt")
 
 
 def make_qwen3_6_args(**overrides):

@@ -158,11 +158,16 @@ def test_custom_source_constructor_keeps_args_only_contract(args, monkeypatch, q
 
     plan = RestorePlan()
     args.debug_train_only = True
+    # Train-only parsing omits SGLang options even when GPU counts remain set
+    # and the serving owner supplies an empty deployment snapshot.
+    args.rollout_num_gpus = 8
+    args.rollout_num_gpus_per_engine = 1
     args.data_source_path = "user.CustomSource"
     args.rollout_function_path = args.eval_function_path = "user.rollout"
     args.custom_reward_post_process_path = args.custom_convert_samples_to_train_data_path = None
     original = vars(args).copy()
     monkeypatch.setattr(rollout, "check_rollout_storage", lambda _: None)
+    monkeypatch.setattr(rollout, "init_http_client", lambda _: pytest.fail("Train-only replay initialized HTTP"))
     monkeypatch.setattr(queue_data_source, "create_queue_controller", create_controller)
     monkeypatch.setattr(rollout, "load_function", lambda path: CustomSource if path == args.data_source_path else None)
     monkeypatch.setattr(rollout, "init_tracking", lambda *a, **kw: None)
@@ -185,6 +190,7 @@ def test_custom_source_constructor_keeps_args_only_contract(args, monkeypatch, q
     manager = rollout.RolloutManager.__ray_metadata__.modified_class(
         args, None, restore_plan=plan, serving=serving, deployment=deployment
     )
+    assert manager.servers == {}
     assert manager.controller is manager.batch_builder.controller is handle
     assert vars(args) == original
     manager.dispose()
