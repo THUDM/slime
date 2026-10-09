@@ -1,752 +1,121 @@
 
+
 <!DOCTYPE html>
-
-
-<html lang="zh" data-content_root="./" >
-
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
-
-    <title>slime 文档 &#8212; slime</title>
-  
-  
-  
-  <script data-cfasync="false">
-    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
-    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
-  </script>
-  <!--
-    this give us a css class that will be invisible only if js is disabled
-  -->
-  <noscript>
-    <style>
-      .pst-js-only { display: none !important; }
-
-    </style>
-  </noscript>
-  
-  <!-- Loaded before other Sphinx assets -->
-  <link href="_static/styles/theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
-<link href="_static/styles/pydata-sphinx-theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
-
-    <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=03e43079" />
-    <link rel="stylesheet" type="text/css" href="_static/styles/sphinx-book-theme.css?v=4418a689" />
-    <link rel="stylesheet" type="text/css" href="_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="_static/css/custom_log.css?v=ad20845f" />
-  
-  <!-- So that users can add custom icons -->
-  <script defer src="_static/scripts/fontawesome.js?digest=90905a2f556bf617f1a9"></script>
-  <!-- Pre-loaded scripts that we'll load fully later -->
-  <link rel="preload" as="script" href="_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
-<link rel="preload" as="script" href="_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
-
-    <script src="_static/documentation_options.js?v=ceb54874"></script>
-    <script src="_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
-    <script src="_static/clipboard.min.js?v=a7894cd8"></script>
-    <script src="_static/copybutton.js?v=ccdb6887"></script>
-    <script src="_static/scripts/sphinx-book-theme.js?v=fab101a9"></script>
-    <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-    <script>DOCUMENTATION_OPTIONS.pagename = 'index';</script>
-    <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
-    <script data-layout="root" src="_static/js/lang-toggle.js?v=082004b6"></script>
-    <link rel="icon" href="_static/logo.ico"/>
-    <link rel="index" title="索引" href="genindex.html" />
-    <link rel="search" title="搜索" href="search.html" />
-    <link rel="next" title="快速使用" href="get_started/quick_start.html" />
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <meta name="docsearch:language" content="zh"/>
-  <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="2026 年 10 月 09 日"/>
-  
-    
-    <script src="_static/searchtools.js"></script>
-    <script src="_static/language_data.js"></script>
-    <script src="searchindex.js"></script>
-  
-  </head>
-  <body data-default-mode="">
-  
-  
-  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">跳转至主要内容</a></div>
-
-  
-  <div id="pst-scroll-pixel-helper"></div>
-  
-  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
-    <i class="fa-solid fa-arrow-up"></i>回到顶部</button>
-  
-  
-  
-  
-  <dialog id="pst-search-dialog">
-    
-<form class="bd-search d-flex align-items-center"
-      action="search.html"
-      method="get">
-  <i class="fa-solid fa-magnifying-glass"></i>
-  <input type="search"
-         class="form-control"
-         name="q"
-         placeholder="Search..."
-         aria-label="Search..."
-         autocomplete="off"
-         autocorrect="off"
-         autocapitalize="off"
-         spellcheck="false"/>
-  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
-</form>
-  </dialog>
-
-  <div class="pst-async-banner-revealer d-none">
-  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="版本警告"></aside>
-</div>
-
-  
-    <header id="pst-header" class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
-<div class="bd-header__inner bd-page-width">
-  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="网页导航">
-    <span class="fa-solid fa-bars"></span>
-  </button>
-  
-  
-  <div class="col-lg-9 navbar-header-items">
-    
-    
-    <div class="navbar-header-items__end">
-      
-        <div class="navbar-item navbar-persistent--container">
-          
-
-<button class="btn search-button-field search-button__button pst-js-only" title="搜索" aria-label="搜索" data-bs-placement="bottom" data-bs-toggle="tooltip">
- <i class="fa-solid fa-magnifying-glass"></i>
- <span class="search-button__default-text">搜索</span>
- <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
-</button>
-        </div>
-      
-      
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="像搭积木一样配置 GLM 强化学习实验：了解取舍、阅读推导、导出 slime 启动脚本。">
+  <title>slime · 搭建你的下一个实验</title>
+  <link rel="icon" href="_static/image/logo.ico">
+  <link rel="stylesheet" href="_static/css/experiment.css">
+  <script defer src="_static/js/experiment-engine.js"></script>
+  <script defer src="_static/js/experiment-diagrams.js"></script>
+  <script defer src="_static/js/experiment-reader.js"></script>
+  <script defer src="_static/js/experiment-ui.js"></script>
+  <script defer src="_static/js/lang-toggle.js" data-layout="root"></script>
+</head>
+<body>
+<a class="skip-link" href="#lab">跳到实验配置</a>
+<header class="site-header">
+  <a class="brand" href="#"><img src="_static/image/logo.jpg" alt="" width="42" height="42">slime<span> / 实验室</span></a>
+  <nav aria-label="主导航">
+    <a href="#lab">搭建实验</a>
+    <a href="library.html">文档</a>
+    <a href="https://github.com/THUDM/slime">GitHub ↗</a>
+    <span class="article-header-buttons"></span>
+  </nav>
+</header>
+<main>
+  <section class="hero">
+    <div class="hero-copy">
+      <p class="eyebrow"><span class="live-dot"></span> A LITTLE SLIME. A LOT OF POSSIBILITY.</p>
+      <h1>为规模化<br><span>RL 而生。</span></h1>
+      <p class="hero-description">slime 是为 RL scaling 设计的 LLM 后训练框架，提供两大核心能力：</p>
+      <ol class="hero-capabilities"><li><a href="#capability-training">高性能训练 ↘</a></li><li><a href="#capability-generation">灵活的数据生成 ↘</a></li></ol>
+      <a class="button primary" href="#lab">搭建第一个实验 <span>↗</span></a>
+      <span class="hero-note">随时切换，随时回退。</span>
     </div>
-    
-  </div>
-  
-  
-    <div class="navbar-persistent--mobile">
-
-<button class="btn search-button-field search-button__button pst-js-only" title="搜索" aria-label="搜索" data-bs-placement="bottom" data-bs-toggle="tooltip">
- <i class="fa-solid fa-magnifying-glass"></i>
- <span class="search-button__default-text">搜索</span>
- <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
-</button>
+    <div class="hero-art" aria-hidden="true">
+      <span class="orbit-label label-top">rollout → reward → train</span>
+      <div class="mascot-frame"><img src="_static/image/logo.jpg" alt="" width="300" height="300"></div>
+      <span class="orbit-label label-bottom">a little slime. a lot of possibility.</span>
+      <span class="spark spark-one">✳</span><span class="spark spark-two">✦</span>
     </div>
-  
-
-  
-    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="当前页面">
-      <span class="fa-solid fa-outdent"></span>
-    </button>
-  
-</div>
-
-    </header>
-  
-
-  <div class="bd-container">
-    <div class="bd-container__inner bd-page-width">
-      
-      
-      
-        
-      
-      <dialog id="pst-primary-sidebar-modal"></dialog>
-      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
-        
-
-  
-  <div class="sidebar-header-items sidebar-primary__section">
-    
-    
-    
-    
-  </div>
-  
-    <div class="sidebar-primary-items__start sidebar-primary__section">
-        <div class="sidebar-primary-item">
-
-  
-    
-  
-
-<a class="navbar-brand logo" href="#">
-  
-  
-  
-  
-  
-    
-    
-      
-    
-    
-    <img src="_static/logo.jpg" class="logo__image only-light" alt="slime - Home"/>
-    <img src="_static/logo.jpg" class="logo__image only-dark pst-js-only" alt="slime - Home"/>
-  
-  
-</a></div>
-        <div class="sidebar-primary-item">
-
-<button class="btn search-button-field search-button__button pst-js-only" title="搜索" aria-label="搜索" data-bs-placement="bottom" data-bs-toggle="tooltip">
- <i class="fa-solid fa-magnifying-glass"></i>
- <span class="search-button__default-text">搜索</span>
- <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
-</button></div>
-        <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
-    <div class="bd-toc-item navbar-nav active">
-        <p aria-level="2" class="caption" role="heading"><span class="caption-text">开始使用</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="get_started/quick_start.html">快速使用</a></li>
-<li class="toctree-l1"><a class="reference internal" href="get_started/usage.html">使用文档</a></li>
-<li class="toctree-l1"><a class="reference internal" href="get_started/customization.html">自定义指南</a></li>
-<li class="toctree-l1"><a class="reference internal" href="get_started/agent.html">Agentic RL 训练路线图</a></li>
-<li class="toctree-l1"><a class="reference internal" href="get_started/qa.html">常见 Q&amp;A</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Dense</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="examples/qwen3-4B.html">8xH100 训练 Qwen3-4B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="examples/glm4-9B.html">8xH100 训练 GLM4-9B</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">MoE</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="examples/glm4.7-30B-A3B.html">8×H100 训练 GLM-4.7-Flash</a></li>
-<li class="toctree-l1"><a class="reference internal" href="examples/qwen3-30B-A3B.html">8xH100 训练 Qwen3-30B-A3B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="examples/qwen3-next-80B-A3B.html">Qwen3-Next-80B-A3B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="examples/glm5.2-744B-A40B.html">256xH100 训练 GLM-5.2 744B-A40B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="examples/glm4.7-355B-A32B.html">64xH100 训练 GLM-4.7</a></li>
-<li class="toctree-l1"><a class="reference internal" href="examples/deepseek-r1.html">128xH100 训练 DeepSeek R1</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">高级特性</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="advanced/on-policy-distillation.html">在策略蒸馏 (On-Policy Distillation)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/speculative-decoding.html">投机采样</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/low-precision.html">低精度训练与 Rollout</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/reproducibility.html">Reproducibility</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/fault-tolerance.html">容灾</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/straw.html">使用 straw 持久化 rollout</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/observability.html">观测</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/pd-disaggregation.html">PD 分离</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/external-rollout-engines.html">External Rollout Engines 配置路线图</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/delta-weight-sync.html">Delta 权重同步</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/sglang-config.html">SGLang Config：高级引擎部署</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/megatron-config.html">Megatron Config：按角色覆盖训练参数</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/arch-support-beyond-megatron.html">在 Megatron-LM 中快速支持新模型架构</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">其他用法</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="examples/qwen3-4b-base-openhermes.html">SFT Qwen3-4B-Base</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/search-r1/README.html">Search-R1 lite</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/fully_async/README.html">Fully-Async Rollout Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/coding_agent_rl/README.html">Coding-Agent RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/delta_weight_sync/README.html">Delta Weight Sync</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/eval_multi_task/README.html">Multi-Task Evaluation Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/geo3k_vlm/README.html">VLM Single-Turn RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/geo3k_vlm_multi_turn/README.html">VLM Multi-Turn (geo3k dataset)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/on_policy_distillation/README.html">On-Policy Distillation Example</a></li>
-
-
-
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/strands_sglang/README.html">slime x Strands-SGLang</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/tau-bench/README.html">Tau bench</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/train_infer_mismatch_helper/README.html">Rollout Correction Methods</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">开发指南</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="developer_guide/ci.html">CI（持续集成）</a></li>
-<li class="toctree-l1"><a class="reference internal" href="developer_guide/debug.html">Debug 指南</a></li>
-<li class="toctree-l1"><a class="reference internal" href="developer_guide/trace.html">Trace 可视化</a></li>
-<li class="toctree-l1"><a class="reference internal" href="developer_guide/profiling.html">性能分析 (Profiling)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="developer_guide/install_flashqla.html">安装 FlashQLA</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">硬件平台</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="platform_support/amd_tutorial.html">AMD ROCm</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">博客</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="blogs/release_v0.1.0.html">v0.1.0: 重新定义高性能 RL 训练框架</a></li>
-<li class="toctree-l1"><a class="reference internal" href="blogs/introducing_slime.html">slime：为 RL Scaling 设计的 SGLang-Native 后训练框架</a></li>
-</ul>
-
-    </div>
-</nav></div>
-    </div>
-  
-  
-  <div class="sidebar-primary-items__end sidebar-primary__section">
-      <div class="sidebar-primary-item">
-<div id="ethical-ad-placement"
-      class="flat"
-      data-ea-publisher="readthedocs"
-      data-ea-type="readthedocs-sidebar"
-      data-ea-manual="true">
-</div></div>
-  </div>
-
-
+  </section>
+  <section class="core-capabilities" aria-label="两大核心能力">
+    <article id="capability-training"><span class="capability-icon">01 / ↔</span><h2>高性能训练</h2><p>通过连接 Megatron 与 SGLang，支持各种模式的高效训练。</p><div class="capability-flow"><span>Megatron</span><b>⇄</b><span>SGLang</span></div></article>
+    <article id="capability-generation"><span class="capability-icon">02 / ⌁</span><h2>灵活的数据生成</h2><p>通过自定义数据生成接口以及 server-based engines，实现任意训练数据生成流程。</p><div class="capability-flow"><span>你的数据与环境</span><b>→</b><span>Data Buffer</span></div></article>
+    <p class="core-dataflow">训练、rollout、自定义数据生成、奖励、验证器与环境交互，都流经同一条 training / rollout / Data Buffer 路径。</p>
+  </section>
+  <section class="ecosystem" id="ecosystem" aria-labelledby="ecosystem-title">
+    <div class="ecosystem-intro"><p class="eyebrow">BUILT IN THE OPEN. USED AT SCALE.</p><h2 id="ecosystem-title">从 GLM-4.5，一直到 GLM-5.3 与 GLM-5.3-Flash。</h2><p>slime 持续支撑 Z.ai 历代 GLM 的 RL 后训练。了解模型的发布历程，再用同样的核心能力搭建你的实验。</p></div>
+    <div class="glm-lineage"><a class="zai-mark" href="https://z.ai">Z.ai <span>× slime</span></a><div><a href="https://z.ai/blog/glm-4.5">GLM-4.5</a><span>→</span><a href="https://z.ai/blog/glm-4.6">GLM-4.6</a><span>→</span><a href="https://z.ai/blog/glm-4.7">GLM-4.7</a><span>→</span><a href="https://z.ai/blog/glm-5">GLM-5</a><span>→</span><a href="https://z.ai/blog/glm-5.1">GLM-5.1</a><span>→</span><a href="https://z.ai/blog/glm-5.2">GLM-5.2</a><span>→</span><a href="https://z.ai/blog/glm-5.3">GLM-5.3</a><span>→</span><a href="https://z.ai/blog/glm-5.3-flash">GLM-5.3-Flash</a></div></div>
+    <a class="scroll-invitation" href="#lab">现在，亲手搭起一个 RL 实验 <span>↓</span></a>
+  </section>
+  <section id="lab" class="lab" aria-labelledby="lab-title">
+    <div class="lab-heading">
+      <div><p class="eyebrow">01 / THE EXPERIMENT BUILDER</p><h2 id="lab-title">来，搭一个你的实验。</h2></div>
+      <div class="history-actions">
+        <button type="button" id="undo" disabled title="撤销上一个选择">↶ 撤销</button>
+        <button type="button" id="redo" disabled title="重做选择">↷ 重做</button>
+        <button type="button" id="reset">重置</button>
       </div>
-      
-      <main id="main-content" class="bd-main" role="main">
-        
-        
-
-<div class="sbt-scroll-pixel-helper"></div>
-
-          <div class="bd-content">
-            <div class="bd-article-container">
-              
-              <div class="bd-header-article d-print-none">
-<div class="header-article-items header-article__inner">
-  
-    <div class="header-article-items__start">
-      
-        <div class="header-article-item"><button class="sidebar-toggle primary-toggle btn btn-sm" title="Toggle primary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
-  <span class="fa-solid fa-bars"></span>
-</button></div>
-      
     </div>
-  
-  
-    <div class="header-article-items__end">
-      
-        <div class="header-article-item">
-
-<div class="article-header-buttons">
-
-
-
-
-
-<div class="dropdown dropdown-source-buttons">
-  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Source repositories">
-    <i class="fab fa-github"></i>
-  </button>
-  <ul class="dropdown-menu">
-      
-      
-      
-      <li><a href="https://github.com/THUDM/slime" target="_blank"
-   class="btn btn-sm btn-source-repository-button dropdown-item"
-   title="源码库"
-   data-bs-placement="left" data-bs-toggle="tooltip"
->
-  
-
-<span class="btn__icon-container">
-  <i class="fab fa-github"></i>
-  </span>
-<span class="btn__text-container">Repository</span>
-</a>
-</li>
-      
-      
-      
-      
-      <li><a href="https://github.com/THUDM/slime/blob/main/docs/zh/index.rst?plain=1" target="_blank"
-   class="btn btn-sm btn-source-file-button dropdown-item"
-   title="Show source"
-   data-bs-placement="left" data-bs-toggle="tooltip"
->
-  
-
-<span class="btn__icon-container">
-  <i class="fas fa-code"></i>
-  </span>
-<span class="btn__text-container">Show source</span>
-</a>
-</li>
-      
-      
-      
-      
-      <li><a href="https://github.com/THUDM/slime/edit/main/docs/zh/index.rst" target="_blank"
-   class="btn btn-sm btn-source-edit-button dropdown-item"
-   title="Suggest edit"
-   data-bs-placement="left" data-bs-toggle="tooltip"
->
-  
-
-<span class="btn__icon-container">
-  <i class="fas fa-pencil-alt"></i>
-  </span>
-<span class="btn__text-container">Suggest edit</span>
-</a>
-</li>
-      
-      
-      
-      
-      <li><a href="https://github.com/THUDM/slime/issues/new?title=Issue%20on%20page%20%2Findex.html&body=Your%20issue%20content%20here." target="_blank"
-   class="btn btn-sm btn-source-issues-button dropdown-item"
-   title="创建议题"
-   data-bs-placement="left" data-bs-toggle="tooltip"
->
-  
-
-<span class="btn__icon-container">
-  <i class="fas fa-lightbulb"></i>
-  </span>
-<span class="btn__text-container">Open issue</span>
-</a>
-</li>
-      
-  </ul>
-</div>
-
-
-
-
-
-
-<div class="dropdown dropdown-download-buttons">
-  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="下载此页面">
-    <i class="fas fa-download"></i>
-  </button>
-  <ul class="dropdown-menu">
-      
-      
-      
-      <li><a href="_sources/index.rst" target="_blank"
-   class="btn btn-sm btn-download-source-button dropdown-item"
-   title="下载源文件"
-   data-bs-placement="left" data-bs-toggle="tooltip"
->
-  
-
-<span class="btn__icon-container">
-  <i class="fas fa-file"></i>
-  </span>
-<span class="btn__text-container">.rst</span>
-</a>
-</li>
-      
-      
-      
-      
-      <li>
-<button onclick="window.print()"
-  class="btn btn-sm btn-download-pdf-button dropdown-item"
-  title="列印成 PDF"
-  data-bs-placement="left" data-bs-toggle="tooltip"
->
-  
-
-<span class="btn__icon-container">
-  <i class="fas fa-file-pdf"></i>
-  </span>
-<span class="btn__text-container">.pdf</span>
-</button>
-</li>
-      
-  </ul>
-</div>
-
-
-
-
-<button onclick="toggleFullScreen()"
-  class="btn btn-sm btn-fullscreen-button pst-navbar-icon"
-  title="全屏模式"
-  data-bs-placement="bottom" data-bs-toggle="tooltip"
->
-  
-
-<span class="btn__icon-container">
-  <i class="fas fa-expand"></i>
-  </span>
-
-</button>
-
-
-
-<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
-  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
-    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="亮色"></i>
-    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="暗色"></i>
-    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
-  </button>
-  <ul class="dropdown-menu dropdown-menu-end">
-    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
-    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>亮色</button></li>
-    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>暗色</button></li>
-  </ul>
-</div>
-
-
-<button class="btn btn-sm pst-navbar-icon search-button search-button__button pst-js-only" title="搜索" aria-label="搜索" data-bs-placement="bottom" data-bs-toggle="tooltip">
-    <i class="fa-solid fa-magnifying-glass fa-lg"></i>
-</button>
-<button class="sidebar-toggle secondary-toggle btn btn-sm pst-navbar-icon" title="Toggle secondary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
-    <span class="fa-solid fa-list"></span>
-</button>
-</div></div>
-      
+    <div class="presets" aria-label="实验起点">
+      <span>选一个起点？</span>
+      <button type="button" data-preset="first">◉ 第一次 RL</button>
+      <button type="button" data-preset="scale">↗ 大规模 GLM</button>
+      <button type="button" data-preset="agent">⌁ 长程 Agent</button>
     </div>
-  
-</div>
-</div>
-              
-              
-
-<div id="jb-print-docs-body" class="onlyprint">
-    <h1>slime 文档</h1>
-    <!-- Table of contents -->
-    <div id="print-main-content">
-        <div id="jb-print-toc">
-            
-            <div>
-                <h2> 目录 </h2>
-            </div>
-            <nav aria-label="Page">
-                <ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">设计与生产实践</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">按使用场景开始</a><ul class="pst-show_toc_level nav section-nav flex-column">
-</ul>
-</li>
-</ul>
-            </nav>
+    <noscript><p class="notice">启用 JavaScript 即可使用向导，也可使用完整的文字指南。 <a href="get_started/experiment-guide.html">实验配置指南 →</a></p></noscript>
+    <div id="interactive-lab" hidden>
+      <nav id="steps" class="steps" aria-label="配置步骤"></nav>
+      <div class="workbench">
+        <div class="builder-panel">
+          <div class="step-heading"><span id="step-number" class="step-number"></span><div><h3 id="step-title" tabindex="-1"></h3><p id="step-description"></p></div></div>
+          <form id="choices" novalidate></form>
+          <div id="step-help" class="step-help"></div>
+          <div class="step-controls"><button type="button" id="previous">← 上一步</button><span id="step-count"></span><button class="button dark" type="button" id="next">下一步 →</button></div>
         </div>
-    </div>
-</div>
-
-              
-                
-<div id="searchbox"></div>
-                <article class="bd-article">
-                  
-  <section id="slime">
-<h1>slime 文档<a class="headerlink" href="#slime" title="链接到此标题。">#</a></h1>
-<p>slime 是一个面向大规模强化学习的 LLM 后训练框架，将 Megatron 训练与 SGLang rollout 连接起来，并提供自定义数据生成和奖励接口。</p>
-<p>训练、rollout、数据缓冲区和环境反馈共享同一条数据流，可以接入数学、代码、工具调用、沙盒和长程智能体任务。</p>
-<section id="id1">
-<h2>设计与生产实践<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h2>
-<ul class="simple">
-<li><p>slime 是 <a class="reference external" href="https://z.ai/blog/glm-5.3-flash">GLM-5.3-Flash</a>、<a class="reference external" href="https://z.ai/blog/glm-5.3">GLM-5.3</a>、<a class="reference external" href="https://z.ai/blog/glm-5.2">GLM-5.2</a>、<a class="reference external" href="https://z.ai/blog/glm-5.1">GLM-5.1</a>、<a class="reference external" href="https://z.ai/blog/glm-5">GLM-5</a>、<a class="reference external" href="https://z.ai/blog/glm-4.7">GLM-4.7</a>、<a class="reference external" href="https://z.ai/blog/glm-4.6">GLM-4.6</a>、<a class="reference external" href="https://z.ai/blog/glm-4.5">GLM-4.5</a> 背后的 RL 训练框架。</p></li>
-<li><p>直接使用 Megatron 参数，通过 <code class="docutils literal notranslate"><span class="pre">--sglang-</span></code> 前缀传入当前安装版本的 SGLang 参数。</p></li>
-<li><p>通过自定义接口接入生成函数、奖励函数、验证器和交互环境。</p></li>
-<li><p>CPU 正确性测试和 GPU 端到端测试覆盖训练、rollout、checkpoint、精度、异步生成与调试回放。详见 <a class="reference internal" href="developer_guide/ci.html"><span class="doc">CI（持续集成）</span></a>。</p></li>
-<li><p>大规模 MoE 配方结合 BF16 训练与 FP8 rollout；<code class="docutils literal notranslate"><span class="pre">--sglang-kv-cache-dtype</span> <span class="pre">fp8_e4m3</span></code> 可提升有效 KV cache 容量。</p></li>
-</ul>
-<p>除 GLM 外，支持的模型系列还包括 Qwen（Qwen3.6、Qwen3.5、Qwen3-Next、Qwen3 MoE、Qwen3、Qwen2.5）、DeepSeek（V3、V3.1、R1）和 Llama 3。可以从下方训练示例和 <code class="docutils literal notranslate"><span class="pre">scripts/models/</span></code> 中的模型配置开始。</p>
-</section>
-<section id="id2">
-<h2>按使用场景开始<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h2>
-<ul class="simple">
-<li><p>第一次使用 slime：<a class="reference internal" href="get_started/quick_start.html"><span class="doc">快速使用</span></a></p></li>
-<li><p>配置训练与 rollout 参数：<a class="reference internal" href="get_started/usage.html"><span class="doc">使用文档</span></a></p></li>
-<li><p>添加自定义生成、奖励或 rollout 函数：<a class="reference internal" href="get_started/customization.html"><span class="doc">自定义指南</span></a></p></li>
-<li><p>构建智能体 RL 工作流：<a class="reference internal" href="get_started/agent.html"><span class="doc">Agentic RL 训练路线图</span></a></p></li>
-<li><p>配置 SGLang rollout 部署拓扑：<a class="reference internal" href="advanced/sglang-config.html"><span class="doc">SGLang Config：高级引擎部署</span></a></p></li>
-<li><p>接入外部 rollout 引擎：<a class="reference internal" href="advanced/external-rollout-engines.html"><span class="doc">External Rollout Engines 配置路线图</span></a></p></li>
-<li><p>使用 straw 持久化分布式 rollout 与共享张量：<a class="reference internal" href="advanced/straw.html"><span class="doc">使用 straw 持久化 rollout</span></a></p></li>
-<li><p>以字节增量同步权重：<a class="reference internal" href="advanced/delta-weight-sync.html"><span class="doc">Delta 权重同步</span></a></p></li>
-<li><p>使用 PD disaggregation：<a class="reference internal" href="advanced/pd-disaggregation.html"><span class="doc">PD 分离</span></a></p></li>
-<li><p>使用 BF16 训练 + FP8 rollout 或 FP8 KV cache：<a class="reference internal" href="advanced/low-precision.html"><span class="doc">低精度训练与 Rollout</span></a></p></li>
-<li><p>了解 CI 和可靠性覆盖：<a class="reference internal" href="developer_guide/ci.html"><span class="doc">CI（持续集成）</span></a></p></li>
-<li><p>调试、追踪和分析长时间运行的任务：<a class="reference internal" href="developer_guide/debug.html"><span class="doc">Debug 指南</span></a>、<a class="reference internal" href="developer_guide/trace.html"><span class="doc">Trace 可视化</span></a>、<a class="reference internal" href="developer_guide/profiling.html"><span class="doc">性能分析 (Profiling)</span></a></p></li>
-</ul>
-<div class="toctree-wrapper compound">
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">开始使用</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="get_started/quick_start.html">快速使用</a></li>
-<li class="toctree-l1"><a class="reference internal" href="get_started/usage.html">使用文档</a></li>
-<li class="toctree-l1"><a class="reference internal" href="get_started/customization.html">自定义指南</a></li>
-<li class="toctree-l1"><a class="reference internal" href="get_started/agent.html">Agentic RL 训练路线图</a></li>
-<li class="toctree-l1"><a class="reference internal" href="get_started/qa.html">常见 Q&amp;A</a></li>
-</ul>
-</div>
-<div class="toctree-wrapper compound">
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Dense</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="examples/qwen3-4B.html">8xH100 训练 Qwen3-4B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="examples/glm4-9B.html">8xH100 训练 GLM4-9B</a></li>
-</ul>
-</div>
-<div class="toctree-wrapper compound">
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">MoE</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="examples/glm4.7-30B-A3B.html">8×H100 训练 GLM-4.7-Flash</a></li>
-<li class="toctree-l1"><a class="reference internal" href="examples/qwen3-30B-A3B.html">8xH100 训练 Qwen3-30B-A3B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="examples/qwen3-next-80B-A3B.html">Qwen3-Next-80B-A3B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="examples/glm5.2-744B-A40B.html">256xH100 训练 GLM-5.2 744B-A40B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="examples/glm4.7-355B-A32B.html">64xH100 训练 GLM-4.7</a></li>
-<li class="toctree-l1"><a class="reference internal" href="examples/deepseek-r1.html">128xH100 训练 DeepSeek R1</a></li>
-</ul>
-</div>
-<div class="toctree-wrapper compound">
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">高级特性</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="advanced/on-policy-distillation.html">在策略蒸馏 (On-Policy Distillation)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/speculative-decoding.html">投机采样</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/low-precision.html">低精度训练与 Rollout</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/reproducibility.html">Reproducibility</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/fault-tolerance.html">容灾</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/straw.html">使用 straw 持久化 rollout</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/observability.html">观测</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/pd-disaggregation.html">PD 分离</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/external-rollout-engines.html">External Rollout Engines 配置路线图</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/delta-weight-sync.html">Delta 权重同步</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/sglang-config.html">SGLang Config：高级引擎部署</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/megatron-config.html">Megatron Config：按角色覆盖训练参数</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/arch-support-beyond-megatron.html">在 Megatron-LM 中快速支持新模型架构</a></li>
-</ul>
-</div>
-<div class="toctree-wrapper compound">
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">其他用法</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="examples/qwen3-4b-base-openhermes.html">SFT Qwen3-4B-Base</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/search-r1/README.html">Search-R1 lite</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/fully_async/README.html">Fully-Async Rollout Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/coding_agent_rl/README.html">Coding-Agent RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/delta_weight_sync/README.html">Delta Weight Sync</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/eval_multi_task/README.html">Multi-Task Evaluation Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/geo3k_vlm/README.html">VLM Single-Turn RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/geo3k_vlm_multi_turn/README.html">VLM Multi-Turn (geo3k dataset)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/on_policy_distillation/README.html">On-Policy Distillation Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/on_policy_distillation/README.html#preliminary-results">Preliminary Results</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/on_policy_distillation/README.html#faq">FAQ</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/on_policy_distillation/README.html#references">References</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/strands_sglang/README.html">slime x Strands-SGLang</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/tau-bench/README.html">Tau bench</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/train_infer_mismatch_helper/README.html">Rollout Correction Methods</a></li>
-</ul>
-</div>
-<div class="toctree-wrapper compound">
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">开发指南</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="developer_guide/ci.html">CI（持续集成）</a></li>
-<li class="toctree-l1"><a class="reference internal" href="developer_guide/debug.html">Debug 指南</a></li>
-<li class="toctree-l1"><a class="reference internal" href="developer_guide/trace.html">Trace 可视化</a></li>
-<li class="toctree-l1"><a class="reference internal" href="developer_guide/profiling.html">性能分析 (Profiling)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="developer_guide/install_flashqla.html">安装 FlashQLA</a></li>
-</ul>
-</div>
-<div class="toctree-wrapper compound">
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">硬件平台</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="platform_support/amd_tutorial.html">AMD ROCm</a></li>
-</ul>
-</div>
-<div class="toctree-wrapper compound">
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">博客</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="blogs/release_v0.1.0.html">v0.1.0: 重新定义高性能 RL 训练框架</a></li>
-<li class="toctree-l1"><a class="reference internal" href="blogs/introducing_slime.html">slime：为 RL Scaling 设计的 SGLang-Native 后训练框架</a></li>
-</ul>
-</div>
-</section>
-</section>
-
-
-                </article>
-              
-
-              
-              
-              
-              
-                <footer class="prev-next-footer d-print-none">
-                  
-<div class="prev-next-area">
-    <a class="right-next"
-       href="get_started/quick_start.html"
-       title="下一页">
-      <div class="prev-next-info">
-        <p class="prev-next-subtitle">下一页</p>
-        <p class="prev-next-title">快速使用</p>
+        <aside class="preview" aria-label="实时实验预览">
+          <div class="preview-heading"><span class="eyebrow">YOUR LITTLE RL WORLD</span><button id="play" type="button" aria-pressed="false">▶ 演示一轮</button></div>
+          <div id="world" class="world"></div>
+          <p id="simulation-status" class="simulation-status" role="status"></p>
+          <div id="summary" class="summary"></div>
+          <div id="advice" class="advice" aria-live="polite"></div>
+          <a id="review-link" class="review-link" href="#recipe">查看我的配方 <span>↓</span></a>
+        </aside>
       </div>
-      <i class="fa-solid fa-angle-right"></i>
-    </a>
-</div>
-                </footer>
-              
-            </div>
-            
-            
-              
-                <dialog id="pst-secondary-sidebar-modal"></dialog>
-                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
-
-
-  <div class="sidebar-secondary-item"><div
-    id="pst-page-navigation-heading-2"
-    class="page-toc tocsection onthispage">
-    <i class="fa-solid fa-list"></i> 目录
-  </div>
-  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
-    <ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">设计与生产实践</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">按使用场景开始</a><ul class="pst-show_toc_level nav section-nav flex-column">
-</ul>
-</li>
-</ul>
-  </nav></div>
-
-</div></div>
-              
-            
-          </div>
-          <footer class="bd-footer-content">
-            
-<div class="bd-footer-content__inner container">
-  
-  <div class="footer-item">
-    
-<p class="component-author">
-作者： slime Team
-</p>
-
-  </div>
-  
-  <div class="footer-item">
-    
-
-  <p class="copyright">
-    
-      © Copyright 2025-2026, slime.
-      <br/>
-    
-  </p>
-
-  </div>
-  
-  <div class="footer-item">
-    <p class="last-updated">
-  最后更新于 2026 年 10 月 09 日.
-  <br/>
-</p>
-  </div>
-  
-  <div class="footer-item">
-    
-  </div>
-  
-</div>
-          </footer>
-        
-
-      </main>
     </div>
-  </div>
-  
-  <!-- Scripts loaded after <body> so the DOM is not blocked -->
-  <script defer src="_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9"></script>
-<script defer src="_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9"></script>
-
-  <footer class="bd-footer">
-  </footer>
-  </body>
+  </section>
+  <section id="recipe" class="recipe" aria-labelledby="recipe-title" hidden>
+    <div class="recipe-heading"><div><p class="eyebrow">02 / FROM PLAY TO RUN</p><h2 id="recipe-title">把实验带走。</h2><p>根据仓库现有配方生成。准备环境、核对配置，然后启动你的实验。</p></div><button type="button" id="share" class="button light">↗ 分享选择</button></div>
+    <div id="issues" aria-live="polite"></div>
+    <div class="artifact-toolbar"><div id="artifact-tabs" class="artifact-tabs" role="tablist" aria-label="生成文件"></div><div class="artifact-actions"><button type="button" id="copy">复制</button><button type="button" class="button primary" id="download">↓ 下载</button></div></div>
+    <pre id="artifact-panel" role="tabpanel" tabindex="0"><code id="artifact-code"></code></pre>
+    <div class="run-guide"><h3>离第一个 reward，还有三步</h3><ol id="run-steps"></ol></div>
+    <p class="recipe-footnote">GPU 数量描述资源布局，不代表显存一定足够。组合配置尚未在你的硬件上测量；先做短实验，对比 reward、log-prob 差异、裁剪比例和 rollout 耗时。</p>
+  </section>
+  <section class="library-teaser" aria-labelledby="library-title">
+    <div><p class="eyebrow">03 / FOLLOW YOUR CURIOSITY</p><h2 id="library-title">好奇，就再往前一步。</h2><p>每个选择背后的论文、公式和工程细节。</p></div>
+    <a href="get_started/experiment-guide.html"><span>01</span><strong>实验配置指南</strong>从 checkpoint 到第一个 reward ↗</a>
+    <a href="advanced/policy-mismatch.html"><span>02</span><strong>拆开算法看一看</strong>GRPO · TIS · ICE-POP · R3 · SC ↗</a>
+    <a href="advanced/rl-systems.html"><span>03</span><strong>看懂系统的取舍</strong>精度、异步、PD 与 HiCache ↗</a>
+    <a href="library.html"><span>04</span><strong>完整文档资料库</strong>分类指南、接口与调试 ↗</a>
+  </section>
+  <section class="advanced-section" aria-labelledby="advanced-title">
+    <div><p class="eyebrow">04 / WHEN YOU WANT TO GO FURTHER</p><h2 id="advanced-title">好的实验，也要会问问题。</h2><p>展开一个问题，找到下一次测量和趁手的工具。</p></div>
+    <details open><summary><span>01 / DEBUG</span>Reward 不对，先从哪里查？<b>＋</b></summary><div><p>先检查生成文本、checkpoint 加载和 chat template。保存一轮 rollout，用固定 batch 重放训练，再比较 log-prob，最后才调整算法。</p><a href="developer_guide/debug.html">Debug 与重放 →</a><a href="advanced/policy-mismatch.html">理解训推差异 →</a></div></details>
+    <details><summary><span>02 / PROFILE</span>训练太慢，时间究竟花在哪里？<b>＋</b></summary><div><p>区分 rollout、reward、权重传输和训练耗时。先用 trace 找关键路径，再 profile 瓶颈引擎。使用 tools/profile_rollout.py 收集 SGLang trace，观察 prefill / decode。</p><a href="developer_guide/profiling.html">性能剖析 →</a><a href="developer_guide/trace.html">时间线与追踪 →</a><a href="advanced/observability.html">指标与观测 →</a></div></details>
+    <details><summary><span>03 / SCALE</span>如何从一台机器走向多个集群？<b>＋</b></summary><div><p>先划分 GPU 的归属，再根据网络选择权重传输。Prefill / decode 资源需求不同时考虑 PD；需要恢复长任务时接入持久 rollout 存储。</p><a href="advanced/external-rollout-engines.html">External engines →</a><a href="advanced/delta-weight-sync.html">Delta sync →</a><a href="advanced/rollout-scheduling.html">Partial / distributed async →</a><a href="advanced/straw.html">straw →</a><a href="advanced/fault-tolerance.html">故障恢复 →</a></div></details>
+    <details><summary><span>04 / EXTEND</span>我的 Agent，需要自己的环境。<b>＋</b></summary><div><p>从自定义逐样本生成函数和奖励开始。需要改变数据调度或跨 step 状态时，再替换完整 rollout 编排。</p><a href="get_started/agent.html">Agent RL →</a><a href="get_started/customization.html">扩展接口 →</a><a href="advanced/sglang-config.html">SGLang topology →</a></div></details>
+  </section>
+</main>
+<footer><a class="brand" href="#">slime<span> / a little slime goes a long way.</span></a><span>Megatron × SGLang · Open source, open possibilities.</span></footer>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<dialog id="learn-dialog" aria-labelledby="learn-title"><button type="button" id="close-learn" class="close-dialog" aria-label="关闭解释">×</button><p class="eyebrow">LEARN WITHOUT LOSING YOUR PLACE</p><h2 id="learn-title"></h2><div id="learn-content"></div></dialog>
+<button id="mobile-preview" type="button" hidden>◈ 查看实时配图</button>
+<dialog id="mobile-preview-dialog" aria-label="实时实验预览"><button type="button" id="close-preview" class="close-dialog" aria-label="关闭预览">×</button><div id="mobile-preview-host"></div></dialog>
+</body>
 </html>

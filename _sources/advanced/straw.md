@@ -89,9 +89,9 @@ for custom rollout functions and queue readers.
 
 ## Packed storage and supported data
 
-Packing is enabled whenever Straw transport is selected. Each writer appends
+Packing is enabled whenever straw transport is selected. Each writer appends
 multiple samples and tensors to the same file (a pack), reducing small-file
-metadata overhead on shared storage. slime uses Straw's default target size,
+metadata overhead on shared storage. slime uses straw's default target size,
 currently **1 GiB**. Use `--rollout-queue-segment-mib` to override it in MiB.
 
 The target size controls file rotation; readers can access each publication
@@ -116,7 +116,7 @@ and ordinary fields still occupy manager memory.
 
 | Option | Default | Purpose |
 |---|---|---|
-| `--rollout-queue-segment-mib` | Unset; uses Straw's default (currently `1024`) | Override the target pack rotation size in MiB; explicit values must be positive. |
+| `--rollout-queue-segment-mib` | Unset; uses straw's default (currently `1024`) | Override the target pack rotation size in MiB; explicit values must be positive. |
 | `--rollout-io-concurrency` | `4` | Bound concurrent serialization and filesystem I/O submissions |
 | `--rollout-queue-lease-seconds` | `300` | Worker lease duration; active readers renew it |
 

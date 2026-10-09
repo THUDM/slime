@@ -1,0 +1,670 @@
+
+<!DOCTYPE html>
+
+
+<html lang="zh" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>看懂你正在搭建的 RL 系统 &#8212; slime</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=4418a689" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=5f5cb4b6" />
+  
+  <!-- So that users can add custom icons -->
+  <script defer src="../_static/scripts/fontawesome.js?digest=90905a2f556bf617f1a9"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
+
+    <script src="../_static/documentation_options.js?v=ceb54874"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=ccdb6887"></script>
+    <script src="../_static/scripts/sphinx-book-theme.js?v=fab101a9"></script>
+    <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+    <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'advanced/rl-systems';</script>
+    <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
+    <script data-layout="root" src="../_static/js/lang-toggle.js?v=9e8f3a3a"></script>
+    <link rel="icon" href="../_static/logo.ico"/>
+    <link rel="index" title="索引" href="../genindex.html" />
+    <link rel="search" title="搜索" href="../search.html" />
+    <link rel="next" title="同步、partial 与 distributed fully async rollout" href="rollout-scheduling.html" />
+    <link rel="prev" title="Rollout 与调度" href="../rollout/index.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="zh"/>
+  <meta name="docsearch:version" content="0.4.0" />
+    <meta name="docbuild:last-update" content="2026 年 10 月 09 日"/>
+  
+    
+    <script src="../_static/searchtools.js"></script>
+    <script src="../_static/language_data.js"></script>
+    <script src="../searchindex.js"></script>
+  
+  </head>
+  <body data-default-mode="">
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">跳转至主要内容</a></div>
+
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>回到顶部</button>
+  
+  
+  
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search..."
+         aria-label="Search..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="版本警告"></aside>
+</div>
+
+  
+    <header id="pst-header" class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="网页导航">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class="col-lg-9 navbar-header-items">
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+<button class="btn search-button-field search-button__button pst-js-only" title="搜索" aria-label="搜索" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">搜索</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+        </div>
+      
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="搜索" aria-label="搜索" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">搜索</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+    </div>
+  
+
+  
+    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="当前页面">
+      <span class="fa-solid fa-outdent"></span>
+    </button>
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/logo.jpg" class="logo__image only-light" alt="slime - Home"/>
+    <img src="../_static/logo.jpg" class="logo__image only-dark pst-js-only" alt="slime - Home"/>
+  
+  
+</a></div>
+        <div class="sidebar-primary-item">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="搜索" aria-label="搜索" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">搜索</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button></div>
+        <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
+    <div class="bd-toc-item navbar-nav active">
+        <ul class="current nav bd-sidenav">
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="../library.html">文档资料库</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../get_started/index.html">从这里开始</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../training/index.html">训练与算法</a></li>
+<li class="toctree-l2 current active has-children"><a class="reference internal" href="../rollout/index.html">Rollout 与调度</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l3 current active"><a class="current reference internal" href="#">看懂你正在搭建的 RL 系统</a></li>
+<li class="toctree-l3"><a class="reference internal" href="rollout-scheduling.html">同步、partial 与 distributed fully async rollout</a></li>
+<li class="toctree-l3"><a class="reference internal" href="straw.html">使用 straw 持久化 rollout</a></li>
+<li class="toctree-l3"><a class="reference internal" href="pd-disaggregation.html">PD 分离</a></li>
+<li class="toctree-l3"><a class="reference internal" href="external-rollout-engines.html">External Rollout Engines 配置路线图</a></li>
+<li class="toctree-l3"><a class="reference internal" href="delta-weight-sync.html">Delta 权重同步</a></li>
+<li class="toctree-l3"><a class="reference internal" href="sglang-config.html">SGLang Config：高级引擎部署</a></li>
+<li class="toctree-l3"><a class="reference internal" href="speculative-decoding.html">投机采样</a></li>
+</ul>
+</details></li>
+<li class="toctree-l2"><a class="reference internal" href="../operations/index.html">调试、性能分析与恢复</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../examples/index.html">任务教程</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../developer_guide/index.html">开发与 CI</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../platform_support/index.html">硬件平台</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../blogs/index.html">设计文章与版本发布</a></li>
+</ul>
+</details></li>
+</ul>
+
+    </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+
+<div class="sbt-scroll-pixel-helper"></div>
+
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item"><button class="sidebar-toggle primary-toggle btn btn-sm" title="Toggle primary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <span class="fa-solid fa-bars"></span>
+</button></div>
+      
+    </div>
+  
+  
+    <div class="header-article-items__end">
+      
+        <div class="header-article-item">
+
+<div class="article-header-buttons">
+
+
+
+
+
+<div class="dropdown dropdown-source-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Source repositories">
+    <i class="fab fa-github"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime" target="_blank"
+   class="btn btn-sm btn-source-repository-button dropdown-item"
+   title="源码库"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fab fa-github"></i>
+  </span>
+<span class="btn__text-container">Repository</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/blob/main/docs/zh/advanced/rl-systems.md?plain=1" target="_blank"
+   class="btn btn-sm btn-source-file-button dropdown-item"
+   title="Show source"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-code"></i>
+  </span>
+<span class="btn__text-container">Show source</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/edit/main/docs/zh/advanced/rl-systems.md" target="_blank"
+   class="btn btn-sm btn-source-edit-button dropdown-item"
+   title="Suggest edit"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-pencil-alt"></i>
+  </span>
+<span class="btn__text-container">Suggest edit</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/issues/new?title=Issue%20on%20page%20%2Fadvanced/rl-systems.html&body=Your%20issue%20content%20here." target="_blank"
+   class="btn btn-sm btn-source-issues-button dropdown-item"
+   title="创建议题"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-lightbulb"></i>
+  </span>
+<span class="btn__text-container">Open issue</span>
+</a>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+
+
+<div class="dropdown dropdown-download-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="下载此页面">
+    <i class="fas fa-download"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="../_sources/advanced/rl-systems.md" target="_blank"
+   class="btn btn-sm btn-download-source-button dropdown-item"
+   title="下载源文件"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file"></i>
+  </span>
+<span class="btn__text-container">.md</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li>
+<button onclick="window.print()"
+  class="btn btn-sm btn-download-pdf-button dropdown-item"
+  title="列印成 PDF"
+  data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file-pdf"></i>
+  </span>
+<span class="btn__text-container">.pdf</span>
+</button>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+<button onclick="toggleFullScreen()"
+  class="btn btn-sm btn-fullscreen-button pst-navbar-icon"
+  title="全屏模式"
+  data-bs-placement="bottom" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-expand"></i>
+  </span>
+
+</button>
+
+
+
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="亮色"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="暗色"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>亮色</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>暗色</button></li>
+  </ul>
+</div>
+
+
+<button class="btn btn-sm pst-navbar-icon search-button search-button__button pst-js-only" title="搜索" aria-label="搜索" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass fa-lg"></i>
+</button>
+<button class="sidebar-toggle secondary-toggle btn btn-sm pst-navbar-icon" title="Toggle secondary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <span class="fa-solid fa-list"></span>
+</button>
+</div></div>
+      
+    </div>
+  
+</div>
+</div>
+              
+              
+
+<div id="jb-print-docs-body" class="onlyprint">
+    <h1>看懂你正在搭建的 RL 系统</h1>
+    <!-- Table of contents -->
+    <div id="print-main-content">
+        <div id="jb-print-toc">
+            
+            <div>
+                <h2> 目录 </h2>
+            </div>
+            <nav aria-label="Page">
+                <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#placement">Placement</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#async">Async</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#precision">Precision</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#deterministic">Deterministic</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#pd">PD</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#hicache">HiCache</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#debug">先 Debug，再优化</a></li>
+</ul>
+            </nav>
+        </div>
+    </div>
+</div>
+
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section class="tex2jax_ignore mathjax_ignore" id="rl">
+<h1>看懂你正在搭建的 RL 系统<a class="headerlink" href="#rl" title="Link to this heading">#</a></h1>
+<p><a class="reference internal" href="../index.html"><span class="std std-doc">打开实验室</span></a>。<strong>布局</strong>决定 GPU 的归属，<strong>调度</strong>决定工作顺序，<strong>精度</strong>决定数值计算，<strong>推理拓扑</strong>决定如何划分 serving 工作。它们是独立的配置维度。下面的成本模型用于理解取舍，不是性能预测。</p>
+<section id="placement">
+<h2>Placement<a class="headerlink" href="#placement" title="Link to this heading">#</a></h2>
+<p>同步的一轮包含生成、奖励计算、训练和权重更新。同卡布局让 rollout 与训练交替驻留在相同 GPU 上；分离布局各自占一组 GPU，即使仍按同步顺序执行。External SGLang 进一步将引擎生命周期交给外部系统，它不自动意味着异步训练。</p>
+<p>如果训练需要 <span class="math notranslate nohighlight">\(N_T\)</span> 张 GPU、rollout 需要 <span class="math notranslate nohighlight">\(N_R\)</span> 张，独立资源池需要 <span class="math notranslate nohighlight">\(N_T+N_R\)</span> 张。同卡布局复用资源池，但每个阶段仍必须满足自己的并行度、显存与主机内存要求。向导假设每个训练节点 8 张 GPU，并检查 TP × PP × CP、expert-TP × EP × PP 的整除条件。整除是必要条件，不是显存证明。</p>
+<p>设完整权重大小为 <span class="math notranslate nohighlight">\(S_W\)</span>、带宽为 <span class="math notranslate nohighlight">\(B_W\)</span>、控制和加载开销为 <span class="math notranslate nohighlight">\(t_0\)</span>，同步成本近似为：</p>
+<div class="math notranslate nohighlight">
+\[t_W\approx S_W/B_W+t_0.\]</div>
+<p>Delta 传输用变化字节 <span class="math notranslate nohighlight">\(S_\Delta\)</span> 替代全量，但增加 snapshot、diff、编码和重建开销。只有节约的传输时间超过这些成本才有收益。slime 同卡使用 CUDA IPC；分离全量更新支持 NCCL 或磁盘。Delta 需要磁盘传输、共享目录、推理主机本地 checkpoint 和带补丁的 SGLang <code class="docutils literal notranslate"><span class="pre">/pull_weights</span></code> 接口。</p>
+<p>相关系统研究：<a class="reference external" href="https://arxiv.org/abs/2409.19256">HybridFlow</a>。实际接口见<a class="reference internal" href="external-rollout-engines.html"><span class="std std-doc">外部引擎</span></a>、<a class="reference internal" href="delta-weight-sync.html"><span class="std std-doc">增量同步</span></a>和<a class="reference internal" href="megatron-config.html"><span class="std std-doc">训练拓扑</span></a>。</p>
+</section>
+<section id="async">
+<h2>Async<a class="headerlink" href="#async" title="Link to this heading">#</a></h2>
+<p>令 <span class="math notranslate nohighlight">\(t_R\)</span> 为 rollout 加 reward 时间，<span class="math notranslate nohighlight">\(t_T\)</span> 为训练时间，<span class="math notranslate nohighlight">\(t_W\)</span> 为权重更新时间，串行一轮约为：</p>
+<div class="math notranslate nohighlight">
+\[t_{\rm sync}=t_R+t_T+t_W.\]</div>
+<p>如果有独立资源、充分预热的队列，且生成与训练能够完美重叠，乐观的稳态下界为：</p>
+<div class="math notranslate nohighlight">
+\[t_{\rm async}\gtrsim\max(t_R,t_T)+t_W,\qquad
+\text{speedup}\lesssim\frac{t_R+t_T+t_W}{\max(t_R,t_T)+t_W}.\]</div>
+<p>权重更新停顿、采样依赖、reward 延迟、队列预热和 GPU 争用都会削弱这个估计。它不代表实测加速比。回复长度差异越大，同步 barrier 的长尾等待往往越明显。</p>
+<p>重叠的代价是 staleness。样本在权重版本 <span class="math notranslate nohighlight">\(v_s\)</span> 生成、在 <span class="math notranslate nohighlight">\(v_t\)</span> 被使用，定义年龄 <span class="math notranslate nohighlight">\(d=v_t-v_s\)</span>。固定 prefix，可拆分差异：</p>
+<div class="math notranslate nohighlight">
+\[
+\log p_{v_t}(a\mid h)-\log q_{v_s}(a\mid h)
+=\underbrace{\log p_{v_t}-\log p_{v_s}}_{\text{参数过期}}
++\underbrace{\log p_{v_s}-\log q_{v_s}}_{\text{同版本引擎差异}}.
+\]</div>
+<p>确定性 kernel 可以减少第二项，不能消去第一项。长轨迹也可能混入多个权重版本，单个年龄统计只是一种诊断。TIS / SC 可以帮助稳定训练，但不意味着可以无限容忍旧样本。</p>
+<p>slime 仍用 <code class="docutils literal notranslate"><span class="pre">train.py</span></code>，选择 <code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span> <span class="pre">slime.rollout.fully_async_rollout.generate_rollout_fully_async</span></code>。它跨调用保留正在生成的样本；要有实际重叠收益，需要独立 GPU。监控 <code class="docutils literal notranslate"><span class="pre">staleness/mean</span></code>、<code class="docutils literal notranslate"><span class="pre">staleness/max</span></code>。生成配方不会在这个连续队列上直接做 evaluation，请使用独立评估路径或任务。见 <a class="reference internal" href="../_examples_synced/fully_async/README.html"><span class="std std-doc">fully async 实现指南</span></a>。相关研究：<a class="reference external" href="https://arxiv.org/abs/2509.19128">PipelineRL</a>，作为概念参考，不表示 slime 实现了论文完整算法。</p>
+</section>
+<section id="precision">
+<h2>Precision<a class="headerlink" href="#precision" title="Link to this heading">#</a></h2>
+<p>设训练 logits 为 <span class="math notranslate nohighlight">\(z\)</span>，推理 logits 为 <span class="math notranslate nohighlight">\(z+\delta\)</span>。对 log-softmax 求导：</p>
+<div class="math notranslate nohighlight">
+\[\frac{\partial\log p_a}{\partial z_j}=\mathbf1_{a=j}-p_j.\]</div>
+<p>一阶展开得到：</p>
+<div class="math notranslate nohighlight">
+\[\log q_a-\log p_a\approx\delta_a-\sum_jp_j\delta_j.\]</div>
+<p>所有 token 相同的平移被消去，token 相关的扰动则改变概率。量化、kernel 差异和累加顺序都可能产生扰动；专家选择等不连续位置可能使一阶近似失效。</p>
+<p><span class="math notranslate nohighlight">\(P\)</span> 个元素、每元素 <span class="math notranslate nohighlight">\(b\)</span> bits 的原始存储约为 <span class="math notranslate nohighlight">\(Pb/8\)</span> 字节，不含 scales、元数据、padding 和副本。位宽减半，只代表这个张量的原始存储减半，不代表整个 GPU 的显存占用减半。优化器状态、激活和 KV cache 是独立预算。</p>
+<p>向导提供 BF16 训练搭配 BF16 / FP8 rollout、实验性 FP8 训练和 beta INT4 rollout。BF16 训练使用转换后的 <code class="docutils literal notranslate"><span class="pre">torch_dist</span></code>；FP8 rollout 使用独立的 block-quantized HF checkpoint，其 <code class="docutils literal notranslate"><span class="pre">quantization_config</span></code> 决定在线更新时的量化。FP8 KV cache 与权重精度独立。FP8 训练采用 TE blockwise 配置，因 CPU Adam 不兼容而不启用 <code class="docutils literal notranslate"><span class="pre">fp8-param-gather</span></code>。</p>
+<p>格式参考：<a class="reference external" href="https://arxiv.org/abs/2209.05433">FP8 Formats for Deep Learning</a>。支持状态见<a class="reference internal" href="low-precision.html"><span class="std std-doc">低精度指南</span></a>。INT4 仍需模型和 kernel 验证，向导不承诺 GLM INT4 的性能。</p>
+</section>
+<section id="deterministic">
+<h2>Deterministic<a class="headerlink" href="#deterministic" title="Link to this heading">#</a></h2>
+<p>浮点加法不满足结合律。即使没有随机采样，batch shape 和归约树改变也可能产生不同结果。可复现性关心同一配置重复执行的输出；对齐则关心<strong>不同实现</strong>是否产生相同概率：</p>
+<div class="math notranslate nohighlight">
+\[\text{repeatable}(p)\land\text{repeatable}(q)\not\Rightarrow p=q.\]</div>
+<p>向导中的 deterministic 开关开启 Megatron deterministic mode、SGLang deterministic inference，以及文档中的 NCCL / TE / cuBLAS 环境变量。它是可复现配置，不是训推相等的证明。依赖栈必须支持当前模型和 kernel，请遵循<a class="reference internal" href="reproducibility.html"><span class="std std-doc">可复现性指南</span></a>，包括 FlashAttention 3 的准备步骤。</p>
+<p>GLM-5 精确对齐还需要匹配 DSA attention、batch-invariant DeepGEMM forward、router 和 head 精度，以及 patched Megatron / DeepEP 路径。维护中的验证是<strong>六层 GLM-5.2、EP8</strong>，要求 <code class="docutils literal notranslate"><span class="pre">train_rollout_logprob_abs_diff</span> <span class="pre">&lt;</span> <span class="pre">1e-6</span></code>；另有逐层零差异 gate。这不证明完整 744B、任意拓扑、异步或 PD 下已经对齐。</p>
+<p>原始技术工作：<a class="reference external" href="https://lmsys.org/blog/2025-09-22-sglang-deterministic/">SGLang deterministic inference</a>。扩展结论前先运行文档中的 gate。</p>
+</section>
+<section id="pd">
+<h2>PD<a class="headerlink" href="#pd" title="Link to this heading">#</a></h2>
+<p>Prefill 处理 prompt，decode 逐 token 生成。PD 是对 <strong>serving 内部</strong>的拆分，独立于训练和 serving 是否共享 GPU。研究动机见 <a class="reference external" href="https://arxiv.org/abs/2401.09670">DistServe</a>，slime 的 SGLang / Mooncake 配置见 <a class="reference internal" href="pd-disaggregation.html"><span class="std std-doc">PD 指南</span></a>。</p>
+<p>设 prefill / decode 引擎数为 <span class="math notranslate nohighlight">\(n_P,n_D\)</span>，在目标负载下的单引擎请求吞吐为 <span class="math notranslate nohighlight">\(\mu_P,\mu_D\)</span>；每请求 KV 传输量为 <span class="math notranslate nohighlight">\(S_{KV}\)</span>、网络带宽为 <span class="math notranslate nohighlight">\(B_{KV}\)</span>。根据流量守恒：</p>
+<div class="math notranslate nohighlight">
+\[\lambda\le\min(n_P\mu_P,n_D\mu_D,B_{KV}/S_{KV}).\]</div>
+<p>忽略传输时，令 <span class="math notranslate nohighlight">\(n_P\mu_P\approx n_D\mu_D\)</span> 可以避免中间队列持续增长。因此 split 应根据 prompt / response 分布实测，而不是固定选 1:1。</p>
+<p>传统 GQA / MHA 中，长度 <span class="math notranslate nohighlight">\(L\)</span> 的 prompt 对应未分片 cache 近似为 <span class="math notranslate nohighlight">\(S_{KV}\approx2L N_{\rm layers}N_{\rm KVheads}d_{\rm head}b/8\)</span>，2 来自 K 和 V。MLA / DSA、压缩和分页布局必须使用实际表示，不能直接套这个公式。</p>
+<p>向导生成含 prefill / decode 两组的 <code class="docutils literal notranslate"><span class="pre">sglang.yaml</span></code>。各组 GPU 数必须是每引擎 GPU 数的倍数，且总和等于 rollout 池。Mooncake 配方还需要可用的 RDMA 网卡与依赖。External 部署自行设置 PD；<code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> 与 <code class="docutils literal notranslate"><span class="pre">--rollout-external-engine-addrs</span></code> 互斥。</p>
+</section>
+<section id="hicache">
+<h2>HiCache<a class="headerlink" href="#hicache" title="Link to this heading">#</a></h2>
+<p><a class="reference external" href="https://docs.sglang.io/docs/advanced_features/hicache_best_practices">官方 HiCache 指南</a> 介绍了将 prefix cache 扩展到 GPU 之外的层级缓存。一个简单的每请求成本模型是：</p>
+<div class="math notranslate nohighlight">
+\[\Delta t\approx h\,t_{\rm avoided\ prefill}-t_{\rm cache\ IO}-t_{\rm bookkeeping},\]</div>
+<p><span class="math notranslate nohighlight">\(h\)</span> 为可复用 prefix 的命中率。命中率大于零也不证明加速，因为传输可能更贵。应测量 prefix 命中率、主机内存、cache I/O 时间和 TTFT。</p>
+<p>向导使用 <code class="docutils literal notranslate"><span class="pre">--sglang-enable-hierarchical-cache</span> <span class="pre">--sglang-hicache-ratio</span> <span class="pre">2</span></code>，只配置主机缓存，不创建 L3 存储服务。slime 管理的 PD 仅在 prefill 开启，与当前 engine builder 一致；不自动配置 decode offload 或分布式存储。KV 是特定权重下的激活，跨 actor 权重更新必须正确失效。因此要在有效权重窗口内测量可用命中。</p>
+</section>
+<section id="debug">
+<h2>先 Debug，再优化<a class="headerlink" href="#debug" title="Link to this heading">#</a></h2>
+<p>先跑三轮短实验并设置独立评估。文本异常时先查模板、checkpoint 转换和权重更新。<a class="reference internal" href="../developer_guide/debug.html"><span class="std std-doc">Debug replay</span></a> 固定采样 batch；<a class="reference internal" href="../developer_guide/trace.html"><span class="std std-doc">Trace</span></a> 找等待阶段；<a class="reference internal" href="../developer_guide/profiling.html"><span class="std std-doc">Profiling</span></a> 再看具体 kernel 或引擎阶段。针对实测瓶颈优化，同时比较 reward 和 mismatch；吞吐本身不是 RL 的最终目标。</p>
+</section>
+</section>
+
+
+                </article>
+              
+
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="../rollout/index.html"
+       title="上一页">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">上一页</p>
+        <p class="prev-next-title">Rollout 与调度</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="rollout-scheduling.html"
+       title="下一页">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">下一页</p>
+        <p class="prev-next-title">同步、partial 与 distributed fully async rollout</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item"><div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> 目录
+  </div>
+  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#placement">Placement</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#async">Async</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#precision">Precision</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#deterministic">Deterministic</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#pd">PD</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#hicache">HiCache</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#debug">先 Debug，再优化</a></li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+<div class="bd-footer-content__inner container">
+  
+  <div class="footer-item">
+    
+<p class="component-author">
+作者： slime Team
+</p>
+
+  </div>
+  
+  <div class="footer-item">
+    
+
+  <p class="copyright">
+    
+      © Copyright 2025-2026, slime.
+      <br/>
+    
+  </p>
+
+  </div>
+  
+  <div class="footer-item">
+    <p class="last-updated">
+  最后更新于 2026 年 10 月 09 日.
+  <br/>
+</p>
+  </div>
+  
+  <div class="footer-item">
+    
+  </div>
+  
+</div>
+          </footer>
+        
+
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9"></script>
+<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9"></script>
+
+  <footer class="bd-footer">
+  </footer>
+  </body>
+</html>

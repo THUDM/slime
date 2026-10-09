@@ -33,7 +33,7 @@
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=4418a689" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=ad20845f" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=5f5cb4b6" />
   
   <!-- So that users can add custom icons -->
   <script defer src="../_static/scripts/fontawesome.js?digest=90905a2f556bf617f1a9"></script>
@@ -42,20 +42,20 @@
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
     <script src="../_static/documentation_options.js?v=ceb54874"></script>
-    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../_static/copybutton.js?v=ccdb6887"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?v=fab101a9"></script>
     <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'advanced/observability';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
-    <script data-layout="root" src="../_static/js/lang-toggle.js?v=082004b6"></script>
+    <script data-layout="root" src="../_static/js/lang-toggle.js?v=9e8f3a3a"></script>
     <link rel="icon" href="../_static/logo.ico"/>
     <link rel="index" title="索引" href="../genindex.html" />
     <link rel="search" title="搜索" href="../search.html" />
-    <link rel="next" title="PD 分离" href="pd-disaggregation.html" />
-    <link rel="prev" title="使用 straw 持久化 rollout" href="straw.html" />
+    <link rel="next" title="容灾" href="fault-tolerance.html" />
+    <link rel="prev" title="性能分析 (Profiling)" href="../developer_guide/profiling.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.4.0" />
@@ -202,80 +202,25 @@
 </button></div>
         <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
     <div class="bd-toc-item navbar-nav active">
-        <p aria-level="2" class="caption" role="heading"><span class="caption-text">开始使用</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../get_started/quick_start.html">快速使用</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/usage.html">使用文档</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/customization.html">自定义指南</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/agent.html">Agentic RL 训练路线图</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/qa.html">常见 Q&amp;A</a></li>
+        <ul class="current nav bd-sidenav">
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="../library.html">文档资料库</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../get_started/index.html">从这里开始</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../training/index.html">训练与算法</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../rollout/index.html">Rollout 与调度</a></li>
+<li class="toctree-l2 current active has-children"><a class="reference internal" href="../operations/index.html">调试、性能分析与恢复</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="../developer_guide/debug.html">Debug 指南</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../developer_guide/trace.html">Trace 可视化</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../developer_guide/profiling.html">性能分析 (Profiling)</a></li>
+<li class="toctree-l3 current active"><a class="current reference internal" href="#">观测</a></li>
+<li class="toctree-l3"><a class="reference internal" href="fault-tolerance.html">容灾</a></li>
 </ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Dense</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4B.html">8xH100 训练 Qwen3-4B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm4-9B.html">8xH100 训练 GLM4-9B</a></li>
+</details></li>
+<li class="toctree-l2"><a class="reference internal" href="../examples/index.html">任务教程</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../developer_guide/index.html">开发与 CI</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../platform_support/index.html">硬件平台</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../blogs/index.html">设计文章与版本发布</a></li>
 </ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">MoE</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-30B-A3B.html">8×H100 训练 GLM-4.7-Flash</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-30B-A3B.html">8xH100 训练 Qwen3-30B-A3B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-next-80B-A3B.html">Qwen3-Next-80B-A3B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm5.2-744B-A40B.html">256xH100 训练 GLM-5.2 744B-A40B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-355B-A32B.html">64xH100 训练 GLM-4.7</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/deepseek-r1.html">128xH100 训练 DeepSeek R1</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">高级特性</span></p>
-<ul class="current nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="on-policy-distillation.html">在策略蒸馏 (On-Policy Distillation)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="speculative-decoding.html">投机采样</a></li>
-<li class="toctree-l1"><a class="reference internal" href="low-precision.html">低精度训练与 Rollout</a></li>
-<li class="toctree-l1"><a class="reference internal" href="reproducibility.html">Reproducibility</a></li>
-<li class="toctree-l1"><a class="reference internal" href="fault-tolerance.html">容灾</a></li>
-<li class="toctree-l1"><a class="reference internal" href="straw.html">使用 straw 持久化 rollout</a></li>
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">观测</a></li>
-<li class="toctree-l1"><a class="reference internal" href="pd-disaggregation.html">PD 分离</a></li>
-<li class="toctree-l1"><a class="reference internal" href="external-rollout-engines.html">External Rollout Engines 配置路线图</a></li>
-<li class="toctree-l1"><a class="reference internal" href="delta-weight-sync.html">Delta 权重同步</a></li>
-<li class="toctree-l1"><a class="reference internal" href="sglang-config.html">SGLang Config：高级引擎部署</a></li>
-<li class="toctree-l1"><a class="reference internal" href="megatron-config.html">Megatron Config：按角色覆盖训练参数</a></li>
-<li class="toctree-l1"><a class="reference internal" href="arch-support-beyond-megatron.html">在 Megatron-LM 中快速支持新模型架构</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">其他用法</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4b-base-openhermes.html">SFT Qwen3-4B-Base</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/search-r1/README.html">Search-R1 lite</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/fully_async/README.html">Fully-Async Rollout Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/coding_agent_rl/README.html">Coding-Agent RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/delta_weight_sync/README.html">Delta Weight Sync</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/eval_multi_task/README.html">Multi-Task Evaluation Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/geo3k_vlm/README.html">VLM Single-Turn RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/geo3k_vlm_multi_turn/README.html">VLM Multi-Turn (geo3k dataset)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/on_policy_distillation/README.html">On-Policy Distillation Example</a></li>
-
-
-
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/strands_sglang/README.html">slime x Strands-SGLang</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/tau-bench/README.html">Tau bench</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/train_infer_mismatch_helper/README.html">Rollout Correction Methods</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">开发指南</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/ci.html">CI（持续集成）</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/debug.html">Debug 指南</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/trace.html">Trace 可视化</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/profiling.html">性能分析 (Profiling)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/install_flashqla.html">安装 FlashQLA</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">硬件平台</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../platform_support/amd_tutorial.html">AMD ROCm</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">博客</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../blogs/release_v0.1.0.html">v0.1.0: 重新定义高性能 RL 训练框架</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../blogs/introducing_slime.html">slime：为 RL Scaling 设计的 SGLang-Native 后训练框架</a></li>
+</details></li>
 </ul>
 
     </div>
@@ -525,10 +470,10 @@
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="id1">
-<h1>观测<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h1>
+<h1>观测<a class="headerlink" href="#id1" title="Link to this heading">#</a></h1>
 <p>slime 的默认观测路径很简单：训练指标继续进 W&amp;B / TensorBoard；SGLang 的高频 Prometheus metrics 不再上传 W&amp;B；request timing 从 SGLang response <code class="docutils literal notranslate"><span class="pre">meta_info</span></code> 写进 sample trace，并在 rollout 结束时聚合成少量 <code class="docutils literal notranslate"><span class="pre">perf/...</span></code> 指标。</p>
 <section id="w-b-tensorboard">
-<h2>W&amp;B / TensorBoard 里会看到什么<a class="headerlink" href="#w-b-tensorboard" title="链接到此标题。">#</a></h2>
+<h2>W&amp;B / TensorBoard 里会看到什么<a class="headerlink" href="#w-b-tensorboard" title="Link to this heading">#</a></h2>
 <p>W&amp;B 和 TensorBoard 仍然记录 reward、loss、KL、entropy、eval 等训练指标。额外的 SGLang request timing 会放在 <code class="docutils literal notranslate"><span class="pre">perf/</span></code> 下，例如：</p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>perf/request/e2e_latency/mean
 perf/request/queue_time/median
@@ -551,7 +496,7 @@ perf/decode/forward_duration/mean
 <p>不开 PD 时仍然会有通用的 <code class="docutils literal notranslate"><span class="pre">perf/request/...</span></code> 和可用的 <code class="docutils literal notranslate"><span class="pre">perf/decode/throughput/...</span></code>。<code class="docutils literal notranslate"><span class="pre">perf/prefill/...</span></code> 和更细的 <code class="docutils literal notranslate"><span class="pre">perf/decode/...duration</span></code> 只有在 SGLang 返回对应 <code class="docutils literal notranslate"><span class="pre">pd_*</span></code> timing 字段时才会出现。</p>
 </section>
 <section id="prometheus-metrics">
-<h2>Prometheus metrics 存在哪里<a class="headerlink" href="#prometheus-metrics" title="链接到此标题。">#</a></h2>
+<h2>Prometheus metrics 存在哪里<a class="headerlink" href="#prometheus-metrics" title="Link to this heading">#</a></h2>
 <p>slime 自己不存 Prometheus 的每秒数据。SGLang / router 只暴露 <code class="docutils literal notranslate"><span class="pre">/metrics</span></code> 和 <code class="docutils literal notranslate"><span class="pre">/engine_metrics</span></code> HTTP endpoint；Prometheus 定期 scrape 这些 endpoint，并把时间序列写进 Prometheus 自己的 TSDB。</p>
 <p>因此：</p>
 <ul class="simple">
@@ -574,7 +519,7 @@ sglang:kv_transfer_total_mb_bucket
 <p>这些适合在 Grafana / Prometheus 里看实时 queue buildup、transfer speed、latency histogram、失败计数等 serving 状态。</p>
 </section>
 <section id="prometheus">
-<h2>如何启动 Prometheus<a class="headerlink" href="#prometheus" title="链接到此标题。">#</a></h2>
+<h2>如何启动 Prometheus<a class="headerlink" href="#prometheus" title="Link to this heading">#</a></h2>
 <p>Prometheus 需要在训练运行时启动，因为它只能 scrape 当前正在暴露的 endpoint，不能在训练结束后从 SGLang endpoint 里补回过去的数据。它不需要放进训练 Python 进程里，推荐作为同一台机器或同一个作业里的旁路进程运行。</p>
 <p>最小配置如下，把 <code class="docutils literal notranslate"><span class="pre">ROUTER_IP:ROUTER_PORT</span></code> 换成 slime 日志里的 router 地址，或者用户显式设置的 <code class="docutils literal notranslate"><span class="pre">--sglang-router-ip</span></code> / <code class="docutils literal notranslate"><span class="pre">--sglang-router-port</span></code>：</p>
 <div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global</span><span class="p">:</span>
@@ -600,7 +545,7 @@ sglang:kv_transfer_total_mb_bucket
 <p>如果 <code class="docutils literal notranslate"><span class="pre">--storage.tsdb.path</span></code> 在容器本地盘里，容器回收后数据也会丢；如果挂到 NFS、持久化卷或作业输出目录，训练结束后可以重新启动 Prometheus 指向同一个 TSDB 目录，再用 Prometheus UI 或 Grafana 查询历史时间段。这里的“回放”是时间序列回放和图表分析，不是 per-request trace 的完整重放；per-sample request timing 仍然走 sample trace / debug rollout 数据。</p>
 </section>
 <section id="trace-viewer">
-<h2>Trace viewer<a class="headerlink" href="#trace-viewer" title="链接到此标题。">#</a></h2>
+<h2>Trace viewer<a class="headerlink" href="#trace-viewer" title="Link to this heading">#</a></h2>
 <p><code class="docutils literal notranslate"><span class="pre">--save-debug-rollout-data</span></code> 保存的 sample trace 会包含 SGLang <code class="docutils literal notranslate"><span class="pre">meta_info</span></code> 里的 timing 字段。trace viewer 直接读取这些 attrs，并用 <code class="docutils literal notranslate"><span class="pre">pd_*</span></code> 字段展示 <code class="docutils literal notranslate"><span class="pre">[P]</span></code> / <code class="docutils literal notranslate"><span class="pre">[D]</span></code> 虚拟 lane。</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>tools/trace_timeline_viewer.py<span class="w"> </span>/path/to/debug/rollout_0.pt
 </pre></div>
@@ -621,20 +566,20 @@ sglang:kv_transfer_total_mb_bucket
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="straw.html"
+       href="../developer_guide/profiling.html"
        title="上一页">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">上一页</p>
-        <p class="prev-next-title">使用 straw 持久化 rollout</p>
+        <p class="prev-next-title">性能分析 (Profiling)</p>
       </div>
     </a>
     <a class="right-next"
-       href="pd-disaggregation.html"
+       href="fault-tolerance.html"
        title="下一页">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">下一页</p>
-        <p class="prev-next-title">PD 分离</p>
+        <p class="prev-next-title">容灾</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>

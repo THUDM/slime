@@ -33,7 +33,7 @@
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=03e43079" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/sphinx-book-theme.css?v=4418a689" />
     <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../../_static/css/custom_log.css?v=ad20845f" />
+    <link rel="stylesheet" type="text/css" href="../../_static/css/custom_log.css?v=5f5cb4b6" />
   
   <!-- So that users can add custom icons -->
   <script defer src="../../_static/scripts/fontawesome.js?digest=90905a2f556bf617f1a9"></script>
@@ -42,20 +42,20 @@
 <link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
     <script src="../../_static/documentation_options.js?v=183391d5"></script>
-    <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../../_static/copybutton.js?v=ccdb6887"></script>
     <script src="../../_static/scripts/sphinx-book-theme.js?v=fab101a9"></script>
     <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = '_examples_synced/fully_async/README';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
-    <script data-layout="root" src="../../_static/js/lang-toggle.js?v=082004b6"></script>
+    <script data-layout="root" src="../../_static/js/lang-toggle.js?v=9e8f3a3a"></script>
     <link rel="icon" href="../../_static/logo.ico"/>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="Retool: from SFT to RL" href="../retool/README.html" />
-    <link rel="prev" title="Search-R1 lite" href="../search-r1/README.html" />
+    <link rel="next" title="Delta Weight Sync" href="../delta_weight_sync/README.html" />
+    <link rel="prev" title="SFT Qwen3-4B-Base" href="../../examples/qwen3-4b-base-openhermes.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.4.0" />
@@ -202,80 +202,34 @@
 </button></div>
         <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
     <div class="bd-toc-item navbar-nav active">
-        <p aria-level="2" class="caption" role="heading"><span class="caption-text">Get Started</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../../get_started/quick_start.html">Quick Start</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../get_started/usage.html">Usage Guide</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../get_started/customization.html">Customization Guide</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../get_started/agent.html">Agentic RL Training Roadmap</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../get_started/qa.html">FAQ</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Dense</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../../examples/qwen3-4B.html">Qwen3-4B with 8xH100</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../examples/glm4-9B.html">GLM4-9B with 8xH100</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">MoE</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../../examples/glm4.7-30B-A3B.html">GLM-4.7-Flash with 8×H100</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../examples/qwen3-30B-A3B.html">Qwen3-30B-A3B with 8xH100</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../examples/qwen3-next-80B-A3B.html">Qwen3-Next-80B-A3B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../examples/glm5.2-744B-A40B.html">GLM-5.2 744B-A40B with 256xH100</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../examples/glm4.7-355B-A32B.html">GLM-4.7 with 64xH100</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../examples/deepseek-r1.html">DeepSeek R1 with 128xH100</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Advanced Features</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/on-policy-distillation.html">On-Policy Distillation</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/speculative-decoding.html">Speculative Decoding</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/low-precision.html">Low Precision Training and Rollout</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/reproducibility.html">Reproducibility</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/fault-tolerance.html">Fault Tolerance</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/straw.html">Persistent rollout with straw</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/observability.html">Observability</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/pd-disaggregation.html">PD Disaggregation</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/external-rollout-engines.html">External Rollout Engines Roadmap</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/delta-weight-sync.html">Delta Weight Sync</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/sglang-config.html">SGLang Config: Advanced Engine Deployment</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/megatron-config.html">Megatron Config: Role-Based Training Overrides</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/arch-support-beyond-megatron.html">Supporting Model Architectures Beyond Megatron-LM</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Other Usage</span></p>
-<ul class="current nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../../examples/qwen3-4b-base-openhermes.html">SFT Qwen3-4B-Base</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../search-r1/README.html">Search-R1 lite</a></li>
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">Fully-Async Rollout Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../retool/README.html">Retool: from SFT to RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../multi_agent/README.html">Multi-Agent RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../coding_agent_rl/README.html">Coding-Agent RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../delta_weight_sync/README.html">Delta Weight Sync</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../eval_multi_task/README.html">Multi-Task Evaluation Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../geo3k_vlm/README.html">VLM Single-Turn RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../geo3k_vlm_multi_turn/README.html">VLM Multi-Turn (geo3k dataset)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../on_policy_distillation/README.html">On-Policy Distillation Example</a></li>
+        <ul class="current nav bd-sidenav">
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="../../library.html">Documentation library</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../../get_started/index.html">Start here</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../training/index.html">Training &amp; algorithms</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../rollout/index.html">Rollout &amp; scheduling</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../operations/index.html">Debugging, profiling &amp; recovery</a></li>
+<li class="toctree-l2 current active has-children"><a class="reference internal" href="../../examples/index.html">Task tutorials</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="../../examples/agents/index.html">Agents &amp; environments</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../examples/multimodal/index.html">Multimodal tasks</a></li>
+<li class="toctree-l3 current active has-children"><a class="reference internal" href="../../examples/workflows/index.html">Training &amp; systems workflows</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l4"><a class="reference internal" href="../../examples/qwen3-4b-base-openhermes.html">SFT Qwen3-4B-Base</a></li>
+<li class="toctree-l4 current active"><a class="current reference internal" href="#">Fully-Async Rollout Example</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../delta_weight_sync/README.html">Delta Weight Sync</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../eval_multi_task/README.html">Multi-Task Evaluation Example</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../on_policy_distillation/README.html">On-Policy Distillation Example</a></li>
 
 
 
-<li class="toctree-l1"><a class="reference internal" href="../strands_sglang/README.html">slime x Strands-SGLang</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../tau-bench/README.html">Tau bench</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../train_infer_mismatch_helper/README.html">Rollout Correction Methods</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../train_infer_mismatch_helper/README.html">Rollout Correction Methods</a></li>
 </ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Developer Guide</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../../developer_guide/ci.html">CI (Continuous Integration)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../developer_guide/debug.html">Debugging</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../developer_guide/trace.html">Trace Viewer</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../developer_guide/profiling.html">Profiling</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../developer_guide/install_flashqla.html">Installing FlashQLA</a></li>
+</details></li>
 </ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Hardware Platforms</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../../platform_support/amd_tutorial.html">AMD ROCm</a></li>
+</details></li>
+<li class="toctree-l2"><a class="reference internal" href="../../developer_guide/index.html">Development &amp; CI</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../platform_support/index.html">Hardware platforms</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../blogs/index.html">Design notes &amp; releases</a></li>
 </ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Blogs</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../../blogs/release_v0.1.0.html">v0.1.0: Redefining High-Performance RL Training Frameworks</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../blogs/introducing_slime.html">slime: An SGLang-Native Post-Training Framework for RL Scaling</a></li>
+</details></li>
 </ul>
 
     </div>
@@ -514,6 +468,7 @@
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#run">Run</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-to-plug-your-own-generate-into-this">How To Plug Your Own Generate Into This</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#worker-internals-very-short">Worker Internals (Very Short)</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#partial-rollout-and-durable-storage">Partial rollout and durable storage</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#limitations">Limitations</a></li>
 </ul>
             </nav>
@@ -584,18 +539,45 @@ multi-turn agent (Claude Code in a Docker-Proxy sandbox) this way.</p>
 <section id="worker-internals-very-short">
 <h2>Worker Internals (Very Short)<a class="headerlink" href="#worker-internals-very-short" title="Link to this heading">#</a></h2>
 <ul class="simple">
-<li><p>First call: create a process-wide <code class="docutils literal notranslate"><span class="pre">AsyncRolloutWorker</span></code> (thread + asyncio
-loop). The worker is shared across all subsequent <code class="docutils literal notranslate"><span class="pre">generate_rollout</span></code>
-calls so its queue stays warm.</p></li>
-<li><p>Loop keeps up to <code class="docutils literal notranslate"><span class="pre">args.sglang_server_concurrency</span></code> tasks in flight using
-<code class="docutils literal notranslate"><span class="pre">generate_and_rm_group</span></code>.</p></li>
+<li><p>With the default object-store data source, the first call creates a
+manager-local <code class="docutils literal notranslate"><span class="pre">AsyncRolloutWorker</span></code> (thread + asyncio loop). The data source
+owns it across subsequent calls so its queue stays warm.</p></li>
+<li><p>With <code class="docutils literal notranslate"><span class="pre">--rollout-data-transport</span> <span class="pre">straw</span></code>, queue readers select
+<code class="docutils literal notranslate"><span class="pre">DistributedRollout</span></code>: one generation actor on each eligible Ray node with
+CPU resources. These actors request generations from the SGLang engines;
+they do not load additional model replicas.</p></li>
+<li><p>The concurrency budget is <code class="docutils literal notranslate"><span class="pre">sglang_server_concurrency</span></code> times the logical
+engine count, divided into prompt-group slots. Distributed workers share
+those slots and need at least one group per worker node.</p></li>
 <li><p>Completed groups land on an output queue; each <code class="docutils literal notranslate"><span class="pre">generate_rollout</span></code> call
 drains until it has <code class="docutils literal notranslate"><span class="pre">rollout_batch_size</span></code> groups and returns them sorted
 by <code class="docutils literal notranslate"><span class="pre">sample.index</span></code>.</p></li>
 <li><p>Groups containing an <code class="docutils literal notranslate"><span class="pre">ABORTED</span></code> sample are pushed back into
 <code class="docutils literal notranslate"><span class="pre">data_buffer.add_samples</span></code> instead of being shipped to training.</p></li>
-<li><p>Worker is stopped automatically at process exit via <code class="docutils literal notranslate"><span class="pre">atexit</span></code>.</p></li>
+<li><p>The data source coordinates pause, checkpoint and close. Admission pauses
+around weight synchronization; in-flight work is preserved before resuming.</p></li>
 </ul>
+</section>
+<section id="partial-rollout-and-durable-storage">
+<h2>Partial rollout and durable storage<a class="headerlink" href="#partial-rollout-and-durable-storage" title="Link to this heading">#</a></h2>
+<p>Partial rollout is also useful with synchronous training. With
+<code class="docutils literal notranslate"><span class="pre">--partial-rollout</span></code>, the standard sampler retains unfinished prefixes after
+enough complete groups are accepted, then resumes them in a later rollout.
+Oversampling supplies spare groups; for example use a target batch of 8 groups
+and <code class="docutils literal notranslate"><span class="pre">--over-sampling-batch-size</span> <span class="pre">16</span></code>. Completed groups form the training batch;
+unfinished groups are saved for continuation.</p>
+<p>Async workers rebuffer aborted groups through their own lifecycle. A continued
+response can contain several weight versions. Optional
+<code class="docutils literal notranslate"><span class="pre">--mask-offpolicy-in-partial-rollout</span></code> excludes existing prefix tokens from the
+loss, but does not remove prefix-distribution mismatch.</p>
+<p>straw persists tasks, partial/ready groups and packed tensors on shared storage.
+For multi-node execution, configure a verified JuiceFS mount at the same path
+on all nodes, along with <code class="docutils literal notranslate"><span class="pre">--rollout-data-dir</span></code>, <code class="docutils literal notranslate"><span class="pre">--rollout-queue-run-id</span></code>,
+<code class="docutils literal notranslate"><span class="pre">--rollout-storage-profile</span> <span class="pre">juicefs</span></code> and <code class="docutils literal notranslate"><span class="pre">--rollout-storage-declaration</span></code>.
+Recovery needs a completed model/optimizer and rollout checkpoint plus the
+referenced data pool and compatible worker topology. See the
+<a class="reference external" href="https://github.com/THUDM/slime/blob/main/docs/en/advanced/rollout-scheduling.md">scheduling tutorial</a>
+and <a class="reference external" href="https://github.com/THUDM/slime/blob/main/docs/en/advanced/straw.md">straw guide</a>.</p>
 </section>
 <section id="limitations">
 <h2>Limitations<a class="headerlink" href="#limitations" title="Link to this heading">#</a></h2>
@@ -603,8 +585,12 @@ by <code class="docutils literal notranslate"><span class="pre">sample.index</sp
 <li><p>No evaluation mode (would conflict with the continuous-running model).</p></li>
 <li><p>Ordering across rollouts is best-effort — within a rollout, groups are
 sorted by index before being handed to training.</p></li>
-<li><p>TODO: partial-rollout-style resume for <code class="docutils literal notranslate"><span class="pre">ABORTED</span></code> trajectories is not
-yet wired; for now the trajectory is re-queued and starts over.</p></li>
+<li><p>Distributed fully async does not support <code class="docutils literal notranslate"><span class="pre">--rollout-all-samples-process-path</span></code>.</p></li>
+<li><p>straw does not support <code class="docutils literal notranslate"><span class="pre">--buffer-filter-path</span></code>; its persisted queue has its
+own completed/partial/fresh ordering and staleness priority.</p></li>
+<li><p>Restoring queue state does not restore GPU KV caches or guarantee identical
+future random generations. Custom generation hooks must preserve the
+continuation and abort contracts.</p></li>
 </ul>
 </section>
 </section>
@@ -621,20 +607,20 @@ yet wired; for now the trajectory is re-queued and starts over.</p></li>
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="../search-r1/README.html"
+       href="../../examples/qwen3-4b-base-openhermes.html"
        title="previous page">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">previous</p>
-        <p class="prev-next-title">Search-R1 lite</p>
+        <p class="prev-next-title">SFT Qwen3-4B-Base</p>
       </div>
     </a>
     <a class="right-next"
-       href="../retool/README.html"
+       href="../delta_weight_sync/README.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Retool: from SFT to RL</p>
+        <p class="prev-next-title">Delta Weight Sync</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -661,6 +647,7 @@ yet wired; for now the trajectory is re-queued and starts over.</p></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#run">Run</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-to-plug-your-own-generate-into-this">How To Plug Your Own Generate Into This</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#worker-internals-very-short">Worker Internals (Very Short)</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#partial-rollout-and-durable-storage">Partial rollout and durable storage</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#limitations">Limitations</a></li>
 </ul>
   </nav></div>

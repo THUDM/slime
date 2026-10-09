@@ -33,7 +33,7 @@
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=4418a689" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=ad20845f" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=5f5cb4b6" />
   
   <!-- So that users can add custom icons -->
   <script defer src="../_static/scripts/fontawesome.js?digest=90905a2f556bf617f1a9"></script>
@@ -42,20 +42,20 @@
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
     <script src="../_static/documentation_options.js?v=ceb54874"></script>
-    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../_static/copybutton.js?v=ccdb6887"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?v=fab101a9"></script>
     <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'advanced/straw';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
-    <script data-layout="root" src="../_static/js/lang-toggle.js?v=082004b6"></script>
+    <script data-layout="root" src="../_static/js/lang-toggle.js?v=9e8f3a3a"></script>
     <link rel="icon" href="../_static/logo.ico"/>
     <link rel="index" title="索引" href="../genindex.html" />
     <link rel="search" title="搜索" href="../search.html" />
-    <link rel="next" title="观测" href="observability.html" />
-    <link rel="prev" title="容灾" href="fault-tolerance.html" />
+    <link rel="next" title="PD 分离" href="pd-disaggregation.html" />
+    <link rel="prev" title="同步、partial 与 distributed fully async rollout" href="rollout-scheduling.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.4.0" />
@@ -202,80 +202,28 @@
 </button></div>
         <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
     <div class="bd-toc-item navbar-nav active">
-        <p aria-level="2" class="caption" role="heading"><span class="caption-text">开始使用</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../get_started/quick_start.html">快速使用</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/usage.html">使用文档</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/customization.html">自定义指南</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/agent.html">Agentic RL 训练路线图</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/qa.html">常见 Q&amp;A</a></li>
+        <ul class="current nav bd-sidenav">
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="../library.html">文档资料库</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../get_started/index.html">从这里开始</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../training/index.html">训练与算法</a></li>
+<li class="toctree-l2 current active has-children"><a class="reference internal" href="../rollout/index.html">Rollout 与调度</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="rl-systems.html">看懂你正在搭建的 RL 系统</a></li>
+<li class="toctree-l3"><a class="reference internal" href="rollout-scheduling.html">同步、partial 与 distributed fully async rollout</a></li>
+<li class="toctree-l3 current active"><a class="current reference internal" href="#">使用 straw 持久化 rollout</a></li>
+<li class="toctree-l3"><a class="reference internal" href="pd-disaggregation.html">PD 分离</a></li>
+<li class="toctree-l3"><a class="reference internal" href="external-rollout-engines.html">External Rollout Engines 配置路线图</a></li>
+<li class="toctree-l3"><a class="reference internal" href="delta-weight-sync.html">Delta 权重同步</a></li>
+<li class="toctree-l3"><a class="reference internal" href="sglang-config.html">SGLang Config：高级引擎部署</a></li>
+<li class="toctree-l3"><a class="reference internal" href="speculative-decoding.html">投机采样</a></li>
 </ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Dense</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4B.html">8xH100 训练 Qwen3-4B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm4-9B.html">8xH100 训练 GLM4-9B</a></li>
+</details></li>
+<li class="toctree-l2"><a class="reference internal" href="../operations/index.html">调试、性能分析与恢复</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../examples/index.html">任务教程</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../developer_guide/index.html">开发与 CI</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../platform_support/index.html">硬件平台</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../blogs/index.html">设计文章与版本发布</a></li>
 </ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">MoE</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-30B-A3B.html">8×H100 训练 GLM-4.7-Flash</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-30B-A3B.html">8xH100 训练 Qwen3-30B-A3B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-next-80B-A3B.html">Qwen3-Next-80B-A3B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm5.2-744B-A40B.html">256xH100 训练 GLM-5.2 744B-A40B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-355B-A32B.html">64xH100 训练 GLM-4.7</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/deepseek-r1.html">128xH100 训练 DeepSeek R1</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">高级特性</span></p>
-<ul class="current nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="on-policy-distillation.html">在策略蒸馏 (On-Policy Distillation)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="speculative-decoding.html">投机采样</a></li>
-<li class="toctree-l1"><a class="reference internal" href="low-precision.html">低精度训练与 Rollout</a></li>
-<li class="toctree-l1"><a class="reference internal" href="reproducibility.html">Reproducibility</a></li>
-<li class="toctree-l1"><a class="reference internal" href="fault-tolerance.html">容灾</a></li>
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">使用 straw 持久化 rollout</a></li>
-<li class="toctree-l1"><a class="reference internal" href="observability.html">观测</a></li>
-<li class="toctree-l1"><a class="reference internal" href="pd-disaggregation.html">PD 分离</a></li>
-<li class="toctree-l1"><a class="reference internal" href="external-rollout-engines.html">External Rollout Engines 配置路线图</a></li>
-<li class="toctree-l1"><a class="reference internal" href="delta-weight-sync.html">Delta 权重同步</a></li>
-<li class="toctree-l1"><a class="reference internal" href="sglang-config.html">SGLang Config：高级引擎部署</a></li>
-<li class="toctree-l1"><a class="reference internal" href="megatron-config.html">Megatron Config：按角色覆盖训练参数</a></li>
-<li class="toctree-l1"><a class="reference internal" href="arch-support-beyond-megatron.html">在 Megatron-LM 中快速支持新模型架构</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">其他用法</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4b-base-openhermes.html">SFT Qwen3-4B-Base</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/search-r1/README.html">Search-R1 lite</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/fully_async/README.html">Fully-Async Rollout Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/coding_agent_rl/README.html">Coding-Agent RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/delta_weight_sync/README.html">Delta Weight Sync</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/eval_multi_task/README.html">Multi-Task Evaluation Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/geo3k_vlm/README.html">VLM Single-Turn RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/geo3k_vlm_multi_turn/README.html">VLM Multi-Turn (geo3k dataset)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/on_policy_distillation/README.html">On-Policy Distillation Example</a></li>
-
-
-
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/strands_sglang/README.html">slime x Strands-SGLang</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/tau-bench/README.html">Tau bench</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/train_infer_mismatch_helper/README.html">Rollout Correction Methods</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">开发指南</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/ci.html">CI（持续集成）</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/debug.html">Debug 指南</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/trace.html">Trace 可视化</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/profiling.html">性能分析 (Profiling)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/install_flashqla.html">安装 FlashQLA</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">硬件平台</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../platform_support/amd_tutorial.html">AMD ROCm</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">博客</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../blogs/release_v0.1.0.html">v0.1.0: 重新定义高性能 RL 训练框架</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../blogs/introducing_slime.html">slime：为 RL Scaling 设计的 SGLang-Native 后训练框架</a></li>
+</details></li>
 </ul>
 
     </div>
@@ -531,11 +479,11 @@
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="straw-rollout">
-<h1>使用 straw 持久化 rollout<a class="headerlink" href="#straw-rollout" title="链接到此标题。">#</a></h1>
+<h1>使用 straw 持久化 rollout<a class="headerlink" href="#straw-rollout" title="Link to this heading">#</a></h1>
 <p><a class="reference external" href="https://github.com/zhuzilin/straw">straw</a> 为 slime 提供基于文件系统的队列和打包张量存储，持久化 prompt 任务、partial rollout、已完成 sample 和训练 batch。多机上的生成与训练进程可以并行读写载荷，Ray 负责传递控制消息和引用。</p>
 <p>当前支持的共享文件系统是 JuiceFS，所有节点必须以相同绝对路径挂载存储池。包括 NFS 在内的其他网络文件系统，需要单独验证锁、可见性和持久性。</p>
 <section id="id1">
-<h2>启用方式<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h2>
+<h2>启用方式<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
 <p>标准 slime 安装和 Docker 构建包含 <code class="docutils literal notranslate"><span class="pre">straw-queue</span></code>。已有环境可以在每个 rollout 和训练节点执行以下命令，同一任务使用相同版本：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span><span class="s1">'straw-queue&gt;=0.1.2'</span>
 </pre></div>
@@ -558,7 +506,7 @@
 <p>未安装 straw 时，默认 object-store 传输可以运行；显式选择 straw 则在启动时报错并给出安装命令。</p>
 </section>
 <section id="id2">
-<h2>数据流与调度<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h2>
+<h2>数据流与调度<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
 <ol class="arabic simple">
 <li><p>Worker 请求 prompt group，数据源从 dataset 读取数据，将 group 和更新后的游标一起保存到队列。</p></li>
 <li><p>Worker 生成和打分。归还的 partial group 持久化后等待续跑；已接收的完整 group 可供训练使用。</p></li>
@@ -569,8 +517,8 @@
 <p>straw 不支持 <code class="docutils literal notranslate"><span class="pre">--buffer-filter-path</span></code>。<code class="docutils literal notranslate"><span class="pre">--buffer-sort-by-staleness</span></code> 适用于内存数据源，straw 使用上述排序规则。Reward 和 sample-selection hook 可用；分布式 fully async 不支持 <code class="docutils literal notranslate"><span class="pre">--rollout-all-samples-process-path</span></code>。自定义 rollout 函数和 queue reader 的用法见<a class="reference internal" href="../get_started/customization.html"><span class="std std-doc">自定义功能</span></a>。</p>
 </section>
 <section id="id3">
-<h2>数据打包与支持类型<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h2>
-<p>选择 Straw 传输后，数据默认打包写入：每个写入进程将多个样本和张量追加到同一个文件（pack）中，减少共享存储上大量小文件的管理开销。slime 默认沿用 Straw 的包大小，当前为 <strong>1 GiB</strong>；可以通过 <code class="docutils literal notranslate"><span class="pre">--rollout-queue-segment-mib</span></code> 指定其他大小，单位为 MiB。</p>
+<h2>数据打包与支持类型<a class="headerlink" href="#id3" title="Link to this heading">#</a></h2>
+<p>选择 straw 传输后，数据默认打包写入：每个写入进程将多个样本和张量追加到同一个文件（pack）中，减少共享存储上大量小文件的管理开销。slime 默认沿用 straw 的包大小，当前为 <strong>1 GiB</strong>；可以通过 <code class="docutils literal notranslate"><span class="pre">--rollout-queue-segment-mib</span></code> 指定其他大小，单位为 MiB。</p>
 <p>包大小控制何时切换到新文件，不影响数据何时可读：每次发布的数据都可以立即读取，无需等待包写满。单次发布超过目标大小时会完整保留，不会为了满足包大小而拆开；显式封存也可能产生小于目标大小的包。</p>
 <p>已写入的张量通过不可变引用在 rollout、训练批次和 checkpoint 之间共享。修改数据时会写入新记录，已有引用仍指向原来的内容。</p>
 <p>Sample codec 支持嵌套 list、tuple、dict、标量、字节数据、NumPy 数组、PyTorch 张量、PIL 图像和 Sample 字段，包括受支持的自定义字段。R3 routes、SC top-k 和 ragged top-p 数据以 typed tensor 保存。不支持的 Python 对象和循环引用会在发布时报错。记录和张量读取都有校验和检查。</p>
@@ -584,7 +532,7 @@
 </thead>
 <tbody>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--rollout-queue-segment-mib</span></code></p></td>
-<td><p>不设置，沿用 Straw 默认值（当前为 <code class="docutils literal notranslate"><span class="pre">1024</span></code>）</p></td>
+<td><p>不设置，沿用 straw 默认值（当前为 <code class="docutils literal notranslate"><span class="pre">1024</span></code>）</p></td>
 <td><p>切换到新包的目标大小，单位 MiB；显式设置时必须为正数。</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--rollout-io-concurrency</span></code></p></td>
@@ -600,18 +548,18 @@
 </div>
 </section>
 <section id="gc">
-<h2>在线 GC<a class="headerlink" href="#gc" title="链接到此标题。">#</a></h2>
+<h2>在线 GC<a class="headerlink" href="#gc" title="Link to this heading">#</a></h2>
 <p>在线 GC 默认关闭，通过 <code class="docutils literal notranslate"><span class="pre">--rollout-queue-online-gc</span></code> 开启。slime 在任务和训练 batch 使用完成或被丢弃后通知 straw。只有所有任务、reader、checkpoint 和归档都释放引用后，straw 才会回收封存的 pack。一条存活记录就会保留整个 pack，活跃 writer 和日志历史也会占用空间。</p>
 <p>保留的 checkpoint 和归档在 GC 开启时也能保护其载荷，因此回退不需要关闭 GC。数据不再需要时还应释放对应的存储保留关系；只删除索引文件不会释放所有权。不要手动删除活跃存储池中的 pack 文件。离线删除前，先停止所有 coordinator、writer 和 reader。</p>
 <p>GC 失败会通过后续队列操作和关闭流程报告。容量耗尽时需要释放不再使用的保留数据或增加容量，不会自动 reset 队列。目前没有活跃 pack 和日志压缩功能。</p>
 </section>
 <section id="checkpoint">
-<h2>恢复与 checkpoint<a class="headerlink" href="#checkpoint" title="链接到此标题。">#</a></h2>
+<h2>恢复与 checkpoint<a class="headerlink" href="#checkpoint" title="Link to this heading">#</a></h2>
 <p>正常训练 checkpoint 同时保存模型和 rollout 状态，包括 dataset 游标、sample/group 编号、pending/partial 输入、ready group 和训练进度。已经保存在 straw 中的载荷通过引用保存，不会在每次 checkpoint 时重新复制。保留 checkpoint 会保留它依赖的数据。</p>
 <p>本节介绍推理集群也需要重新启动时的恢复方式。启动前需要停止整个原任务，包括远端生成进程；保存目录的锁会拒绝同时运行的队列控制器，但不会替你停止遗留的读取进程。目前不支持队列控制器自动故障转移。</p>
 <p>如果只是 Megatron 训练失败，Ray 和推理集群仍在运行，应按<a class="reference internal" href="fault-tolerance.html"><span class="std std-doc">容灾文档</span></a>重新提交训练任务，保留原来的推理服务和队列控制器。</p>
 <section id="step">
-<h3>续跑或选择 step<a class="headerlink" href="#step" title="链接到此标题。">#</a></h3>
+<h3>续跑或选择 step<a class="headerlink" href="#step" title="Link to this heading">#</a></h3>
 <p>使用相同的逻辑目录恢复最近一次完整 checkpoint：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--rollout-data-transport<span class="w"> </span>straw<span class="w"> </span><span class="se">\</span>
 --load<span class="w"> </span>/shared/checkpoints/run<span class="w"> </span><span class="se">\</span>
@@ -648,7 +596,7 @@
 <p>也可以修改逻辑 save 目录或当前分支中的 <code class="docutils literal notranslate"><span class="pre">latest_checkpointed_iteration.txt</span></code>，选择更早的 step。显式 <code class="docutils literal notranslate"><span class="pre">--ckpt-step</span></code> 或具体提交文件优先。自动选择只使用完整的模型与队列 checkpoint，不会跟随更晚但未完成的模型保存。沿父分支查找时只追溯到各分支起点；如需加载其他分支已放弃的后续历史，请指定具体提交文件。</p>
 </section>
 <section id="id4">
-<h3>缺失状态与恢复限制<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h3>
+<h3>缺失状态与恢复限制<a class="headerlink" href="#id4" title="Link to this heading">#</a></h3>
 <p>如果模型存在但没有保存队列快照，则从空队列开始。存在 <code class="docutils literal notranslate"><span class="pre">rollout/global_dataset_state_dict_&lt;step&gt;.pt</span></code> 时恢复其中的 dataset 游标，否则从 offset 0 开始并打印警告。不会从其他 step 借用 pending、partial 或 ready 数据。模型缺失、快照不完整或损坏、载荷缺失、快照版本不受支持等情况会报错，不会静默退化成空队列。</p>
 <p>尚无模型 checkpoint 时，使用相同 <code class="docutils literal notranslate"><span class="pre">--save</span></code> 和模型/输入配置重启原任务，可以恢复已持久化的 rollout 工作，但仅限于第一个训练 batch 尚未开始规划的阶段。之后恢复需要匹配的模型/optimizer 和 rollout checkpoint。</p>
 <p>恢复依赖原 straw 存储池，单独复制 checkpoint 目录不会复制载荷。恢复边界是完成的 rollout 训练 batch，不是 optimizer microstep。GPU KV cache 和生成 RNG 状态不会恢复，新生成的 token 和随机 hook 结果可能不同。</p>
@@ -656,7 +604,7 @@
 </section>
 </section>
 <section id="debug-key">
-<h2>Debug 归档与按 key 查询<a class="headerlink" href="#debug-key" title="链接到此标题。">#</a></h2>
+<h2>Debug 归档与按 key 查询<a class="headerlink" href="#debug-key" title="Link to this heading">#</a></h2>
 <p>Debug 保存和加载参数支持 <code class="docutils literal notranslate"><span class="pre">.pt</span></code> 与 <code class="docutils literal notranslate"><span class="pre">.straw.json</span></code> 两种格式：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--save-debug-rollout-data<span class="w"> </span><span class="s1">'/shared/debug/rollout_{rollout_id}.straw.json'</span>
 <span class="c1"># 在独立的只训练任务中加载，不启动 SGLang：</span>
@@ -714,20 +662,20 @@
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="fault-tolerance.html"
+       href="rollout-scheduling.html"
        title="上一页">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">上一页</p>
-        <p class="prev-next-title">容灾</p>
+        <p class="prev-next-title">同步、partial 与 distributed fully async rollout</p>
       </div>
     </a>
     <a class="right-next"
-       href="observability.html"
+       href="pd-disaggregation.html"
        title="下一页">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">下一页</p>
-        <p class="prev-next-title">观测</p>
+        <p class="prev-next-title">PD 分离</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>

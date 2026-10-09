@@ -1,752 +1,121 @@
 
+
 <!DOCTYPE html>
-
-
-<html lang="en" data-content_root="./" >
-
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
-
-    <title>slime Documentation &#8212; slime</title>
-  
-  
-  
-  <script data-cfasync="false">
-    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
-    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
-  </script>
-  <!--
-    this give us a css class that will be invisible only if js is disabled
-  -->
-  <noscript>
-    <style>
-      .pst-js-only { display: none !important; }
-
-    </style>
-  </noscript>
-  
-  <!-- Loaded before other Sphinx assets -->
-  <link href="_static/styles/theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
-<link href="_static/styles/pydata-sphinx-theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
-
-    <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=03e43079" />
-    <link rel="stylesheet" type="text/css" href="_static/styles/sphinx-book-theme.css?v=4418a689" />
-    <link rel="stylesheet" type="text/css" href="_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="_static/css/custom_log.css?v=ad20845f" />
-  
-  <!-- So that users can add custom icons -->
-  <script defer src="_static/scripts/fontawesome.js?digest=90905a2f556bf617f1a9"></script>
-  <!-- Pre-loaded scripts that we'll load fully later -->
-  <link rel="preload" as="script" href="_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
-<link rel="preload" as="script" href="_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
-
-    <script src="_static/documentation_options.js?v=183391d5"></script>
-    <script src="_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
-    <script src="_static/clipboard.min.js?v=a7894cd8"></script>
-    <script src="_static/copybutton.js?v=ccdb6887"></script>
-    <script src="_static/scripts/sphinx-book-theme.js?v=fab101a9"></script>
-    <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-    <script>DOCUMENTATION_OPTIONS.pagename = 'index';</script>
-    <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
-    <script data-layout="root" src="_static/js/lang-toggle.js?v=082004b6"></script>
-    <link rel="icon" href="_static/logo.ico"/>
-    <link rel="index" title="Index" href="genindex.html" />
-    <link rel="search" title="Search" href="search.html" />
-    <link rel="next" title="Quick Start" href="get_started/quick_start.html" />
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <meta name="docsearch:language" content="en"/>
-  <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="Oct 09, 2026"/>
-  
-    
-    <script src="_static/searchtools.js"></script>
-    <script src="_static/language_data.js"></script>
-    <script src="searchindex.js"></script>
-  
-  </head>
-  <body data-default-mode="">
-  
-  
-  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
-
-  
-  <div id="pst-scroll-pixel-helper"></div>
-  
-  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
-    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
-  
-  
-  
-  
-  <dialog id="pst-search-dialog">
-    
-<form class="bd-search d-flex align-items-center"
-      action="search.html"
-      method="get">
-  <i class="fa-solid fa-magnifying-glass"></i>
-  <input type="search"
-         class="form-control"
-         name="q"
-         placeholder="Search..."
-         aria-label="Search..."
-         autocomplete="off"
-         autocorrect="off"
-         autocapitalize="off"
-         spellcheck="false"/>
-  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
-</form>
-  </dialog>
-
-  <div class="pst-async-banner-revealer d-none">
-  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
-</div>
-
-  
-    <header id="pst-header" class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
-<div class="bd-header__inner bd-page-width">
-  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
-    <span class="fa-solid fa-bars"></span>
-  </button>
-  
-  
-  <div class="col-lg-9 navbar-header-items">
-    
-    
-    <div class="navbar-header-items__end">
-      
-        <div class="navbar-item navbar-persistent--container">
-          
-
-<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
- <i class="fa-solid fa-magnifying-glass"></i>
- <span class="search-button__default-text">Search</span>
- <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
-</button>
-        </div>
-      
-      
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Build a GLM reinforcement learning experiment. Explore the tradeoffs, understand the math, and export a slime launch script.">
+  <title>slime · Build your next experiment</title>
+  <link rel="icon" href="_static/image/logo.ico">
+  <link rel="stylesheet" href="_static/css/experiment.css">
+  <script defer src="_static/js/experiment-engine.js"></script>
+  <script defer src="_static/js/experiment-diagrams.js"></script>
+  <script defer src="_static/js/experiment-reader.js"></script>
+  <script defer src="_static/js/experiment-ui.js"></script>
+  <script defer src="_static/js/lang-toggle.js" data-layout="root"></script>
+</head>
+<body>
+<a class="skip-link" href="#lab">Skip to experiment builder</a>
+<header class="site-header">
+  <a class="brand" href="#"><img src="_static/image/logo.jpg" alt="" width="42" height="42">slime<span> / experiment lab</span></a>
+  <nav aria-label="Main navigation">
+    <a href="#lab">Build</a>
+    <a href="library.html">Docs</a>
+    <a href="https://github.com/THUDM/slime">GitHub ↗</a>
+    <span class="article-header-buttons"></span>
+  </nav>
+</header>
+<main>
+  <section class="hero">
+    <div class="hero-copy">
+      <p class="eyebrow"><span class="live-dot"></span> A LITTLE SLIME. A LOT OF POSSIBILITY.</p>
+      <h1>Built for<br><span>scaling RL.</span></h1>
+      <p class="hero-description">slime is an LLM post-training framework for RL scaling, providing two core capabilities:</p>
+      <ol class="hero-capabilities"><li><a href="#capability-training">High-Performance Training ↘</a></li><li><a href="#capability-generation">Flexible Data Generation ↘</a></li></ol>
+      <a class="button primary" href="#lab">Build your first experiment <span>↗</span></a>
+      <span class="hero-note">Explore. Undo. Try again.</span>
     </div>
-    
-  </div>
-  
-  
-    <div class="navbar-persistent--mobile">
-
-<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
- <i class="fa-solid fa-magnifying-glass"></i>
- <span class="search-button__default-text">Search</span>
- <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
-</button>
+    <div class="hero-art" aria-hidden="true">
+      <span class="orbit-label label-top">rollout → reward → train</span>
+      <div class="mascot-frame"><img src="_static/image/logo.jpg" alt="" width="300" height="300"></div>
+      <span class="orbit-label label-bottom">a little slime. a lot of possibility.</span>
+      <span class="spark spark-one">✳</span><span class="spark spark-two">✦</span>
     </div>
-  
-
-  
-    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="On this page">
-      <span class="fa-solid fa-outdent"></span>
-    </button>
-  
-</div>
-
-    </header>
-  
-
-  <div class="bd-container">
-    <div class="bd-container__inner bd-page-width">
-      
-      
-      
-        
-      
-      <dialog id="pst-primary-sidebar-modal"></dialog>
-      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
-        
-
-  
-  <div class="sidebar-header-items sidebar-primary__section">
-    
-    
-    
-    
-  </div>
-  
-    <div class="sidebar-primary-items__start sidebar-primary__section">
-        <div class="sidebar-primary-item">
-
-  
-    
-  
-
-<a class="navbar-brand logo" href="#">
-  
-  
-  
-  
-  
-    
-    
-      
-    
-    
-    <img src="_static/logo.jpg" class="logo__image only-light" alt="slime - Home"/>
-    <img src="_static/logo.jpg" class="logo__image only-dark pst-js-only" alt="slime - Home"/>
-  
-  
-</a></div>
-        <div class="sidebar-primary-item">
-
-<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
- <i class="fa-solid fa-magnifying-glass"></i>
- <span class="search-button__default-text">Search</span>
- <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
-</button></div>
-        <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
-    <div class="bd-toc-item navbar-nav active">
-        <p aria-level="2" class="caption" role="heading"><span class="caption-text">Get Started</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="get_started/quick_start.html">Quick Start</a></li>
-<li class="toctree-l1"><a class="reference internal" href="get_started/usage.html">Usage Guide</a></li>
-<li class="toctree-l1"><a class="reference internal" href="get_started/customization.html">Customization Guide</a></li>
-<li class="toctree-l1"><a class="reference internal" href="get_started/agent.html">Agentic RL Training Roadmap</a></li>
-<li class="toctree-l1"><a class="reference internal" href="get_started/qa.html">FAQ</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Dense</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="examples/qwen3-4B.html">Qwen3-4B with 8xH100</a></li>
-<li class="toctree-l1"><a class="reference internal" href="examples/glm4-9B.html">GLM4-9B with 8xH100</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">MoE</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="examples/glm4.7-30B-A3B.html">GLM-4.7-Flash with 8×H100</a></li>
-<li class="toctree-l1"><a class="reference internal" href="examples/qwen3-30B-A3B.html">Qwen3-30B-A3B with 8xH100</a></li>
-<li class="toctree-l1"><a class="reference internal" href="examples/qwen3-next-80B-A3B.html">Qwen3-Next-80B-A3B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="examples/glm5.2-744B-A40B.html">GLM-5.2 744B-A40B with 256xH100</a></li>
-<li class="toctree-l1"><a class="reference internal" href="examples/glm4.7-355B-A32B.html">GLM-4.7 with 64xH100</a></li>
-<li class="toctree-l1"><a class="reference internal" href="examples/deepseek-r1.html">DeepSeek R1 with 128xH100</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Advanced Features</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="advanced/on-policy-distillation.html">On-Policy Distillation</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/speculative-decoding.html">Speculative Decoding</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/low-precision.html">Low Precision Training and Rollout</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/reproducibility.html">Reproducibility</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/fault-tolerance.html">Fault Tolerance</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/straw.html">Persistent rollout with straw</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/observability.html">Observability</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/pd-disaggregation.html">PD Disaggregation</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/external-rollout-engines.html">External Rollout Engines Roadmap</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/delta-weight-sync.html">Delta Weight Sync</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/sglang-config.html">SGLang Config: Advanced Engine Deployment</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/megatron-config.html">Megatron Config: Role-Based Training Overrides</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/arch-support-beyond-megatron.html">Supporting Model Architectures Beyond Megatron-LM</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Other Usage</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="examples/qwen3-4b-base-openhermes.html">SFT Qwen3-4B-Base</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/search-r1/README.html">Search-R1 lite</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/fully_async/README.html">Fully-Async Rollout Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/coding_agent_rl/README.html">Coding-Agent RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/delta_weight_sync/README.html">Delta Weight Sync</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/eval_multi_task/README.html">Multi-Task Evaluation Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/geo3k_vlm/README.html">VLM Single-Turn RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/geo3k_vlm_multi_turn/README.html">VLM Multi-Turn (geo3k dataset)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/on_policy_distillation/README.html">On-Policy Distillation Example</a></li>
-
-
-
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/strands_sglang/README.html">slime x Strands-SGLang</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/tau-bench/README.html">Tau bench</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/train_infer_mismatch_helper/README.html">Rollout Correction Methods</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Developer Guide</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="developer_guide/ci.html">CI (Continuous Integration)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="developer_guide/debug.html">Debugging</a></li>
-<li class="toctree-l1"><a class="reference internal" href="developer_guide/trace.html">Trace Viewer</a></li>
-<li class="toctree-l1"><a class="reference internal" href="developer_guide/profiling.html">Profiling</a></li>
-<li class="toctree-l1"><a class="reference internal" href="developer_guide/install_flashqla.html">Installing FlashQLA</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Hardware Platforms</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="platform_support/amd_tutorial.html">AMD ROCm</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Blogs</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="blogs/release_v0.1.0.html">v0.1.0: Redefining High-Performance RL Training Frameworks</a></li>
-<li class="toctree-l1"><a class="reference internal" href="blogs/introducing_slime.html">slime: An SGLang-Native Post-Training Framework for RL Scaling</a></li>
-</ul>
-
-    </div>
-</nav></div>
-    </div>
-  
-  
-  <div class="sidebar-primary-items__end sidebar-primary__section">
-      <div class="sidebar-primary-item">
-<div id="ethical-ad-placement"
-      class="flat"
-      data-ea-publisher="readthedocs"
-      data-ea-type="readthedocs-sidebar"
-      data-ea-manual="true">
-</div></div>
-  </div>
-
-
+  </section>
+  <section class="core-capabilities" aria-label="Two core capabilities">
+    <article id="capability-training"><span class="capability-icon">01 / ↔</span><h2>High-Performance Training</h2><p>Supports efficient training in various modes by connecting Megatron with SGLang.</p><div class="capability-flow"><span>Megatron</span><b>⇄</b><span>SGLang</span></div></article>
+    <article id="capability-generation"><span class="capability-icon">02 / ⌁</span><h2>Flexible Data Generation</h2><p>Enables arbitrary training data generation workflows through custom data generation interfaces and server-based engines.</p><div class="capability-flow"><span>Your data & environments</span><b>→</b><span>Data Buffer</span></div></article>
+    <p class="core-dataflow">Training, rollout, custom generation, rewards, verifiers, and environment interaction flow through the same training / rollout / Data Buffer path.</p>
+  </section>
+  <section class="ecosystem" id="ecosystem" aria-labelledby="ecosystem-title">
+    <div class="ecosystem-intro"><p class="eyebrow">BUILT IN THE OPEN. USED AT SCALE.</p><h2 id="ecosystem-title">From GLM-4.5 to GLM-5.3 & GLM-5.3-Flash.</h2><p>slime has powered RL post-training across Z.ai’s GLM generations. Explore the model releases, then use the same core capabilities in your own experiment.</p></div>
+    <div class="glm-lineage"><a class="zai-mark" href="https://z.ai">Z.ai <span>× slime</span></a><div><a href="https://z.ai/blog/glm-4.5">GLM-4.5</a><span>→</span><a href="https://z.ai/blog/glm-4.6">GLM-4.6</a><span>→</span><a href="https://z.ai/blog/glm-4.7">GLM-4.7</a><span>→</span><a href="https://z.ai/blog/glm-5">GLM-5</a><span>→</span><a href="https://z.ai/blog/glm-5.1">GLM-5.1</a><span>→</span><a href="https://z.ai/blog/glm-5.2">GLM-5.2</a><span>→</span><a href="https://z.ai/blog/glm-5.3">GLM-5.3</a><span>→</span><a href="https://z.ai/blog/glm-5.3-flash">GLM-5.3-Flash</a></div></div>
+    <a class="scroll-invitation" href="#lab">Now, see how an RL experiment fits together <span>↓</span></a>
+  </section>
+  <section id="lab" class="lab" aria-labelledby="lab-title">
+    <div class="lab-heading">
+      <div><p class="eyebrow">01 / THE EXPERIMENT BUILDER</p><h2 id="lab-title">Make it yours.</h2></div>
+      <div class="history-actions">
+        <button type="button" id="undo" disabled title="Undo a choice">↶ Undo</button>
+        <button type="button" id="redo" disabled title="Redo a choice">↷ Redo</button>
+        <button type="button" id="reset">Reset</button>
       </div>
-      
-      <main id="main-content" class="bd-main" role="main">
-        
-        
-
-<div class="sbt-scroll-pixel-helper"></div>
-
-          <div class="bd-content">
-            <div class="bd-article-container">
-              
-              <div class="bd-header-article d-print-none">
-<div class="header-article-items header-article__inner">
-  
-    <div class="header-article-items__start">
-      
-        <div class="header-article-item"><button class="sidebar-toggle primary-toggle btn btn-sm" title="Toggle primary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
-  <span class="fa-solid fa-bars"></span>
-</button></div>
-      
     </div>
-  
-  
-    <div class="header-article-items__end">
-      
-        <div class="header-article-item">
-
-<div class="article-header-buttons">
-
-
-
-
-
-<div class="dropdown dropdown-source-buttons">
-  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Source repositories">
-    <i class="fab fa-github"></i>
-  </button>
-  <ul class="dropdown-menu">
-      
-      
-      
-      <li><a href="https://github.com/THUDM/slime" target="_blank"
-   class="btn btn-sm btn-source-repository-button dropdown-item"
-   title="Source repository"
-   data-bs-placement="left" data-bs-toggle="tooltip"
->
-  
-
-<span class="btn__icon-container">
-  <i class="fab fa-github"></i>
-  </span>
-<span class="btn__text-container">Repository</span>
-</a>
-</li>
-      
-      
-      
-      
-      <li><a href="https://github.com/THUDM/slime/blob/main/docs/en/index.rst?plain=1" target="_blank"
-   class="btn btn-sm btn-source-file-button dropdown-item"
-   title="Show source"
-   data-bs-placement="left" data-bs-toggle="tooltip"
->
-  
-
-<span class="btn__icon-container">
-  <i class="fas fa-code"></i>
-  </span>
-<span class="btn__text-container">Show source</span>
-</a>
-</li>
-      
-      
-      
-      
-      <li><a href="https://github.com/THUDM/slime/edit/main/docs/en/index.rst" target="_blank"
-   class="btn btn-sm btn-source-edit-button dropdown-item"
-   title="Suggest edit"
-   data-bs-placement="left" data-bs-toggle="tooltip"
->
-  
-
-<span class="btn__icon-container">
-  <i class="fas fa-pencil-alt"></i>
-  </span>
-<span class="btn__text-container">Suggest edit</span>
-</a>
-</li>
-      
-      
-      
-      
-      <li><a href="https://github.com/THUDM/slime/issues/new?title=Issue%20on%20page%20%2Findex.html&body=Your%20issue%20content%20here." target="_blank"
-   class="btn btn-sm btn-source-issues-button dropdown-item"
-   title="Open an issue"
-   data-bs-placement="left" data-bs-toggle="tooltip"
->
-  
-
-<span class="btn__icon-container">
-  <i class="fas fa-lightbulb"></i>
-  </span>
-<span class="btn__text-container">Open issue</span>
-</a>
-</li>
-      
-  </ul>
-</div>
-
-
-
-
-
-
-<div class="dropdown dropdown-download-buttons">
-  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Download this page">
-    <i class="fas fa-download"></i>
-  </button>
-  <ul class="dropdown-menu">
-      
-      
-      
-      <li><a href="_sources/index.rst" target="_blank"
-   class="btn btn-sm btn-download-source-button dropdown-item"
-   title="Download source file"
-   data-bs-placement="left" data-bs-toggle="tooltip"
->
-  
-
-<span class="btn__icon-container">
-  <i class="fas fa-file"></i>
-  </span>
-<span class="btn__text-container">.rst</span>
-</a>
-</li>
-      
-      
-      
-      
-      <li>
-<button onclick="window.print()"
-  class="btn btn-sm btn-download-pdf-button dropdown-item"
-  title="Print to PDF"
-  data-bs-placement="left" data-bs-toggle="tooltip"
->
-  
-
-<span class="btn__icon-container">
-  <i class="fas fa-file-pdf"></i>
-  </span>
-<span class="btn__text-container">.pdf</span>
-</button>
-</li>
-      
-  </ul>
-</div>
-
-
-
-
-<button onclick="toggleFullScreen()"
-  class="btn btn-sm btn-fullscreen-button pst-navbar-icon"
-  title="Fullscreen mode"
-  data-bs-placement="bottom" data-bs-toggle="tooltip"
->
-  
-
-<span class="btn__icon-container">
-  <i class="fas fa-expand"></i>
-  </span>
-
-</button>
-
-
-
-<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
-  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
-    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="Light"></i>
-    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="Dark"></i>
-    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
-  </button>
-  <ul class="dropdown-menu dropdown-menu-end">
-    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
-    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>Light</button></li>
-    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>Dark</button></li>
-  </ul>
-</div>
-
-
-<button class="btn btn-sm pst-navbar-icon search-button search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
-    <i class="fa-solid fa-magnifying-glass fa-lg"></i>
-</button>
-<button class="sidebar-toggle secondary-toggle btn btn-sm pst-navbar-icon" title="Toggle secondary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
-    <span class="fa-solid fa-list"></span>
-</button>
-</div></div>
-      
+    <div class="presets" aria-label="Starting points">
+      <span>A starting point?</span>
+      <button type="button" data-preset="first">◉ My first RL run</button>
+      <button type="button" data-preset="scale">↗ Scale a GLM</button>
+      <button type="button" data-preset="agent">⌁ Long-running agents</button>
     </div>
-  
-</div>
-</div>
-              
-              
-
-<div id="jb-print-docs-body" class="onlyprint">
-    <h1>slime Documentation</h1>
-    <!-- Table of contents -->
-    <div id="print-main-content">
-        <div id="jb-print-toc">
-            
-            <div>
-                <h2> Contents </h2>
-            </div>
-            <nav aria-label="Page">
-                <ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#design-and-production-experience">Design and Production Experience</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#start-by-use-case">Start by Use Case</a><ul class="pst-show_toc_level nav section-nav flex-column">
-</ul>
-</li>
-</ul>
-            </nav>
+    <noscript><p class="notice">Enable JavaScript to use the builder, or follow the complete written guide. <a href="get_started/experiment-guide.html">Experiment guide →</a></p></noscript>
+    <div id="interactive-lab" hidden>
+      <nav id="steps" class="steps" aria-label="Experiment steps"></nav>
+      <div class="workbench">
+        <div class="builder-panel">
+          <div class="step-heading"><span id="step-number" class="step-number"></span><div><h3 id="step-title" tabindex="-1"></h3><p id="step-description"></p></div></div>
+          <form id="choices" novalidate></form>
+          <div id="step-help" class="step-help"></div>
+          <div class="step-controls"><button type="button" id="previous">← Back</button><span id="step-count"></span><button class="button dark" type="button" id="next">Next →</button></div>
         </div>
-    </div>
-</div>
-
-              
-                
-<div id="searchbox"></div>
-                <article class="bd-article">
-                  
-  <section id="slime-documentation">
-<h1>slime Documentation<a class="headerlink" href="#slime-documentation" title="Link to this heading">#</a></h1>
-<p>slime is an LLM post-training framework for RL scaling. It combines Megatron training with SGLang rollout and provides custom interfaces for data generation and rewards.</p>
-<p>Training, rollout, the data buffer, and environment feedback share one dataflow, supporting math, code, tools, sandboxes, and long-horizon agent workflows.</p>
-<section id="design-and-production-experience">
-<h2>Design and Production Experience<a class="headerlink" href="#design-and-production-experience" title="Link to this heading">#</a></h2>
-<ul class="simple">
-<li><p>slime is the RL framework behind <a class="reference external" href="https://z.ai/blog/glm-5.3-flash">GLM-5.3-Flash</a>, <a class="reference external" href="https://z.ai/blog/glm-5.3">GLM-5.3</a>, <a class="reference external" href="https://z.ai/blog/glm-5.2">GLM-5.2</a>, <a class="reference external" href="https://z.ai/blog/glm-5.1">GLM-5.1</a>, <a class="reference external" href="https://z.ai/blog/glm-5">GLM-5</a>, <a class="reference external" href="https://z.ai/blog/glm-4.7">GLM-4.7</a>, <a class="reference external" href="https://z.ai/blog/glm-4.6">GLM-4.6</a>, <a class="reference external" href="https://z.ai/blog/glm-4.5">GLM-4.5</a>.</p></li>
-<li><p>Megatron arguments are available directly; installed SGLang arguments use the <code class="docutils literal notranslate"><span class="pre">--sglang-</span></code> prefix.</p></li>
-<li><p>Generation functions, reward functions, verifiers, and environments connect through documented customization interfaces.</p></li>
-<li><p>CPU correctness tests and GPU end-to-end tests cover training, rollout, checkpointing, precision, asynchronous generation, and debug replay. See <a class="reference internal" href="developer_guide/ci.html"><span class="doc">CI (Continuous Integration)</span></a>.</p></li>
-<li><p>Large MoE recipes combine BF16 training with FP8 rollout; <code class="docutils literal notranslate"><span class="pre">--sglang-kv-cache-dtype</span> <span class="pre">fp8_e4m3</span></code> can increase effective KV cache capacity.</p></li>
-</ul>
-<p>Alongside GLM, supported model families include Qwen (Qwen3.6, Qwen3.5, Qwen3-Next, Qwen3 MoE, Qwen3, Qwen2.5), DeepSeek (V3, V3.1, R1), and Llama 3. Start with the recipes below and the model configurations in <code class="docutils literal notranslate"><span class="pre">scripts/models/</span></code>.</p>
-</section>
-<section id="start-by-use-case">
-<h2>Start by Use Case<a class="headerlink" href="#start-by-use-case" title="Link to this heading">#</a></h2>
-<ul class="simple">
-<li><p>New to slime: <a class="reference internal" href="get_started/quick_start.html"><span class="doc">Quick Start</span></a></p></li>
-<li><p>Configure training and rollout arguments: <a class="reference internal" href="get_started/usage.html"><span class="doc">Usage Guide</span></a></p></li>
-<li><p>Add custom generation, reward, or rollout functions: <a class="reference internal" href="get_started/customization.html"><span class="doc">Customization Guide</span></a></p></li>
-<li><p>Build agentic RL workflows: <a class="reference internal" href="get_started/agent.html"><span class="doc">Agentic RL Training Roadmap</span></a></p></li>
-<li><p>Configure production SGLang rollout topology: <a class="reference internal" href="advanced/sglang-config.html"><span class="doc">SGLang Config: Advanced Engine Deployment</span></a></p></li>
-<li><p>Connect external rollout engines: <a class="reference internal" href="advanced/external-rollout-engines.html"><span class="doc">External Rollout Engines Roadmap</span></a></p></li>
-<li><p>Persist distributed rollout and shared tensors with straw: <a class="reference internal" href="advanced/straw.html"><span class="doc">Persistent rollout with straw</span></a></p></li>
-<li><p>Sync weights as byte-level deltas: <a class="reference internal" href="advanced/delta-weight-sync.html"><span class="doc">Delta Weight Sync</span></a></p></li>
-<li><p>Use PD disaggregation: <a class="reference internal" href="advanced/pd-disaggregation.html"><span class="doc">PD Disaggregation</span></a></p></li>
-<li><p>Use BF16 training with FP8 rollout or FP8 KV cache: <a class="reference internal" href="advanced/low-precision.html"><span class="doc">Low Precision Training and Rollout</span></a></p></li>
-<li><p>Understand CI and reliability coverage: <a class="reference internal" href="developer_guide/ci.html"><span class="doc">CI (Continuous Integration)</span></a></p></li>
-<li><p>Debug, trace, and profile long-running jobs: <a class="reference internal" href="developer_guide/debug.html"><span class="doc">Debugging</span></a>, <a class="reference internal" href="developer_guide/trace.html"><span class="doc">Trace Viewer</span></a>, <a class="reference internal" href="developer_guide/profiling.html"><span class="doc">Profiling</span></a></p></li>
-</ul>
-<div class="toctree-wrapper compound">
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Get Started</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="get_started/quick_start.html">Quick Start</a></li>
-<li class="toctree-l1"><a class="reference internal" href="get_started/usage.html">Usage Guide</a></li>
-<li class="toctree-l1"><a class="reference internal" href="get_started/customization.html">Customization Guide</a></li>
-<li class="toctree-l1"><a class="reference internal" href="get_started/agent.html">Agentic RL Training Roadmap</a></li>
-<li class="toctree-l1"><a class="reference internal" href="get_started/qa.html">FAQ</a></li>
-</ul>
-</div>
-<div class="toctree-wrapper compound">
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Dense</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="examples/qwen3-4B.html">Qwen3-4B with 8xH100</a></li>
-<li class="toctree-l1"><a class="reference internal" href="examples/glm4-9B.html">GLM4-9B with 8xH100</a></li>
-</ul>
-</div>
-<div class="toctree-wrapper compound">
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">MoE</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="examples/glm4.7-30B-A3B.html">GLM-4.7-Flash with 8×H100</a></li>
-<li class="toctree-l1"><a class="reference internal" href="examples/qwen3-30B-A3B.html">Qwen3-30B-A3B with 8xH100</a></li>
-<li class="toctree-l1"><a class="reference internal" href="examples/qwen3-next-80B-A3B.html">Qwen3-Next-80B-A3B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="examples/glm5.2-744B-A40B.html">GLM-5.2 744B-A40B with 256xH100</a></li>
-<li class="toctree-l1"><a class="reference internal" href="examples/glm4.7-355B-A32B.html">GLM-4.7 with 64xH100</a></li>
-<li class="toctree-l1"><a class="reference internal" href="examples/deepseek-r1.html">DeepSeek R1 with 128xH100</a></li>
-</ul>
-</div>
-<div class="toctree-wrapper compound">
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Advanced Features</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="advanced/on-policy-distillation.html">On-Policy Distillation</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/speculative-decoding.html">Speculative Decoding</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/low-precision.html">Low Precision Training and Rollout</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/reproducibility.html">Reproducibility</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/fault-tolerance.html">Fault Tolerance</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/straw.html">Persistent rollout with straw</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/observability.html">Observability</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/pd-disaggregation.html">PD Disaggregation</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/external-rollout-engines.html">External Rollout Engines Roadmap</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/delta-weight-sync.html">Delta Weight Sync</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/sglang-config.html">SGLang Config: Advanced Engine Deployment</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/megatron-config.html">Megatron Config: Role-Based Training Overrides</a></li>
-<li class="toctree-l1"><a class="reference internal" href="advanced/arch-support-beyond-megatron.html">Supporting Model Architectures Beyond Megatron-LM</a></li>
-</ul>
-</div>
-<div class="toctree-wrapper compound">
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Other Usage</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="examples/qwen3-4b-base-openhermes.html">SFT Qwen3-4B-Base</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/search-r1/README.html">Search-R1 lite</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/fully_async/README.html">Fully-Async Rollout Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/coding_agent_rl/README.html">Coding-Agent RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/delta_weight_sync/README.html">Delta Weight Sync</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/eval_multi_task/README.html">Multi-Task Evaluation Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/geo3k_vlm/README.html">VLM Single-Turn RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/geo3k_vlm_multi_turn/README.html">VLM Multi-Turn (geo3k dataset)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/on_policy_distillation/README.html">On-Policy Distillation Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/on_policy_distillation/README.html#preliminary-results">Preliminary Results</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/on_policy_distillation/README.html#faq">FAQ</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/on_policy_distillation/README.html#references">References</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/strands_sglang/README.html">slime x Strands-SGLang</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/tau-bench/README.html">Tau bench</a></li>
-<li class="toctree-l1"><a class="reference internal" href="_examples_synced/train_infer_mismatch_helper/README.html">Rollout Correction Methods</a></li>
-</ul>
-</div>
-<div class="toctree-wrapper compound">
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Developer Guide</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="developer_guide/ci.html">CI (Continuous Integration)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="developer_guide/debug.html">Debugging</a></li>
-<li class="toctree-l1"><a class="reference internal" href="developer_guide/trace.html">Trace Viewer</a></li>
-<li class="toctree-l1"><a class="reference internal" href="developer_guide/profiling.html">Profiling</a></li>
-<li class="toctree-l1"><a class="reference internal" href="developer_guide/install_flashqla.html">Installing FlashQLA</a></li>
-</ul>
-</div>
-<div class="toctree-wrapper compound">
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Hardware Platforms</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="platform_support/amd_tutorial.html">AMD ROCm</a></li>
-</ul>
-</div>
-<div class="toctree-wrapper compound">
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Blogs</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference internal" href="blogs/release_v0.1.0.html">v0.1.0: Redefining High-Performance RL Training Frameworks</a></li>
-<li class="toctree-l1"><a class="reference internal" href="blogs/introducing_slime.html">slime: An SGLang-Native Post-Training Framework for RL Scaling</a></li>
-</ul>
-</div>
-</section>
-</section>
-
-
-                </article>
-              
-
-              
-              
-              
-              
-                <footer class="prev-next-footer d-print-none">
-                  
-<div class="prev-next-area">
-    <a class="right-next"
-       href="get_started/quick_start.html"
-       title="next page">
-      <div class="prev-next-info">
-        <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Quick Start</p>
+        <aside class="preview" aria-label="Live experiment preview">
+          <div class="preview-heading"><span class="eyebrow">YOUR LITTLE RL WORLD</span><button id="play" type="button" aria-pressed="false">▶ Play a round</button></div>
+          <div id="world" class="world"></div>
+          <p id="simulation-status" class="simulation-status" role="status"></p>
+          <div id="summary" class="summary"></div>
+          <div id="advice" class="advice" aria-live="polite"></div>
+          <a id="review-link" class="review-link" href="#recipe">See my recipe <span>↓</span></a>
+        </aside>
       </div>
-      <i class="fa-solid fa-angle-right"></i>
-    </a>
-</div>
-                </footer>
-              
-            </div>
-            
-            
-              
-                <dialog id="pst-secondary-sidebar-modal"></dialog>
-                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
-
-
-  <div class="sidebar-secondary-item"><div
-    id="pst-page-navigation-heading-2"
-    class="page-toc tocsection onthispage">
-    <i class="fa-solid fa-list"></i> Contents
-  </div>
-  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
-    <ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#design-and-production-experience">Design and Production Experience</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#start-by-use-case">Start by Use Case</a><ul class="pst-show_toc_level nav section-nav flex-column">
-</ul>
-</li>
-</ul>
-  </nav></div>
-
-</div></div>
-              
-            
-          </div>
-          <footer class="bd-footer-content">
-            
-<div class="bd-footer-content__inner container">
-  
-  <div class="footer-item">
-    
-<p class="component-author">
-By slime Team
-</p>
-
-  </div>
-  
-  <div class="footer-item">
-    
-
-  <p class="copyright">
-    
-      © Copyright 2025-2026, slime.
-      <br/>
-    
-  </p>
-
-  </div>
-  
-  <div class="footer-item">
-    <p class="last-updated">
-  Last updated on Oct 09, 2026.
-  <br/>
-</p>
-  </div>
-  
-  <div class="footer-item">
-    
-  </div>
-  
-</div>
-          </footer>
-        
-
-      </main>
     </div>
-  </div>
-  
-  <!-- Scripts loaded after <body> so the DOM is not blocked -->
-  <script defer src="_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9"></script>
-<script defer src="_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9"></script>
-
-  <footer class="bd-footer">
-  </footer>
-  </body>
+  </section>
+  <section id="recipe" class="recipe" aria-labelledby="recipe-title" hidden>
+    <div class="recipe-heading"><div><p class="eyebrow">02 / FROM PLAY TO RUN</p><h2 id="recipe-title">Your experiment, to go.</h2><p>A starting recipe grounded in this repository. Prepare the environment, review the assumptions, then run.</p></div><button type="button" id="share" class="button light">↗ Share choices</button></div>
+    <div id="issues" aria-live="polite"></div>
+    <div class="artifact-toolbar"><div id="artifact-tabs" class="artifact-tabs" role="tablist" aria-label="Generated files"></div><div class="artifact-actions"><button type="button" id="copy">Copy</button><button type="button" class="button primary" id="download">↓ Download</button></div></div>
+    <pre id="artifact-panel" role="tabpanel" tabindex="0"><code id="artifact-code"></code></pre>
+    <div class="run-guide"><h3>Three steps to your first reward</h3><ol id="run-steps"></ol></div>
+    <p class="recipe-footnote">GPU counts describe placement, not a memory-fit guarantee. These generated combinations have not been benchmarked on your hardware. Start with a short run and compare reward, log-prob mismatch, clipping, and rollout time.</p>
+  </section>
+  <section class="library-teaser" aria-labelledby="library-title">
+    <div><p class="eyebrow">03 / FOLLOW YOUR CURIOSITY</p><h2 id="library-title">Go a little deeper.</h2><p>The ideas, equations, and engineering behind your choices.</p></div>
+    <a href="get_started/experiment-guide.html"><span>01</span><strong>The experiment field guide</strong>From checkpoint to first reward ↗</a>
+    <a href="advanced/policy-mismatch.html"><span>02</span><strong>Inside the algorithms</strong>GRPO · TIS · ICE-POP · R3 · SC ↗</a>
+    <a href="advanced/rl-systems.html"><span>03</span><strong>Inside the system</strong>Precision, async, PD & HiCache ↗</a>
+    <a href="library.html"><span>04</span><strong>The documentation library</strong>Organized guides, APIs & debugging ↗</a>
+  </section>
+  <section class="advanced-section" aria-labelledby="advanced-title">
+    <div><p class="eyebrow">04 / WHEN YOU WANT TO GO FURTHER</p><h2 id="advanced-title">A good experiment asks good questions.</h2><p>Open a question. Find the next measurement, then the right tool.</p></div>
+    <details open><summary><span>01 / DEBUG</span>The reward looks wrong. Where do I start?<b>＋</b></summary><div><p>Inspect generated text, checkpoint loading, and the chat template first. Save a rollout, replay a fixed batch on the training side, then compare log-probs before changing the algorithm.</p><a href="developer_guide/debug.html">Debug & replay →</a><a href="advanced/policy-mismatch.html">Understand mismatch →</a></div></details>
+    <details><summary><span>02 / PROFILE</span>Training is slow. What am I waiting for?<b>＋</b></summary><div><p>Separate rollout, reward, weight transfer, and training time. Trace the critical path, then profile the busy engine. Use tools/profile_rollout.py to collect SGLang traces and inspect prefill/decode behavior.</p><a href="developer_guide/profiling.html">Profiling →</a><a href="developer_guide/trace.html">Timeline & tracing →</a><a href="advanced/observability.html">Metrics →</a></div></details>
+    <details><summary><span>03 / SCALE</span>How do I grow beyond one cluster?<b>＋</b></summary><div><p>Split GPU ownership, then choose a weight transport that matches the network. Add PD when prefill and decode need different resources; use persistent rollout storage when jobs need recovery.</p><a href="advanced/external-rollout-engines.html">External engines →</a><a href="advanced/delta-weight-sync.html">Delta sync →</a><a href="advanced/rollout-scheduling.html">Partial / distributed async →</a><a href="advanced/straw.html">straw →</a><a href="advanced/fault-tolerance.html">Recovery →</a></div></details>
+    <details><summary><span>04 / EXTEND</span>My agent needs its own world.<b>＋</b></summary><div><p>Start with a custom per-sample generation function and reward. Replace rollout orchestration only when your data scheduling or cross-step state needs it.</p><a href="get_started/agent.html">Agent RL →</a><a href="get_started/customization.html">Extension interfaces →</a><a href="advanced/sglang-config.html">SGLang topology →</a></div></details>
+  </section>
+</main>
+<footer><a class="brand" href="#">slime<span> / a little slime goes a long way.</span></a><span>Megatron × SGLang · Open source, open possibilities.</span></footer>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<dialog id="learn-dialog" aria-labelledby="learn-title"><button type="button" id="close-learn" class="close-dialog" aria-label="Close explanation">×</button><p class="eyebrow">LEARN WITHOUT LOSING YOUR PLACE</p><h2 id="learn-title"></h2><div id="learn-content"></div></dialog>
+<button id="mobile-preview" type="button" hidden>◈ See live diagram</button>
+<dialog id="mobile-preview-dialog" aria-label="Live experiment preview"><button type="button" id="close-preview" class="close-dialog" aria-label="Close preview">×</button><div id="mobile-preview-host"></div></dialog>
+</body>
 </html>

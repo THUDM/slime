@@ -33,7 +33,7 @@
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=03e43079" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/sphinx-book-theme.css?v=4418a689" />
     <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../../_static/css/custom_log.css?v=ad20845f" />
+    <link rel="stylesheet" type="text/css" href="../../_static/css/custom_log.css?v=5f5cb4b6" />
   
   <!-- So that users can add custom icons -->
   <script defer src="../../_static/scripts/fontawesome.js?digest=90905a2f556bf617f1a9"></script>
@@ -42,19 +42,19 @@
 <link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
     <script src="../../_static/documentation_options.js?v=183391d5"></script>
-    <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../../_static/copybutton.js?v=ccdb6887"></script>
     <script src="../../_static/scripts/sphinx-book-theme.js?v=fab101a9"></script>
     <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = '_examples_synced/eval_multi_task/README';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
-    <script data-layout="root" src="../../_static/js/lang-toggle.js?v=082004b6"></script>
+    <script data-layout="root" src="../../_static/js/lang-toggle.js?v=9e8f3a3a"></script>
     <link rel="icon" href="../../_static/logo.ico"/>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="VLM Single-Turn RL" href="../geo3k_vlm/README.html" />
+    <link rel="next" title="On-Policy Distillation Example" href="../on_policy_distillation/README.html" />
     <link rel="prev" title="Delta Weight Sync" href="../delta_weight_sync/README.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
@@ -202,80 +202,34 @@
 </button></div>
         <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
     <div class="bd-toc-item navbar-nav active">
-        <p aria-level="2" class="caption" role="heading"><span class="caption-text">Get Started</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../../get_started/quick_start.html">Quick Start</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../get_started/usage.html">Usage Guide</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../get_started/customization.html">Customization Guide</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../get_started/agent.html">Agentic RL Training Roadmap</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../get_started/qa.html">FAQ</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Dense</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../../examples/qwen3-4B.html">Qwen3-4B with 8xH100</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../examples/glm4-9B.html">GLM4-9B with 8xH100</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">MoE</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../../examples/glm4.7-30B-A3B.html">GLM-4.7-Flash with 8×H100</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../examples/qwen3-30B-A3B.html">Qwen3-30B-A3B with 8xH100</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../examples/qwen3-next-80B-A3B.html">Qwen3-Next-80B-A3B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../examples/glm5.2-744B-A40B.html">GLM-5.2 744B-A40B with 256xH100</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../examples/glm4.7-355B-A32B.html">GLM-4.7 with 64xH100</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../examples/deepseek-r1.html">DeepSeek R1 with 128xH100</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Advanced Features</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/on-policy-distillation.html">On-Policy Distillation</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/speculative-decoding.html">Speculative Decoding</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/low-precision.html">Low Precision Training and Rollout</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/reproducibility.html">Reproducibility</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/fault-tolerance.html">Fault Tolerance</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/straw.html">Persistent rollout with straw</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/observability.html">Observability</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/pd-disaggregation.html">PD Disaggregation</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/external-rollout-engines.html">External Rollout Engines Roadmap</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/delta-weight-sync.html">Delta Weight Sync</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/sglang-config.html">SGLang Config: Advanced Engine Deployment</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/megatron-config.html">Megatron Config: Role-Based Training Overrides</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/arch-support-beyond-megatron.html">Supporting Model Architectures Beyond Megatron-LM</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Other Usage</span></p>
-<ul class="current nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../../examples/qwen3-4b-base-openhermes.html">SFT Qwen3-4B-Base</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../search-r1/README.html">Search-R1 lite</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../fully_async/README.html">Fully-Async Rollout Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../retool/README.html">Retool: from SFT to RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../multi_agent/README.html">Multi-Agent RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../coding_agent_rl/README.html">Coding-Agent RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../delta_weight_sync/README.html">Delta Weight Sync</a></li>
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">Multi-Task Evaluation Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../geo3k_vlm/README.html">VLM Single-Turn RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../geo3k_vlm_multi_turn/README.html">VLM Multi-Turn (geo3k dataset)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../on_policy_distillation/README.html">On-Policy Distillation Example</a></li>
+        <ul class="current nav bd-sidenav">
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="../../library.html">Documentation library</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../../get_started/index.html">Start here</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../training/index.html">Training &amp; algorithms</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../rollout/index.html">Rollout &amp; scheduling</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../operations/index.html">Debugging, profiling &amp; recovery</a></li>
+<li class="toctree-l2 current active has-children"><a class="reference internal" href="../../examples/index.html">Task tutorials</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="../../examples/agents/index.html">Agents &amp; environments</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../../examples/multimodal/index.html">Multimodal tasks</a></li>
+<li class="toctree-l3 current active has-children"><a class="reference internal" href="../../examples/workflows/index.html">Training &amp; systems workflows</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l4"><a class="reference internal" href="../../examples/qwen3-4b-base-openhermes.html">SFT Qwen3-4B-Base</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../fully_async/README.html">Fully-Async Rollout Example</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../delta_weight_sync/README.html">Delta Weight Sync</a></li>
+<li class="toctree-l4 current active"><a class="current reference internal" href="#">Multi-Task Evaluation Example</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../on_policy_distillation/README.html">On-Policy Distillation Example</a></li>
 
 
 
-<li class="toctree-l1"><a class="reference internal" href="../strands_sglang/README.html">slime x Strands-SGLang</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../tau-bench/README.html">Tau bench</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../train_infer_mismatch_helper/README.html">Rollout Correction Methods</a></li>
+<li class="toctree-l4"><a class="reference internal" href="../train_infer_mismatch_helper/README.html">Rollout Correction Methods</a></li>
 </ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Developer Guide</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../../developer_guide/ci.html">CI (Continuous Integration)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../developer_guide/debug.html">Debugging</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../developer_guide/trace.html">Trace Viewer</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../developer_guide/profiling.html">Profiling</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../developer_guide/install_flashqla.html">Installing FlashQLA</a></li>
+</details></li>
 </ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Hardware Platforms</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../../platform_support/amd_tutorial.html">AMD ROCm</a></li>
+</details></li>
+<li class="toctree-l2"><a class="reference internal" href="../../developer_guide/index.html">Development &amp; CI</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../platform_support/index.html">Hardware platforms</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../blogs/index.html">Design notes &amp; releases</a></li>
 </ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Blogs</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../../blogs/release_v0.1.0.html">v0.1.0: Redefining High-Performance RL Training Frameworks</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../blogs/introducing_slime.html">slime: An SGLang-Native Post-Training Framework for RL Scaling</a></li>
+</details></li>
 </ul>
 
     </div>
@@ -567,11 +521,11 @@
       </div>
     </a>
     <a class="right-next"
-       href="../geo3k_vlm/README.html"
+       href="../on_policy_distillation/README.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">VLM Single-Turn RL</p>
+        <p class="prev-next-title">On-Policy Distillation Example</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>

@@ -33,7 +33,7 @@
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=4418a689" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=ad20845f" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=5f5cb4b6" />
   
   <!-- So that users can add custom icons -->
   <script defer src="../_static/scripts/fontawesome.js?digest=90905a2f556bf617f1a9"></script>
@@ -42,20 +42,20 @@
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
     <script src="../_static/documentation_options.js?v=183391d5"></script>
-    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../_static/copybutton.js?v=ccdb6887"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?v=fab101a9"></script>
     <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'advanced/fault-tolerance';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
-    <script data-layout="root" src="../_static/js/lang-toggle.js?v=082004b6"></script>
+    <script data-layout="root" src="../_static/js/lang-toggle.js?v=9e8f3a3a"></script>
     <link rel="icon" href="../_static/logo.ico"/>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="Persistent rollout with straw" href="straw.html" />
-    <link rel="prev" title="Reproducibility" href="reproducibility.html" />
+    <link rel="next" title="Task tutorials" href="../examples/index.html" />
+    <link rel="prev" title="Observability" href="observability.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.4.0" />
@@ -202,80 +202,25 @@
 </button></div>
         <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
     <div class="bd-toc-item navbar-nav active">
-        <p aria-level="2" class="caption" role="heading"><span class="caption-text">Get Started</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../get_started/quick_start.html">Quick Start</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/usage.html">Usage Guide</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/customization.html">Customization Guide</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/agent.html">Agentic RL Training Roadmap</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/qa.html">FAQ</a></li>
+        <ul class="current nav bd-sidenav">
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="../library.html">Documentation library</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../get_started/index.html">Start here</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../training/index.html">Training &amp; algorithms</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../rollout/index.html">Rollout &amp; scheduling</a></li>
+<li class="toctree-l2 current active has-children"><a class="reference internal" href="../operations/index.html">Debugging, profiling &amp; recovery</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="../developer_guide/debug.html">Debugging</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../developer_guide/trace.html">Trace Viewer</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../developer_guide/profiling.html">Profiling</a></li>
+<li class="toctree-l3"><a class="reference internal" href="observability.html">Observability</a></li>
+<li class="toctree-l3 current active"><a class="current reference internal" href="#">Fault Tolerance</a></li>
 </ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Dense</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4B.html">Qwen3-4B with 8xH100</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm4-9B.html">GLM4-9B with 8xH100</a></li>
+</details></li>
+<li class="toctree-l2"><a class="reference internal" href="../examples/index.html">Task tutorials</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../developer_guide/index.html">Development &amp; CI</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../platform_support/index.html">Hardware platforms</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../blogs/index.html">Design notes &amp; releases</a></li>
 </ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">MoE</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-30B-A3B.html">GLM-4.7-Flash with 8×H100</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-30B-A3B.html">Qwen3-30B-A3B with 8xH100</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-next-80B-A3B.html">Qwen3-Next-80B-A3B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm5.2-744B-A40B.html">GLM-5.2 744B-A40B with 256xH100</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-355B-A32B.html">GLM-4.7 with 64xH100</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/deepseek-r1.html">DeepSeek R1 with 128xH100</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Advanced Features</span></p>
-<ul class="current nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="on-policy-distillation.html">On-Policy Distillation</a></li>
-<li class="toctree-l1"><a class="reference internal" href="speculative-decoding.html">Speculative Decoding</a></li>
-<li class="toctree-l1"><a class="reference internal" href="low-precision.html">Low Precision Training and Rollout</a></li>
-<li class="toctree-l1"><a class="reference internal" href="reproducibility.html">Reproducibility</a></li>
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">Fault Tolerance</a></li>
-<li class="toctree-l1"><a class="reference internal" href="straw.html">Persistent rollout with straw</a></li>
-<li class="toctree-l1"><a class="reference internal" href="observability.html">Observability</a></li>
-<li class="toctree-l1"><a class="reference internal" href="pd-disaggregation.html">PD Disaggregation</a></li>
-<li class="toctree-l1"><a class="reference internal" href="external-rollout-engines.html">External Rollout Engines Roadmap</a></li>
-<li class="toctree-l1"><a class="reference internal" href="delta-weight-sync.html">Delta Weight Sync</a></li>
-<li class="toctree-l1"><a class="reference internal" href="sglang-config.html">SGLang Config: Advanced Engine Deployment</a></li>
-<li class="toctree-l1"><a class="reference internal" href="megatron-config.html">Megatron Config: Role-Based Training Overrides</a></li>
-<li class="toctree-l1"><a class="reference internal" href="arch-support-beyond-megatron.html">Supporting Model Architectures Beyond Megatron-LM</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Other Usage</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4b-base-openhermes.html">SFT Qwen3-4B-Base</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/search-r1/README.html">Search-R1 lite</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/fully_async/README.html">Fully-Async Rollout Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/coding_agent_rl/README.html">Coding-Agent RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/delta_weight_sync/README.html">Delta Weight Sync</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/eval_multi_task/README.html">Multi-Task Evaluation Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/geo3k_vlm/README.html">VLM Single-Turn RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/geo3k_vlm_multi_turn/README.html">VLM Multi-Turn (geo3k dataset)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/on_policy_distillation/README.html">On-Policy Distillation Example</a></li>
-
-
-
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/strands_sglang/README.html">slime x Strands-SGLang</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/tau-bench/README.html">Tau bench</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/train_infer_mismatch_helper/README.html">Rollout Correction Methods</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Developer Guide</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/ci.html">CI (Continuous Integration)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/debug.html">Debugging</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/trace.html">Trace Viewer</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/profiling.html">Profiling</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/install_flashqla.html">Installing FlashQLA</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Hardware Platforms</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../platform_support/amd_tutorial.html">AMD ROCm</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Blogs</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../blogs/release_v0.1.0.html">v0.1.0: Redefining High-Performance RL Training Frameworks</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../blogs/introducing_slime.html">slime: An SGLang-Native Post-Training Framework for RL Scaling</a></li>
+</details></li>
 </ul>
 
     </div>
@@ -532,7 +477,7 @@
                   
   <section class="tex2jax_ignore mathjax_ignore" id="fault-tolerance">
 <h1>Fault Tolerance<a class="headerlink" href="#fault-tolerance" title="Link to this heading">#</a></h1>
-<p>slime checks SGLang engines, removes failed engines from service, and restarts them before the next weight update. When you use Straw transport or save rollout debug data, you can also retain the serving cluster after a Megatron failure, adjust the training configuration, and resume training.</p>
+<p>slime checks SGLang engines, removes failed engines from service, and restarts them before the next weight update. When you use straw transport or save rollout debug data, you can also retain the serving cluster after a Megatron failure, adjust the training configuration, and resume training.</p>
 <p>These features are enabled by default for serving clusters started by slime. You do not need <code class="docutils literal notranslate"><span class="pre">--use-fault-tolerance</span></code>; the flag remains for compatibility with older commands. External serving clusters retain their existing policy.</p>
 <section id="resuming-after-a-megatron-failure">
 <h2>Resuming After a Megatron Failure<a class="headerlink" href="#resuming-after-a-megatron-failure" title="Link to this heading">#</a></h2>
@@ -540,7 +485,7 @@
 <section id="retain-recovery-data-from-the-first-launch">
 <h3>Retain Recovery Data from the First Launch<a class="headerlink" href="#retain-recovery-data-from-the-first-launch" title="Link to this heading">#</a></h3>
 <p>Choose either option below. slime automatically persists recovery data in these modes, independently of <code class="docutils literal notranslate"><span class="pre">--use-fault-tolerance</span></code>.</p>
-<p>Use Straw to store rollout and training data:</p>
+<p>Use straw to store rollout and training data:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--rollout-data-transport<span class="w"> </span>straw<span class="w"> </span>--rollout-data-dir<span class="w"> </span>/shared/my-run/queue
 </pre></div>
 </div>
@@ -577,7 +522,7 @@
 <p>slime manages the serving cluster through a named Ray actor. A new job looks up that actor by its session name and gets the existing router and engine information from it. It does not scan for router processes.</p>
 <p>Set <code class="docutils literal notranslate"><span class="pre">--rollout-session-id</span></code> to choose a session identity explicitly. Otherwise, slime selects an identity in the following order and hashes it to produce a stable name:</p>
 <ol class="arabic simple">
-<li><p>With Straw, use the absolute storage directory path and <code class="docutils literal notranslate"><span class="pre">--rollout-queue-run-id</span></code>.</p></li>
+<li><p>With straw, use the absolute storage directory path and <code class="docutils literal notranslate"><span class="pre">--rollout-queue-run-id</span></code>.</p></li>
 <li><p>Otherwise, use the absolute path template from <code class="docutils literal notranslate"><span class="pre">--save-debug-rollout-data</span></code>.</p></li>
 <li><p>If debug data is not saved, use the absolute <code class="docutils literal notranslate"><span class="pre">--save</span></code> directory path.</p></li>
 <li><p>If none of these is configured, use the model and rollout configuration.</p></li>
@@ -585,9 +530,9 @@
 <p>Use the same identity for both attempts of a training run. Independent runs should use different identities to avoid connecting to the same serving cluster.</p>
 <p>Three components handle recovery:</p>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">ServingCluster</span></code> manages routers, SGLang engines, GPU resources, the Straw queue controller, and the weight-update lock. It is a named, detached Ray actor that survives the job that created it.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">ServingCluster</span></code> manages routers, SGLang engines, GPU resources, the straw queue controller, and the weight-update lock. It is a named, detached Ray actor that survives the job that created it.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">RolloutManager</span></code> handles generation, data reading, sample conversion, and training-data partitioning. It can be reused or recreated after it exits; recreating it does not destroy resources held by <code class="docutils literal notranslate"><span class="pre">ServingCluster</span></code>.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">TrainingRecovery</span></code> owns the model checkpoint boundary and retains the batches needed after it. The Straw accepted log owns raw and converted batch receipts; recovery reconciles those receipts if a manager or RPC fails before the journal is updated. A converted batch is stored once, and each DP rank receives an index view that can be rebuilt for a new parallel configuration.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">TrainingRecovery</span></code> owns the model checkpoint boundary and retains the batches needed after it. The straw accepted log owns raw and converted batch receipts; recovery reconciles those receipts if a manager or RPC fails before the journal is updated. A converted batch is stored once, and each DP rank receives an index view that can be rebuilt for a new parallel configuration.</p></li>
 </ul>
 <p>If <code class="docutils literal notranslate"><span class="pre">RolloutManager</span></code> survives, it pauses admission of new generation tasks. If it exits, its replacement reconnects to <code class="docutils literal notranslate"><span class="pre">ServingCluster</span></code>, restores data-source progress, and uses the queue controller to prevent old readers from taking more tasks. Completed prefetch results that have not reached training remain available. Trainer processes are also registered with <code class="docutils literal notranslate"><span class="pre">ServingCluster</span></code>, so it can clean up old trainers even after the manager exits.</p>
 <p>The driver owns the lifetime of each training attempt, including rollback when startup fails after attaching to serving. On failure, it gives the manager a bounded opportunity to pause, then asks serving to release trainers directly. A manager that fails to pause is terminated and recreated on the next attempt. Successful completion disposes the manager and serving independently, so an error in a custom data source’s <code class="docutils literal notranslate"><span class="pre">close()</span></code> does not skip serving cleanup. Cleanup errors are logged without replacing the original training failure.</p>
@@ -644,7 +589,7 @@
 </section>
 <section id="recovery-scope-and-limitations">
 <h2>Recovery Scope and Limitations<a class="headerlink" href="#recovery-scope-and-limitations" title="Link to this heading">#</a></h2>
-<p>Without Straw or rollout debug dumps, you can still retain the serving cluster, but you cannot replay training batches after the last checkpoint.</p>
+<p>Without straw or rollout debug dumps, you can still retain the serving cluster, but you cannot replay training batches after the last checkpoint.</p>
 <p>Recreating <code class="docutils literal notranslate"><span class="pre">RolloutManager</span></code> supports the built-in data sources. Custom sources need compatible <code class="docutils literal notranslate"><span class="pre">state_dict</span></code> / <code class="docutils literal notranslate"><span class="pre">load_state_dict</span></code> methods and queue controllers that survive independently of the manager. Data-source constructors and rollout hook signatures are unchanged.</p>
 <p>If <code class="docutils literal notranslate"><span class="pre">ServingCluster</span></code> or the entire Ray cluster is lost, you must start serving again and recover from a checkpoint. Cluster preemption and node loss still require coordination between your scheduler and checkpoint recovery.</p>
 <p>See <a class="reference internal" href="../developer_guide/debug.html"><span class="std std-doc">Debugging</span></a> for more debugging options and <a class="reference internal" href="../developer_guide/ci.html"><span class="std std-doc">CI</span></a> for recovery-test coverage.</p>
@@ -663,20 +608,20 @@
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="reproducibility.html"
+       href="observability.html"
        title="previous page">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">previous</p>
-        <p class="prev-next-title">Reproducibility</p>
+        <p class="prev-next-title">Observability</p>
       </div>
     </a>
     <a class="right-next"
-       href="straw.html"
+       href="../examples/index.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Persistent rollout with straw</p>
+        <p class="prev-next-title">Task tutorials</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>

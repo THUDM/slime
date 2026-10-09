@@ -33,7 +33,7 @@
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=4418a689" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=ad20845f" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=5f5cb4b6" />
   
   <!-- So that users can add custom icons -->
   <script defer src="../_static/scripts/fontawesome.js?digest=90905a2f556bf617f1a9"></script>
@@ -42,20 +42,20 @@
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
     <script src="../_static/documentation_options.js?v=ceb54874"></script>
-    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../_static/copybutton.js?v=ccdb6887"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?v=fab101a9"></script>
     <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'advanced/low-precision';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
-    <script data-layout="root" src="../_static/js/lang-toggle.js?v=082004b6"></script>
+    <script data-layout="root" src="../_static/js/lang-toggle.js?v=9e8f3a3a"></script>
     <link rel="icon" href="../_static/logo.ico"/>
     <link rel="index" title="索引" href="../genindex.html" />
     <link rel="search" title="搜索" href="../search.html" />
     <link rel="next" title="Reproducibility" href="reproducibility.html" />
-    <link rel="prev" title="投机采样" href="speculative-decoding.html" />
+    <link rel="prev" title="卡数、显存与并行方式" href="parallelism-memory.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.4.0" />
@@ -202,80 +202,27 @@
 </button></div>
         <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
     <div class="bd-toc-item navbar-nav active">
-        <p aria-level="2" class="caption" role="heading"><span class="caption-text">开始使用</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../get_started/quick_start.html">快速使用</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/usage.html">使用文档</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/customization.html">自定义指南</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/agent.html">Agentic RL 训练路线图</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/qa.html">常见 Q&amp;A</a></li>
+        <ul class="current nav bd-sidenav">
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="../library.html">文档资料库</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../get_started/index.html">从这里开始</a></li>
+<li class="toctree-l2 current active has-children"><a class="reference internal" href="../training/index.html">训练与算法</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="policy-mismatch.html">从策略梯度到训推一致性</a></li>
+<li class="toctree-l3"><a class="reference internal" href="parallelism-memory.html">卡数、显存与并行方式</a></li>
+<li class="toctree-l3 current active"><a class="current reference internal" href="#">低精度训练与 Rollout</a></li>
+<li class="toctree-l3"><a class="reference internal" href="reproducibility.html">Reproducibility</a></li>
+<li class="toctree-l3"><a class="reference internal" href="on-policy-distillation.html">在策略蒸馏 (On-Policy Distillation)</a></li>
+<li class="toctree-l3"><a class="reference internal" href="megatron-config.html">Megatron Config：按角色覆盖训练参数</a></li>
+<li class="toctree-l3"><a class="reference internal" href="arch-support-beyond-megatron.html">在 Megatron-LM 中快速支持新模型架构</a></li>
 </ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Dense</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4B.html">8xH100 训练 Qwen3-4B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm4-9B.html">8xH100 训练 GLM4-9B</a></li>
+</details></li>
+<li class="toctree-l2"><a class="reference internal" href="../rollout/index.html">Rollout 与调度</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../operations/index.html">调试、性能分析与恢复</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../examples/index.html">任务教程</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../developer_guide/index.html">开发与 CI</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../platform_support/index.html">硬件平台</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../blogs/index.html">设计文章与版本发布</a></li>
 </ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">MoE</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-30B-A3B.html">8×H100 训练 GLM-4.7-Flash</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-30B-A3B.html">8xH100 训练 Qwen3-30B-A3B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-next-80B-A3B.html">Qwen3-Next-80B-A3B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm5.2-744B-A40B.html">256xH100 训练 GLM-5.2 744B-A40B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-355B-A32B.html">64xH100 训练 GLM-4.7</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/deepseek-r1.html">128xH100 训练 DeepSeek R1</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">高级特性</span></p>
-<ul class="current nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="on-policy-distillation.html">在策略蒸馏 (On-Policy Distillation)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="speculative-decoding.html">投机采样</a></li>
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">低精度训练与 Rollout</a></li>
-<li class="toctree-l1"><a class="reference internal" href="reproducibility.html">Reproducibility</a></li>
-<li class="toctree-l1"><a class="reference internal" href="fault-tolerance.html">容灾</a></li>
-<li class="toctree-l1"><a class="reference internal" href="straw.html">使用 straw 持久化 rollout</a></li>
-<li class="toctree-l1"><a class="reference internal" href="observability.html">观测</a></li>
-<li class="toctree-l1"><a class="reference internal" href="pd-disaggregation.html">PD 分离</a></li>
-<li class="toctree-l1"><a class="reference internal" href="external-rollout-engines.html">External Rollout Engines 配置路线图</a></li>
-<li class="toctree-l1"><a class="reference internal" href="delta-weight-sync.html">Delta 权重同步</a></li>
-<li class="toctree-l1"><a class="reference internal" href="sglang-config.html">SGLang Config：高级引擎部署</a></li>
-<li class="toctree-l1"><a class="reference internal" href="megatron-config.html">Megatron Config：按角色覆盖训练参数</a></li>
-<li class="toctree-l1"><a class="reference internal" href="arch-support-beyond-megatron.html">在 Megatron-LM 中快速支持新模型架构</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">其他用法</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4b-base-openhermes.html">SFT Qwen3-4B-Base</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/search-r1/README.html">Search-R1 lite</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/fully_async/README.html">Fully-Async Rollout Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/coding_agent_rl/README.html">Coding-Agent RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/delta_weight_sync/README.html">Delta Weight Sync</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/eval_multi_task/README.html">Multi-Task Evaluation Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/geo3k_vlm/README.html">VLM Single-Turn RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/geo3k_vlm_multi_turn/README.html">VLM Multi-Turn (geo3k dataset)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/on_policy_distillation/README.html">On-Policy Distillation Example</a></li>
-
-
-
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/strands_sglang/README.html">slime x Strands-SGLang</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/tau-bench/README.html">Tau bench</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/train_infer_mismatch_helper/README.html">Rollout Correction Methods</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">开发指南</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/ci.html">CI（持续集成）</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/debug.html">Debug 指南</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/trace.html">Trace 可视化</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/profiling.html">性能分析 (Profiling)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/install_flashqla.html">安装 FlashQLA</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">硬件平台</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../platform_support/amd_tutorial.html">AMD ROCm</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">博客</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../blogs/release_v0.1.0.html">v0.1.0: 重新定义高性能 RL 训练框架</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../blogs/introducing_slime.html">slime：为 RL Scaling 设计的 SGLang-Native 后训练框架</a></li>
+</details></li>
 </ul>
 
     </div>
@@ -534,14 +481,14 @@
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="rollout">
-<h1>低精度训练与 Rollout<a class="headerlink" href="#rollout" title="链接到此标题。">#</a></h1>
+<h1>低精度训练与 Rollout<a class="headerlink" href="#rollout" title="Link to this heading">#</a></h1>
 <p>slime 中的低精度能力主要用于让 rollout 更快、更省显存，同时保持训练侧数值稳定。对于大规模 MoE RL，推荐的生产路径是：</p>
 <blockquote>
 <div><p><strong>Megatron BF16 训练 + SGLang FP8 rollout/inference</strong></p>
 </div></blockquote>
 <p>Megatron 侧保持 BF16/torch_dist 的可训练 checkpoint；SGLang 侧使用 FP8 Hugging Face checkpoint 做 rollout。权重更新时，slime 会根据 <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> 中的量化配置，把更新后的 BF16 权重量化后再发送给 SGLang。</p>
 <section id="feature-maturity">
-<h2>Feature Maturity<a class="headerlink" href="#feature-maturity" title="链接到此标题。">#</a></h2>
+<h2>Feature Maturity<a class="headerlink" href="#feature-maturity" title="Link to this heading">#</a></h2>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>功能</p></th>
@@ -571,7 +518,7 @@
 </div>
 </section>
 <section id="bf16-fp8-rollout">
-<h2>BF16 训练 + FP8 Rollout<a class="headerlink" href="#bf16-fp8-rollout" title="链接到此标题。">#</a></h2>
+<h2>BF16 训练 + FP8 Rollout<a class="headerlink" href="#bf16-fp8-rollout" title="Link to this heading">#</a></h2>
 <p>这是 slime 当前最主要的生产路径。</p>
 <p>你可以通过将 <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> 指向 blockwise quantized Hugging Face checkpoint 来开启 FP8 rollout。可以用如下命令从 BF16 checkpoint 转换：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>tools/convert_hf_to_fp8.py<span class="w"> </span><span class="se">\</span>
@@ -592,7 +539,7 @@
 </div>
 </section>
 <section id="rollout-fp8-kv-cache">
-<h2>Rollout 使用 FP8 KV Cache<a class="headerlink" href="#rollout-fp8-kv-cache" title="链接到此标题。">#</a></h2>
+<h2>Rollout 使用 FP8 KV Cache<a class="headerlink" href="#rollout-fp8-kv-cache" title="Link to this heading">#</a></h2>
 <p>对于 long-context、multi-turn 或 agentic workload，KV cache 容量经常是瓶颈。由于 slime 通过 <code class="docutils literal notranslate"><span class="pre">--sglang-</span></code> 前缀透传 SGLang 参数，可以直接开启 FP8 KV cache：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--sglang-kv-cache-dtype<span class="w"> </span>fp8_e4m3
 </pre></div>
@@ -600,10 +547,10 @@
 <p>这是 rollout 侧配置，不会改变 Megatron 的训练精度。它可以提升 SGLang 的有效 KV cache 容量，从而支持更长 context 或更高并发；实际精度和性能表现取决于当前 SGLang 版本与 GPU stack。</p>
 </section>
 <section id="fp8-fp8-rollout">
-<h2>FP8 训练 + FP8 Rollout<a class="headerlink" href="#fp8-fp8-rollout" title="链接到此标题。">#</a></h2>
+<h2>FP8 训练 + FP8 Rollout<a class="headerlink" href="#fp8-fp8-rollout" title="Link to this heading">#</a></h2>
 <p>slime 也支持 experimental 的 FP8 training 路径。我们观察到，在一些设置下同时使用 FP8 training 和 FP8 inference，可以提升推理吞吐并降低训推不一致。更多细节请参考 <a class="reference external" href="https://lmsys.org/blog/2025-11-25-fp8-rl/">这篇博客</a>。</p>
 <section id="fp8">
-<h3>FP8 快速开始<a class="headerlink" href="#fp8" title="链接到此标题。">#</a></h3>
+<h3>FP8 快速开始<a class="headerlink" href="#fp8" title="Link to this heading">#</a></h3>
 <ol class="arabic simple">
 <li><p>使用 <code class="docutils literal notranslate"><span class="pre">tools/convert_hf_to_fp8.py</span></code> 将 Hugging Face 模型权重转换为 FP8 格式。</p></li>
 <li><p>添加 FP8 训练参数：</p></li>
@@ -626,7 +573,7 @@ bash<span class="w"> </span>scripts/low_precision/run-qwen3-30b-a3b-fp8.sh
 </div>
 </section>
 <section id="id1">
-<h3>实现说明<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h3>
+<h3>实现说明<a class="headerlink" href="#id1" title="Link to this heading">#</a></h3>
 <ol class="arabic simple">
 <li><p>如果启用 FP8 recipe，TransformerEngine layers 会在 FP8 context 中构建。</p></li>
 <li><p>训练时，权重和 activation 会在线量化为 NVFP8 格式，并在 forward/backward GEMM 中使用 cuBLAS FP8 GEMM。</p></li>
@@ -636,15 +583,15 @@ bash<span class="w"> </span>scripts/low_precision/run-qwen3-30b-a3b-fp8.sh
 <p>目前只有 TransformerEngine 中的 <code class="docutils literal notranslate"><span class="pre">Linear</span></code> 和 <code class="docutils literal notranslate"><span class="pre">GroupLinear</span></code> 层使用 FP8。<code class="docutils literal notranslate"><span class="pre">embedding</span></code> 和 <code class="docutils literal notranslate"><span class="pre">lm_head</span></code> 保持原始精度。如果未开启 <code class="docutils literal notranslate"><span class="pre">--fp8-param-gather</span></code>，TransformerEngine 中的权重以 BF16 存储，仅在 <code class="docutils literal notranslate"><span class="pre">GEMM</span></code> 或 <code class="docutils literal notranslate"><span class="pre">GroupGEMM</span></code> 时转换为 FP8。</p>
 </section>
 <section id="id2">
-<h3>已知限制<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h3>
+<h3>已知限制<a class="headerlink" href="#id2" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">--fp8-param-gather</span></code> 可以节省显存，但目前需要 TransformerEngine <code class="docutils literal notranslate"><span class="pre">FusedAdam</span></code>，这与大规模 Megatron-LM RL 中常用的 CPU Adam offload 路径冲突。</p>
 </section>
 </section>
 <section id="int4-qat">
-<h2>INT4 QAT 训练<a class="headerlink" href="#int4-qat" title="链接到此标题。">#</a></h2>
+<h2>INT4 QAT 训练<a class="headerlink" href="#int4-qat" title="Link to this heading">#</a></h2>
 <p>INT4 STE（Straight-Through Estimator）训练和 INT4 inference 可以进一步降低 rollout 显存并提升吞吐。在目标模型和 reward setup 验证前，请把这条路径视作 beta。</p>
 <section id="int4">
-<h3>INT4 快速开始<a class="headerlink" href="#int4" title="链接到此标题。">#</a></h3>
+<h3>INT4 快速开始<a class="headerlink" href="#int4" title="Link to this heading">#</a></h3>
 <ol class="arabic simple">
 <li><p>将 Hugging Face 权重转换为 INT4：</p></li>
 </ol>
@@ -703,12 +650,12 @@ bash<span class="w"> </span>scripts/low_precision/run-kimi-k2-Thinking-int4.sh
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="speculative-decoding.html"
+       href="parallelism-memory.html"
        title="上一页">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">上一页</p>
-        <p class="prev-next-title">投机采样</p>
+        <p class="prev-next-title">卡数、显存与并行方式</p>
       </div>
     </a>
     <a class="right-next"

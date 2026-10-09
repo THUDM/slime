@@ -50,7 +50,7 @@ straw 不支持 `--buffer-filter-path`。`--buffer-sort-by-staleness` 适用于�
 
 ## 数据打包与支持类型
 
-选择 Straw 传输后，数据默认打包写入：每个写入进程将多个样本和张量追加到同一个文件（pack）中，减少共享存储上大量小文件的管理开销。slime 默认沿用 Straw 的包大小，当前为 **1 GiB**；可以通过 `--rollout-queue-segment-mib` 指定其他大小，单位为 MiB。
+选择 straw 传输后，数据默认打包写入：每个写入进程将多个样本和张量追加到同一个文件（pack）中，减少共享存储上大量小文件的管理开销。slime 默认沿用 straw 的包大小，当前为 **1 GiB**；可以通过 `--rollout-queue-segment-mib` 指定其他大小，单位为 MiB。
 
 包大小控制何时切换到新文件，不影响数据何时可读：每次发布的数据都可以立即读取，无需等待包写满。单次发布超过目标大小时会完整保留，不会为了满足包大小而拆开；显式封存也可能产生小于目标大小的包。
 
@@ -62,7 +62,7 @@ R3 使用 `--use-rollout-routing-replay`，SC 使用 `--use-score-centering`。�
 
 | 参数 | 默认值 | 用途 |
 |---|---|---|
-| `--rollout-queue-segment-mib` | 不设置，沿用 Straw 默认值（当前为 `1024`） | 切换到新包的目标大小，单位 MiB；显式设置时必须为正数。 |
+| `--rollout-queue-segment-mib` | 不设置，沿用 straw 默认值（当前为 `1024`） | 切换到新包的目标大小，单位 MiB；显式设置时必须为正数。 |
 | `--rollout-io-concurrency` | `4` | 限制并发序列化与文件系统 I/O 提交 |
 | `--rollout-queue-lease-seconds` | `300` | Worker 租期，活跃 reader 会续租 |
 

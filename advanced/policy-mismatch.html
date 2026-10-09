@@ -1,0 +1,800 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>From policy gradients to train–rollout consistency &#8212; slime</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=4418a689" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=5f5cb4b6" />
+  
+  <!-- So that users can add custom icons -->
+  <script defer src="../_static/scripts/fontawesome.js?digest=90905a2f556bf617f1a9"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
+
+    <script src="../_static/documentation_options.js?v=183391d5"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=ccdb6887"></script>
+    <script src="../_static/scripts/sphinx-book-theme.js?v=fab101a9"></script>
+    <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+    <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'advanced/policy-mismatch';</script>
+    <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
+    <script data-layout="root" src="../_static/js/lang-toggle.js?v=9e8f3a3a"></script>
+    <link rel="icon" href="../_static/logo.ico"/>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="GPUs, memory, and parallelism" href="parallelism-memory.html" />
+    <link rel="prev" title="Training &amp; algorithms" href="../training/index.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="0.4.0" />
+    <meta name="docbuild:last-update" content="Oct 09, 2026"/>
+  
+    
+    <script src="../_static/searchtools.js"></script>
+    <script src="../_static/language_data.js"></script>
+    <script src="../searchindex.js"></script>
+  
+  </head>
+  <body data-default-mode="">
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+  
+  
+  
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search..."
+         aria-label="Search..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header id="pst-header" class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class="col-lg-9 navbar-header-items">
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+        </div>
+      
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+    </div>
+  
+
+  
+    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="On this page">
+      <span class="fa-solid fa-outdent"></span>
+    </button>
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/logo.jpg" class="logo__image only-light" alt="slime - Home"/>
+    <img src="../_static/logo.jpg" class="logo__image only-dark pst-js-only" alt="slime - Home"/>
+  
+  
+</a></div>
+        <div class="sidebar-primary-item">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button></div>
+        <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
+    <div class="bd-toc-item navbar-nav active">
+        <ul class="current nav bd-sidenav">
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="../library.html">Documentation library</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../get_started/index.html">Start here</a></li>
+<li class="toctree-l2 current active has-children"><a class="reference internal" href="../training/index.html">Training &amp; algorithms</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l3 current active"><a class="current reference internal" href="#">From policy gradients to train–rollout consistency</a></li>
+<li class="toctree-l3"><a class="reference internal" href="parallelism-memory.html">GPUs, memory, and parallelism</a></li>
+<li class="toctree-l3"><a class="reference internal" href="low-precision.html">Low Precision Training and Rollout</a></li>
+<li class="toctree-l3"><a class="reference internal" href="reproducibility.html">Reproducibility</a></li>
+<li class="toctree-l3"><a class="reference internal" href="on-policy-distillation.html">On-Policy Distillation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="megatron-config.html">Megatron Config: Role-Based Training Overrides</a></li>
+<li class="toctree-l3"><a class="reference internal" href="arch-support-beyond-megatron.html">Supporting Model Architectures Beyond Megatron-LM</a></li>
+</ul>
+</details></li>
+<li class="toctree-l2"><a class="reference internal" href="../rollout/index.html">Rollout &amp; scheduling</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../operations/index.html">Debugging, profiling &amp; recovery</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../examples/index.html">Task tutorials</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../developer_guide/index.html">Development &amp; CI</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../platform_support/index.html">Hardware platforms</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../blogs/index.html">Design notes &amp; releases</a></li>
+</ul>
+</details></li>
+</ul>
+
+    </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+
+<div class="sbt-scroll-pixel-helper"></div>
+
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item"><button class="sidebar-toggle primary-toggle btn btn-sm" title="Toggle primary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <span class="fa-solid fa-bars"></span>
+</button></div>
+      
+    </div>
+  
+  
+    <div class="header-article-items__end">
+      
+        <div class="header-article-item">
+
+<div class="article-header-buttons">
+
+
+
+
+
+<div class="dropdown dropdown-source-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Source repositories">
+    <i class="fab fa-github"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime" target="_blank"
+   class="btn btn-sm btn-source-repository-button dropdown-item"
+   title="Source repository"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fab fa-github"></i>
+  </span>
+<span class="btn__text-container">Repository</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/blob/main/docs/en/advanced/policy-mismatch.md?plain=1" target="_blank"
+   class="btn btn-sm btn-source-file-button dropdown-item"
+   title="Show source"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-code"></i>
+  </span>
+<span class="btn__text-container">Show source</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/edit/main/docs/en/advanced/policy-mismatch.md" target="_blank"
+   class="btn btn-sm btn-source-edit-button dropdown-item"
+   title="Suggest edit"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-pencil-alt"></i>
+  </span>
+<span class="btn__text-container">Suggest edit</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/issues/new?title=Issue%20on%20page%20%2Fadvanced/policy-mismatch.html&body=Your%20issue%20content%20here." target="_blank"
+   class="btn btn-sm btn-source-issues-button dropdown-item"
+   title="Open an issue"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-lightbulb"></i>
+  </span>
+<span class="btn__text-container">Open issue</span>
+</a>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+
+
+<div class="dropdown dropdown-download-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Download this page">
+    <i class="fas fa-download"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="../_sources/advanced/policy-mismatch.md" target="_blank"
+   class="btn btn-sm btn-download-source-button dropdown-item"
+   title="Download source file"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file"></i>
+  </span>
+<span class="btn__text-container">.md</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li>
+<button onclick="window.print()"
+  class="btn btn-sm btn-download-pdf-button dropdown-item"
+  title="Print to PDF"
+  data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file-pdf"></i>
+  </span>
+<span class="btn__text-container">.pdf</span>
+</button>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+<button onclick="toggleFullScreen()"
+  class="btn btn-sm btn-fullscreen-button pst-navbar-icon"
+  title="Fullscreen mode"
+  data-bs-placement="bottom" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-expand"></i>
+  </span>
+
+</button>
+
+
+
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="Light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="Dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>Light</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>Dark</button></li>
+  </ul>
+</div>
+
+
+<button class="btn btn-sm pst-navbar-icon search-button search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass fa-lg"></i>
+</button>
+<button class="sidebar-toggle secondary-toggle btn btn-sm pst-navbar-icon" title="Toggle secondary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <span class="fa-solid fa-list"></span>
+</button>
+</div></div>
+      
+    </div>
+  
+</div>
+</div>
+              
+              
+
+<div id="jb-print-docs-body" class="onlyprint">
+    <h1>From policy gradients to train–rollout consistency</h1>
+    <!-- Table of contents -->
+    <div id="print-main-content">
+        <div id="jb-print-toc">
+            
+            <div>
+                <h2> Contents </h2>
+            </div>
+            <nav aria-label="Page">
+                <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#a-common-language">A common language</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#grpo">GRPO</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#tis">TIS</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#ice-pop">ICE-POP</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#r3">R3</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sc">SC</a><ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#from-an-unwanted-mean-to-a-centered-score">From an unwanted mean to a centered score</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#compose-with-a-correction-weight">Compose with a correction weight</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#why-top-k-does-not-require-storing-the-full-vocabulary">Why top-k does not require storing the full vocabulary</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#match-the-sampler-s-actual-distribution">Match the sampler’s actual distribution</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#what-to-measure">What to measure</a></li>
+</ul>
+            </nav>
+        </div>
+    </div>
+</div>
+
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section class="tex2jax_ignore mathjax_ignore" id="from-policy-gradients-to-trainrollout-consistency">
+<h1>From policy gradients to train–rollout consistency<a class="headerlink" href="#from-policy-gradients-to-trainrollout-consistency" title="Link to this heading">#</a></h1>
+<p><a class="reference internal" href="../index.html"><span class="std std-doc">Return to the experiment lab</span></a>. Read <a class="reference internal" href="rl-systems.html"><span class="std std-doc">the systems companion</span></a> for precision, determinism, asynchronous execution, PD, and HiCache.</p>
+<p>The equations below are a tutorial derivation of the objectives implemented in this repository. They distinguish identities, biased surrogates, and engineering approximations. Paper links identify the original work; the implementation links explain the particular variant exported by the lab.</p>
+<section id="a-common-language">
+<h2>A common language<a class="headerlink" href="#a-common-language" title="Link to this heading">#</a></h2>
+<p>Let <span class="math notranslate nohighlight">\(x\)</span> be a prompt, <span class="math notranslate nohighlight">\(y=(a_1,\ldots,a_T)\)</span> a response, and <span class="math notranslate nohighlight">\(h_t=(x,a_{&lt;t})\)</span> a prefix. Let <span class="math notranslate nohighlight">\(R(x,y)\)</span> be a reward independent of the parameters during differentiation. Use three different policies:</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Symbol</p></th>
+<th class="head"><p>Meaning</p></th>
+<th class="head"><p>Where it comes from</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><span class="math notranslate nohighlight">\(q(a\mid h)\)</span></p></td>
+<td><p>Behavior distribution that actually sampled the token</p></td>
+<td><p>SGLang, including quantization, sampling transforms, and potentially older weights</p></td>
+</tr>
+<tr class="row-odd"><td><p><span class="math notranslate nohighlight">\(p_0(a\mid h)\)</span></p></td>
+<td><p>Frozen trainer before the optimizer update</p></td>
+<td><p>Megatron’s recomputed old log-probs</p></td>
+</tr>
+<tr class="row-even"><td><p><span class="math notranslate nohighlight">\(p_\theta(a\mid h)\)</span></p></td>
+<td><p>Current trainable policy</p></td>
+<td><p>Megatron’s differentiable forward</p></td>
+</tr>
+<tr class="row-odd"><td><p><span class="math notranslate nohighlight">\(\operatorname{sg}(z)\)</span></p></td>
+<td><p>Stop-gradient: value <span class="math notranslate nohighlight">\(z\)</span>, derivative zero</p></td>
+<td><p>Detaching weights, rewards, and correction coefficients</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>At a fixed prefix define the score <span class="math notranslate nohighlight">\(s_a=\nabla_\theta\log p_\theta(a\mid h)\)</span>. Assuming normalized differentiable probabilities and legitimate interchange of summation and differentiation:</p>
+<div class="math notranslate nohighlight">
+\[
+\sum_a p_\theta(a\mid h)s_a
+=\sum_a\nabla_\theta p_\theta(a\mid h)
+=\nabla_\theta 1=0.
+\]</div>
+<p>Starting with <span class="math notranslate nohighlight">\(J(\theta)=\sum_y p_\theta(y\mid x)R(x,y)\)</span>, apply <span class="math notranslate nohighlight">\(\nabla p=p\nabla\log p\)</span> and autoregressive factorization:</p>
+<div class="math notranslate nohighlight">
+\[
+\nabla J
+=\mathbb E_{y\sim p_\theta}\left[R\nabla\log p_\theta(y\mid x)\right]
+=\mathbb E_{y\sim p_\theta}\left[R\sum_{t=1}^{T}s_{a_t}\right].
+\]</div>
+<p>An action-independent baseline <span class="math notranslate nohighlight">\(b(h_t)\)</span> has zero expectation against the score <strong>under <span class="math notranslate nohighlight">\(p_\theta\)</span></strong>, so it can reduce variance without changing that expectation. Sampling from <span class="math notranslate nohighlight">\(q\)</span> generally breaks this cancellation. This is why identical checkpoint names do not prove an on-policy update.</p>
+</section>
+<section id="grpo">
+<h2>GRPO<a class="headerlink" href="#grpo" title="Link to this heading">#</a></h2>
+<p>Original work: <a class="reference external" href="https://arxiv.org/abs/2402.03300">DeepSeekMath</a>; clipping objective: <a class="reference external" href="https://arxiv.org/abs/1707.06347">PPO</a>.</p>
+<p>For <span class="math notranslate nohighlight">\(G\)</span> responses to one prompt, form group statistics and a response advantage:</p>
+<div class="math notranslate nohighlight">
+\[
+\bar R=\frac1G\sum_{i=1}^G R_i,\quad
+\sigma_R=\sqrt{\frac1G\sum_i(R_i-\bar R)^2},\quad
+A_i=\frac{R_i-\bar R}{\sigma_R+\epsilon}.
+\]</div>
+<p>The response advantage is shared across its response tokens. The exact standard-deviation convention and numerical epsilon are implementation details; disabling standard-deviation normalization gives <span class="math notranslate nohighlight">\(A_i=R_i-\bar R\)</span>. Group baselines include the sampled response itself, so the usual unbiased-baseline argument does not apply literally. For independent responses, mean centering alone scales the expected on-policy gradient by <span class="math notranslate nohighlight">\(1-1/G\)</span>; standard-deviation normalization adds a random scale.</p>
+<p>Define <span class="math notranslate nohighlight">\(r_{i,t}(\theta)=p_\theta(a_{i,t}\mid h_{i,t})/p_0(a_{i,t}\mid h_{i,t})\)</span>. A clipped surrogate to maximize, omitting optional KL terms, is</p>
+<div class="math notranslate nohighlight">
+\[
+J_{\rm clip}=\frac1G\sum_i\frac1{T_i}\sum_t
+\min\left(r_{i,t} A_i,
+\operatorname{clip}(r_{i,t},1-\epsilon_-,1+\epsilon_+)A_i\right).
+\]</div>
+<p>For positive <span class="math notranslate nohighlight">\(A_i\)</span>, the upper clip limits incentive to increase token probability. For negative <span class="math notranslate nohighlight">\(A_i\)</span>, the lower clip limits incentive to decrease it. At <span class="math notranslate nohighlight">\(\theta=\theta_0\)</span>, inside the clip, <span class="math notranslate nohighlight">\(\nabla r=r\nabla\log p_\theta\)</span> reduces to the policy-gradient direction. This is a local surrogate, not a general identity for arbitrarily stale data.</p>
+<p>The lab emits <code class="docutils literal notranslate"><span class="pre">--advantage-estimator</span> <span class="pre">grpo</span></code>, eight samples per prompt, and PPO clipping unless SC is enabled. <code class="docutils literal notranslate"><span class="pre">--calculate-per-token-loss</span></code> changes the outer reduction to total loss divided by total response-token count; it is not the same weighting as averaging each response’s mean.</p>
+</section>
+<section id="tis">
+<h2>TIS<a class="headerlink" href="#tis" title="Link to this heading">#</a></h2>
+<p>Original work: <a class="reference external" href="https://openreview.net/forum?id=8MHqvb4lK9">On the Rollout-Training Mismatch in Modern RL Systems</a>, with the <a class="reference external" href="https://fengyao.notion.site/off-policy-rl">authors’ technical article</a>. The following algebra also describes the repository’s built-in callback.</p>
+<p>At a fixed prefix, provided <span class="math notranslate nohighlight">\(q(a)&gt;0\)</span> wherever <span class="math notranslate nohighlight">\(p_0(a)f(a)\ne0\)</span>, change of measure gives</p>
+<div class="math notranslate nohighlight">
+\[
+\mathbb E_{a\sim p_0}[f(a)]
+=\sum_a q(a)\frac{p_0(a)}{q(a)}f(a)
+=\mathbb E_{a\sim q}[\rho_a f(a)],\qquad
+\rho_a=\exp(\log p_0(a)-\log q(a)).
+\]</div>
+<p>The PPO policy-update ratio <span class="math notranslate nohighlight">\(r=p_\theta/p_0\)</span> and behavior-correction ratio <span class="math notranslate nohighlight">\(\rho=p_0/q\)</span> serve different purposes. Before clipping, their product is <span class="math notranslate nohighlight">\(p_\theta/q\)</span>. slime multiplies the PPO loss by detached <span class="math notranslate nohighlight">\(w(\rho)=\operatorname{clip}(\rho,L,U)\)</span>; the lab uses <span class="math notranslate nohighlight">\(L=0,U=2\)</span>.</p>
+<p>Derive its bias by subtracting the exact expression:</p>
+<div class="math notranslate nohighlight">
+\[
+\mathbb E_q[w(\rho)f]-\mathbb E_{p_0}[f]
+=\mathbb E_q[(w(\rho)-\rho)f].
+\]</div>
+<p>For <span class="math notranslate nohighlight">\(L=0\)</span>, this becomes <span class="math notranslate nohighlight">\(-\mathbb E_q[(\rho-U)f\,\mathbf1_{\rho&gt;U}]\)</span>. Capping weights limits outliers but does not give unbiased importance sampling. With nonzero <span class="math notranslate nohighlight">\(L\)</span>, small weights are also increased.</p>
+<p>This fixed-prefix identity does not correct the distribution of prefixes. Full-sequence change of measure would use <span class="math notranslate nohighlight">\(p_0(y)/q(y)=\prod_t\rho_t\)</span>, often with high variance. Token-wise TIS is a practical surrogate, not an exact replacement for that product.</p>
+<p>Implementation: <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/backends/megatron_utils/loss.py"><code class="docutils literal notranslate"><span class="pre">vanilla_tis_function</span></code></a>, <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/utils/ppo_utils.py"><code class="docutils literal notranslate"><span class="pre">importance_weights</span></code></a>. REINFORCE, including SC, uses detached <strong>current</strong> trainer probabilities in the correction numerator instead of <span class="math notranslate nohighlight">\(p_0\)</span>.</p>
+</section>
+<section id="ice-pop">
+<h2>ICE-POP<a class="headerlink" href="#ice-pop" title="Link to this heading">#</a></h2>
+<p>Original work: <a class="reference external" href="https://arxiv.org/abs/2510.18855">Every Step Evolves: Scaling Reinforcement Learning for Trillion-Scale Thinking Model</a>.</p>
+<p>The lab selects slime’s built-in <code class="docutils literal notranslate"><span class="pre">icepop_function</span></code>. Its behavior-correction rule is</p>
+<div class="math notranslate nohighlight">
+\[
+w_{\rm ice}(\rho)=\rho\,\mathbf1_{L\le\rho\le U},\qquad L=0.5,\quad U=2.
+\]</div>
+<p>Inside the interval this equals importance sampling. Outside it, the contribution is zero. Its bias relative to the same fixed-prefix target is therefore</p>
+<div class="math notranslate nohighlight">
+\[
+\mathbb E_q[w_{\rm ice}(\rho)f]-\mathbb E_{p_0}[f]
+=-\mathbb E_q[\rho f\,\mathbf1_{\rho&lt;L\;\lor\;\rho&gt;U}].
+\]</div>
+<p>A token with <span class="math notranslate nohighlight">\(\rho=4\)</span> receives weight 2 under the lab’s TIS rule and weight 0 under IcePop. These are distinct estimators. The callback sets weights to zero; it does <strong>not</strong> renormalize the loss by the number of retained tokens. PPO clipping can still act on <span class="math notranslate nohighlight">\(r\)</span> independently. The paper’s complete training recipe contains other components; selecting this callback does not reproduce the whole paper.</p>
+<p>Exported settings: <code class="docutils literal notranslate"><span class="pre">--use-tis</span> <span class="pre">--custom-tis-function-path</span> <span class="pre">slime.backends.megatron_utils.loss.icepop_function</span> <span class="pre">--tis-clip-low</span> <span class="pre">0.5</span> <span class="pre">--tis-clip</span> <span class="pre">2</span></code>. Observe <code class="docutils literal notranslate"><span class="pre">tis</span></code>, <code class="docutils literal notranslate"><span class="pre">tis_clipfrac</span></code>, reward, and effective signal after masking.</p>
+</section>
+<section id="r3">
+<h2>R3<a class="headerlink" href="#r3" title="Link to this heading">#</a></h2>
+<p>Original work: <a class="reference external" href="https://arxiv.org/abs/2510.11370">Stabilizing MoE Reinforcement Learning by Aligning Training and Inference Routers</a>.</p>
+<p>Write a MoE layer as <span class="math notranslate nohighlight">\(F(x)=\sum_{i\in I(x)}g_i(x)E_i(x)\)</span>, with discrete expert set <span class="math notranslate nohighlight">\(I=\operatorname{TopK}(u(x))\)</span>. A perturbation near a top-k boundary can swap an expert even when its magnitude is tiny. Decompose the output difference by adding and subtracting the same intermediate term:</p>
+<div class="math notranslate nohighlight">
+\[
+F_{I_q}(x_q)-F_{I_p}(x_p)
+=\underbrace{F_{I_q}(x_q)-F_{I_q}(x_p)}_{\text{same-route numerical/input difference}}
++\underbrace{F_{I_q}(x_p)-F_{I_p}(x_p)}_{\text{expert-selection difference}}.
+\]</div>
+<p>Replay sets the trainer route to recorded <span class="math notranslate nohighlight">\(I_q\)</span>, eliminating the second term <strong>at this layer for this comparison</strong>. It does not eliminate the first. For a softmax-gated example,</p>
+<div class="math notranslate nohighlight">
+\[
+g_i=\frac{\mathbf1_{i\in I_q}\exp u_i}{\sum_{j\in I_q}\exp u_j},\qquad
+\frac{\partial g_i}{\partial u_j}=g_i(\mathbf1_{i=j}-g_j),\quad i,j\in I_q.
+\]</div>
+<p>Replay expert identities, not detached expert outputs. Gradients can still flow through selected gates and experts. GLM uses sigmoid-based routing and its own normalization/scaling, so this softmax example is illustrative; keep the architecture’s actual gate rule.</p>
+<p>The lab emits <code class="docutils literal notranslate"><span class="pre">--use-rollout-routing-replay</span></code>; slime-managed SGLang requests routed experts automatically. External engines must be launched with <code class="docutils literal notranslate"><span class="pre">--enable-return-routed-experts</span></code>. Storage grows with tokens × MoE layers × selected experts. R3 is independent of TIS/SC and is not meaningful for a dense model. Implementation: <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/backends/sglang_utils/sglang_engine.py"><code class="docutils literal notranslate"><span class="pre">sglang_engine.py</span></code></a> and the replay code in <a class="reference external" href="https://github.com/THUDM/slime/tree/main/slime/backends/megatron_utils"><code class="docutils literal notranslate"><span class="pre">megatron_utils</span></code></a>.</p>
+</section>
+<section id="sc">
+<h2>SC<a class="headerlink" href="#sc" title="Link to this heading">#</a></h2>
+<p>Original work: <a class="reference external" href="https://arxiv.org/abs/2609.20807">Score Centering Stabilizes Off-policy Reinforcement Learning</a>. The derivation here follows the algebra of slime’s <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/utils/score_centering.py"><code class="docutils literal notranslate"><span class="pre">score_centering_correction</span></code></a> and its loss implementation.</p>
+<section id="from-an-unwanted-mean-to-a-centered-score">
+<h3>From an unwanted mean to a centered score<a class="headerlink" href="#from-an-unwanted-mean-to-a-centered-score" title="Link to this heading">#</a></h3>
+<p>Fix a prefix and let <span class="math notranslate nohighlight">\(\mu=\sum_a q_a s_a\)</span>. In general <span class="math notranslate nohighlight">\(\mu\ne0\)</span>, even with the same checkpoint on both sides. For a detached advantage <span class="math notranslate nohighlight">\(A\)</span>, covariance decomposition gives</p>
+<div class="math notranslate nohighlight">
+\[
+\mathbb E_q[A s]=\mathbb E_q[A]\mu+\operatorname{Cov}_q(A,s).
+\]</div>
+<p>Use <span class="math notranslate nohighlight">\(\tilde s_a=s_a-\mu\)</span>. Then <span class="math notranslate nohighlight">\(\mathbb E_q[\tilde s]=0\)</span>, and</p>
+<div class="math notranslate nohighlight">
+\[
+\mathbb E_q[A\tilde s]=\operatorname{Cov}_q(A,s).
+\]</div>
+<p>The prefix-conditional mean term vanishes. The covariance is still under <span class="math notranslate nohighlight">\(q\)</span>, so this does not establish an unbiased gradient under <span class="math notranslate nohighlight">\(p_\theta\)</span>. Group-centered rewards across full responses do not ensure <span class="math notranslate nohighlight">\(\mathbb E[A\mid h]=0\)</span> at every prefix.</p>
+</section>
+<section id="compose-with-a-correction-weight">
+<h3>Compose with a correction weight<a class="headerlink" href="#compose-with-a-correction-weight" title="Link to this heading">#</a></h3>
+<p>Let <span class="math notranslate nohighlight">\(w_a=f(p_a/q_a)\)</span>, with <span class="math notranslate nohighlight">\(f\)</span> either identity, TIS, masking, or 1. Define <span class="math notranslate nohighlight">\(\mu_w=\sum_a q_aw_as_a\)</span> and center the <strong>weighted</strong> score:</p>
+<div class="math notranslate nohighlight">
+\[
+\tilde s^w_a=w_as_a-\mu_w,\qquad
+\mathbb E_q[\tilde s^w]=0.
+\]</div>
+<p>An implementable minimization loss with exactly this local gradient direction is</p>
+<div class="math notranslate nohighlight">
+\[
+\ell=-\operatorname{sg}(A)\left[
+\operatorname{sg}(w_a)\log p_a
+-\sum_v\operatorname{sg}(q_vw_v)\log p_v\right].
+\]</div>
+<p>Differentiate only <span class="math notranslate nohighlight">\(\log p\)</span>: <span class="math notranslate nohighlight">\(-\nabla\ell=A(w_as_a-\mu_w)\)</span>. Differentiating through <span class="math notranslate nohighlight">\(w\)</span> would add unwanted derivatives. With exact <span class="math notranslate nohighlight">\(w=p/q\)</span> and full support, <span class="math notranslate nohighlight">\(\mu_w=\sum p s=0\)</span>; clipped or masked weights generally make it nonzero.</p>
+</section>
+<section id="why-top-k-does-not-require-storing-the-full-vocabulary">
+<h3>Why top-k does not require storing the full vocabulary<a class="headerlink" href="#why-top-k-does-not-require-storing-the-full-vocabulary" title="Link to this heading">#</a></h3>
+<p>slime records the sampler’s head <span class="math notranslate nohighlight">\(H\)</span> (128 tokens in the lab). Its probabilities retain <strong>full-vocabulary mass</strong>, not a head-only renormalization. Set</p>
+<div class="math notranslate nohighlight">
+\[\begin{split}
+P_H=\sum_{v\in H}p_v,\quad Q_H=\sum_{v\in H}q_v,\quad
+\alpha=\frac{1-Q_H}{1-P_H},\quad
+\hat q_v=\begin{cases}q_v&amp;v\in H\\\alpha p_v&amp;v\notin H.\end{cases}
+\end{split}\]</div>
+<p>This approximation sums to one. Since <span class="math notranslate nohighlight">\(\sum_v p_vs_v=0\)</span>, the tail score can be replaced algebraically:</p>
+<div class="math notranslate nohighlight">
+\[
+\mu_{\hat q}=\sum_{H}q_vs_v+\alpha\sum_{v\notin H}p_vs_v
+=\sum_H(q_v-\alpha p_v)s_v.
+\]</div>
+<p>In the tail <span class="math notranslate nohighlight">\(p_v/\hat q_v=1/\alpha\)</span>, so with <span class="math notranslate nohighlight">\(w=f(p/q)\)</span>:</p>
+<div class="math notranslate nohighlight">
+\[
+\mu_{\hat q,w}=\sum_{v\in H}
+\left[q_v f(p_v/q_v)-\alpha f(1/\alpha)p_v\right]s_v.
+\]</div>
+<p>This is the head-only residual used in the implementation. Full-distribution centering is exact; centering with the reconstructed tail is an approximation, and small tail masses need numerical protection. A minimal logit check uses <span class="math notranslate nohighlight">\(p=(0.6,0.4)\)</span>, <span class="math notranslate nohighlight">\(q=(0.5,0.5)\)</span> and <span class="math notranslate nohighlight">\(s_a=e_a-p\)</span>: the uncentered mean is <span class="math notranslate nohighlight">\(q-p=(-0.1,0.1)\)</span>; subtracting this mean makes the expected centered score zero.</p>
+</section>
+<section id="match-the-sampler-s-actual-distribution">
+<h3>Match the sampler’s actual distribution<a class="headerlink" href="#match-the-sampler-s-actual-distribution" title="Link to this heading">#</a></h3>
+<p>The lab fixes temperature 1, top-p 1, top-k -1 and selects <code class="docutils literal notranslate"><span class="pre">--pg-loss-type</span> <span class="pre">reinforce</span></code>, <code class="docutils literal notranslate"><span class="pre">--disable-grpo-std-normalization</span></code>, <code class="docutils literal notranslate"><span class="pre">--calculate-per-token-loss</span></code>. SC cannot be substituted into GSPO/CISPO/PPO clipping. Streaming, constrained decoding, sampling penalties, and per-request temperature changes are unsupported here.</p>
+<p>slime also supports recorded top-p support <span class="math notranslate nohighlight">\(S\)</span>: normalize trainer probabilities on <span class="math notranslate nohighlight">\(S\)</span> and use all recorded <span class="math notranslate nohighlight">\(q_v\)</span> on that support. Then <span class="math notranslate nohighlight">\(\mu_w=\sum_{v\in S}q_vw_v\nabla\log p^S_v\)</span> needs no tail approximation. This is exact relative to the recorded support, not to an untruncated policy; storage can greatly exceed top-128. See <a class="reference internal" href="../get_started/usage.html#score-centering"><span class="std std-ref">sampling and compatibility details</span></a>.</p>
+</section>
+</section>
+<section id="what-to-measure">
+<h2>What to measure<a class="headerlink" href="#what-to-measure" title="Link to this heading">#</a></h2>
+<p>Hold prompt data, seed, response budget, and evaluation fixed. Begin with the short baseline, change one mechanism at a time, and record reward alongside <code class="docutils literal notranslate"><span class="pre">train_rollout_logprob_abs_diff</span></code>, <code class="docutils literal notranslate"><span class="pre">tis_clipfrac</span></code> when applicable, and async <code class="docutils literal notranslate"><span class="pre">staleness/mean</span></code> / <code class="docutils literal notranslate"><span class="pre">staleness/max</span></code>. Smaller mismatch alone does not prove better learning. Save a fixed batch for <a class="reference internal" href="../developer_guide/debug.html"><span class="std std-doc">debug replay</span></a> to distinguish optimizer behavior from sampling variation.</p>
+</section>
+</section>
+
+
+                </article>
+              
+
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="../training/index.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">Training &amp; algorithms</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="parallelism-memory.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">GPUs, memory, and parallelism</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item"><div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> Contents
+  </div>
+  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#a-common-language">A common language</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#grpo">GRPO</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#tis">TIS</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#ice-pop">ICE-POP</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#r3">R3</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sc">SC</a><ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#from-an-unwanted-mean-to-a-centered-score">From an unwanted mean to a centered score</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#compose-with-a-correction-weight">Compose with a correction weight</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#why-top-k-does-not-require-storing-the-full-vocabulary">Why top-k does not require storing the full vocabulary</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#match-the-sampler-s-actual-distribution">Match the sampler’s actual distribution</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#what-to-measure">What to measure</a></li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+<div class="bd-footer-content__inner container">
+  
+  <div class="footer-item">
+    
+<p class="component-author">
+By slime Team
+</p>
+
+  </div>
+  
+  <div class="footer-item">
+    
+
+  <p class="copyright">
+    
+      © Copyright 2025-2026, slime.
+      <br/>
+    
+  </p>
+
+  </div>
+  
+  <div class="footer-item">
+    <p class="last-updated">
+  Last updated on Oct 09, 2026.
+  <br/>
+</p>
+  </div>
+  
+  <div class="footer-item">
+    
+  </div>
+  
+</div>
+          </footer>
+        
+
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9"></script>
+<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9"></script>
+
+  <footer class="bd-footer">
+  </footer>
+  </body>
+</html>

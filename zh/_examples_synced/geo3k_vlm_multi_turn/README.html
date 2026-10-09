@@ -33,7 +33,7 @@
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=03e43079" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/sphinx-book-theme.css?v=4418a689" />
     <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../../_static/css/custom_log.css?v=ad20845f" />
+    <link rel="stylesheet" type="text/css" href="../../_static/css/custom_log.css?v=5f5cb4b6" />
   
   <!-- So that users can add custom icons -->
   <script defer src="../../_static/scripts/fontawesome.js?digest=90905a2f556bf617f1a9"></script>
@@ -42,19 +42,19 @@
 <link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
     <script src="../../_static/documentation_options.js?v=ceb54874"></script>
-    <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../../_static/copybutton.js?v=ccdb6887"></script>
     <script src="../../_static/scripts/sphinx-book-theme.js?v=fab101a9"></script>
     <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = '_examples_synced/geo3k_vlm_multi_turn/README';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
-    <script data-layout="root" src="../../_static/js/lang-toggle.js?v=082004b6"></script>
+    <script data-layout="root" src="../../_static/js/lang-toggle.js?v=9e8f3a3a"></script>
     <link rel="icon" href="../../_static/logo.ico"/>
     <link rel="index" title="索引" href="../../genindex.html" />
     <link rel="search" title="搜索" href="../../search.html" />
-    <link rel="next" title="On-Policy Distillation Example" href="../on_policy_distillation/README.html" />
+    <link rel="next" title="训练与系统流程" href="../../examples/workflows/index.html" />
     <link rel="prev" title="VLM Single-Turn RL" href="../geo3k_vlm/README.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
@@ -202,80 +202,27 @@
 </button></div>
         <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
     <div class="bd-toc-item navbar-nav active">
-        <p aria-level="2" class="caption" role="heading"><span class="caption-text">开始使用</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../../get_started/quick_start.html">快速使用</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../get_started/usage.html">使用文档</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../get_started/customization.html">自定义指南</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../get_started/agent.html">Agentic RL 训练路线图</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../get_started/qa.html">常见 Q&amp;A</a></li>
+        <ul class="current nav bd-sidenav">
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="../../library.html">文档资料库</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../../get_started/index.html">从这里开始</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../training/index.html">训练与算法</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../rollout/index.html">Rollout 与调度</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../operations/index.html">调试、性能分析与恢复</a></li>
+<li class="toctree-l2 current active has-children"><a class="reference internal" href="../../examples/index.html">任务教程</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="../../examples/agents/index.html">Agent 与环境</a></li>
+<li class="toctree-l3 current active has-children"><a class="reference internal" href="../../examples/multimodal/index.html">多模态任务</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l4"><a class="reference internal" href="../geo3k_vlm/README.html">VLM Single-Turn RL</a></li>
+<li class="toctree-l4 current active"><a class="current reference internal" href="#">VLM Multi-Turn (geo3k dataset)</a></li>
 </ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Dense</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../../examples/qwen3-4B.html">8xH100 训练 Qwen3-4B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../examples/glm4-9B.html">8xH100 训练 GLM4-9B</a></li>
+</details></li>
+<li class="toctree-l3"><a class="reference internal" href="../../examples/workflows/index.html">训练与系统流程</a></li>
 </ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">MoE</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../../examples/glm4.7-30B-A3B.html">8×H100 训练 GLM-4.7-Flash</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../examples/qwen3-30B-A3B.html">8xH100 训练 Qwen3-30B-A3B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../examples/qwen3-next-80B-A3B.html">Qwen3-Next-80B-A3B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../examples/glm5.2-744B-A40B.html">256xH100 训练 GLM-5.2 744B-A40B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../examples/glm4.7-355B-A32B.html">64xH100 训练 GLM-4.7</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../examples/deepseek-r1.html">128xH100 训练 DeepSeek R1</a></li>
+</details></li>
+<li class="toctree-l2"><a class="reference internal" href="../../developer_guide/index.html">开发与 CI</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../platform_support/index.html">硬件平台</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../blogs/index.html">设计文章与版本发布</a></li>
 </ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">高级特性</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/on-policy-distillation.html">在策略蒸馏 (On-Policy Distillation)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/speculative-decoding.html">投机采样</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/low-precision.html">低精度训练与 Rollout</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/reproducibility.html">Reproducibility</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/fault-tolerance.html">容灾</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/straw.html">使用 straw 持久化 rollout</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/observability.html">观测</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/pd-disaggregation.html">PD 分离</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/external-rollout-engines.html">External Rollout Engines 配置路线图</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/delta-weight-sync.html">Delta 权重同步</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/sglang-config.html">SGLang Config：高级引擎部署</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/megatron-config.html">Megatron Config：按角色覆盖训练参数</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../advanced/arch-support-beyond-megatron.html">在 Megatron-LM 中快速支持新模型架构</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">其他用法</span></p>
-<ul class="current nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../../examples/qwen3-4b-base-openhermes.html">SFT Qwen3-4B-Base</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../search-r1/README.html">Search-R1 lite</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../fully_async/README.html">Fully-Async Rollout Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../retool/README.html">Retool: from SFT to RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../multi_agent/README.html">Multi-Agent RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../coding_agent_rl/README.html">Coding-Agent RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../delta_weight_sync/README.html">Delta Weight Sync</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../eval_multi_task/README.html">Multi-Task Evaluation Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../geo3k_vlm/README.html">VLM Single-Turn RL</a></li>
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">VLM Multi-Turn (geo3k dataset)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../on_policy_distillation/README.html">On-Policy Distillation Example</a></li>
-
-
-
-<li class="toctree-l1"><a class="reference internal" href="../strands_sglang/README.html">slime x Strands-SGLang</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../tau-bench/README.html">Tau bench</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../train_infer_mismatch_helper/README.html">Rollout Correction Methods</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">开发指南</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../../developer_guide/ci.html">CI（持续集成）</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../developer_guide/debug.html">Debug 指南</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../developer_guide/trace.html">Trace 可视化</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../developer_guide/profiling.html">性能分析 (Profiling)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../developer_guide/install_flashqla.html">安装 FlashQLA</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">硬件平台</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../../platform_support/amd_tutorial.html">AMD ROCm</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">博客</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../../blogs/release_v0.1.0.html">v0.1.0: 重新定义高性能 RL 训练框架</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../blogs/introducing_slime.html">slime：为 RL Scaling 设计的 SGLang-Native 后训练框架</a></li>
+</details></li>
 </ul>
 
     </div>
@@ -523,7 +470,7 @@
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="vlm-multi-turn-geo3k-dataset">
-<h1>VLM Multi-Turn (geo3k dataset)<a class="headerlink" href="#vlm-multi-turn-geo3k-dataset" title="链接到此标题。">#</a></h1>
+<h1>VLM Multi-Turn (geo3k dataset)<a class="headerlink" href="#vlm-multi-turn-geo3k-dataset" title="Link to this heading">#</a></h1>
 <p>Training VLM on <a class="reference external" href="https://huggingface.co/datasets/hiyouga/geometry3k">geo3k dataset</a> with multi-turn reasoning with interactive environment feedback, using GRPO. For the dataset, we used the <a class="reference external" href="https://huggingface.co/datasets/VeraIsHere/geo3k_imgurl_processed">processed version</a>.</p>
 <p>Note: Please make sure the cudnn version in the environment is 9.16.0.29 to prevent severe performance regression in conv3d in torch 2.9 mentioned in <a class="github reference external" href="https://github.com/pytorch/pytorch/issues/168167">pytorch/pytorch#168167</a>. Otherwise, you can reinstall cudnn with:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>nvidia-cudnn-cu12<span class="o">==</span><span class="m">9</span>.16.0.29
@@ -544,7 +491,7 @@
 <p><img alt="VLM multi-turn geo3k reward" src="../../_images/geo3k_vlm_multi_turn_reward.png" />
 <img alt="Rollout megatron" src="../../_images/rollout_experiment_result_megatron.png" /></p>
 <section id="reproduce">
-<h2>Reproduce<a class="headerlink" href="#reproduce" title="链接到此标题。">#</a></h2>
+<h2>Reproduce<a class="headerlink" href="#reproduce" title="Link to this heading">#</a></h2>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 1) Set environment variable</span>
 <span class="nb">export</span><span class="w"> </span><span class="nv">WANDB_API_KEY</span><span class="o">=</span>...
 <span class="nb">export</span><span class="w"> </span><span class="nv">SLIME_SCRIPT_NUM_GPUS</span><span class="o">=</span><span class="m">8</span>
@@ -559,7 +506,7 @@ python<span class="w"> </span>examples/geo3k_vlm_multi_turn/run_geo3k_vlm_multi_
 </div>
 </section>
 <section id="what-each-file-does">
-<h2>What each file does<a class="headerlink" href="#what-each-file-does" title="链接到此标题。">#</a></h2>
+<h2>What each file does<a class="headerlink" href="#what-each-file-does" title="Link to this heading">#</a></h2>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">examples/geo3k_vlm_multi_turn/run_geo3k_vlm_multi_turn.py</span></code>: downloads Qwen3.5-35B-A3B, sets training/rollout args, and launches the run.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">examples/geo3k_vlm_multi_turn/geo3k_vlm_multi_turn_config.yaml</span></code>: specifies <code class="docutils literal notranslate"><span class="pre">max_turns</span></code> and <code class="docutils literal notranslate"><span class="pre">rollout_interaction_env_path</span></code> for the multi-turn rollout.</p></li>
@@ -590,11 +537,11 @@ python<span class="w"> </span>examples/geo3k_vlm_multi_turn/run_geo3k_vlm_multi_
       </div>
     </a>
     <a class="right-next"
-       href="../on_policy_distillation/README.html"
+       href="../../examples/workflows/index.html"
        title="下一页">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">下一页</p>
-        <p class="prev-next-title">On-Policy Distillation Example</p>
+        <p class="prev-next-title">训练与系统流程</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>

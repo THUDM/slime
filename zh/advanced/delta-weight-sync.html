@@ -33,7 +33,7 @@
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=4418a689" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=ad20845f" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=5f5cb4b6" />
   
   <!-- So that users can add custom icons -->
   <script defer src="../_static/scripts/fontawesome.js?digest=90905a2f556bf617f1a9"></script>
@@ -42,15 +42,15 @@
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
     <script src="../_static/documentation_options.js?v=ceb54874"></script>
-    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../_static/copybutton.js?v=ccdb6887"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?v=fab101a9"></script>
     <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'advanced/delta-weight-sync';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
-    <script data-layout="root" src="../_static/js/lang-toggle.js?v=082004b6"></script>
+    <script data-layout="root" src="../_static/js/lang-toggle.js?v=9e8f3a3a"></script>
     <link rel="icon" href="../_static/logo.ico"/>
     <link rel="index" title="索引" href="../genindex.html" />
     <link rel="search" title="搜索" href="../search.html" />
@@ -202,80 +202,28 @@
 </button></div>
         <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
     <div class="bd-toc-item navbar-nav active">
-        <p aria-level="2" class="caption" role="heading"><span class="caption-text">开始使用</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../get_started/quick_start.html">快速使用</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/usage.html">使用文档</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/customization.html">自定义指南</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/agent.html">Agentic RL 训练路线图</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/qa.html">常见 Q&amp;A</a></li>
+        <ul class="current nav bd-sidenav">
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="../library.html">文档资料库</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../get_started/index.html">从这里开始</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../training/index.html">训练与算法</a></li>
+<li class="toctree-l2 current active has-children"><a class="reference internal" href="../rollout/index.html">Rollout 与调度</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="rl-systems.html">看懂你正在搭建的 RL 系统</a></li>
+<li class="toctree-l3"><a class="reference internal" href="rollout-scheduling.html">同步、partial 与 distributed fully async rollout</a></li>
+<li class="toctree-l3"><a class="reference internal" href="straw.html">使用 straw 持久化 rollout</a></li>
+<li class="toctree-l3"><a class="reference internal" href="pd-disaggregation.html">PD 分离</a></li>
+<li class="toctree-l3"><a class="reference internal" href="external-rollout-engines.html">External Rollout Engines 配置路线图</a></li>
+<li class="toctree-l3 current active"><a class="current reference internal" href="#">Delta 权重同步</a></li>
+<li class="toctree-l3"><a class="reference internal" href="sglang-config.html">SGLang Config：高级引擎部署</a></li>
+<li class="toctree-l3"><a class="reference internal" href="speculative-decoding.html">投机采样</a></li>
 </ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Dense</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4B.html">8xH100 训练 Qwen3-4B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm4-9B.html">8xH100 训练 GLM4-9B</a></li>
+</details></li>
+<li class="toctree-l2"><a class="reference internal" href="../operations/index.html">调试、性能分析与恢复</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../examples/index.html">任务教程</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../developer_guide/index.html">开发与 CI</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../platform_support/index.html">硬件平台</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../blogs/index.html">设计文章与版本发布</a></li>
 </ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">MoE</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-30B-A3B.html">8×H100 训练 GLM-4.7-Flash</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-30B-A3B.html">8xH100 训练 Qwen3-30B-A3B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-next-80B-A3B.html">Qwen3-Next-80B-A3B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm5.2-744B-A40B.html">256xH100 训练 GLM-5.2 744B-A40B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-355B-A32B.html">64xH100 训练 GLM-4.7</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/deepseek-r1.html">128xH100 训练 DeepSeek R1</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">高级特性</span></p>
-<ul class="current nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="on-policy-distillation.html">在策略蒸馏 (On-Policy Distillation)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="speculative-decoding.html">投机采样</a></li>
-<li class="toctree-l1"><a class="reference internal" href="low-precision.html">低精度训练与 Rollout</a></li>
-<li class="toctree-l1"><a class="reference internal" href="reproducibility.html">Reproducibility</a></li>
-<li class="toctree-l1"><a class="reference internal" href="fault-tolerance.html">容灾</a></li>
-<li class="toctree-l1"><a class="reference internal" href="straw.html">使用 straw 持久化 rollout</a></li>
-<li class="toctree-l1"><a class="reference internal" href="observability.html">观测</a></li>
-<li class="toctree-l1"><a class="reference internal" href="pd-disaggregation.html">PD 分离</a></li>
-<li class="toctree-l1"><a class="reference internal" href="external-rollout-engines.html">External Rollout Engines 配置路线图</a></li>
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">Delta 权重同步</a></li>
-<li class="toctree-l1"><a class="reference internal" href="sglang-config.html">SGLang Config：高级引擎部署</a></li>
-<li class="toctree-l1"><a class="reference internal" href="megatron-config.html">Megatron Config：按角色覆盖训练参数</a></li>
-<li class="toctree-l1"><a class="reference internal" href="arch-support-beyond-megatron.html">在 Megatron-LM 中快速支持新模型架构</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">其他用法</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4b-base-openhermes.html">SFT Qwen3-4B-Base</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/search-r1/README.html">Search-R1 lite</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/fully_async/README.html">Fully-Async Rollout Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/coding_agent_rl/README.html">Coding-Agent RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/delta_weight_sync/README.html">Delta Weight Sync</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/eval_multi_task/README.html">Multi-Task Evaluation Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/geo3k_vlm/README.html">VLM Single-Turn RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/geo3k_vlm_multi_turn/README.html">VLM Multi-Turn (geo3k dataset)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/on_policy_distillation/README.html">On-Policy Distillation Example</a></li>
-
-
-
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/strands_sglang/README.html">slime x Strands-SGLang</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/tau-bench/README.html">Tau bench</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/train_infer_mismatch_helper/README.html">Rollout Correction Methods</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">开发指南</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/ci.html">CI（持续集成）</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/debug.html">Debug 指南</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/trace.html">Trace 可视化</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/profiling.html">性能分析 (Profiling)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/install_flashqla.html">安装 FlashQLA</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">硬件平台</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../platform_support/amd_tutorial.html">AMD ROCm</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">博客</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../blogs/release_v0.1.0.html">v0.1.0: 重新定义高性能 RL 训练框架</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../blogs/introducing_slime.html">slime：为 RL Scaling 设计的 SGLang-Native 后训练框架</a></li>
+</details></li>
 </ul>
 
     </div>
@@ -526,11 +474,11 @@
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="delta">
-<h1>Delta 权重同步<a class="headerlink" href="#delta" title="链接到此标题。">#</a></h1>
+<h1>Delta 权重同步<a class="headerlink" href="#delta" title="Link to this heading">#</a></h1>
 <p>Delta 权重同步只发送两次同步之间发生变化的字节，而不是每次都写一份完整 checkpoint，以此让非 colocate 的 rollout engine 保持最新。它面向大模型、跨集群或跨数据中心的训推解耦场景——这种场景下每次都写整份 actor 权重是主要开销。</p>
 <p>它<strong>只支持 disk transport</strong>。训练端把每次同步发布为一份 canonical HF checkpoint 目录；engine 的 <code class="docutils literal notranslate"><span class="pre">/pull_weights</span></code> 端点（随 slime 的 sglang patch 提供）把 apply 扇出到 <strong>engine 覆盖的每一个 host</strong> 并校验，随后 engine 通过<strong>原生</strong>的 <code class="docutils literal notranslate"><span class="pre">update_weights_from_disk</span></code> 端点 reload 打过补丁的本地 checkpoint。slime 对每个 engine 只与一个端点通信，所以多节点 serving 和外部 rollout engine 在 slime 侧都不需要任何额外支持。</p>
 <section id="id1">
-<h2>配置<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h2>
+<h2>配置<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--update-weight-mode<span class="w"> </span>delta
 --update-weight-transport<span class="w"> </span>disk
 --update-weight-disk-dir<span class="w"> </span>/shared/fs/delta-updates
@@ -564,7 +512,7 @@
 <p>delta 始终用 zstd（level 1）压缩；profiling 显示对这类数据它在 wire 大小和解压速度上都优于 lz4 / gzip / snappy / brotli，所以不做成可配置项。</p>
 </section>
 <section id="id2">
-<h2>工作原理<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h2>
+<h2>工作原理<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
 <ol class="arabic">
 <li><p><strong>Seed。</strong> 首次同步，以及训练端恢复或替换 engine 后的首次同步，会从训练端当前权重发布完整 HF checkpoint，并从同一批 tensor 捕获 CPU snapshot。所有 engine 加载成功后才恢复生成。版本号高于目录中所有已有版本，包括已经写盘但丢失应答的更新；重启不会删除旧版本流。</p></li>
 <li><p><strong>Publish。</strong> 之后每次同步，训练端把每个 gather 出的 HF tensor 与 snapshot 做 diff，编码、压缩，写到 <code class="docutils literal notranslate"><span class="pre">--update-weight-disk-dir</span></code> 下的新版本目录 <code class="docutils literal notranslate"><span class="pre">weight_v{N:06d}/</span></code>。该目录是一份 canonical HF checkpoint——<code class="docutils literal notranslate"><span class="pre">model-NNNNN.safetensors</span></code> 文件装着压缩后的 diff tensor，外加 <code class="docutils literal notranslate"><span class="pre">model.safetensors.index.json</span></code>（tensor 名 → 文件）承载 apply 元数据——所以这个产物是可移植的，不绑定训练端的并行 layout。随后 snapshot 推进到新值，供下次 diff。</p></li>
@@ -579,7 +527,7 @@ full 模式 disk 同步在设置了 <code class="docutils literal notranslate"><
 <p>snapshot 与 engine 都以同一份已发布的 HF 字节为基准，即使训练端恢复的是比 <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> 更新的模型也成立。因此，Megatron→HF 转换中的差异（例如 embedding / LM head 被裁掉的 vocab padding 行）不会破坏下一次 delta。</p>
 </section>
 <section id="id3">
-<h2>编码<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h2>
+<h2>编码<a class="headerlink" href="#id3" title="Link to this heading">#</a></h2>
 <p>两种编码都是字节级、与 dtype 无关的，所以量化 checkpoint 也走同一条路径。engine 从每个版本的 index 元数据读取所用编码。</p>
 <ul class="simple">
 <li><p><strong><code class="docutils literal notranslate"><span class="pre">xor</span></code></strong>（默认）：写 <code class="docutils literal notranslate"><span class="pre">new</span> <span class="pre">^</span> <span class="pre">old</span></code>。wire 最小、apply 最快（顺序访问、对 cache 友好；未变化的字节是 0，被压缩器压到极小）。它是一个对合（involution），所以必须<strong>恰好对正确的 base apply 一次</strong>——apply 两次会还原。</p></li>
@@ -587,12 +535,12 @@ full 模式 disk 同步在设置了 <code class="docutils literal notranslate"><
 </ul>
 </section>
 <section id="id4">
-<h2>完整性<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h2>
+<h2>完整性<a class="headerlink" href="#id4" title="Link to this heading">#</a></h2>
 <p>训练端把每个 tensor 新状态的逐 tensor checksum 存进版本里。apply 之后每个 host 重新计算 checksum，<strong>任何不匹配都会 raise</strong>——失败会通过 <code class="docutils literal notranslate"><span class="pre">/pull_weights</span></code> 的响应传回，所以损坏的 delta 或错误的 base 会直接报错失败，而不会把坏权重提供出去。apply 还拒绝乱序执行：一个版本只会在它声明的 base 版本之上 apply。</p>
 <p><code class="docutils literal notranslate"><span class="pre">--update-weight-delta-checksum</span></code> 选择算法。checksum 不是 apply 的瓶颈（apply 受解压 + XOR 限制），所以这是一个 digest 属性的选择，而非速度选择：<code class="docutils literal notranslate"><span class="pre">xxh3-128</span></code>（默认）是最宽的快速非加密 digest；<code class="docutils literal notranslate"><span class="pre">blake3</span></code> 是加密 digest，用于不可信存储；<code class="docutils literal notranslate"><span class="pre">adler32</span></code> 用于与期望它的系统互操作。</p>
 </section>
 <section id="hook">
-<h2>共享文件系统可见性 hook<a class="headerlink" href="#hook" title="链接到此标题。">#</a></h2>
+<h2>共享文件系统可见性 hook<a class="headerlink" href="#hook" title="Link to this heading">#</a></h2>
 <p>在 POSIX 共享文件系统（NFS、Lustre……）上不需要额外步骤。对于需要显式 commit/refresh 才能让写入跨 host 可见的对象存储挂载，可以提供两个可选 hook（通过 import 路径加载——slime 和 sglang 里都不存在任何厂商特定代码）：</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">--custom-update-weight-post-write-path</span></code>（slime，训练端）：在一个版本的文件写完之后、通知 engine 读取之前调用（例如把待写入数据上传到底层对象存储）。签名：<code class="docutils literal notranslate"><span class="pre">hook(args,</span> <span class="pre">version_dir,</span> <span class="pre">rollout_engines)</span></code>。</p></li>

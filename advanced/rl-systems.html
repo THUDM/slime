@@ -1,0 +1,673 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Understand the RL system you are building &#8212; slime</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=4418a689" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=5f5cb4b6" />
+  
+  <!-- So that users can add custom icons -->
+  <script defer src="../_static/scripts/fontawesome.js?digest=90905a2f556bf617f1a9"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
+
+    <script src="../_static/documentation_options.js?v=183391d5"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=ccdb6887"></script>
+    <script src="../_static/scripts/sphinx-book-theme.js?v=fab101a9"></script>
+    <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+    <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'advanced/rl-systems';</script>
+    <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
+    <script data-layout="root" src="../_static/js/lang-toggle.js?v=9e8f3a3a"></script>
+    <link rel="icon" href="../_static/logo.ico"/>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Synchronous, partial, and distributed fully async rollout" href="rollout-scheduling.html" />
+    <link rel="prev" title="Rollout &amp; scheduling" href="../rollout/index.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="0.4.0" />
+    <meta name="docbuild:last-update" content="Oct 09, 2026"/>
+  
+    
+    <script src="../_static/searchtools.js"></script>
+    <script src="../_static/language_data.js"></script>
+    <script src="../searchindex.js"></script>
+  
+  </head>
+  <body data-default-mode="">
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+  
+  
+  
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search..."
+         aria-label="Search..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header id="pst-header" class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class="col-lg-9 navbar-header-items">
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+        </div>
+      
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+    </div>
+  
+
+  
+    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="On this page">
+      <span class="fa-solid fa-outdent"></span>
+    </button>
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/logo.jpg" class="logo__image only-light" alt="slime - Home"/>
+    <img src="../_static/logo.jpg" class="logo__image only-dark pst-js-only" alt="slime - Home"/>
+  
+  
+</a></div>
+        <div class="sidebar-primary-item">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button></div>
+        <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
+    <div class="bd-toc-item navbar-nav active">
+        <ul class="current nav bd-sidenav">
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="../library.html">Documentation library</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../get_started/index.html">Start here</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../training/index.html">Training &amp; algorithms</a></li>
+<li class="toctree-l2 current active has-children"><a class="reference internal" href="../rollout/index.html">Rollout &amp; scheduling</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l3 current active"><a class="current reference internal" href="#">Understand the RL system you are building</a></li>
+<li class="toctree-l3"><a class="reference internal" href="rollout-scheduling.html">Synchronous, partial, and distributed fully async rollout</a></li>
+<li class="toctree-l3"><a class="reference internal" href="straw.html">Persistent rollout with straw</a></li>
+<li class="toctree-l3"><a class="reference internal" href="pd-disaggregation.html">PD Disaggregation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="external-rollout-engines.html">External Rollout Engines Roadmap</a></li>
+<li class="toctree-l3"><a class="reference internal" href="delta-weight-sync.html">Delta Weight Sync</a></li>
+<li class="toctree-l3"><a class="reference internal" href="sglang-config.html">SGLang Config: Advanced Engine Deployment</a></li>
+<li class="toctree-l3"><a class="reference internal" href="speculative-decoding.html">Speculative Decoding</a></li>
+</ul>
+</details></li>
+<li class="toctree-l2"><a class="reference internal" href="../operations/index.html">Debugging, profiling &amp; recovery</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../examples/index.html">Task tutorials</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../developer_guide/index.html">Development &amp; CI</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../platform_support/index.html">Hardware platforms</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../blogs/index.html">Design notes &amp; releases</a></li>
+</ul>
+</details></li>
+</ul>
+
+    </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+
+<div class="sbt-scroll-pixel-helper"></div>
+
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item"><button class="sidebar-toggle primary-toggle btn btn-sm" title="Toggle primary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <span class="fa-solid fa-bars"></span>
+</button></div>
+      
+    </div>
+  
+  
+    <div class="header-article-items__end">
+      
+        <div class="header-article-item">
+
+<div class="article-header-buttons">
+
+
+
+
+
+<div class="dropdown dropdown-source-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Source repositories">
+    <i class="fab fa-github"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime" target="_blank"
+   class="btn btn-sm btn-source-repository-button dropdown-item"
+   title="Source repository"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fab fa-github"></i>
+  </span>
+<span class="btn__text-container">Repository</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/blob/main/docs/en/advanced/rl-systems.md?plain=1" target="_blank"
+   class="btn btn-sm btn-source-file-button dropdown-item"
+   title="Show source"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-code"></i>
+  </span>
+<span class="btn__text-container">Show source</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/edit/main/docs/en/advanced/rl-systems.md" target="_blank"
+   class="btn btn-sm btn-source-edit-button dropdown-item"
+   title="Suggest edit"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-pencil-alt"></i>
+  </span>
+<span class="btn__text-container">Suggest edit</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/issues/new?title=Issue%20on%20page%20%2Fadvanced/rl-systems.html&body=Your%20issue%20content%20here." target="_blank"
+   class="btn btn-sm btn-source-issues-button dropdown-item"
+   title="Open an issue"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-lightbulb"></i>
+  </span>
+<span class="btn__text-container">Open issue</span>
+</a>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+
+
+<div class="dropdown dropdown-download-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Download this page">
+    <i class="fas fa-download"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="../_sources/advanced/rl-systems.md" target="_blank"
+   class="btn btn-sm btn-download-source-button dropdown-item"
+   title="Download source file"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file"></i>
+  </span>
+<span class="btn__text-container">.md</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li>
+<button onclick="window.print()"
+  class="btn btn-sm btn-download-pdf-button dropdown-item"
+  title="Print to PDF"
+  data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file-pdf"></i>
+  </span>
+<span class="btn__text-container">.pdf</span>
+</button>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+<button onclick="toggleFullScreen()"
+  class="btn btn-sm btn-fullscreen-button pst-navbar-icon"
+  title="Fullscreen mode"
+  data-bs-placement="bottom" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-expand"></i>
+  </span>
+
+</button>
+
+
+
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="Light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="Dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>Light</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>Dark</button></li>
+  </ul>
+</div>
+
+
+<button class="btn btn-sm pst-navbar-icon search-button search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass fa-lg"></i>
+</button>
+<button class="sidebar-toggle secondary-toggle btn btn-sm pst-navbar-icon" title="Toggle secondary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <span class="fa-solid fa-list"></span>
+</button>
+</div></div>
+      
+    </div>
+  
+</div>
+</div>
+              
+              
+
+<div id="jb-print-docs-body" class="onlyprint">
+    <h1>Understand the RL system you are building</h1>
+    <!-- Table of contents -->
+    <div id="print-main-content">
+        <div id="jb-print-toc">
+            
+            <div>
+                <h2> Contents </h2>
+            </div>
+            <nav aria-label="Page">
+                <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#placement">Placement</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#async">Async</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#precision">Precision</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#deterministic">Deterministic</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#pd">PD</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#hicache">HiCache</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#debug-before-optimizing">Debug before optimizing</a></li>
+</ul>
+            </nav>
+        </div>
+    </div>
+</div>
+
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section class="tex2jax_ignore mathjax_ignore" id="understand-the-rl-system-you-are-building">
+<h1>Understand the RL system you are building<a class="headerlink" href="#understand-the-rl-system-you-are-building" title="Link to this heading">#</a></h1>
+<p><a class="reference internal" href="../index.html"><span class="std std-doc">Open the experiment lab</span></a>. These are independent dimensions of an experiment: <strong>placement</strong> owns GPUs, <strong>scheduling</strong> orders work, <strong>precision</strong> changes arithmetic, and <strong>serving topology</strong> divides inference work. The simple cost models below are explanatory estimates, not benchmark predictions.</p>
+<section id="placement">
+<h2>Placement<a class="headerlink" href="#placement" title="Link to this heading">#</a></h2>
+<p>A synchronous round generates responses, computes rewards, trains, and distributes new weights. With colocation, rollout and training share GPUs and alternate residency. With disaggregation they own separate GPU pools, even when scheduling is synchronous. External SGLang adds independent lifecycle ownership; it does not by itself imply asynchronous training.</p>
+<p>If training needs <span class="math notranslate nohighlight">\(N_T\)</span> GPUs and rollout needs <span class="math notranslate nohighlight">\(N_R\)</span>, separate pools reserve <span class="math notranslate nohighlight">\(N_T+N_R\)</span> GPUs. Colocation reuses a pool, but each phase still needs enough devices and host memory for its own parallelism/offload. The lab assumes 8 GPUs per training node and checks divisibility by TP × PP × CP and expert-TP × EP × PP. Divisibility is necessary, not a memory-capacity proof.</p>
+<p>For full weight size <span class="math notranslate nohighlight">\(S_W\)</span>, transfer bandwidth <span class="math notranslate nohighlight">\(B_W\)</span>, and control/load overhead <span class="math notranslate nohighlight">\(t_0\)</span>, a rough sync cost is</p>
+<div class="math notranslate nohighlight">
+\[t_W\approx S_W/B_W+t_0.\]</div>
+<p>Delta transfer substitutes changed bytes <span class="math notranslate nohighlight">\(S_\Delta\)</span> but adds snapshot, diff, encoding, and reconstruction time. It wins only when the bytes saved outweigh those costs. slime uses CUDA IPC for colocation; disaggregated full updates can use NCCL or disk. Delta requires disk transport, a shared directory, host-local checkpoint directories, and patched SGLang <code class="docutils literal notranslate"><span class="pre">/pull_weights</span></code> endpoints.</p>
+<p>Related systems research: <a class="reference external" href="https://arxiv.org/abs/2409.19256">HybridFlow</a>. slime’s actual interfaces: <a class="reference internal" href="external-rollout-engines.html"><span class="std std-doc">external engines</span></a>, <a class="reference internal" href="delta-weight-sync.html"><span class="std std-doc">delta sync</span></a>, and <a class="reference internal" href="megatron-config.html"><span class="std std-doc">training topology</span></a>.</p>
+</section>
+<section id="async">
+<h2>Async<a class="headerlink" href="#async" title="Link to this heading">#</a></h2>
+<p>Let <span class="math notranslate nohighlight">\(t_R\)</span> be rollout plus reward time, <span class="math notranslate nohighlight">\(t_T\)</span> training time, and <span class="math notranslate nohighlight">\(t_W\)</span> weight-update time. A serial round takes approximately</p>
+<div class="math notranslate nohighlight">
+\[t_{\rm sync}=t_R+t_T+t_W.\]</div>
+<p>If independent resources and a sufficiently full queue overlap generation and training perfectly, the optimistic steady-state lower bound becomes</p>
+<div class="math notranslate nohighlight">
+\[t_{\rm async}\gtrsim\max(t_R,t_T)+t_W,\quad
+\text{speedup}\lesssim\frac{t_R+t_T+t_W}{\max(t_R,t_T)+t_W}.
+\]</div>
+<p>Weight-update stalls, sampling dependencies, reward latency, queue warmup, and GPU contention weaken this bound. It does not predict a measured speedup. Variable-length samples make synchronous barriers especially costly.</p>
+<p>The cost of overlap is staleness. If a sample was generated at weight version <span class="math notranslate nohighlight">\(v_s\)</span> and consumed at <span class="math notranslate nohighlight">\(v_t\)</span>, define age <span class="math notranslate nohighlight">\(d=v_t-v_s\)</span>. At a prefix <span class="math notranslate nohighlight">\(h\)</span>, mismatch can be split into</p>
+<div class="math notranslate nohighlight">
+\[
+\log p_{v_t}(a\mid h)-\log q_{v_s}(a\mid h)
+=\underbrace{\log p_{v_t}-\log p_{v_s}}_{\text{parameter staleness}}
++\underbrace{\log p_{v_s}-\log q_{v_s}}_{\text{same-version engine mismatch}}.
+\]</div>
+<p>Deterministic kernels can reduce the second term, not the first. A long trajectory may contain several versions; a single age statistic is only a diagnostic. TIS/SC can be useful, but do not justify an unlimited stale queue.</p>
+<p>slime uses <code class="docutils literal notranslate"><span class="pre">train.py</span></code> with <code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span> <span class="pre">slime.rollout.fully_async_rollout.generate_rollout_fully_async</span></code>. It preserves in-flight generations across calls and needs separate GPUs for meaningful overlap. Monitor <code class="docutils literal notranslate"><span class="pre">staleness/mean</span></code> and <code class="docutils literal notranslate"><span class="pre">staleness/max</span></code>. The generated recipe omits evaluation on that continuous queue; use a separate evaluation path/job. See the <a class="reference internal" href="../_examples_synced/fully_async/README.html"><span class="std std-doc">fully async implementation guide</span></a>. Related work: <a class="reference external" href="https://arxiv.org/abs/2509.19128">PipelineRL</a>; this citation is conceptual context, not a claim that slime implements the paper’s entire algorithm.</p>
+</section>
+<section id="precision">
+<h2>Precision<a class="headerlink" href="#precision" title="Link to this heading">#</a></h2>
+<p>Suppose serving logits are <span class="math notranslate nohighlight">\(z+\delta\)</span> while trainer logits are <span class="math notranslate nohighlight">\(z\)</span>. For a fixed token, differentiate log-softmax:</p>
+<div class="math notranslate nohighlight">
+\[
+\frac{\partial\log p_a}{\partial z_j}=\mathbf1_{a=j}-p_j.
+\]</div>
+<p>A first-order expansion gives</p>
+<div class="math notranslate nohighlight">
+\[\log q_a-\log p_a\approx\delta_a-\sum_jp_j\delta_j.\]</div>
+<p>A common shift cancels, while token-dependent perturbations change probabilities. Quantization, differing kernels, and accumulation order all contribute; this approximation can fail near discontinuities such as expert selection.</p>
+<p>A tensor with <span class="math notranslate nohighlight">\(P\)</span> elements needs approximately <span class="math notranslate nohighlight">\(Pb/8\)</span> bytes at <span class="math notranslate nohighlight">\(b\)</span> bits, excluding scales, metadata, padding, and replicated copies. Halving the bit width halves the raw tensor storage, not necessarily total GPU memory. Optimizer state, activations, and KV cache remain separate budgets.</p>
+<p>The lab offers BF16 training + BF16 or FP8 rollout, experimental FP8 training, and beta INT4 rollout. BF16 training uses a converted <code class="docutils literal notranslate"><span class="pre">torch_dist</span></code> checkpoint. FP8 rollout uses a separate block-quantized HF checkpoint whose <code class="docutils literal notranslate"><span class="pre">quantization_config</span></code> controls online weight conversion. FP8 KV cache is independent of weight precision. FP8 training uses blockwise TE settings; it omits <code class="docutils literal notranslate"><span class="pre">fp8-param-gather</span></code> because of CPU Adam incompatibility.</p>
+<p>Format reference: <a class="reference external" href="https://arxiv.org/abs/2209.05433">FP8 Formats for Deep Learning</a>. See <a class="reference internal" href="low-precision.html"><span class="std std-doc">slime precision support and caveats</span></a>. The lab’s INT4 options require model/kernel validation; no GLM INT4 performance claim is made.</p>
+</section>
+<section id="deterministic">
+<h2>Deterministic<a class="headerlink" href="#deterministic" title="Link to this heading">#</a></h2>
+<p>Floating-point addition is not associative. Changing a batch shape or reduction tree can change a result even without any random sampling. Reproducibility asks whether repeated execution of one configuration produces the same output; alignment asks whether two <strong>different</strong> implementations produce the same probabilities:</p>
+<div class="math notranslate nohighlight">
+\[\text{repeatable}(p)\land\text{repeatable}(q)\not\Rightarrow p=q.\]</div>
+<p>The lab’s deterministic switch enables Megatron deterministic mode, deterministic SGLang inference, and the documented NCCL/TE/cuBLAS environment settings. It is a reproducibility configuration, not a proof of cross-engine equality. The dependency stack must support the selected model and kernels; follow the <a class="reference internal" href="reproducibility.html"><span class="std std-doc">reproducibility guide</span></a>, including its FlashAttention 3 preparation.</p>
+<p>Exact GLM-5 alignment additionally uses aligned DSA attention, batch-invariant DeepGEMM forward, matching router and head precision, and the patched Megatron/DeepEP path. The maintained regression is <strong>six-layer GLM-5.2, EP8</strong>, with <code class="docutils literal notranslate"><span class="pre">train_rollout_logprob_abs_diff</span> <span class="pre">&lt;</span> <span class="pre">1e-6</span></code>; a separate layerwise gate checks exact equality. This evidence does not establish full 744B, arbitrary topology, async, or PD alignment.</p>
+<p>Original technical work: <a class="reference external" href="https://lmsys.org/blog/2025-09-22-sglang-deterministic/">SGLang deterministic inference</a>. Run the documented gate before expanding the claim.</p>
+</section>
+<section id="pd">
+<h2>PD<a class="headerlink" href="#pd" title="Link to this heading">#</a></h2>
+<p>Prefill consumes the prompt; decode produces tokens iteratively. PD disaggregation splits these <strong>serving</strong> phases, independently of whether the trainer shares GPUs with serving. See <a class="reference external" href="https://arxiv.org/abs/2401.09670">DistServe</a> for the research motivation, and <a class="reference internal" href="pd-disaggregation.html"><span class="std std-doc">slime’s PD guide</span></a> for its SGLang/Mooncake implementation.</p>
+<p>Let <span class="math notranslate nohighlight">\(n_P,n_D\)</span> be counts of prefill/decode engines and <span class="math notranslate nohighlight">\(\mu_P,\mu_D\)</span> their measured requests/second under the target workload. With KV payload <span class="math notranslate nohighlight">\(S_{KV}\)</span> per request and network bandwidth <span class="math notranslate nohighlight">\(B_{KV}\)</span>, flow conservation gives the bottleneck bound</p>
+<div class="math notranslate nohighlight">
+\[\lambda\le\min(n_P\mu_P,n_D\mu_D,B_{KV}/S_{KV}).\]</div>
+<p>Ignoring transfer, balancing <span class="math notranslate nohighlight">\(n_P\mu_P\approx n_D\mu_D\)</span> prevents a growing interstage queue. The correct split follows measurements of your prompt/response distribution, not a universal 1:1 ratio.</p>
+<p>For a conventional GQA/MHA cache, a rough unsharded payload for a prompt of length <span class="math notranslate nohighlight">\(L\)</span> is <span class="math notranslate nohighlight">\(S_{KV}\approx2L N_{\rm layers}N_{\rm KVheads}d_{\rm head}b/8\)</span>. The factor 2 accounts for K and V. MLA/DSA and compressed or paged layouts need their actual representation instead of this formula.</p>
+<p>The lab generates <code class="docutils literal notranslate"><span class="pre">sglang.yaml</span></code> with prefill and decode groups. Group GPU counts must be multiples of the model’s GPUs-per-engine and sum to the rollout pool. The selected Mooncake recipe needs working RDMA devices and corresponding dependencies. External deployments apply PD in their own launcher; <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> must not be combined with <code class="docutils literal notranslate"><span class="pre">--rollout-external-engine-addrs</span></code>.</p>
+</section>
+<section id="hicache">
+<h2>HiCache<a class="headerlink" href="#hicache" title="Link to this heading">#</a></h2>
+<p>The <a class="reference external" href="https://docs.sglang.io/docs/advanced_features/hicache_best_practices">official HiCache design and usage guide</a> describes a cache hierarchy extending prefix reuse beyond GPU memory. A simple per-request model compares reused computation with I/O:</p>
+<div class="math notranslate nohighlight">
+\[\Delta t\approx h\,t_{\rm avoided\ prefill}-t_{\rm cache\ IO}-t_{\rm bookkeeping},\]</div>
+<p>where <span class="math notranslate nohighlight">\(h\)</span> is the reusable-prefix hit rate. A positive hit rate alone does not prove speedup; large transfer cost can dominate. Useful metrics include prefix hit rate, host RAM, cache I/O time, and TTFT.</p>
+<p>The lab uses <code class="docutils literal notranslate"><span class="pre">--sglang-enable-hierarchical-cache</span> <span class="pre">--sglang-hicache-ratio</span> <span class="pre">2</span></code>, configuring host cache without an L3 storage service. Under managed PD, it enables HiCache on prefill only, matching the engine builder’s behavior. It does not configure decode offload or distributed cache storage. KV represents activations under specific weights; reuse across actor weight updates needs correct invalidation. Measure useful hits within that validity window.</p>
+</section>
+<section id="debug-before-optimizing">
+<h2>Debug before optimizing<a class="headerlink" href="#debug-before-optimizing" title="Link to this heading">#</a></h2>
+<p>Start with a three-round run and held-out evaluation. If generations are wrong, check the input template, checkpoint conversion, and weight update first. <a class="reference internal" href="../developer_guide/debug.html"><span class="std std-doc">Debug replay</span></a> freezes the sampled batch. <a class="reference internal" href="../developer_guide/trace.html"><span class="std std-doc">Tracing</span></a> identifies which phase waits. <a class="reference internal" href="../developer_guide/profiling.html"><span class="std std-doc">Profiling</span></a> then inspects the expensive kernels or engine stage. Optimize the measured bottleneck while comparing reward and mismatch; throughput alone is not the RL objective.</p>
+</section>
+</section>
+
+
+                </article>
+              
+
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="../rollout/index.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">Rollout &amp; scheduling</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="rollout-scheduling.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">Synchronous, partial, and distributed fully async rollout</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item"><div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> Contents
+  </div>
+  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#placement">Placement</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#async">Async</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#precision">Precision</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#deterministic">Deterministic</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#pd">PD</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#hicache">HiCache</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#debug-before-optimizing">Debug before optimizing</a></li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+<div class="bd-footer-content__inner container">
+  
+  <div class="footer-item">
+    
+<p class="component-author">
+By slime Team
+</p>
+
+  </div>
+  
+  <div class="footer-item">
+    
+
+  <p class="copyright">
+    
+      © Copyright 2025-2026, slime.
+      <br/>
+    
+  </p>
+
+  </div>
+  
+  <div class="footer-item">
+    <p class="last-updated">
+  Last updated on Oct 09, 2026.
+  <br/>
+</p>
+  </div>
+  
+  <div class="footer-item">
+    
+  </div>
+  
+</div>
+          </footer>
+        
+
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9"></script>
+<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9"></script>
+
+  <footer class="bd-footer">
+  </footer>
+  </body>
+</html>

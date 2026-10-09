@@ -1,0 +1,1064 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Tutorial: build and understand an RL experiment &#8212; slime</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=4418a689" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=5f5cb4b6" />
+  
+  <!-- So that users can add custom icons -->
+  <script defer src="../_static/scripts/fontawesome.js?digest=90905a2f556bf617f1a9"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
+
+    <script src="../_static/documentation_options.js?v=183391d5"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=ccdb6887"></script>
+    <script src="../_static/scripts/sphinx-book-theme.js?v=fab101a9"></script>
+    <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script type="module">import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.12.1/dist/mermaid.esm.min.mjs";
+
+
+
+
+
+const initStyles = () => {
+    const defaultStyle = document.createElement('style');
+    defaultStyle.textContent = "pre.mermaid {\n    /* Same as .mermaid-container > pre */\n    display: block;\n    width: 100%;\n}\n\npre.mermaid > svg {\n    /* Same as .mermaid-container > pre > svg */\n    height: 500px;\n    width: 100%;\n    max-width: 100% !important;\n}";
+    document.head.appendChild(defaultStyle);
+
+    const fullscreenStyle = document.createElement('style');
+    fullscreenStyle.textContent = ".mermaid-container {\n    position: relative;\n    display: flex;\n    flex-direction: row;\n    width: 100%;\n}\n\n.mermaid-container > pre {\n    display: block;\n    width: 100%;\n}\n\n.mermaid-container > pre > svg {\n    height: 500px;\n    width: 100%;\n    max-width: 100% !important;\n}\n\n.mermaid-fullscreen-btn {\n    position: absolute;\n    width: 28px;\n    height: 28px;\n    background: rgba(255, 255, 255, 0.95);\n    border: 1px solid rgba(0, 0, 0, 0.3);\n    border-radius: 4px;\n    cursor: pointer;\n    display: flex;\n    align-items: center;\n    justify-content: center;\n    transition: all 0.2s;\n    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);\n    font-size: 14px;\n    line-height: 1;\n    padding: 0;\n    color: #333;\n}\n\n.mermaid-fullscreen-btn:hover {\n    opacity: 100% !important;\n    background: rgba(255, 255, 255, 1);\n    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.3);\n    transform: scale(1.1);\n}\n\n.mermaid-fullscreen-btn.dark-theme {\n    background: rgba(50, 50, 50, 0.95);\n    border: 1px solid rgba(255, 255, 255, 0.3);\n    color: #e0e0e0;\n}\n\n.mermaid-fullscreen-btn.dark-theme:hover {\n    background: rgba(60, 60, 60, 1);\n    box-shadow: 0 3px 10px rgba(255, 255, 255, 0.2);\n}\n\n.mermaid-fullscreen-modal {\n    display: none;\n    position: fixed !important;\n    top: 0 !important;\n    left: 0 !important;\n    width: 95vw;\n    height: 100vh;\n    background: rgba(255, 255, 255, 0.98);\n    z-index: 9999;\n    padding: 20px;\n    overflow: auto;\n}\n\n.mermaid-fullscreen-modal.dark-theme {\n    background: rgba(0, 0, 0, 0.98);\n}\n\n.mermaid-fullscreen-modal.active {\n    display: flex;\n    align-items: center;\n    justify-content: center;\n}\n\n.mermaid-container-fullscreen {\n    position: relative;\n    width: 95vw;\n    height: 90vh;\n    max-width: 95vw;\n    max-height: 90vh;\n    background: white;\n    border-radius: 8px;\n    padding: 20px;\n    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);\n    overflow: auto;\n    display: flex;\n    align-items: center;\n    justify-content: center;\n}\n\n.mermaid-container-fullscreen.dark-theme {\n    background: #1a1a1a;\n    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.8);\n}\n\n.mermaid-container-fullscreen pre.mermaid {\n    width: 100%;\n    height: 100%;\n    display: flex;\n    align-items: center;\n    justify-content: center;\n}\n\n.mermaid-container-fullscreen .mermaid svg {\n    height: 100% !important;\n    width: 100% !important;\n    cursor: grab;\n}\n\n.mermaid-fullscreen-close {\n    position: fixed !important;\n    top: 20px !important;\n    right: 20px !important;\n    width: 40px;\n    height: 40px;\n    background: rgba(255, 255, 255, 0.95);\n    border: 1px solid rgba(0, 0, 0, 0.2);\n    border-radius: 50%;\n    cursor: pointer;\n    z-index: 10000;\n    display: flex;\n    align-items: center;\n    justify-content: center;\n    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);\n    transition: all 0.2s;\n    font-size: 24px;\n    line-height: 1;\n    color: #333;\n}\n\n.mermaid-fullscreen-close:hover {\n    background: white;\n    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);\n    transform: scale(1.1);\n}\n\n.mermaid-fullscreen-close.dark-theme {\n    background: rgba(50, 50, 50, 0.95);\n    border: 1px solid rgba(255, 255, 255, 0.2);\n    color: #e0e0e0;\n}\n\n.mermaid-fullscreen-close.dark-theme:hover {\n    background: rgba(60, 60, 60, 1);\n    box-shadow: 0 6px 16px rgba(255, 255, 255, 0.2);\n}\n\n.mermaid-fullscreen-modal .mermaid-fullscreen-btn {\n    display: none !important;\n}";
+    document.head.appendChild(fullscreenStyle);
+}
+
+// Detect if page has dark background
+const isDarkTheme = () => {
+    // We use a set of heuristics:
+    // 1. Check for common dark mode classes or attributes
+    // 2. Check computed background color brightness
+    if (document.documentElement.classList.contains('dark') ||
+        document.documentElement.getAttribute('data-theme') === 'dark' ||
+        document.body.classList.contains('dark') ||
+        document.body.getAttribute('data-theme') === 'dark') {
+        // console.log("Dark theme detected via class/attribute");
+        return true;
+    }
+    if (document.documentElement.classList.contains('light') ||
+        document.documentElement.getAttribute('data-theme') === 'light' ||
+        document.body.classList.contains('light') ||
+        document.body.getAttribute('data-theme') === 'light') {
+        // console.log("Light theme detected via class/attribute");
+        return false;
+    }
+    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        // console.log("Dark theme detected via prefers-color-scheme");
+        return true;
+    }
+    const bgColor = window.getComputedStyle(document.body).backgroundColor;
+    const match = bgColor.match(/rgb\((\d+),\s*(\d+),\s*(\d+)/);
+    if (match) {
+        const r = parseInt(match[1]);
+        const g = parseInt(match[2]);
+        const b = parseInt(match[3]);
+        const brightness = (r * 299 + g * 587 + b * 114) / 1000;
+        // console.log("Background color brightness:", brightness);
+        return brightness < 128;
+    }
+    // console.log("No dark or light theme detected, defaulting to light theme");
+    return false;
+};
+
+let darkTheme = isDarkTheme();
+let modal = null;
+let modalContent = null;
+let previousScrollOffset = [window.scrollX, window.scrollY];
+let _lazyObserver = null;
+let _renderQueue = Promise.resolve();
+let closeModal = () => {};
+
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal?.classList.contains('active')) {
+        closeModal();
+    }
+});
+
+// Apply d3 zoom to each SVG. Idempotent: an SVG already wrapped is skipped,
+// so this is safe to call both for the initial batch and for diagrams that
+// render lazily once they become visible.
+const addZoomToSvgs = (svgs) => {
+    svgs.each(function() {
+        if (this.getAttribute('data-zoom-applied') === 'true') return;
+        var svg = d3.select(this);
+        svg.html("<g class='wrapper'>" + svg.html() + "</g>");
+        var inner = svg.select("g");
+        var zoom = d3.zoom().on("zoom", function(event) {
+            inner.attr("transform", event.transform);
+        });
+        svg.call(zoom);
+        this.setAttribute('data-zoom-applied', 'true');
+    });
+};
+
+const runMermaid = async (rerun) => {
+    console.log("Running mermaid diagrams, rerun =", rerun);
+    // clear all existing mermaid charts
+    let all_mermaids = document.querySelectorAll(".mermaid");
+
+    if (rerun) {
+        // Disconnect any previous lazy rendering observer
+        if (_lazyObserver) {
+            _lazyObserver.disconnect();
+            _lazyObserver = null;
+        }
+
+        all_mermaids.forEach((el) => {
+            el.removeAttribute('data-mermaid-deferred');
+            el.removeAttribute('data-mermaid-render-failed');
+            if(!el.hasAttribute("data-original-code")) {
+                // store original code
+                // console.log(`Storing original code for first run: `, el.innerHTML);
+                el.setAttribute('data-original-code', el.innerHTML);
+            }
+            if(el.getAttribute("data-processed") === "true") {
+                // remove and restore original
+                el.removeAttribute("data-processed");
+                // console.log(`Restoring original code for re-run: `, el.getAttribute('data-original-code'));
+                el.innerHTML = el.getAttribute('data-original-code');
+            } else {
+                // store original code
+                // console.log(`Storing original code for re-run: `, el.innerHTML);
+                el.setAttribute('data-original-code', el.innerHTML);
+            }
+        });
+
+        // Separate visible and hidden elements. Mermaid's layout engine measures
+        // text dimensions via the DOM, which fails for elements hidden by a parent
+        // (e.g., Reveal.js non-active slides, sphinx-design unopened tabs),
+        // producing broken SVGs. Render visible elements now, defer hidden ones.
+        const visible = [];
+        const hidden = [];
+        all_mermaids.forEach((el) => {
+            // offsetParent is null for display:none ancestors.
+            // getClientRects().length > 0 catches position:fixed elements
+            // (which also have null offsetParent but are still visible).
+            if (el.offsetParent !== null || el.getClientRects().length > 0) {
+                visible.push(el);
+            } else {
+                hidden.push(el);
+                el.setAttribute('data-mermaid-deferred', 'true');
+            }
+        });
+
+        if (visible.length > 0) {
+            try {
+                await mermaid.run({ nodes: visible });
+            } catch (e) {
+                console.error("Mermaid rendering failed:", e);
+            }
+        }
+
+        // Lazily render hidden elements when they become visible.
+        // Uses a promise chain (_renderQueue) to serialize rendering,
+        // since IntersectionObserver may report multiple entries at once
+        // and mermaid.run() is not safe to call concurrently.
+        if (hidden.length > 0) {
+            if (typeof IntersectionObserver === 'undefined') {
+                console.warn("IntersectionObserver not available; hidden mermaid diagrams will not render.");
+            } else {
+                _renderQueue = Promise.resolve();
+                _lazyObserver = new IntersectionObserver((entries) => {
+                    for (const entry of entries) {
+                        if (entry.isIntersecting && entry.target.getAttribute("data-processed") !== "true") {
+                            _lazyObserver.unobserve(entry.target);
+                            const el = entry.target;
+                            _renderQueue = _renderQueue.then(async () => {
+                                try {
+                                    await mermaid.run({ nodes: [el] });
+                                    el.removeAttribute('data-mermaid-deferred');
+                                    // Apply zoom to the now-rendered diagram, matching
+                                    // the decoration visible diagrams receive.
+                                    if (false) {
+                                        addZoomToSvgs(d3.selectAll("").select(function() {
+                                            return this.querySelector("svg");
+                                        }));
+                                    }
+                                } catch (e) {
+                                    console.error("Mermaid deferred rendering failed:", e);
+                                    el.removeAttribute('data-mermaid-deferred');
+                                    el.setAttribute('data-mermaid-render-failed', 'true');
+                                }
+                            });
+                        }
+                    }
+                });
+                hidden.forEach((el) => _lazyObserver.observe(el));
+            }
+        }
+    }
+
+    all_mermaids = document.querySelectorAll(".mermaid");
+    // Exclude deferred (hidden) and render-failed elements from completion checks
+    const mermaids_active = document.querySelectorAll(".mermaid:not([data-mermaid-deferred]):not([data-mermaid-render-failed])");
+    const mermaids_processed = document.querySelectorAll(".mermaid:not([data-mermaid-deferred]):not([data-mermaid-render-failed])[data-processed='true']");
+
+    if (false) {
+        const mermaids_to_add_zoom = 0 === -1 ? mermaids_active.length : 0;
+        if(mermaids_to_add_zoom > 0) {
+            var svgs = d3.selectAll("").select(function() {
+                return this.querySelector("svg");
+            });
+            // Wait until every active (visible) diagram has rendered. Deferred
+            // diagrams are excluded, so a fixed d3_node_count that counts a
+            // hidden diagram no longer loops forever waiting for its SVG.
+            if(mermaids_active.length !== mermaids_processed.length) {
+                setTimeout(() => runMermaid(false), 200);
+                return;
+            }
+            addZoomToSvgs(svgs);
+        }
+    } else if(mermaids_active.length !== mermaids_processed.length) {
+        // Wait for mermaid to process all diagrams
+        setTimeout(() => runMermaid(false), 200);
+        return;
+    }
+
+    // Stop here if not adding fullscreen capability
+    if (!true) return;
+
+    if (modal !== null ) {
+        // Destroy existing modal
+        modal.remove();
+        modal = null;
+        modalContent = null;
+    }
+
+    modal = document.createElement('div');
+    modal.className = 'mermaid-fullscreen-modal' + (darkTheme ? ' dark-theme' : '');
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-label', 'Fullscreen diagram viewer');
+    modal.innerHTML = `
+        <button class="mermaid-fullscreen-close${darkTheme ? ' dark-theme' : ''}" aria-label="Close fullscreen">✕</button>
+        <div class="mermaid-container-fullscreen${darkTheme ? ' dark-theme' : ''}"></div>
+    `;
+    document.body.appendChild(modal);
+
+    modalContent = modal.querySelector('.mermaid-container-fullscreen');
+    const closeBtn = modal.querySelector('.mermaid-fullscreen-close');
+
+    closeModal = () => {
+        modal.classList.remove('active');
+        modalContent.innerHTML = '';
+        document.body.style.overflow = ''
+        window.scrollTo({left: previousScrollOffset[0], top: previousScrollOffset[1], behavior: 'instant'});
+    };
+
+    closeBtn.addEventListener('click', closeModal);
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) closeModal();
+    });
+    document.querySelectorAll('.mermaid').forEach((mermaidDiv) => {
+        if (mermaidDiv.parentNode.classList.contains('mermaid-container') ||
+            mermaidDiv.closest('.mermaid-fullscreen-modal')) {
+            // Already processed, adjust button class if needed
+            const existingBtn = mermaidDiv.parentNode.querySelector('.mermaid-fullscreen-btn');
+            if (existingBtn) {
+                existingBtn.className = 'mermaid-fullscreen-btn' + (darkTheme ? ' dark-theme' : '');
+            }
+            return;
+        }
+
+        const container = document.createElement('div');
+        container.className = 'mermaid-container';
+        mermaidDiv.parentNode.insertBefore(container, mermaidDiv);
+        container.appendChild(mermaidDiv);
+
+        const fullscreenBtn = document.createElement('button');
+        fullscreenBtn.className = 'mermaid-fullscreen-btn' + (darkTheme ? ' dark-theme' : '');
+        fullscreenBtn.setAttribute('aria-label', 'View diagram in fullscreen');
+        fullscreenBtn.textContent = "\u26f6";
+        fullscreenBtn.style.opacity = "50%";
+
+        // Calculate dynamic position based on diagram's margin and padding
+        const diagramStyle = window.getComputedStyle(mermaidDiv);
+        const marginTop = parseFloat(diagramStyle.marginTop) || 0;
+        const marginRight = parseFloat(diagramStyle.marginRight) || 0;
+        const paddingTop = parseFloat(diagramStyle.paddingTop) || 0;
+        const paddingRight = parseFloat(diagramStyle.paddingRight) || 0;
+        fullscreenBtn.style.top = `${marginTop + paddingTop + 4}px`;
+        fullscreenBtn.style.right = `${marginRight + paddingRight + 4}px`;
+
+        fullscreenBtn.addEventListener('click', () => {
+            previousScrollOffset = [window.scrollX, window.scrollY];
+            const clone = mermaidDiv.cloneNode(true);
+            modalContent.innerHTML = '';
+            modalContent.appendChild(clone);
+
+            const svg = clone.querySelector('svg');
+            if (svg) {
+                svg.removeAttribute('width');
+                svg.removeAttribute('height');
+                svg.style.width = '100%';
+                svg.style.height = 'auto';
+                svg.style.maxWidth = '100%';
+                svg.style.display = 'block';
+
+                if (false) {
+                    setTimeout(() => {
+                        const g = svg.querySelector('g');
+                        if (g) {
+                            var svgD3 = d3.select(svg);
+                            svgD3.html("<g class='wrapper'>" + svgD3.html() + "</g>");
+                            var inner = svgD3.select("g");
+                            var zoom = d3.zoom().on("zoom", function(event) {
+                                inner.attr("transform", event.transform);
+                            });
+                            svgD3.call(zoom);
+                        }
+                    }, 100);
+                }
+            }
+
+            modal.classList.add('active');
+            document.body.style.overflow = 'hidden';
+        });
+        container.appendChild(fullscreenBtn);
+    });
+};
+
+
+
+const load = async () => {
+    initStyles();
+
+
+    await runMermaid(true);
+
+    const reRunIfThemeChanges = async () => {
+        const newDarkTheme = isDarkTheme();
+        if (newDarkTheme !== darkTheme) {
+            darkTheme = newDarkTheme;
+            console.log("Theme change detected, re-running mermaid with", darkTheme ? "dark" : "default", "theme");
+            await mermaid.initialize(
+                {...{"startOnLoad": false},
+                ...{ darkMode: darkTheme, theme: darkTheme ? "dark" : "default" },
+                }
+            );
+            await runMermaid(true);
+        }
+    };
+
+    // Update theme classes when theme changes
+    const themeObserver = new MutationObserver(reRunIfThemeChanges);
+    themeObserver.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ['class', 'style', 'data-theme']
+    });
+    themeObserver.observe(document.body, {
+        attributes: true,
+        attributeFilter: ['class', 'style', 'data-theme']
+    });
+};
+
+
+
+
+
+console.log("Initializing mermaid with", darkTheme ? "dark" : "default", "theme");
+mermaid.initialize(
+    {...{"startOnLoad": false},
+    ...{ darkMode: darkTheme, theme: darkTheme ? "dark" : "default" },
+    }
+);
+
+window.addEventListener("load", load);
+window.runMermaid = runMermaid;</script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'get_started/experiment-guide';</script>
+    <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
+    <script data-layout="root" src="../_static/js/lang-toggle.js?v=9e8f3a3a"></script>
+    <link rel="icon" href="../_static/logo.ico"/>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Environment setup" href="quick_start.html" />
+    <link rel="prev" title="Start here" href="index.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="0.4.0" />
+    <meta name="docbuild:last-update" content="Oct 09, 2026"/>
+  
+    
+    <script src="../_static/searchtools.js"></script>
+    <script src="../_static/language_data.js"></script>
+    <script src="../searchindex.js"></script>
+  
+  </head>
+  <body data-default-mode="">
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+  
+  
+  
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search..."
+         aria-label="Search..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header id="pst-header" class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class="col-lg-9 navbar-header-items">
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+        </div>
+      
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+    </div>
+  
+
+  
+    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="On this page">
+      <span class="fa-solid fa-outdent"></span>
+    </button>
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/logo.jpg" class="logo__image only-light" alt="slime - Home"/>
+    <img src="../_static/logo.jpg" class="logo__image only-dark pst-js-only" alt="slime - Home"/>
+  
+  
+</a></div>
+        <div class="sidebar-primary-item">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button></div>
+        <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
+    <div class="bd-toc-item navbar-nav active">
+        <ul class="current nav bd-sidenav">
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="../library.html">Documentation library</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2 current active has-children"><a class="reference internal" href="index.html">Start here</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l3 current active"><a class="current reference internal" href="#">Tutorial: build and understand an RL experiment</a></li>
+<li class="toctree-l3"><a class="reference internal" href="quick_start.html">Environment setup</a></li>
+<li class="toctree-l3"><a class="reference internal" href="usage.html">Usage Guide</a></li>
+<li class="toctree-l3"><a class="reference internal" href="customization.html">Customization Guide</a></li>
+<li class="toctree-l3"><a class="reference internal" href="agent.html">Agentic RL Training Roadmap</a></li>
+<li class="toctree-l3"><a class="reference internal" href="qa.html">FAQ</a></li>
+</ul>
+</details></li>
+<li class="toctree-l2"><a class="reference internal" href="../training/index.html">Training &amp; algorithms</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../rollout/index.html">Rollout &amp; scheduling</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../operations/index.html">Debugging, profiling &amp; recovery</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../examples/index.html">Task tutorials</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../developer_guide/index.html">Development &amp; CI</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../platform_support/index.html">Hardware platforms</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../blogs/index.html">Design notes &amp; releases</a></li>
+</ul>
+</details></li>
+</ul>
+
+    </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+
+<div class="sbt-scroll-pixel-helper"></div>
+
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item"><button class="sidebar-toggle primary-toggle btn btn-sm" title="Toggle primary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <span class="fa-solid fa-bars"></span>
+</button></div>
+      
+    </div>
+  
+  
+    <div class="header-article-items__end">
+      
+        <div class="header-article-item">
+
+<div class="article-header-buttons">
+
+
+
+
+
+<div class="dropdown dropdown-source-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Source repositories">
+    <i class="fab fa-github"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime" target="_blank"
+   class="btn btn-sm btn-source-repository-button dropdown-item"
+   title="Source repository"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fab fa-github"></i>
+  </span>
+<span class="btn__text-container">Repository</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/blob/main/docs/en/get_started/experiment-guide.md?plain=1" target="_blank"
+   class="btn btn-sm btn-source-file-button dropdown-item"
+   title="Show source"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-code"></i>
+  </span>
+<span class="btn__text-container">Show source</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/edit/main/docs/en/get_started/experiment-guide.md" target="_blank"
+   class="btn btn-sm btn-source-edit-button dropdown-item"
+   title="Suggest edit"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-pencil-alt"></i>
+  </span>
+<span class="btn__text-container">Suggest edit</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/issues/new?title=Issue%20on%20page%20%2Fget_started/experiment-guide.html&body=Your%20issue%20content%20here." target="_blank"
+   class="btn btn-sm btn-source-issues-button dropdown-item"
+   title="Open an issue"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-lightbulb"></i>
+  </span>
+<span class="btn__text-container">Open issue</span>
+</a>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+
+
+<div class="dropdown dropdown-download-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Download this page">
+    <i class="fas fa-download"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="../_sources/get_started/experiment-guide.md" target="_blank"
+   class="btn btn-sm btn-download-source-button dropdown-item"
+   title="Download source file"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file"></i>
+  </span>
+<span class="btn__text-container">.md</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li>
+<button onclick="window.print()"
+  class="btn btn-sm btn-download-pdf-button dropdown-item"
+  title="Print to PDF"
+  data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file-pdf"></i>
+  </span>
+<span class="btn__text-container">.pdf</span>
+</button>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+<button onclick="toggleFullScreen()"
+  class="btn btn-sm btn-fullscreen-button pst-navbar-icon"
+  title="Fullscreen mode"
+  data-bs-placement="bottom" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-expand"></i>
+  </span>
+
+</button>
+
+
+
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="Light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="Dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>Light</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>Dark</button></li>
+  </ul>
+</div>
+
+
+<button class="btn btn-sm pst-navbar-icon search-button search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass fa-lg"></i>
+</button>
+<button class="sidebar-toggle secondary-toggle btn btn-sm pst-navbar-icon" title="Toggle secondary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <span class="fa-solid fa-list"></span>
+</button>
+</div></div>
+      
+    </div>
+  
+</div>
+</div>
+              
+              
+
+<div id="jb-print-docs-body" class="onlyprint">
+    <h1>Tutorial: build and understand an RL experiment</h1>
+    <!-- Table of contents -->
+    <div id="print-main-content">
+        <div id="jb-print-toc">
+            
+            <div>
+                <h2> Contents </h2>
+            </div>
+            <nav aria-label="Page">
+                <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#the-loop-you-are-building">The loop you are building</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#choose-the-task-and-model">1. Choose the task and model</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#choose-gpu-ownership-then-scheduling">2. Choose GPU ownership, then scheduling</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#choose-numerical-behavior">3. Choose numerical behavior</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#size-serving-for-the-workload">4. Size serving for the workload</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#prepare-once-convert-then-run">5. Prepare once, convert, then run</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#decide-whether-the-experiment-worked">6. Decide whether the experiment worked</a></li>
+</ul>
+            </nav>
+        </div>
+    </div>
+</div>
+
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section class="tex2jax_ignore mathjax_ignore" id="tutorial-build-and-understand-an-rl-experiment">
+<h1>Tutorial: build and understand an RL experiment<a class="headerlink" href="#tutorial-build-and-understand-an-rl-experiment" title="Link to this heading">#</a></h1>
+<p><a class="reference internal" href="../index.html#lab"><span class="std std-ref">Open the interactive Quick Start</span></a>. Choose a model, watch the GPU layout change, try alternatives, and download the resulting shell. The same tutorial applies across GLM, Qwen3.8-27B, and DeepSeek-R1; model dimensions come from the repository’s model configurations.</p>
+<section id="the-loop-you-are-building">
+<h2>The loop you are building<a class="headerlink" href="#the-loop-you-are-building" title="Link to this heading">#</a></h2>
+<pre  class="mermaid">
+        flowchart LR
+    A[Prompts / environment] --&gt; B[SGLang: sample responses]
+    B --&gt; C[Reward / verifier]
+    C --&gt; D[Batch or persistent queue]
+    D --&gt; E[Megatron: policy update]
+    E --&gt;|updated weights| B
+    E --&gt; F[Checkpoint + held-out evaluation]
+    </pre><p>A training example is more than a prompt and an answer: it carries tokens, rewards, masks, and the probabilities or replay data required by your objective. SGLang generates experience; Megatron computes gradients. Changing precision, kernels, or weight versions can make their distributions differ. Scaling RL means managing that difference while using compute effectively.</p>
+<p>The lab’s <strong>Play a round</strong> animation illustrates this loop. It is not a simulation of GPU speed or a training run. Every choice is reversible: use the previous step, any step label, undo/redo, or reset. Choices survive reload locally. A share link carries architecture choices but excludes machine paths, engine addresses, and custom hook paths. <code class="docutils literal notranslate"><span class="pre">experiment.json</span></code> preserves the complete local configuration.</p>
+</section>
+<section id="choose-the-task-and-model">
+<h2>1. Choose the task and model<a class="headerlink" href="#choose-the-task-and-model" title="Link to this heading">#</a></h2>
+<p>The initial experiment uses verifiable math, JSONL keys <code class="docutils literal notranslate"><span class="pre">prompt</span></code> and <code class="docutils literal notranslate"><span class="pre">label</span></code>, a chat template, and the built-in <code class="docutils literal notranslate"><span class="pre">deepscaler</span></code> reward. It samples eight responses per prompt, uses GRPO, and runs three rounds. This is a correctness run, not a claim of capability improvement.</p>
+<p>For an agent or a different reward, choose <strong>My agent / reward</strong>, then provide importable generation and reward functions. Those hooks must exist in the same environment on workers. The lab does not invent a reward function for your task. See <a class="reference internal" href="agent.html"><span class="std std-doc">agent workflows</span></a> and <a class="reference internal" href="customization.html"><span class="std std-doc">hook contracts</span></a>.</p>
+<p>Model selection changes architecture, TP/PP/CP/EP, conversion strategy, and serving-engine size together. These are starting configurations, not a memory-fit calculator. Default training node counts are inherited from repository recipes: GLM-4.7-Flash and GLM-4-9B use one 8-GPU node; GLM-4.7 uses 8; GLM-5.3 uses 32; DeepSeek-R1 uses 16. Qwen3.8-27B uses the four-node 27B hybrid-attention configuration.</p>
+<p><a class="reference external" href="https://huggingface.co/Qwen/Qwen3.8-27B/blob/main/config.json">Qwen3.8-27B’s official config</a> identifies <code class="docutils literal notranslate"><span class="pre">qwen3_5</span></code> with dimensions matching <code class="docutils literal notranslate"><span class="pre">scripts/models/qwen3.5-27B.sh</span></code>. The text-RL path reuses this model spec and its HF conversion support. This architecture check is not GPU validation of the new checkpoint or a multimodal RL recipe. FLA/Gated Delta Net dependencies still apply; see <a class="reference internal" href="../advanced/arch-support-beyond-megatron.html"><span class="std std-doc">architecture support</span></a>.</p>
+<p><a class="reference external" href="https://huggingface.co/zai-org/GLM-5.3/blob/main/config.json">GLM-5.3’s official config</a> matches the 78-layer, 256-expert DSA architecture and cross-layer index-sharing schedule in the existing <code class="docutils literal notranslate"><span class="pre">glm5.2-744B-A40B</span></code> model specification. The lab reuses that architecture source with the GLM-5.3 checkpoint; the older six-layer deterministic regression is not a validation of this new checkpoint.</p>
+</section>
+<section id="choose-gpu-ownership-then-scheduling">
+<h2>2. Choose GPU ownership, then scheduling<a class="headerlink" href="#choose-gpu-ownership-then-scheduling" title="Link to this heading">#</a></h2>
+<p>The lab shows starting GPU counts, total allocation, and clickable TP/PP/EP/CP/ZeRO diagrams. CPU Adam and activation recomputation switches change the exported shell. See <a class="reference internal" href="../advanced/parallelism-memory.html"><span class="std std-doc">memory accounting and parallelism</span></a>, including allgather/zigzag CP.</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Choice</p></th>
+<th class="head"><p>What happens</p></th>
+<th class="head"><p>What you must provide</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Colocated</p></td>
+<td><p>Training and rollout alternate on one GPU pool</p></td>
+<td><p>Enough memory for each phase and offload</p></td>
+</tr>
+<tr class="row-odd"><td><p>Disaggregated</p></td>
+<td><p>slime manages separate training and serving pools</p></td>
+<td><p>Ray capacity for both pools</p></td>
+</tr>
+<tr class="row-even"><td><p>External SGLang</p></td>
+<td><p>slime connects to engines owned by another deployment</p></td>
+<td><p>Engine addresses and compatible weight transport</p></td>
+</tr>
+<tr class="row-odd"><td><p>Synchronous</p></td>
+<td><p>Finish a rollout batch, train, sync weights</p></td>
+<td><p>A straightforward ordering baseline</p></td>
+</tr>
+<tr class="row-even"><td><p>Fully async</p></td>
+<td><p>Keep generation in flight across updates</p></td>
+<td><p>Separate pools and monitoring of sample age</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Selecting fully async from colocation moves the layout to separate GPUs in the same undoable action. Selecting colocation restores synchronous execution. Other incompatibilities remain visible until fixed, so the lab never silently exports a different algorithm.</p>
+<p>External engines are not a generic text-completion API: slime needs SGLang server information, weight-update endpoints, and sampler metadata. The generated <code class="docutils literal notranslate"><span class="pre">serving-reference.sh</span></code> shows the required settings. Deployment-specific hosts, ports, multi-node ranks, and RDMA configuration belong to that external launcher. A trainer CLI cannot reconfigure an already-running engine.</p>
+<p>Partial rollout keeps unfinished prefixes for later continuation, including under synchronous training. straw persists payloads and queue state; combined with fully async it selects distributed producer processes across Ray nodes. The lab exposes both choices independently. Compare their timelines, mixed-version probabilities, and checkpoint boundaries in <a class="reference internal" href="../advanced/rollout-scheduling.html"><span class="std std-doc">rollout scheduling</span></a>.</p>
+</section>
+<section id="choose-numerical-behavior">
+<h2>3. Choose numerical behavior<a class="headerlink" href="#choose-numerical-behavior" title="Link to this heading">#</a></h2>
+<p>Start with BF16 on both sides to establish a baseline, or the maintained BF16-training / FP8-rollout path for large MoE. The latter keeps a BF16 training checkpoint and uses a separately quantized HF checkpoint for serving. KV cache precision is another independent choice.</p>
+<p>FP8 training is experimental; INT4 rollout is beta. Every lower-precision path needs a compatible GPU/kernel stack. See <a class="reference internal" href="../advanced/rl-systems.html#precision"><span class="std std-ref">precision and memory derivation</span></a>.</p>
+<p>Then choose corrections deliberately. TIS clips importance weights; IcePop masks out-of-range weights. R3 replays MoE routes. SC centers weighted scores and uses REINFORCE. Deterministic execution addresses reproducibility but does not automatically make two engines identical. The <strong>why &amp; math</strong> buttons lead to <a class="reference internal" href="../advanced/policy-mismatch.html"><span class="std std-doc">full derivations</span></a> and the original papers.</p>
+</section>
+<section id="size-serving-for-the-workload">
+<h2>4. Size serving for the workload<a class="headerlink" href="#size-serving-for-the-workload" title="Link to this heading">#</a></h2>
+<p>Keep ordinary serving as a baseline. Enable PD when measurements show prefill and decode need independent resources. The lab requires both groups to contain whole engines and uses Mooncake/RDMA; fill in actual device names. <code class="docutils literal notranslate"><span class="pre">sglang.yaml</span></code> is embedded inside <code class="docutils literal notranslate"><span class="pre">experiment.sh</span></code>, so a separate manual file copy is unnecessary.</p>
+<p>Enable HiCache for reused prefixes after budgeting host RAM and I/O. Under PD this recipe enables it on prefill only. Tune concurrency and response-token limits against actual memory and latency. See <a class="reference internal" href="../advanced/rl-systems.html#pd"><span class="std std-ref">the serving cost models</span></a>.</p>
+</section>
+<section id="prepare-once-convert-then-run">
+<h2>5. Prepare once, convert, then run<a class="headerlink" href="#prepare-once-convert-then-run" title="Link to this heading">#</a></h2>
+<p>First <a class="reference internal" href="quick_start.html"><span class="std std-doc">install the environment</span></a>. Keep the same checkout, dependencies, model/data paths, and configuration paths on every participating host. Multi-node runs need a shared filesystem or equivalent identical local copies; a path inside only the head container is insufficient. Make the generated <code class="docutils literal notranslate"><span class="pre">.slime-lab.*</span></code> configuration directory visible to Ray workers through the same repository path.</p>
+<p>Download <code class="docutils literal notranslate"><span class="pre">experiment.sh</span></code> from the lab into the slime repository root. Review its paths and notes, then run:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Once, on the shared filesystem: download source weights and data,</span>
+<span class="c1"># and prepare selected FP8/INT4 rollout weights.</span>
+bash<span class="w"> </span>experiment.sh<span class="w"> </span>prepare
+
+<span class="c1"># Convert the BF16 source into a reshardable Megatron checkpoint.</span>
+bash<span class="w"> </span>experiment.sh<span class="w"> </span>convert
+</pre></div>
+</div>
+<p>Small/medium recipes convert on one node with 8 GPUs. For GLM-4.7, GLM-5.3, and DeepSeek-R1, the generated conversion is a four-node job with 8 GPUs per node. Run <code class="docutils literal notranslate"><span class="pre">convert</span></code> on <strong>all four nodes</strong> with the same <code class="docutils literal notranslate"><span class="pre">CONVERT_MASTER_ADDR</span></code> and a different <code class="docutils literal notranslate"><span class="pre">CONVERT_NODE_RANK</span></code> in 0–3. Conversion parallelism can differ from training because <code class="docutils literal notranslate"><span class="pre">torch_dist</span></code> is reshardable. Conversion itself needs sufficient GPU and host memory.</p>
+<p>GLM-5.3 and DeepSeek-R1 publish FP8 weights, so <code class="docutils literal notranslate"><span class="pre">prepare</span></code> downloads them into a separate source directory, converts them to BF16, and then prepares the selected serving format. An existing BF16 HF checkpoint and <code class="docutils literal notranslate"><span class="pre">torch_dist</span></code> checkpoint can be used directly by editing paths and skipping preparation.</p>
+<p>Start the Ray head and join workers using the number of GPUs reported by the lab:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Head node</span>
+ray<span class="w"> </span>start<span class="w"> </span>--head<span class="w"> </span>--node-ip-address<span class="w"> </span>HEAD_IP<span class="w"> </span>--num-gpus<span class="w"> </span><span class="m">8</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--dashboard-host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--dashboard-port<span class="w"> </span><span class="m">8265</span>
+
+<span class="c1"># Each worker node</span>
+ray<span class="w"> </span>start<span class="w"> </span>--address<span class="w"> </span>HEAD_IP:6379<span class="w"> </span>--num-gpus<span class="w"> </span><span class="m">8</span>
+</pre></div>
+</div>
+<p>With external engines, deploy and verify those engines first; their GPUs are outside the trainer’s Ray capacity. For disk transport, mount the weight directory at the same path on both sides. Delta additionally needs the patched serving endpoints and local checkpoint directories.</p>
+<p>On the head, from the repository root:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bash<span class="w"> </span>experiment.sh<span class="w"> </span>check
+bash<span class="w"> </span>experiment.sh<span class="w"> </span>train
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">check</span></code> verifies the presence of input files; it does not load the model or certify capacity. <code class="docutils literal notranslate"><span class="pre">train</span></code> submits the job with explicit runtime environment settings. Set <code class="docutils literal notranslate"><span class="pre">RAY_DASHBOARD</span></code> if using another Ray head. The shell does not kill processes or start a cluster implicitly.</p>
+<p>The shell defaults to a short training run. Use a fresh output directory and straw run ID for a new experiment; existing save directories follow the backend’s recovery rules. To resume a later run, add <code class="docutils literal notranslate"><span class="pre">--load</span></code> for the saved checkpoint and follow the <a class="reference internal" href="../advanced/fault-tolerance.html"><span class="std std-doc">checkpoint/recovery requirements</span></a>. Decide a save interval appropriate for your experiment; the short default may finish before the interval is reached.</p>
+</section>
+<section id="decide-whether-the-experiment-worked">
+<h2>6. Decide whether the experiment worked<a class="headerlink" href="#decide-whether-the-experiment-worked" title="Link to this heading">#</a></h2>
+<p>Read generated responses first. Check reward and the reference/trainer log-probs; then inspect training/rollout mismatch and correction clipping/masking. With fully async, inspect staleness. A fast run with meaningless rewards is not progress.</p>
+<p>Add a held-out dataset before a long run. A synchronous example after downloading AIME data is:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--eval-interval<span class="w"> </span><span class="m">20</span><span class="w"> </span><span class="se">\</span>
+--eval-prompt-data<span class="w"> </span>aime<span class="w"> </span>/data/aime-2024/aime-2024.jsonl<span class="w"> </span><span class="se">\</span>
+--n-samples-per-eval-prompt<span class="w"> </span><span class="m">8</span>
+</pre></div>
+</div>
+<p>The fully async queue does not implement evaluation itself; schedule a separate supported evaluation path or job. See <a class="reference internal" href="usage.html"><span class="std std-doc">evaluation configuration</span></a> and the <a class="reference internal" href="../_examples_synced/fully_async/README.html"><span class="std std-doc">fully async guide</span></a>.</p>
+<p>If output is wrong, use <a class="reference internal" href="../developer_guide/debug.html"><span class="std std-doc">debug and replay</span></a>. If an otherwise correct run is slow, use <a class="reference internal" href="../developer_guide/trace.html"><span class="std std-doc">trace</span></a>, <a class="reference internal" href="../developer_guide/profiling.html"><span class="std std-doc">profiling</span></a>, and <a class="reference internal" href="../advanced/observability.html"><span class="std std-doc">observability</span></a> to identify the next change. The homepage’s expandable advanced sections follow the same diagnostic order.</p>
+</section>
+</section>
+
+
+                </article>
+              
+
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="index.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">Start here</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="quick_start.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">Environment setup</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item"><div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> Contents
+  </div>
+  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#the-loop-you-are-building">The loop you are building</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#choose-the-task-and-model">1. Choose the task and model</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#choose-gpu-ownership-then-scheduling">2. Choose GPU ownership, then scheduling</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#choose-numerical-behavior">3. Choose numerical behavior</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#size-serving-for-the-workload">4. Size serving for the workload</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#prepare-once-convert-then-run">5. Prepare once, convert, then run</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#decide-whether-the-experiment-worked">6. Decide whether the experiment worked</a></li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+<div class="bd-footer-content__inner container">
+  
+  <div class="footer-item">
+    
+<p class="component-author">
+By slime Team
+</p>
+
+  </div>
+  
+  <div class="footer-item">
+    
+
+  <p class="copyright">
+    
+      © Copyright 2025-2026, slime.
+      <br/>
+    
+  </p>
+
+  </div>
+  
+  <div class="footer-item">
+    <p class="last-updated">
+  Last updated on Oct 09, 2026.
+  <br/>
+</p>
+  </div>
+  
+  <div class="footer-item">
+    
+  </div>
+  
+</div>
+          </footer>
+        
+
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9"></script>
+<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9"></script>
+
+  <footer class="bd-footer">
+  </footer>
+  </body>
+</html>

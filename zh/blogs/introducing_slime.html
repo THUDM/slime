@@ -33,7 +33,7 @@
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=4418a689" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=ad20845f" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=5f5cb4b6" />
   
   <!-- So that users can add custom icons -->
   <script defer src="../_static/scripts/fontawesome.js?digest=90905a2f556bf617f1a9"></script>
@@ -42,15 +42,15 @@
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
     <script src="../_static/documentation_options.js?v=ceb54874"></script>
-    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../_static/copybutton.js?v=ccdb6887"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?v=fab101a9"></script>
     <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'blogs/introducing_slime';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
-    <script data-layout="root" src="../_static/js/lang-toggle.js?v=082004b6"></script>
+    <script data-layout="root" src="../_static/js/lang-toggle.js?v=9e8f3a3a"></script>
     <link rel="icon" href="../_static/logo.ico"/>
     <link rel="index" title="索引" href="../genindex.html" />
     <link rel="search" title="搜索" href="../search.html" />
@@ -201,80 +201,22 @@
 </button></div>
         <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
     <div class="bd-toc-item navbar-nav active">
-        <p aria-level="2" class="caption" role="heading"><span class="caption-text">开始使用</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../get_started/quick_start.html">快速使用</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/usage.html">使用文档</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/customization.html">自定义指南</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/agent.html">Agentic RL 训练路线图</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/qa.html">常见 Q&amp;A</a></li>
+        <ul class="current nav bd-sidenav">
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="../library.html">文档资料库</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../get_started/index.html">从这里开始</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../training/index.html">训练与算法</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../rollout/index.html">Rollout 与调度</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../operations/index.html">调试、性能分析与恢复</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../examples/index.html">任务教程</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../developer_guide/index.html">开发与 CI</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../platform_support/index.html">硬件平台</a></li>
+<li class="toctree-l2 current active has-children"><a class="reference internal" href="index.html">设计文章与版本发布</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="release_v0.1.0.html">v0.1.0: 重新定义高性能 RL 训练框架</a></li>
+<li class="toctree-l3 current active"><a class="current reference internal" href="#">slime：为 RL Scaling 设计的 SGLang-Native 后训练框架</a></li>
 </ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Dense</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4B.html">8xH100 训练 Qwen3-4B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm4-9B.html">8xH100 训练 GLM4-9B</a></li>
+</details></li>
 </ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">MoE</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-30B-A3B.html">8×H100 训练 GLM-4.7-Flash</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-30B-A3B.html">8xH100 训练 Qwen3-30B-A3B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-next-80B-A3B.html">Qwen3-Next-80B-A3B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm5.2-744B-A40B.html">256xH100 训练 GLM-5.2 744B-A40B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-355B-A32B.html">64xH100 训练 GLM-4.7</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/deepseek-r1.html">128xH100 训练 DeepSeek R1</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">高级特性</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../advanced/on-policy-distillation.html">在策略蒸馏 (On-Policy Distillation)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/speculative-decoding.html">投机采样</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/low-precision.html">低精度训练与 Rollout</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/reproducibility.html">Reproducibility</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/fault-tolerance.html">容灾</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/straw.html">使用 straw 持久化 rollout</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/observability.html">观测</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/pd-disaggregation.html">PD 分离</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/external-rollout-engines.html">External Rollout Engines 配置路线图</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/delta-weight-sync.html">Delta 权重同步</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/sglang-config.html">SGLang Config：高级引擎部署</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/megatron-config.html">Megatron Config：按角色覆盖训练参数</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/arch-support-beyond-megatron.html">在 Megatron-LM 中快速支持新模型架构</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">其他用法</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4b-base-openhermes.html">SFT Qwen3-4B-Base</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/search-r1/README.html">Search-R1 lite</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/fully_async/README.html">Fully-Async Rollout Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/coding_agent_rl/README.html">Coding-Agent RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/delta_weight_sync/README.html">Delta Weight Sync</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/eval_multi_task/README.html">Multi-Task Evaluation Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/geo3k_vlm/README.html">VLM Single-Turn RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/geo3k_vlm_multi_turn/README.html">VLM Multi-Turn (geo3k dataset)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/on_policy_distillation/README.html">On-Policy Distillation Example</a></li>
-
-
-
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/strands_sglang/README.html">slime x Strands-SGLang</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/tau-bench/README.html">Tau bench</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/train_infer_mismatch_helper/README.html">Rollout Correction Methods</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">开发指南</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/ci.html">CI（持续集成）</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/debug.html">Debug 指南</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/trace.html">Trace 可视化</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/profiling.html">性能分析 (Profiling)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/install_flashqla.html">安装 FlashQLA</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">硬件平台</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../platform_support/amd_tutorial.html">AMD ROCm</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">博客</span></p>
-<ul class="current nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="release_v0.1.0.html">v0.1.0: 重新定义高性能 RL 训练框架</a></li>
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">slime：为 RL Scaling 设计的 SGLang-Native 后训练框架</a></li>
+</details></li>
 </ul>
 
     </div>
@@ -525,12 +467,12 @@
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="slime-rl-scaling-sglang-native">
-<h1>slime：为 RL Scaling 设计的 SGLang-Native 后训练框架<a class="headerlink" href="#slime-rl-scaling-sglang-native" title="链接到此标题。">#</a></h1>
+<h1>slime：为 RL Scaling 设计的 SGLang-Native 后训练框架<a class="headerlink" href="#slime-rl-scaling-sglang-native" title="Link to this heading">#</a></h1>
 <blockquote>
 <div><p>本文由英文版翻译而来，首发于 <a class="reference external" href="https://lmsys.org/blog/2025-07-09-slime/">lmsys.org</a>。</p>
 </div></blockquote>
 <section id="id1">
-<h2>愿景<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h2>
+<h2>愿景<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
 <p>我们相信强化学习。我们相信强化学习是通往 AGI 的最后一块拼图。</p>
 <p>所以我们相信：</p>
 <ul class="simple">
@@ -548,7 +490,7 @@
 <p>以下是我们如何实现这一切的。</p>
 </section>
 <section id="id2">
-<h2>自定义才能自由<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h2>
+<h2>自定义才能自由<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
 <blockquote>
 <div><p>我们应该停止尝试用简单的方式来思考心智的内容，例如简单地思考空间、物体、多智能体或对称性。</p>
 <p>— <em>The Bitter Lesson</em></p>
@@ -561,7 +503,7 @@
 <p>slime 只保留一个训练入口 <code class="docutils literal notranslate"><span class="pre">train.py</span></code>。Fully-async 能力由 rollout 实现负责，而不是另一套训练循环：通过 <code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code> 指定 <code class="docutils literal notranslate"><span class="pre">slime.rollout.fully_async_rollout.generate_rollout_fully_async</span></code> 即可启用。后台 worker 会持续维护正在生成的单个样本，并在训练 step 之间保留预热队列。</p>
 </section>
 <section id="id3">
-<h2>为性能而生<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h2>
+<h2>为性能而生<a class="headerlink" href="#id3" title="Link to this heading">#</a></h2>
 <p><strong>一个合格的强化学习框架必须既快，又持续地快。</strong></p>
 <p><strong>快</strong>意味着要利用最快的推理和训练框架。</p>
 <p>与预训练不同，强化学习工作负载在训练过程中涉及大量的在线采样，这使得推理性能至关重要。因此，slime 专门集成了 SGLang，并刻意提供了 SGLang 原生体验。</p>
@@ -595,7 +537,7 @@
 <p>这些功能在 <a class="reference external" href="https://github.com/sgl-project/sglang/pull/6698">#6698</a>、<a class="reference external" href="https://github.com/sgl-project/sglang/pull/6855">#6855</a>、<a class="reference external" href="https://github.com/sgl-project/sglang/pull/6184">#6184</a>、<a class="reference external" href="https://github.com/sgl-project/sglang/pull/5966">#5966</a> 中实现。</p>
 </section>
 <section id="id4">
-<h2>轻量且可扩展<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h2>
+<h2>轻量且可扩展<a class="headerlink" href="#id4" title="Link to this heading">#</a></h2>
 <p>slime 专注于可定制性和性能：</p>
 <ol class="arabic simple">
 <li><p>提供了一个可定制的推理接口。</p></li>
@@ -615,7 +557,7 @@
 <p>统一的管道将我们从繁琐的“胶水代码”中解放出来，让我们能够专注于真正重要的事情：更好的强化学习。太棒了！</p>
 </section>
 <section id="id5">
-<h2>发展蓝图<a class="headerlink" href="#id5" title="链接到此标题。">#</a></h2>
+<h2>发展蓝图<a class="headerlink" href="#id5" title="Link to this heading">#</a></h2>
 <p>强化学习扩展的旅程才刚刚开始，slime 也在不断演进。在下一阶段，我们将专注于：</p>
 <ol class="arabic simple">
 <li><p>与 SGLang 团队合作，探索大规模 MoE 模型的最佳强化学习训练策略。</p></li>

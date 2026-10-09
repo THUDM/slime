@@ -1,0 +1,1103 @@
+
+<!DOCTYPE html>
+
+
+<html lang="zh" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>卡数、显存与并行方式 &#8212; slime</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=4418a689" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=5f5cb4b6" />
+  
+  <!-- So that users can add custom icons -->
+  <script defer src="../_static/scripts/fontawesome.js?digest=90905a2f556bf617f1a9"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
+
+    <script src="../_static/documentation_options.js?v=ceb54874"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=ccdb6887"></script>
+    <script src="../_static/scripts/sphinx-book-theme.js?v=fab101a9"></script>
+    <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+    <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script type="module">import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.12.1/dist/mermaid.esm.min.mjs";
+
+
+
+
+
+const initStyles = () => {
+    const defaultStyle = document.createElement('style');
+    defaultStyle.textContent = "pre.mermaid {\n    /* Same as .mermaid-container > pre */\n    display: block;\n    width: 100%;\n}\n\npre.mermaid > svg {\n    /* Same as .mermaid-container > pre > svg */\n    height: 500px;\n    width: 100%;\n    max-width: 100% !important;\n}";
+    document.head.appendChild(defaultStyle);
+
+    const fullscreenStyle = document.createElement('style');
+    fullscreenStyle.textContent = ".mermaid-container {\n    position: relative;\n    display: flex;\n    flex-direction: row;\n    width: 100%;\n}\n\n.mermaid-container > pre {\n    display: block;\n    width: 100%;\n}\n\n.mermaid-container > pre > svg {\n    height: 500px;\n    width: 100%;\n    max-width: 100% !important;\n}\n\n.mermaid-fullscreen-btn {\n    position: absolute;\n    width: 28px;\n    height: 28px;\n    background: rgba(255, 255, 255, 0.95);\n    border: 1px solid rgba(0, 0, 0, 0.3);\n    border-radius: 4px;\n    cursor: pointer;\n    display: flex;\n    align-items: center;\n    justify-content: center;\n    transition: all 0.2s;\n    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);\n    font-size: 14px;\n    line-height: 1;\n    padding: 0;\n    color: #333;\n}\n\n.mermaid-fullscreen-btn:hover {\n    opacity: 100% !important;\n    background: rgba(255, 255, 255, 1);\n    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.3);\n    transform: scale(1.1);\n}\n\n.mermaid-fullscreen-btn.dark-theme {\n    background: rgba(50, 50, 50, 0.95);\n    border: 1px solid rgba(255, 255, 255, 0.3);\n    color: #e0e0e0;\n}\n\n.mermaid-fullscreen-btn.dark-theme:hover {\n    background: rgba(60, 60, 60, 1);\n    box-shadow: 0 3px 10px rgba(255, 255, 255, 0.2);\n}\n\n.mermaid-fullscreen-modal {\n    display: none;\n    position: fixed !important;\n    top: 0 !important;\n    left: 0 !important;\n    width: 95vw;\n    height: 100vh;\n    background: rgba(255, 255, 255, 0.98);\n    z-index: 9999;\n    padding: 20px;\n    overflow: auto;\n}\n\n.mermaid-fullscreen-modal.dark-theme {\n    background: rgba(0, 0, 0, 0.98);\n}\n\n.mermaid-fullscreen-modal.active {\n    display: flex;\n    align-items: center;\n    justify-content: center;\n}\n\n.mermaid-container-fullscreen {\n    position: relative;\n    width: 95vw;\n    height: 90vh;\n    max-width: 95vw;\n    max-height: 90vh;\n    background: white;\n    border-radius: 8px;\n    padding: 20px;\n    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);\n    overflow: auto;\n    display: flex;\n    align-items: center;\n    justify-content: center;\n}\n\n.mermaid-container-fullscreen.dark-theme {\n    background: #1a1a1a;\n    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.8);\n}\n\n.mermaid-container-fullscreen pre.mermaid {\n    width: 100%;\n    height: 100%;\n    display: flex;\n    align-items: center;\n    justify-content: center;\n}\n\n.mermaid-container-fullscreen .mermaid svg {\n    height: 100% !important;\n    width: 100% !important;\n    cursor: grab;\n}\n\n.mermaid-fullscreen-close {\n    position: fixed !important;\n    top: 20px !important;\n    right: 20px !important;\n    width: 40px;\n    height: 40px;\n    background: rgba(255, 255, 255, 0.95);\n    border: 1px solid rgba(0, 0, 0, 0.2);\n    border-radius: 50%;\n    cursor: pointer;\n    z-index: 10000;\n    display: flex;\n    align-items: center;\n    justify-content: center;\n    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);\n    transition: all 0.2s;\n    font-size: 24px;\n    line-height: 1;\n    color: #333;\n}\n\n.mermaid-fullscreen-close:hover {\n    background: white;\n    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);\n    transform: scale(1.1);\n}\n\n.mermaid-fullscreen-close.dark-theme {\n    background: rgba(50, 50, 50, 0.95);\n    border: 1px solid rgba(255, 255, 255, 0.2);\n    color: #e0e0e0;\n}\n\n.mermaid-fullscreen-close.dark-theme:hover {\n    background: rgba(60, 60, 60, 1);\n    box-shadow: 0 6px 16px rgba(255, 255, 255, 0.2);\n}\n\n.mermaid-fullscreen-modal .mermaid-fullscreen-btn {\n    display: none !important;\n}";
+    document.head.appendChild(fullscreenStyle);
+}
+
+// Detect if page has dark background
+const isDarkTheme = () => {
+    // We use a set of heuristics:
+    // 1. Check for common dark mode classes or attributes
+    // 2. Check computed background color brightness
+    if (document.documentElement.classList.contains('dark') ||
+        document.documentElement.getAttribute('data-theme') === 'dark' ||
+        document.body.classList.contains('dark') ||
+        document.body.getAttribute('data-theme') === 'dark') {
+        // console.log("Dark theme detected via class/attribute");
+        return true;
+    }
+    if (document.documentElement.classList.contains('light') ||
+        document.documentElement.getAttribute('data-theme') === 'light' ||
+        document.body.classList.contains('light') ||
+        document.body.getAttribute('data-theme') === 'light') {
+        // console.log("Light theme detected via class/attribute");
+        return false;
+    }
+    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        // console.log("Dark theme detected via prefers-color-scheme");
+        return true;
+    }
+    const bgColor = window.getComputedStyle(document.body).backgroundColor;
+    const match = bgColor.match(/rgb\((\d+),\s*(\d+),\s*(\d+)/);
+    if (match) {
+        const r = parseInt(match[1]);
+        const g = parseInt(match[2]);
+        const b = parseInt(match[3]);
+        const brightness = (r * 299 + g * 587 + b * 114) / 1000;
+        // console.log("Background color brightness:", brightness);
+        return brightness < 128;
+    }
+    // console.log("No dark or light theme detected, defaulting to light theme");
+    return false;
+};
+
+let darkTheme = isDarkTheme();
+let modal = null;
+let modalContent = null;
+let previousScrollOffset = [window.scrollX, window.scrollY];
+let _lazyObserver = null;
+let _renderQueue = Promise.resolve();
+let closeModal = () => {};
+
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal?.classList.contains('active')) {
+        closeModal();
+    }
+});
+
+// Apply d3 zoom to each SVG. Idempotent: an SVG already wrapped is skipped,
+// so this is safe to call both for the initial batch and for diagrams that
+// render lazily once they become visible.
+const addZoomToSvgs = (svgs) => {
+    svgs.each(function() {
+        if (this.getAttribute('data-zoom-applied') === 'true') return;
+        var svg = d3.select(this);
+        svg.html("<g class='wrapper'>" + svg.html() + "</g>");
+        var inner = svg.select("g");
+        var zoom = d3.zoom().on("zoom", function(event) {
+            inner.attr("transform", event.transform);
+        });
+        svg.call(zoom);
+        this.setAttribute('data-zoom-applied', 'true');
+    });
+};
+
+const runMermaid = async (rerun) => {
+    console.log("Running mermaid diagrams, rerun =", rerun);
+    // clear all existing mermaid charts
+    let all_mermaids = document.querySelectorAll(".mermaid");
+
+    if (rerun) {
+        // Disconnect any previous lazy rendering observer
+        if (_lazyObserver) {
+            _lazyObserver.disconnect();
+            _lazyObserver = null;
+        }
+
+        all_mermaids.forEach((el) => {
+            el.removeAttribute('data-mermaid-deferred');
+            el.removeAttribute('data-mermaid-render-failed');
+            if(!el.hasAttribute("data-original-code")) {
+                // store original code
+                // console.log(`Storing original code for first run: `, el.innerHTML);
+                el.setAttribute('data-original-code', el.innerHTML);
+            }
+            if(el.getAttribute("data-processed") === "true") {
+                // remove and restore original
+                el.removeAttribute("data-processed");
+                // console.log(`Restoring original code for re-run: `, el.getAttribute('data-original-code'));
+                el.innerHTML = el.getAttribute('data-original-code');
+            } else {
+                // store original code
+                // console.log(`Storing original code for re-run: `, el.innerHTML);
+                el.setAttribute('data-original-code', el.innerHTML);
+            }
+        });
+
+        // Separate visible and hidden elements. Mermaid's layout engine measures
+        // text dimensions via the DOM, which fails for elements hidden by a parent
+        // (e.g., Reveal.js non-active slides, sphinx-design unopened tabs),
+        // producing broken SVGs. Render visible elements now, defer hidden ones.
+        const visible = [];
+        const hidden = [];
+        all_mermaids.forEach((el) => {
+            // offsetParent is null for display:none ancestors.
+            // getClientRects().length > 0 catches position:fixed elements
+            // (which also have null offsetParent but are still visible).
+            if (el.offsetParent !== null || el.getClientRects().length > 0) {
+                visible.push(el);
+            } else {
+                hidden.push(el);
+                el.setAttribute('data-mermaid-deferred', 'true');
+            }
+        });
+
+        if (visible.length > 0) {
+            try {
+                await mermaid.run({ nodes: visible });
+            } catch (e) {
+                console.error("Mermaid rendering failed:", e);
+            }
+        }
+
+        // Lazily render hidden elements when they become visible.
+        // Uses a promise chain (_renderQueue) to serialize rendering,
+        // since IntersectionObserver may report multiple entries at once
+        // and mermaid.run() is not safe to call concurrently.
+        if (hidden.length > 0) {
+            if (typeof IntersectionObserver === 'undefined') {
+                console.warn("IntersectionObserver not available; hidden mermaid diagrams will not render.");
+            } else {
+                _renderQueue = Promise.resolve();
+                _lazyObserver = new IntersectionObserver((entries) => {
+                    for (const entry of entries) {
+                        if (entry.isIntersecting && entry.target.getAttribute("data-processed") !== "true") {
+                            _lazyObserver.unobserve(entry.target);
+                            const el = entry.target;
+                            _renderQueue = _renderQueue.then(async () => {
+                                try {
+                                    await mermaid.run({ nodes: [el] });
+                                    el.removeAttribute('data-mermaid-deferred');
+                                    // Apply zoom to the now-rendered diagram, matching
+                                    // the decoration visible diagrams receive.
+                                    if (false) {
+                                        addZoomToSvgs(d3.selectAll("").select(function() {
+                                            return this.querySelector("svg");
+                                        }));
+                                    }
+                                } catch (e) {
+                                    console.error("Mermaid deferred rendering failed:", e);
+                                    el.removeAttribute('data-mermaid-deferred');
+                                    el.setAttribute('data-mermaid-render-failed', 'true');
+                                }
+                            });
+                        }
+                    }
+                });
+                hidden.forEach((el) => _lazyObserver.observe(el));
+            }
+        }
+    }
+
+    all_mermaids = document.querySelectorAll(".mermaid");
+    // Exclude deferred (hidden) and render-failed elements from completion checks
+    const mermaids_active = document.querySelectorAll(".mermaid:not([data-mermaid-deferred]):not([data-mermaid-render-failed])");
+    const mermaids_processed = document.querySelectorAll(".mermaid:not([data-mermaid-deferred]):not([data-mermaid-render-failed])[data-processed='true']");
+
+    if (false) {
+        const mermaids_to_add_zoom = 0 === -1 ? mermaids_active.length : 0;
+        if(mermaids_to_add_zoom > 0) {
+            var svgs = d3.selectAll("").select(function() {
+                return this.querySelector("svg");
+            });
+            // Wait until every active (visible) diagram has rendered. Deferred
+            // diagrams are excluded, so a fixed d3_node_count that counts a
+            // hidden diagram no longer loops forever waiting for its SVG.
+            if(mermaids_active.length !== mermaids_processed.length) {
+                setTimeout(() => runMermaid(false), 200);
+                return;
+            }
+            addZoomToSvgs(svgs);
+        }
+    } else if(mermaids_active.length !== mermaids_processed.length) {
+        // Wait for mermaid to process all diagrams
+        setTimeout(() => runMermaid(false), 200);
+        return;
+    }
+
+    // Stop here if not adding fullscreen capability
+    if (!true) return;
+
+    if (modal !== null ) {
+        // Destroy existing modal
+        modal.remove();
+        modal = null;
+        modalContent = null;
+    }
+
+    modal = document.createElement('div');
+    modal.className = 'mermaid-fullscreen-modal' + (darkTheme ? ' dark-theme' : '');
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-label', 'Fullscreen diagram viewer');
+    modal.innerHTML = `
+        <button class="mermaid-fullscreen-close${darkTheme ? ' dark-theme' : ''}" aria-label="Close fullscreen">✕</button>
+        <div class="mermaid-container-fullscreen${darkTheme ? ' dark-theme' : ''}"></div>
+    `;
+    document.body.appendChild(modal);
+
+    modalContent = modal.querySelector('.mermaid-container-fullscreen');
+    const closeBtn = modal.querySelector('.mermaid-fullscreen-close');
+
+    closeModal = () => {
+        modal.classList.remove('active');
+        modalContent.innerHTML = '';
+        document.body.style.overflow = ''
+        window.scrollTo({left: previousScrollOffset[0], top: previousScrollOffset[1], behavior: 'instant'});
+    };
+
+    closeBtn.addEventListener('click', closeModal);
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) closeModal();
+    });
+    document.querySelectorAll('.mermaid').forEach((mermaidDiv) => {
+        if (mermaidDiv.parentNode.classList.contains('mermaid-container') ||
+            mermaidDiv.closest('.mermaid-fullscreen-modal')) {
+            // Already processed, adjust button class if needed
+            const existingBtn = mermaidDiv.parentNode.querySelector('.mermaid-fullscreen-btn');
+            if (existingBtn) {
+                existingBtn.className = 'mermaid-fullscreen-btn' + (darkTheme ? ' dark-theme' : '');
+            }
+            return;
+        }
+
+        const container = document.createElement('div');
+        container.className = 'mermaid-container';
+        mermaidDiv.parentNode.insertBefore(container, mermaidDiv);
+        container.appendChild(mermaidDiv);
+
+        const fullscreenBtn = document.createElement('button');
+        fullscreenBtn.className = 'mermaid-fullscreen-btn' + (darkTheme ? ' dark-theme' : '');
+        fullscreenBtn.setAttribute('aria-label', 'View diagram in fullscreen');
+        fullscreenBtn.textContent = "\u26f6";
+        fullscreenBtn.style.opacity = "50%";
+
+        // Calculate dynamic position based on diagram's margin and padding
+        const diagramStyle = window.getComputedStyle(mermaidDiv);
+        const marginTop = parseFloat(diagramStyle.marginTop) || 0;
+        const marginRight = parseFloat(diagramStyle.marginRight) || 0;
+        const paddingTop = parseFloat(diagramStyle.paddingTop) || 0;
+        const paddingRight = parseFloat(diagramStyle.paddingRight) || 0;
+        fullscreenBtn.style.top = `${marginTop + paddingTop + 4}px`;
+        fullscreenBtn.style.right = `${marginRight + paddingRight + 4}px`;
+
+        fullscreenBtn.addEventListener('click', () => {
+            previousScrollOffset = [window.scrollX, window.scrollY];
+            const clone = mermaidDiv.cloneNode(true);
+            modalContent.innerHTML = '';
+            modalContent.appendChild(clone);
+
+            const svg = clone.querySelector('svg');
+            if (svg) {
+                svg.removeAttribute('width');
+                svg.removeAttribute('height');
+                svg.style.width = '100%';
+                svg.style.height = 'auto';
+                svg.style.maxWidth = '100%';
+                svg.style.display = 'block';
+
+                if (false) {
+                    setTimeout(() => {
+                        const g = svg.querySelector('g');
+                        if (g) {
+                            var svgD3 = d3.select(svg);
+                            svgD3.html("<g class='wrapper'>" + svgD3.html() + "</g>");
+                            var inner = svgD3.select("g");
+                            var zoom = d3.zoom().on("zoom", function(event) {
+                                inner.attr("transform", event.transform);
+                            });
+                            svgD3.call(zoom);
+                        }
+                    }, 100);
+                }
+            }
+
+            modal.classList.add('active');
+            document.body.style.overflow = 'hidden';
+        });
+        container.appendChild(fullscreenBtn);
+    });
+};
+
+
+
+const load = async () => {
+    initStyles();
+
+
+    await runMermaid(true);
+
+    const reRunIfThemeChanges = async () => {
+        const newDarkTheme = isDarkTheme();
+        if (newDarkTheme !== darkTheme) {
+            darkTheme = newDarkTheme;
+            console.log("Theme change detected, re-running mermaid with", darkTheme ? "dark" : "default", "theme");
+            await mermaid.initialize(
+                {...{"startOnLoad": false},
+                ...{ darkMode: darkTheme, theme: darkTheme ? "dark" : "default" },
+                }
+            );
+            await runMermaid(true);
+        }
+    };
+
+    // Update theme classes when theme changes
+    const themeObserver = new MutationObserver(reRunIfThemeChanges);
+    themeObserver.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ['class', 'style', 'data-theme']
+    });
+    themeObserver.observe(document.body, {
+        attributes: true,
+        attributeFilter: ['class', 'style', 'data-theme']
+    });
+};
+
+
+
+
+
+console.log("Initializing mermaid with", darkTheme ? "dark" : "default", "theme");
+mermaid.initialize(
+    {...{"startOnLoad": false},
+    ...{ darkMode: darkTheme, theme: darkTheme ? "dark" : "default" },
+    }
+);
+
+window.addEventListener("load", load);
+window.runMermaid = runMermaid;</script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'advanced/parallelism-memory';</script>
+    <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
+    <script data-layout="root" src="../_static/js/lang-toggle.js?v=9e8f3a3a"></script>
+    <link rel="icon" href="../_static/logo.ico"/>
+    <link rel="index" title="索引" href="../genindex.html" />
+    <link rel="search" title="搜索" href="../search.html" />
+    <link rel="next" title="低精度训练与 Rollout" href="low-precision.html" />
+    <link rel="prev" title="从策略梯度到训推一致性" href="policy-mismatch.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="zh"/>
+  <meta name="docsearch:version" content="0.4.0" />
+    <meta name="docbuild:last-update" content="2026 年 10 月 09 日"/>
+  
+    
+    <script src="../_static/searchtools.js"></script>
+    <script src="../_static/language_data.js"></script>
+    <script src="../searchindex.js"></script>
+  
+  </head>
+  <body data-default-mode="">
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">跳转至主要内容</a></div>
+
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>回到顶部</button>
+  
+  
+  
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search..."
+         aria-label="Search..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="版本警告"></aside>
+</div>
+
+  
+    <header id="pst-header" class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="网页导航">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class="col-lg-9 navbar-header-items">
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+<button class="btn search-button-field search-button__button pst-js-only" title="搜索" aria-label="搜索" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">搜索</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+        </div>
+      
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="搜索" aria-label="搜索" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">搜索</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+    </div>
+  
+
+  
+    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="当前页面">
+      <span class="fa-solid fa-outdent"></span>
+    </button>
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/logo.jpg" class="logo__image only-light" alt="slime - Home"/>
+    <img src="../_static/logo.jpg" class="logo__image only-dark pst-js-only" alt="slime - Home"/>
+  
+  
+</a></div>
+        <div class="sidebar-primary-item">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="搜索" aria-label="搜索" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">搜索</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button></div>
+        <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
+    <div class="bd-toc-item navbar-nav active">
+        <ul class="current nav bd-sidenav">
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="../library.html">文档资料库</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../get_started/index.html">从这里开始</a></li>
+<li class="toctree-l2 current active has-children"><a class="reference internal" href="../training/index.html">训练与算法</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="policy-mismatch.html">从策略梯度到训推一致性</a></li>
+<li class="toctree-l3 current active"><a class="current reference internal" href="#">卡数、显存与并行方式</a></li>
+<li class="toctree-l3"><a class="reference internal" href="low-precision.html">低精度训练与 Rollout</a></li>
+<li class="toctree-l3"><a class="reference internal" href="reproducibility.html">Reproducibility</a></li>
+<li class="toctree-l3"><a class="reference internal" href="on-policy-distillation.html">在策略蒸馏 (On-Policy Distillation)</a></li>
+<li class="toctree-l3"><a class="reference internal" href="megatron-config.html">Megatron Config：按角色覆盖训练参数</a></li>
+<li class="toctree-l3"><a class="reference internal" href="arch-support-beyond-megatron.html">在 Megatron-LM 中快速支持新模型架构</a></li>
+</ul>
+</details></li>
+<li class="toctree-l2"><a class="reference internal" href="../rollout/index.html">Rollout 与调度</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../operations/index.html">调试、性能分析与恢复</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../examples/index.html">任务教程</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../developer_guide/index.html">开发与 CI</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../platform_support/index.html">硬件平台</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../blogs/index.html">设计文章与版本发布</a></li>
+</ul>
+</details></li>
+</ul>
+
+    </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+
+<div class="sbt-scroll-pixel-helper"></div>
+
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item"><button class="sidebar-toggle primary-toggle btn btn-sm" title="Toggle primary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <span class="fa-solid fa-bars"></span>
+</button></div>
+      
+    </div>
+  
+  
+    <div class="header-article-items__end">
+      
+        <div class="header-article-item">
+
+<div class="article-header-buttons">
+
+
+
+
+
+<div class="dropdown dropdown-source-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Source repositories">
+    <i class="fab fa-github"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime" target="_blank"
+   class="btn btn-sm btn-source-repository-button dropdown-item"
+   title="源码库"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fab fa-github"></i>
+  </span>
+<span class="btn__text-container">Repository</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/blob/main/docs/zh/advanced/parallelism-memory.md?plain=1" target="_blank"
+   class="btn btn-sm btn-source-file-button dropdown-item"
+   title="Show source"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-code"></i>
+  </span>
+<span class="btn__text-container">Show source</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/edit/main/docs/zh/advanced/parallelism-memory.md" target="_blank"
+   class="btn btn-sm btn-source-edit-button dropdown-item"
+   title="Suggest edit"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-pencil-alt"></i>
+  </span>
+<span class="btn__text-container">Suggest edit</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/issues/new?title=Issue%20on%20page%20%2Fadvanced/parallelism-memory.html&body=Your%20issue%20content%20here." target="_blank"
+   class="btn btn-sm btn-source-issues-button dropdown-item"
+   title="创建议题"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-lightbulb"></i>
+  </span>
+<span class="btn__text-container">Open issue</span>
+</a>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+
+
+<div class="dropdown dropdown-download-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="下载此页面">
+    <i class="fas fa-download"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="../_sources/advanced/parallelism-memory.md" target="_blank"
+   class="btn btn-sm btn-download-source-button dropdown-item"
+   title="下载源文件"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file"></i>
+  </span>
+<span class="btn__text-container">.md</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li>
+<button onclick="window.print()"
+  class="btn btn-sm btn-download-pdf-button dropdown-item"
+  title="列印成 PDF"
+  data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file-pdf"></i>
+  </span>
+<span class="btn__text-container">.pdf</span>
+</button>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+<button onclick="toggleFullScreen()"
+  class="btn btn-sm btn-fullscreen-button pst-navbar-icon"
+  title="全屏模式"
+  data-bs-placement="bottom" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-expand"></i>
+  </span>
+
+</button>
+
+
+
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="亮色"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="暗色"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>亮色</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>暗色</button></li>
+  </ul>
+</div>
+
+
+<button class="btn btn-sm pst-navbar-icon search-button search-button__button pst-js-only" title="搜索" aria-label="搜索" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass fa-lg"></i>
+</button>
+<button class="sidebar-toggle secondary-toggle btn btn-sm pst-navbar-icon" title="Toggle secondary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <span class="fa-solid fa-list"></span>
+</button>
+</div></div>
+      
+    </div>
+  
+</div>
+</div>
+              
+              
+
+<div id="jb-print-docs-body" class="onlyprint">
+    <h1>卡数、显存与并行方式</h1>
+    <!-- Table of contents -->
+    <div id="print-main-content">
+        <div id="jb-print-toc">
+            
+            <div>
+                <h2> 目录 </h2>
+            </div>
+            <nav aria-label="Page">
+                <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">从多少张卡起步？</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">显存账本</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#tp">TP：拆一个层</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#pp">PP：拆模型层</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#ep-moe">EP：拆 MoE 专家</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#cp-token">CP：拆 token</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#zero-distributed-optimizer">ZeRO 与 distributed optimizer</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#cpu-adam">CPU Adam 与重计算</a></li>
+</ul>
+            </nav>
+        </div>
+    </div>
+</div>
+
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section class="tex2jax_ignore mathjax_ignore" id="id1">
+<h1>卡数、显存与并行方式<a class="headerlink" href="#id1" title="Link to this heading">#</a></h1>
+<p>在<a class="reference internal" href="../index.html#lab"><span class="std std-ref">交互实验室</span></a>的「布局」步骤中逐个点击图示。先确认各阶段能放下且学习正确，再优化每秒有效样本数。</p>
+<section id="id2">
+<h2>从多少张卡起步？<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<p>实验室按每节点 8 GPU，参考 H100/H200 级别、高速互联服务器的仓库配方。这些是配方起步值，不是实测最小值，也不保证这一档所有硬件均能直接运行。短实验限制回复为 4,096 tokens，每轮 8 个 prompt、各采样 8 次；prompt 长度仍计入显存。MoE 和 Qwen 默认启用 CPU Adam 与重计算。</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>模型</p></th>
+<th class="head text-right"><p>训练卡数</p></th>
+<th class="head"><p>TP / PP / CP / EP</p></th>
+<th class="head text-right"><p>每个推理引擎卡数</p></th>
+<th class="head"><p>来源</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>GLM-4-9B</p></td>
+<td class="text-right"><p>8</p></td>
+<td><p>2 / 1 / 2 / 1</p></td>
+<td class="text-right"><p>2</p></td>
+<td><p><a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-glm4-9B.sh">9B</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>GLM-4.7-Flash</p></td>
+<td class="text-right"><p>8</p></td>
+<td><p>2 / 2 / 2 / 4</p></td>
+<td class="text-right"><p>8</p></td>
+<td><p><a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-glm4.7-30B-A3B.sh">Flash</a></p></td>
+</tr>
+<tr class="row-even"><td><p>GLM-4.7</p></td>
+<td class="text-right"><p>64</p></td>
+<td><p>8 / 4 / 2 / 16</p></td>
+<td class="text-right"><p>32</p></td>
+<td><p><a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-glm4.7-355B-A32B.sh">355B</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>GLM-5.3</p></td>
+<td class="text-right"><p>256</p></td>
+<td><p>4 / 8 / 8 / 32</p></td>
+<td class="text-right"><p>64</p></td>
+<td><p><a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-glm5.2-744B-A40B.sh">744B</a></p></td>
+</tr>
+<tr class="row-even"><td><p>DeepSeek-R1</p></td>
+<td class="text-right"><p>128</p></td>
+<td><p>8 / 4 / 4 / 32</p></td>
+<td class="text-right"><p>64</p></td>
+<td><p><a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-deepseek-r1.sh">R1</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Qwen3.8-27B</p></td>
+<td class="text-right"><p>32</p></td>
+<td><p>4 / 2 / 4 / 1</p></td>
+<td class="text-right"><p>2</p></td>
+<td><p><a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-qwen3.5-27B.sh">匹配的架构</a></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Flash 在实验室使用 EP4，使 EP × PP 能放进 8 卡。Qwen3.8 复用匹配架构配置，此次文档修改尚未对新 checkpoint 做 GPU 验证。第一次建议用 9B 或 Flash 理解循环，再对目标模型做短实验，测量峰值显存后分配长任务资源。</p>
+<p>同卡训推分配一个池；训推分离需训练卡数加 rollout 卡数。PD 将 rollout 池分为完整 prefill/decode 引擎；外部推理资源不计入训练 Ray 集群。只增加卡数而不调整模型并行，可能只是增加副本，并不减少每卡模型显存。</p>
+</section>
+<section id="id3">
+<h2>显存账本<a class="headerlink" href="#id3" title="Link to this heading">#</a></h2>
+<p>以一种混合精度 Adam 为例，<span class="math notranslate nohighlight">\(P\)</span> 个参数的 BF16 权重占 <span class="math notranslate nohighlight">\(2P\)</span> 字节、FP32 梯度 <span class="math notranslate nohighlight">\(4P\)</span>、FP32 master weights <span class="math notranslate nohighlight">\(4P\)</span>、两份 FP32 moments <span class="math notranslate nohighlight">\(8P\)</span>：</p>
+<div class="math notranslate nohighlight">
+\[M_{\rm states}=(2+4+4+8)P=18P\ \text{bytes}.\]</div>
+<p>实际 precision-aware 优化器的状态精度可能不同。激活、buffers、临时转换、分配器预留、reference policy 副本、KV cache 还要另算。30B 的 BF16 权重约 60 GB，两份 FP32 moments 约 240 GB，尚未分片。MoE 存储要看总参数量，不能只看激活参数量。</p>
+<pre  class="mermaid">
+        flowchart TB
+    T[训练显存] --&gt; W[权重 + 梯度]
+    T --&gt; O[优化器状态]
+    T --&gt; A[保存的激活]
+    T --&gt; B[Buffers + 临时分配]
+    O --&gt; C[CPU Adam：主机存储和计算]
+    A --&gt; R[重计算：少保存，再算一次]
+    S[推理显存] --&gt; SW[权重]
+    S --&gt; KV[KV cache + workspace]
+    </pre><p>理想的阶段 offload 使同卡显存需求接近 <span class="math notranslate nohighlight">\(\max(M_{\rm train},M_{\rm rollout})\)</span>，还需考虑常驻 buffers 与切换开销。分离布局则分别满足两个池的容量约束。</p>
+</section>
+<section id="tp">
+<h2>TP：拆一个层<a class="headerlink" href="#tp" title="Link to this heading">#</a></h2>
+<p>按矩阵列拆分：</p>
+<div class="math notranslate nohighlight">
+\[W=[W_0\;W_1],\qquad Y=XW=[XW_0\;XW_1].\]</div>
+<p>各卡计算一片；后续按输入行拆分的层计算 <span class="math notranslate nohighlight">\(Z=Y_0V_0+Y_1V_1\)</span>，需要归约各卡的部分输出。这解释了显存节省和频繁通信的来源，TP 应优先放在高速互联内。Sequence parallelism 还拆分部分激活操作，不能替代 CP。见 <a class="reference external" href="https://arxiv.org/abs/2104.04473">Megatron 论文</a>和<a class="reference external" href="https://docs.nvidia.com/megatron-core/developer-guide/latest/user-guide/parallelism-guide.html">并行指南</a>。</p>
+</section>
+<section id="pp">
+<h2>PP：拆模型层<a class="headerlink" href="#pp" title="Link to this heading">#</a></h2>
+<pre  class="mermaid">
+        flowchart LR
+    A[前面的层] --&gt;|激活| B[中间的层]
+    B --&gt;|激活| C[后面的层]
+    C --&gt;|梯度| B
+    B --&gt;|梯度| A
+    </pre><p>每个 stage 只保存自己的层。假设 <span class="math notranslate nohighlight">\(p\)</span> 个等耗时阶段、<span class="math notranslate nohighlight">\(m\)</span> 个 microbatch、每阶段耗时 <span class="math notranslate nohighlight">\(\tau\)</span>，简单 forward 流水线耗时 <span class="math notranslate nohighlight">\((m+p-1)\tau\)</span>。利用率为 <span class="math notranslate nohighlight">\(m/(m+p-1)\)</span>，填充与排空的 bubble 比例为 <span class="math notranslate nohighlight">\((p-1)/(m+p-1)\)</span>。实际训练还受 backward 调度、通信与分层不均衡影响。增加 microbatch 数能摊薄 bubble，但每个 microbatch 仍要放得下。见 <a class="reference external" href="https://arxiv.org/abs/2104.04473">Megatron 论文</a>。</p>
+</section>
+<section id="ep-moe">
+<h2>EP：拆 MoE 专家<a class="headerlink" href="#ep-moe" title="Link to this heading">#</a></h2>
+<p>对选中的专家集合 <span class="math notranslate nohighlight">\(K(x)\)</span>：</p>
+<div class="math notranslate nohighlight">
+\[y(x)=\sum_{e\in K(x)}g_e(x)E_e(x).\]</div>
+<p>不同 GPU 保存不同专家。All-to-all dispatch 把 token 送到专家所在卡，combine 返回加权输出。权重均匀分片不代表 token 流量均匀，专家负载倾斜可能成为瓶颈。见 <a class="reference external" href="https://arxiv.org/abs/2006.16668">GShard</a>。</p>
+<p>Dense 层常用卡数关系为 <span class="math notranslate nohighlight">\(N=TP\cdot PP\cdot CP\cdot DP\)</span>。专家层有另一套含 expert TP、expert DP 的分组，不能在 dense 关系上再乘 EP。本实验室使用 expert TP=1，检查卡数能被 <span class="math notranslate nohighlight">\(TP\cdot PP\cdot CP\)</span> 和 <span class="math notranslate nohighlight">\(EP\cdot PP\)</span> 整除；模型维度与 Megatron 还会带来其他约束。</p>
+</section>
+<section id="cp-token">
+<h2>CP：拆 token<a class="headerlink" href="#cp-token" title="Link to this heading">#</a></h2>
+<p>CP 按 token 位置分配 queries；attention 仍需远端 keys/values，因此引入通信。它减少本地序列激活，不会自动拆模型权重。</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>单条 8-token 序列、CP2</p></th>
+<th class="head"><p>Rank 0</p></th>
+<th class="head"><p>Rank 1</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>默认 zigzag</p></td>
+<td><p>0、1、6、7</p></td>
+<td><p>2、3、4、5</p></td>
+</tr>
+<tr class="row-odd"><td><p>slime allgather CP</p></td>
+<td><p>0、1、2、3</p></td>
+<td><p>4、5、6、7</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Zigzag 将每条补齐后的序列切为 <span class="math notranslate nohighlight">\(2c\)</span> 块，rank <span class="math notranslate nohighlight">\(r\)</span> 得到第 <span class="math notranslate nohighlight">\(r\)</span> 与 <span class="math notranslate nohighlight">\(2c-r-1\)</span> 块。前后配对平衡 causal attention：8 个位置连续切分时两卡分别处理 10、26 个 query-key 对，图中的 zigzag 各处理 18 对。这是配对数，不是 sparse kernel 真实耗时。</p>
+<p>slime 的 <code class="docutils literal notranslate"><span class="pre">--allgather-cp</span></code> 打包序列，将补齐后的整体 token 流连续切分。DSA backend 收集所需远端 attention/index 数据，loss 处理再恢复样本归属。它不同于 zigzag 逐序列切分；不兼容的 backend 上误开 flag 会打乱 token 顺序。</p>
+<pre  class="mermaid">
+        flowchart LR
+    A[Rank 0 本地 queries] --&gt; C[对所需 keys 做 attention]
+    B[Rank 1 keys / values] --&gt;|backend 通信| C
+    C --&gt; D[Rank 0 本地输出]
+    </pre><p>Zigzag 描述布局，不等同于某一个固定 ring 算法；通信由 attention backend 决定。Allgather 可能产生较大聚合张量，所以 CP 不会将每类内存等比例缩小。</p>
+<p>CP &gt; 1 时，slime 当前只允许 <code class="docutils literal notranslate"><span class="pre">DeepseekV32ForCausalLM</span></code> 和 <code class="docutils literal notranslate"><span class="pre">GlmMoeDsaForCausalLM</span></code> 使用 allgather CP。实验室的 GLM-5.3 通过模型配置启用它，其他配方保持支持的布局。图示按钮不修改运行 flag。见<a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/backends/megatron_utils/arguments.py">参数校验</a>、<a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/backends/megatron_utils/data.py">打包</a>、<a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/backends/megatron_utils/cp_utils.py">CP 索引</a>和 <a class="reference external" href="https://docs.nvidia.com/megatron-core/developer-guide/latest/user-guide/parallelism-guide.html">Megatron 指南</a>。</p>
+</section>
+<section id="zero-distributed-optimizer">
+<h2>ZeRO 与 distributed optimizer<a class="headerlink" href="#zero-distributed-optimizer" title="Link to this heading">#</a></h2>
+<p>数据并行副本处理不同样本。ZeRO 依次分片优化器状态（stage 1）、梯度（stage 2）、参数（stage 3）。沿用每参数 18 字节示例，<span class="math notranslate nohighlight">\(D\)</span> 个副本上的理想持久状态开销为：</p>
+<div class="math notranslate nohighlight">
+\[M_0=18P,\quad M_1=6P+12P/D,\quad M_2=2P+16P/D,\quad M_3=18P/D.\]</div>
+<p>推导即先将 master weights 和 moments 除以 <span class="math notranslate nohighlight">\(D\)</span>，再依次将梯度、BF16 权重除以 <span class="math notranslate nohighlight">\(D\)</span>；未计临时通信 buffers。<span class="math notranslate nohighlight">\(P\)</span> 可以是本地模型并行分片，<span class="math notranslate nohighlight">\(D\)</span> 是对应副本数；专家参数分组可能不同。见 <a class="reference external" href="https://arxiv.org/abs/1910.02054">ZeRO</a>。</p>
+<p>slime 默认启用 Megatron <code class="docutils literal notranslate"><span class="pre">use_distributed_optimizer</span></code>，分片优化器状态与更新计算，再聚合更新后的参数。这不等于完整 ZeRO-3 参数分片，也不表示使用 DeepSpeed runtime。见<a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/backends/megatron_utils/arguments.py">后端默认参数</a>。</p>
+</section>
+<section id="cpu-adam">
+<h2>CPU Adam 与重计算<a class="headerlink" href="#cpu-adam" title="Link to this heading">#</a></h2>
+<p>Adam 保存 moments 并做偏差修正：</p>
+<div class="math notranslate nohighlight">
+\[m_t=\beta_1m_{t-1}+(1-\beta_1)g_t,\quad v_t=\beta_2v_{t-1}+(1-\beta_2)g_t^2,\]</div>
+<div class="math notranslate nohighlight">
+\[\hat m_t=m_t/(1-\beta_1^t),\quad\hat v_t=v_t/(1-\beta_2^t),\quad\theta_{t+1}=\theta_t-\eta\hat m_t/(\sqrt{\hat v_t}+\epsilon).\]</div>
+<p>CPU Adam 在主机保存优化器状态并执行更新。开关导出 <code class="docutils literal notranslate"><span class="pre">--optimizer-cpu-offload</span></code>、<code class="docutils literal notranslate"><span class="pre">--overlap-cpu-optimizer-d2h-h2d</span></code> 和 <code class="docutils literal notranslate"><span class="pre">--use-precision-aware-optimizer</span></code>。分片决定哪个 rank 负责状态；offload 决定该 rank 在哪里保存和更新状态。主机内存、CPU 算力和 PCIe 带宽接过一部分显存负担，激活与 KV cache 不受影响。背景见 <a class="reference external" href="https://arxiv.org/abs/1412.6980">Adam</a>、<a class="reference external" href="https://arxiv.org/abs/2101.06840">ZeRO-Offload</a>，slime 使用 Megatron 实现。</p>
+<p>独立的重计算开关保存边界，在 backward 时重做部分 forward，以 FLOPs 换激活显存，见<a class="reference external" href="https://arxiv.org/abs/1604.06174">激活 checkpointing</a>。训练 OOM 先判断状态还是激活占主导，再选 offload、更多模型并行或更小的 token microbatch。推理 OOM 则检查权重、KV 精度、并发、回复长度和引擎卡数。通过 <a class="reference internal" href="../developer_guide/profiling.html"><span class="std std-doc">profiling</span></a>逐项测量。</p>
+</section>
+</section>
+
+
+                </article>
+              
+
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="policy-mismatch.html"
+       title="上一页">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">上一页</p>
+        <p class="prev-next-title">从策略梯度到训推一致性</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="low-precision.html"
+       title="下一页">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">下一页</p>
+        <p class="prev-next-title">低精度训练与 Rollout</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item"><div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> 目录
+  </div>
+  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">从多少张卡起步？</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">显存账本</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#tp">TP：拆一个层</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#pp">PP：拆模型层</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#ep-moe">EP：拆 MoE 专家</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#cp-token">CP：拆 token</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#zero-distributed-optimizer">ZeRO 与 distributed optimizer</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#cpu-adam">CPU Adam 与重计算</a></li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+<div class="bd-footer-content__inner container">
+  
+  <div class="footer-item">
+    
+<p class="component-author">
+作者： slime Team
+</p>
+
+  </div>
+  
+  <div class="footer-item">
+    
+
+  <p class="copyright">
+    
+      © Copyright 2025-2026, slime.
+      <br/>
+    
+  </p>
+
+  </div>
+  
+  <div class="footer-item">
+    <p class="last-updated">
+  最后更新于 2026 年 10 月 09 日.
+  <br/>
+</p>
+  </div>
+  
+  <div class="footer-item">
+    
+  </div>
+  
+</div>
+          </footer>
+        
+
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9"></script>
+<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9"></script>
+
+  <footer class="bd-footer">
+  </footer>
+  </body>
+</html>

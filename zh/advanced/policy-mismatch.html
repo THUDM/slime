@@ -1,0 +1,799 @@
+
+<!DOCTYPE html>
+
+
+<html lang="zh" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>从策略梯度到训推一致性 &#8212; slime</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=4418a689" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=5f5cb4b6" />
+  
+  <!-- So that users can add custom icons -->
+  <script defer src="../_static/scripts/fontawesome.js?digest=90905a2f556bf617f1a9"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
+
+    <script src="../_static/documentation_options.js?v=ceb54874"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=ccdb6887"></script>
+    <script src="../_static/scripts/sphinx-book-theme.js?v=fab101a9"></script>
+    <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+    <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'advanced/policy-mismatch';</script>
+    <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
+    <script data-layout="root" src="../_static/js/lang-toggle.js?v=9e8f3a3a"></script>
+    <link rel="icon" href="../_static/logo.ico"/>
+    <link rel="index" title="索引" href="../genindex.html" />
+    <link rel="search" title="搜索" href="../search.html" />
+    <link rel="next" title="卡数、显存与并行方式" href="parallelism-memory.html" />
+    <link rel="prev" title="训练与算法" href="../training/index.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="zh"/>
+  <meta name="docsearch:version" content="0.4.0" />
+    <meta name="docbuild:last-update" content="2026 年 10 月 09 日"/>
+  
+    
+    <script src="../_static/searchtools.js"></script>
+    <script src="../_static/language_data.js"></script>
+    <script src="../searchindex.js"></script>
+  
+  </head>
+  <body data-default-mode="">
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">跳转至主要内容</a></div>
+
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>回到顶部</button>
+  
+  
+  
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search..."
+         aria-label="Search..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="版本警告"></aside>
+</div>
+
+  
+    <header id="pst-header" class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="网页导航">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class="col-lg-9 navbar-header-items">
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+<button class="btn search-button-field search-button__button pst-js-only" title="搜索" aria-label="搜索" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">搜索</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+        </div>
+      
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="搜索" aria-label="搜索" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">搜索</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+    </div>
+  
+
+  
+    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="当前页面">
+      <span class="fa-solid fa-outdent"></span>
+    </button>
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/logo.jpg" class="logo__image only-light" alt="slime - Home"/>
+    <img src="../_static/logo.jpg" class="logo__image only-dark pst-js-only" alt="slime - Home"/>
+  
+  
+</a></div>
+        <div class="sidebar-primary-item">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="搜索" aria-label="搜索" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">搜索</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button></div>
+        <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
+    <div class="bd-toc-item navbar-nav active">
+        <ul class="current nav bd-sidenav">
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="../library.html">文档资料库</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../get_started/index.html">从这里开始</a></li>
+<li class="toctree-l2 current active has-children"><a class="reference internal" href="../training/index.html">训练与算法</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l3 current active"><a class="current reference internal" href="#">从策略梯度到训推一致性</a></li>
+<li class="toctree-l3"><a class="reference internal" href="parallelism-memory.html">卡数、显存与并行方式</a></li>
+<li class="toctree-l3"><a class="reference internal" href="low-precision.html">低精度训练与 Rollout</a></li>
+<li class="toctree-l3"><a class="reference internal" href="reproducibility.html">Reproducibility</a></li>
+<li class="toctree-l3"><a class="reference internal" href="on-policy-distillation.html">在策略蒸馏 (On-Policy Distillation)</a></li>
+<li class="toctree-l3"><a class="reference internal" href="megatron-config.html">Megatron Config：按角色覆盖训练参数</a></li>
+<li class="toctree-l3"><a class="reference internal" href="arch-support-beyond-megatron.html">在 Megatron-LM 中快速支持新模型架构</a></li>
+</ul>
+</details></li>
+<li class="toctree-l2"><a class="reference internal" href="../rollout/index.html">Rollout 与调度</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../operations/index.html">调试、性能分析与恢复</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../examples/index.html">任务教程</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../developer_guide/index.html">开发与 CI</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../platform_support/index.html">硬件平台</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../blogs/index.html">设计文章与版本发布</a></li>
+</ul>
+</details></li>
+</ul>
+
+    </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+
+<div class="sbt-scroll-pixel-helper"></div>
+
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item"><button class="sidebar-toggle primary-toggle btn btn-sm" title="Toggle primary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <span class="fa-solid fa-bars"></span>
+</button></div>
+      
+    </div>
+  
+  
+    <div class="header-article-items__end">
+      
+        <div class="header-article-item">
+
+<div class="article-header-buttons">
+
+
+
+
+
+<div class="dropdown dropdown-source-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Source repositories">
+    <i class="fab fa-github"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime" target="_blank"
+   class="btn btn-sm btn-source-repository-button dropdown-item"
+   title="源码库"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fab fa-github"></i>
+  </span>
+<span class="btn__text-container">Repository</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/blob/main/docs/zh/advanced/policy-mismatch.md?plain=1" target="_blank"
+   class="btn btn-sm btn-source-file-button dropdown-item"
+   title="Show source"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-code"></i>
+  </span>
+<span class="btn__text-container">Show source</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/edit/main/docs/zh/advanced/policy-mismatch.md" target="_blank"
+   class="btn btn-sm btn-source-edit-button dropdown-item"
+   title="Suggest edit"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-pencil-alt"></i>
+  </span>
+<span class="btn__text-container">Suggest edit</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/issues/new?title=Issue%20on%20page%20%2Fadvanced/policy-mismatch.html&body=Your%20issue%20content%20here." target="_blank"
+   class="btn btn-sm btn-source-issues-button dropdown-item"
+   title="创建议题"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-lightbulb"></i>
+  </span>
+<span class="btn__text-container">Open issue</span>
+</a>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+
+
+<div class="dropdown dropdown-download-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="下载此页面">
+    <i class="fas fa-download"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="../_sources/advanced/policy-mismatch.md" target="_blank"
+   class="btn btn-sm btn-download-source-button dropdown-item"
+   title="下载源文件"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file"></i>
+  </span>
+<span class="btn__text-container">.md</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li>
+<button onclick="window.print()"
+  class="btn btn-sm btn-download-pdf-button dropdown-item"
+  title="列印成 PDF"
+  data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file-pdf"></i>
+  </span>
+<span class="btn__text-container">.pdf</span>
+</button>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+<button onclick="toggleFullScreen()"
+  class="btn btn-sm btn-fullscreen-button pst-navbar-icon"
+  title="全屏模式"
+  data-bs-placement="bottom" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-expand"></i>
+  </span>
+
+</button>
+
+
+
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="亮色"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="暗色"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>亮色</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>暗色</button></li>
+  </ul>
+</div>
+
+
+<button class="btn btn-sm pst-navbar-icon search-button search-button__button pst-js-only" title="搜索" aria-label="搜索" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass fa-lg"></i>
+</button>
+<button class="sidebar-toggle secondary-toggle btn btn-sm pst-navbar-icon" title="Toggle secondary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <span class="fa-solid fa-list"></span>
+</button>
+</div></div>
+      
+    </div>
+  
+</div>
+</div>
+              
+              
+
+<div id="jb-print-docs-body" class="onlyprint">
+    <h1>从策略梯度到训推一致性</h1>
+    <!-- Table of contents -->
+    <div id="print-main-content">
+        <div id="jb-print-toc">
+            
+            <div>
+                <h2> 目录 </h2>
+            </div>
+            <nav aria-label="Page">
+                <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">统一符号</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#grpo">GRPO</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#tis">TIS</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#ice-pop">ICE-POP</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#r3">R3</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sc">SC</a><ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#score">从非零均值到中心化 score</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">与重要性修正组合</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#top-k">Top-k 如何避免保存整个词表</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">必须匹配真实采样分布</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">如何验证选择</a></li>
+</ul>
+            </nav>
+        </div>
+    </div>
+</div>
+
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section class="tex2jax_ignore mathjax_ignore" id="id1">
+<h1>从策略梯度到训推一致性<a class="headerlink" href="#id1" title="Link to this heading">#</a></h1>
+<p><a class="reference internal" href="../index.html"><span class="std std-doc">返回实验室</span></a>。精度、确定性、异步、PD 和 HiCache 见<a class="reference internal" href="rl-systems.html"><span class="std std-doc">系统篇</span></a>。</p>
+<p>下面按照仓库实现推导各个目标，区分数学恒等式、有偏 surrogate 和工程近似。论文链接标注原始工作；实现链接说明向导具体导出的变体。</p>
+<section id="id2">
+<h2>统一符号<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<p><span class="math notranslate nohighlight">\(x\)</span> 表示 prompt，<span class="math notranslate nohighlight">\(y=(a_1,\ldots,a_T)\)</span> 表示回答，<span class="math notranslate nohighlight">\(h_t=(x,a_{&lt;t})\)</span> 表示 prefix。奖励 <span class="math notranslate nohighlight">\(R(x,y)\)</span> 在求导时不依赖参数。必须区分三种策略：</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>符号</p></th>
+<th class="head"><p>含义</p></th>
+<th class="head"><p>来源</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><span class="math notranslate nohighlight">\(q(a\mid h)\)</span></p></td>
+<td><p>真正产生 token 的行为分布</p></td>
+<td><p>SGLang，包含量化、采样变换以及可能过期的权重</p></td>
+</tr>
+<tr class="row-odd"><td><p><span class="math notranslate nohighlight">\(p_0(a\mid h)\)</span></p></td>
+<td><p>更新前冻结的训练策略</p></td>
+<td><p>Megatron 重新计算的 old log-probs</p></td>
+</tr>
+<tr class="row-even"><td><p><span class="math notranslate nohighlight">\(p_\theta(a\mid h)\)</span></p></td>
+<td><p>当前可训练策略</p></td>
+<td><p>Megatron 的可微 forward</p></td>
+</tr>
+<tr class="row-odd"><td><p><span class="math notranslate nohighlight">\(\operatorname{sg}(z)\)</span></p></td>
+<td><p>数值为 <span class="math notranslate nohighlight">\(z\)</span>、梯度为零</p></td>
+<td><p>对权重、奖励和修正系数停止梯度</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>固定 prefix，定义 score 为 <span class="math notranslate nohighlight">\(s_a=\nabla_\theta\log p_\theta(a\mid h)\)</span>。在概率可微、归一化且可交换求和与求导的前提下：</p>
+<div class="math notranslate nohighlight">
+\[
+\sum_a p_\theta(a\mid h)s_a
+=\sum_a\nabla_\theta p_\theta(a\mid h)
+=\nabla_\theta 1=0.
+\]</div>
+<p>从 <span class="math notranslate nohighlight">\(J(\theta)=\sum_y p_\theta(y\mid x)R(x,y)\)</span> 出发，应用 <span class="math notranslate nohighlight">\(\nabla p=p\nabla\log p\)</span> 和自回归分解：</p>
+<div class="math notranslate nohighlight">
+\[
+\nabla J
+=\mathbb E_{y\sim p_\theta}[R\nabla\log p_\theta(y\mid x)]
+=\mathbb E_{y\sim p_\theta}\left[R\sum_t s_{a_t}\right].
+\]</div>
+<p>在 <strong><span class="math notranslate nohighlight">\(p_\theta\)</span> 分布下</strong>，与当前 action 无关的 baseline <span class="math notranslate nohighlight">\(b(h_t)\)</span> 和 score 相乘后的期望为零，因此可以降低方差而不改变这个期望。换成 <span class="math notranslate nohighlight">\(q\)</span> 采样，一般就不能这样消去。两个引擎加载了同名 checkpoint，并不证明训练是 on-policy。</p>
+</section>
+<section id="grpo">
+<h2>GRPO<a class="headerlink" href="#grpo" title="Link to this heading">#</a></h2>
+<p>原论文：<a class="reference external" href="https://arxiv.org/abs/2402.03300">DeepSeekMath</a>；裁剪目标：<a class="reference external" href="https://arxiv.org/abs/1707.06347">PPO</a>。</p>
+<p>对同一 prompt 采样 <span class="math notranslate nohighlight">\(G\)</span> 个回答，用组内统计构造 advantage：</p>
+<div class="math notranslate nohighlight">
+\[
+\bar R=\frac1G\sum_i R_i,\quad
+\sigma_R=\sqrt{\frac1G\sum_i(R_i-\bar R)^2},\quad
+A_i=\frac{R_i-\bar R}{\sigma_R+\epsilon}.
+\]</div>
+<p>同一回答中的 response token 共用这个 advantage。标准差是否使用样本修正以及具体 epsilon 取决于实现；关闭标准差归一化后，<span class="math notranslate nohighlight">\(A_i=R_i-\bar R\)</span>。组均值包含当前样本，不能直接套用“独立 baseline 无偏”的证明。独立采样时，仅减均值会让 on-policy 梯度期望缩放为 <span class="math notranslate nohighlight">\(1-1/G\)</span>；再除标准差还引入随机尺度。</p>
+<p>令 <span class="math notranslate nohighlight">\(r_{i,t}(\theta)=p_\theta(a_{i,t}\mid h_{i,t})/p_0(a_{i,t}\mid h_{i,t})\)</span>。忽略可选 KL 项，要最大化的 clipped surrogate 为：</p>
+<div class="math notranslate nohighlight">
+\[
+J_{\rm clip}=\frac1G\sum_i\frac1{T_i}\sum_t
+\min\left(r_{i,t}A_i,
+\operatorname{clip}(r_{i,t},1-\epsilon_-,1+\epsilon_+)A_i\right).
+\]</div>
+<p><span class="math notranslate nohighlight">\(A_i&gt;0\)</span> 时，上界限制继续提高 token 概率的收益；<span class="math notranslate nohighlight">\(A_i&lt;0\)</span> 时，下界限制继续降低概率的收益。在 <span class="math notranslate nohighlight">\(\theta=\theta_0\)</span> 且未触发 clipping 时，<span class="math notranslate nohighlight">\(\nabla r=r\nabla\log p_\theta\)</span> 还原为策略梯度方向。这是局部 surrogate，不是任意过期数据上的恒等式。</p>
+<p>向导使用 <code class="docutils literal notranslate"><span class="pre">--advantage-estimator</span> <span class="pre">grpo</span></code>、每个 prompt 8 次采样；不开 SC 时采用 PPO clipping。<code class="docutils literal notranslate"><span class="pre">--calculate-per-token-loss</span></code> 将聚合方式改成“总 loss / 总 response token 数”，与“先求每个回答均值，再平均回答”并不相同。</p>
+</section>
+<section id="tis">
+<h2>TIS<a class="headerlink" href="#tis" title="Link to this heading">#</a></h2>
+<p>原始工作：<a class="reference external" href="https://openreview.net/forum?id=8MHqvb4lK9">On the Rollout-Training Mismatch in Modern RL Systems</a> 和<a class="reference external" href="https://fengyao.notion.site/off-policy-rl">作者技术文章</a>。下面的代数也对应仓库内置 callback。</p>
+<p>固定 prefix，只要 <span class="math notranslate nohighlight">\(p_0(a)f(a)\ne0\)</span> 的位置都有 <span class="math notranslate nohighlight">\(q(a)&gt;0\)</span>，就有换测度恒等式：</p>
+<div class="math notranslate nohighlight">
+\[
+\mathbb E_{p_0}[f(a)]
+=\sum_a q(a)\frac{p_0(a)}{q(a)}f(a)
+=\mathbb E_q[\rho_a f(a)],\quad
+\rho_a=\exp(\log p_0(a)-\log q(a)).
+\]</div>
+<p>PPO 的更新比值 <span class="math notranslate nohighlight">\(r=p_\theta/p_0\)</span> 与行为修正比值 <span class="math notranslate nohighlight">\(\rho=p_0/q\)</span> 负责不同问题。未裁剪时两者乘积为 <span class="math notranslate nohighlight">\(p_\theta/q\)</span>。slime 将 PPO loss 乘上停止梯度的 <span class="math notranslate nohighlight">\(w(\rho)=\operatorname{clip}(\rho,L,U)\)</span>，向导取 <span class="math notranslate nohighlight">\(L=0,U=2\)</span>。</p>
+<p>减去精确表达式，就能直接得到偏差：</p>
+<div class="math notranslate nohighlight">
+\[
+\mathbb E_q[w(\rho)f]-\mathbb E_{p_0}[f]
+=\mathbb E_q[(w(\rho)-\rho)f].
+\]</div>
+<p><span class="math notranslate nohighlight">\(L=0\)</span> 时，偏差为 <span class="math notranslate nohighlight">\(-\mathbb E_q[(\rho-U)f\mathbf1_{\rho&gt;U}]\)</span>。限制权重能抑制离群值，却不能保持无偏；<span class="math notranslate nohighlight">\(L&gt;0\)</span> 时还会抬高小权重。</p>
+<p>这个恒等式固定了 prefix，没有修正 prefix 本身的分布。完整序列的换测度需要 <span class="math notranslate nohighlight">\(p_0(y)/q(y)=\prod_t\rho_t\)</span>，方差可能很大。逐 token TIS 是实用 surrogate，不能宣称等价于完整乘积。</p>
+<p>实现：<a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/backends/megatron_utils/loss.py"><code class="docutils literal notranslate"><span class="pre">vanilla_tis_function</span></code></a>、<a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/utils/ppo_utils.py"><code class="docutils literal notranslate"><span class="pre">importance_weights</span></code></a>。REINFORCE（包括 SC）使用停止梯度的<strong>当前</strong>训练策略作为修正分子，而不是 <span class="math notranslate nohighlight">\(p_0\)</span>。</p>
+</section>
+<section id="ice-pop">
+<h2>ICE-POP<a class="headerlink" href="#ice-pop" title="Link to this heading">#</a></h2>
+<p>原论文：<a class="reference external" href="https://arxiv.org/abs/2510.18855">Every Step Evolves: Scaling Reinforcement Learning for Trillion-Scale Thinking Model</a>。</p>
+<p>向导选择 slime 的 <code class="docutils literal notranslate"><span class="pre">icepop_function</span></code>，其行为修正规则是：</p>
+<div class="math notranslate nohighlight">
+\[
+w_{\rm ice}(\rho)=\rho\mathbf1_{L\le\rho\le U},\qquad L=0.5,\quad U=2.
+\]</div>
+<p>区间内保留重要性权重，区间外贡献为零。因此相对于同一个固定 prefix 的目标：</p>
+<div class="math notranslate nohighlight">
+\[
+\mathbb E_q[w_{\rm ice}(\rho)f]-\mathbb E_{p_0}[f]
+=-\mathbb E_q[\rho f\mathbf1_{\rho&lt;L\lor\rho&gt;U}].
+\]</div>
+<p>例如 <span class="math notranslate nohighlight">\(\rho=4\)</span> 时，向导中的 TIS 给权重 2，IcePop 给权重 0。两者不是同一种估计器。Callback 将权重置零，<strong>不会</strong>按保留下来的 token 数重新归一化 loss；PPO clipping 仍可以独立作用于 <span class="math notranslate nohighlight">\(r\)</span>。论文完整训练流程还有其他部分，启用这个 callback 并不等于复现整篇论文。</p>
+<p>导出参数为 <code class="docutils literal notranslate"><span class="pre">--use-tis</span> <span class="pre">--custom-tis-function-path</span> <span class="pre">slime.backends.megatron_utils.loss.icepop_function</span> <span class="pre">--tis-clip-low</span> <span class="pre">0.5</span> <span class="pre">--tis-clip</span> <span class="pre">2</span></code>。观察 <code class="docutils literal notranslate"><span class="pre">tis</span></code>、<code class="docutils literal notranslate"><span class="pre">tis_clipfrac</span></code>、reward 以及 mask 后是否还有足够的学习信号。</p>
+</section>
+<section id="r3">
+<h2>R3<a class="headerlink" href="#r3" title="Link to this heading">#</a></h2>
+<p>原论文：<a class="reference external" href="https://arxiv.org/abs/2510.11370">Stabilizing MoE Reinforcement Learning by Aligning Training and Inference Routers</a>。</p>
+<p>把 MoE 层写为 <span class="math notranslate nohighlight">\(F(x)=\sum_{i\in I(x)}g_i(x)E_i(x)\)</span>，其中 <span class="math notranslate nohighlight">\(I=\operatorname{TopK}(u(x))\)</span> 是离散 expert 集合。Top-k 边界附近，微小扰动也可能换掉一个专家。加减同一个中间项，可将输出差异分解为：</p>
+<div class="math notranslate nohighlight">
+\[
+F_{I_q}(x_q)-F_{I_p}(x_p)
+=\underbrace{F_{I_q}(x_q)-F_{I_q}(x_p)}_{\text{相同路由下的数值与输入差异}}
++\underbrace{F_{I_q}(x_p)-F_{I_p}(x_p)}_{\text{专家选择差异}}.
+\]</div>
+<p>训练时固定为 rollout 记录的 <span class="math notranslate nohighlight">\(I_q\)</span>，就能在<strong>此层、此比较中</strong>消去第二项，但第一项仍然存在。以 softmax gate 为例：</p>
+<div class="math notranslate nohighlight">
+\[
+g_i=\frac{\mathbf1_{i\in I_q}\exp u_i}{\sum_{j\in I_q}\exp u_j},\qquad
+\frac{\partial g_i}{\partial u_j}=g_i(\mathbf1_{i=j}-g_j),\quad i,j\in I_q.
+\]</div>
+<p>重放的是专家身份，不是 detach 的专家输出；梯度仍可流过选中的 gate 和 expert。GLM 使用 sigmoid 路由及自己的归一化与缩放，以上 softmax 只是示例，实际必须保留模型的 gate 规则。</p>
+<p>向导添加 <code class="docutils literal notranslate"><span class="pre">--use-rollout-routing-replay</span></code>。slime 管理的 SGLang 自动返回路由；external 引擎需自行启用 <code class="docutils literal notranslate"><span class="pre">--enable-return-routed-experts</span></code>。存储随 token 数 × MoE 层数 × 选中专家数增长。R3 可独立组合 TIS/SC，对 dense 模型没有意义。实现见 <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/backends/sglang_utils/sglang_engine.py"><code class="docutils literal notranslate"><span class="pre">sglang_engine.py</span></code></a> 和 <a class="reference external" href="https://github.com/THUDM/slime/tree/main/slime/backends/megatron_utils"><code class="docutils literal notranslate"><span class="pre">megatron_utils</span></code></a> 的 replay 逻辑。</p>
+</section>
+<section id="sc">
+<h2>SC<a class="headerlink" href="#sc" title="Link to this heading">#</a></h2>
+<p>原论文：<a class="reference external" href="https://arxiv.org/abs/2609.20807">Score Centering Stabilizes Off-policy Reinforcement Learning</a>。以下按照 slime 的 <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/utils/score_centering.py"><code class="docutils literal notranslate"><span class="pre">score_centering_correction</span></code></a> 和 loss 实现展开推导。</p>
+<section id="score">
+<h3>从非零均值到中心化 score<a class="headerlink" href="#score" title="Link to this heading">#</a></h3>
+<p>固定 prefix，令 <span class="math notranslate nohighlight">\(\mu=\sum_a q_as_a\)</span>。即使两侧 checkpoint 相同，一般仍有 <span class="math notranslate nohighlight">\(\mu\ne0\)</span>。对停止梯度的 advantage <span class="math notranslate nohighlight">\(A\)</span>，应用协方差分解：</p>
+<div class="math notranslate nohighlight">
+\[
+\mathbb E_q[As]=\mathbb E_q[A]\mu+\operatorname{Cov}_q(A,s).
+\]</div>
+<p>令 <span class="math notranslate nohighlight">\(\tilde s_a=s_a-\mu\)</span>，则 <span class="math notranslate nohighlight">\(\mathbb E_q[\tilde s]=0\)</span>，因此：</p>
+<div class="math notranslate nohighlight">
+\[
+\mathbb E_q[A\tilde s]=\operatorname{Cov}_q(A,s).
+\]</div>
+<p>Prefix 条件下的均值项被消去了。但协方差仍在 <span class="math notranslate nohighlight">\(q\)</span> 下计算，这并不证明得到了 <span class="math notranslate nohighlight">\(p_\theta\)</span> 下的无偏梯度。对完整回答做组内 reward centering，也不保证每个 prefix 上都有 <span class="math notranslate nohighlight">\(\mathbb E[A\mid h]=0\)</span>。</p>
+</section>
+<section id="id3">
+<h3>与重要性修正组合<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
+<p>令 <span class="math notranslate nohighlight">\(w_a=f(p_a/q_a)\)</span>，<span class="math notranslate nohighlight">\(f\)</span> 可以是原始比值、TIS、mask 或常数 1。定义 <span class="math notranslate nohighlight">\(\mu_w=\sum_aq_aw_as_a\)</span>，对<strong>加权 score</strong>进行中心化：</p>
+<div class="math notranslate nohighlight">
+\[
+\tilde s_a^w=w_as_a-\mu_w,\qquad \mathbb E_q[\tilde s^w]=0.
+\]</div>
+<p>实现这个局部梯度方向的一种最小化 loss 是：</p>
+<div class="math notranslate nohighlight">
+\[
+\ell=-\operatorname{sg}(A)\left[
+\operatorname{sg}(w_a)\log p_a-
+\sum_v\operatorname{sg}(q_vw_v)\log p_v\right].
+\]</div>
+<p>只对 <span class="math notranslate nohighlight">\(\log p\)</span> 求导，得到 <span class="math notranslate nohighlight">\(-\nabla\ell=A(w_as_a-\mu_w)\)</span>。如果让梯度流过 <span class="math notranslate nohighlight">\(w\)</span>，就会出现额外项。完整 support 且 <span class="math notranslate nohighlight">\(w=p/q\)</span> 时，<span class="math notranslate nohighlight">\(\mu_w=\sum p s=0\)</span>；经过裁剪或 mask 后通常不再为零。</p>
+</section>
+<section id="top-k">
+<h3>Top-k 如何避免保存整个词表<a class="headerlink" href="#top-k" title="Link to this heading">#</a></h3>
+<p>slime 保存 sampler 的 head <span class="math notranslate nohighlight">\(H\)</span>，向导默认 128 个 token。这些概率保留<strong>完整词表上的质量</strong>，不按 head 重新归一化。定义：</p>
+<div class="math notranslate nohighlight">
+\[\begin{split}
+P_H=\sum_{v\in H}p_v,\quad Q_H=\sum_{v\in H}q_v,\quad
+\alpha=\frac{1-Q_H}{1-P_H},\quad
+\hat q_v=\begin{cases}q_v&amp;v\in H\\\alpha p_v&amp;v\notin H.\end{cases}
+\end{split}\]</div>
+<p>该近似的概率和为一。利用 <span class="math notranslate nohighlight">\(\sum_vp_vs_v=0\)</span>，把 tail 项替换掉：</p>
+<div class="math notranslate nohighlight">
+\[
+\mu_{\hat q}=\sum_Hq_vs_v+\alpha\sum_{v\notin H}p_vs_v
+=\sum_H(q_v-\alpha p_v)s_v.
+\]</div>
+<p>Tail 中 <span class="math notranslate nohighlight">\(p_v/\hat q_v=1/\alpha\)</span>，因此加权形式为：</p>
+<div class="math notranslate nohighlight">
+\[
+\mu_{\hat q,w}=\sum_{v\in H}
+[q_vf(p_v/q_v)-\alpha f(1/\alpha)p_v]s_v.
+\]</div>
+<p>这正是代码中的 head residual。完整分布的中心化是精确的，使用重建 tail 时则是近似；很小的 tail mass 还需要数值保护。可以用一个 logit 小例子验证：<span class="math notranslate nohighlight">\(p=(0.6,0.4)\)</span>、<span class="math notranslate nohighlight">\(q=(0.5,0.5)\)</span>、<span class="math notranslate nohighlight">\(s_a=e_a-p\)</span>，未中心化的均值为 <span class="math notranslate nohighlight">\(q-p=(-0.1,0.1)\)</span>；减去它之后 score 的期望为零。</p>
+</section>
+<section id="id4">
+<h3>必须匹配真实采样分布<a class="headerlink" href="#id4" title="Link to this heading">#</a></h3>
+<p>向导固定 temperature=1、top-p=1、top-k=-1，并使用 <code class="docutils literal notranslate"><span class="pre">--pg-loss-type</span> <span class="pre">reinforce</span></code>、<code class="docutils literal notranslate"><span class="pre">--disable-grpo-std-normalization</span></code>、<code class="docutils literal notranslate"><span class="pre">--calculate-per-token-loss</span></code>。不能把 SC 直接塞进 GSPO / CISPO / PPO clipping；此路径不支持 streaming、约束解码、采样惩罚和逐请求修改 temperature。</p>
+<p>slime 还支持记录 top-p support <span class="math notranslate nohighlight">\(S\)</span>：将训练概率也归一化到 <span class="math notranslate nohighlight">\(S\)</span>，使用所有记录的 <span class="math notranslate nohighlight">\(q_v\)</span>。此时 <span class="math notranslate nohighlight">\(\mu_w=\sum_{v\in S}q_vw_v\nabla\log p_v^S\)</span> 无需 tail 近似。这只相对于记录的 support 精确，不等同于未截断策略；数据量可能远大于 top-128。详见<a class="reference internal" href="../get_started/usage.html#score-centering"><span class="std std-ref">采样与兼容条件</span></a>。</p>
+</section>
+</section>
+<section id="id5">
+<h2>如何验证选择<a class="headerlink" href="#id5" title="Link to this heading">#</a></h2>
+<p>固定 prompt 数据、seed、回复长度预算和评估集。从短基线开始，每次改一个机制，同时记录 reward、<code class="docutils literal notranslate"><span class="pre">train_rollout_logprob_abs_diff</span></code>、适用时的 <code class="docutils literal notranslate"><span class="pre">tis_clipfrac</span></code>，以及异步的 <code class="docutils literal notranslate"><span class="pre">staleness/mean</span></code>、<code class="docutils literal notranslate"><span class="pre">staleness/max</span></code>。差异更小不自动意味着学得更好。保存固定 batch 做 <a class="reference internal" href="../developer_guide/debug.html"><span class="std std-doc">debug replay</span></a>，将优化器行为与采样变化分开定位。</p>
+</section>
+</section>
+
+
+                </article>
+              
+
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="../training/index.html"
+       title="上一页">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">上一页</p>
+        <p class="prev-next-title">训练与算法</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="parallelism-memory.html"
+       title="下一页">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">下一页</p>
+        <p class="prev-next-title">卡数、显存与并行方式</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item"><div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> 目录
+  </div>
+  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">统一符号</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#grpo">GRPO</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#tis">TIS</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#ice-pop">ICE-POP</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#r3">R3</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sc">SC</a><ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#score">从非零均值到中心化 score</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">与重要性修正组合</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#top-k">Top-k 如何避免保存整个词表</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">必须匹配真实采样分布</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">如何验证选择</a></li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+<div class="bd-footer-content__inner container">
+  
+  <div class="footer-item">
+    
+<p class="component-author">
+作者： slime Team
+</p>
+
+  </div>
+  
+  <div class="footer-item">
+    
+
+  <p class="copyright">
+    
+      © Copyright 2025-2026, slime.
+      <br/>
+    
+  </p>
+
+  </div>
+  
+  <div class="footer-item">
+    <p class="last-updated">
+  最后更新于 2026 年 10 月 09 日.
+  <br/>
+</p>
+  </div>
+  
+  <div class="footer-item">
+    
+  </div>
+  
+</div>
+          </footer>
+        
+
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9"></script>
+<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9"></script>
+
+  <footer class="bd-footer">
+  </footer>
+  </body>
+</html>

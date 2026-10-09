@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Quick Start &#8212; slime</title>
+    <title>Environment setup &#8212; slime</title>
   
   
   
@@ -33,7 +33,7 @@
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=4418a689" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=ad20845f" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=5f5cb4b6" />
   
   <!-- So that users can add custom icons -->
   <script defer src="../_static/scripts/fontawesome.js?digest=90905a2f556bf617f1a9"></script>
@@ -42,20 +42,20 @@
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
     <script src="../_static/documentation_options.js?v=183391d5"></script>
-    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../_static/copybutton.js?v=ccdb6887"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?v=fab101a9"></script>
     <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'get_started/quick_start';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
-    <script data-layout="root" src="../_static/js/lang-toggle.js?v=082004b6"></script>
+    <script data-layout="root" src="../_static/js/lang-toggle.js?v=9e8f3a3a"></script>
     <link rel="icon" href="../_static/logo.ico"/>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Usage Guide" href="usage.html" />
-    <link rel="prev" title="slime Documentation" href="../index.html" />
+    <link rel="prev" title="Tutorial: build and understand an RL experiment" href="experiment-guide.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.4.0" />
@@ -202,80 +202,26 @@
 </button></div>
         <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
     <div class="bd-toc-item navbar-nav active">
-        <p aria-level="2" class="caption" role="heading"><span class="caption-text">Get Started</span></p>
-<ul class="current nav bd-sidenav">
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">Quick Start</a></li>
-<li class="toctree-l1"><a class="reference internal" href="usage.html">Usage Guide</a></li>
-<li class="toctree-l1"><a class="reference internal" href="customization.html">Customization Guide</a></li>
-<li class="toctree-l1"><a class="reference internal" href="agent.html">Agentic RL Training Roadmap</a></li>
-<li class="toctree-l1"><a class="reference internal" href="qa.html">FAQ</a></li>
+        <ul class="current nav bd-sidenav">
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="../library.html">Documentation library</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2 current active has-children"><a class="reference internal" href="index.html">Start here</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="experiment-guide.html">Tutorial: build and understand an RL experiment</a></li>
+<li class="toctree-l3 current active"><a class="current reference internal" href="#">Environment setup</a></li>
+<li class="toctree-l3"><a class="reference internal" href="usage.html">Usage Guide</a></li>
+<li class="toctree-l3"><a class="reference internal" href="customization.html">Customization Guide</a></li>
+<li class="toctree-l3"><a class="reference internal" href="agent.html">Agentic RL Training Roadmap</a></li>
+<li class="toctree-l3"><a class="reference internal" href="qa.html">FAQ</a></li>
 </ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Dense</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4B.html">Qwen3-4B with 8xH100</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm4-9B.html">GLM4-9B with 8xH100</a></li>
+</details></li>
+<li class="toctree-l2"><a class="reference internal" href="../training/index.html">Training &amp; algorithms</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../rollout/index.html">Rollout &amp; scheduling</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../operations/index.html">Debugging, profiling &amp; recovery</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../examples/index.html">Task tutorials</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../developer_guide/index.html">Development &amp; CI</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../platform_support/index.html">Hardware platforms</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../blogs/index.html">Design notes &amp; releases</a></li>
 </ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">MoE</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-30B-A3B.html">GLM-4.7-Flash with 8×H100</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-30B-A3B.html">Qwen3-30B-A3B with 8xH100</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-next-80B-A3B.html">Qwen3-Next-80B-A3B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm5.2-744B-A40B.html">GLM-5.2 744B-A40B with 256xH100</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-355B-A32B.html">GLM-4.7 with 64xH100</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/deepseek-r1.html">DeepSeek R1 with 128xH100</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Advanced Features</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../advanced/on-policy-distillation.html">On-Policy Distillation</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/speculative-decoding.html">Speculative Decoding</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/low-precision.html">Low Precision Training and Rollout</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/reproducibility.html">Reproducibility</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/fault-tolerance.html">Fault Tolerance</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/straw.html">Persistent rollout with straw</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/observability.html">Observability</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/pd-disaggregation.html">PD Disaggregation</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/external-rollout-engines.html">External Rollout Engines Roadmap</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/delta-weight-sync.html">Delta Weight Sync</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/sglang-config.html">SGLang Config: Advanced Engine Deployment</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/megatron-config.html">Megatron Config: Role-Based Training Overrides</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/arch-support-beyond-megatron.html">Supporting Model Architectures Beyond Megatron-LM</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Other Usage</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4b-base-openhermes.html">SFT Qwen3-4B-Base</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/search-r1/README.html">Search-R1 lite</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/fully_async/README.html">Fully-Async Rollout Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/coding_agent_rl/README.html">Coding-Agent RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/delta_weight_sync/README.html">Delta Weight Sync</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/eval_multi_task/README.html">Multi-Task Evaluation Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/geo3k_vlm/README.html">VLM Single-Turn RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/geo3k_vlm_multi_turn/README.html">VLM Multi-Turn (geo3k dataset)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/on_policy_distillation/README.html">On-Policy Distillation Example</a></li>
-
-
-
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/strands_sglang/README.html">slime x Strands-SGLang</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/tau-bench/README.html">Tau bench</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/train_infer_mismatch_helper/README.html">Rollout Correction Methods</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Developer Guide</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/ci.html">CI (Continuous Integration)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/debug.html">Debugging</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/trace.html">Trace Viewer</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/profiling.html">Profiling</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/install_flashqla.html">Installing FlashQLA</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Hardware Platforms</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../platform_support/amd_tutorial.html">AMD ROCm</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Blogs</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../blogs/release_v0.1.0.html">v0.1.0: Redefining High-Performance RL Training Frameworks</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../blogs/introducing_slime.html">slime: An SGLang-Native Post-Training Framework for RL Scaling</a></li>
+</details></li>
 </ul>
 
     </div>
@@ -499,7 +445,7 @@
               
 
 <div id="jb-print-docs-body" class="onlyprint">
-    <h1>Quick Start</h1>
+    <h1>Environment setup</h1>
     <!-- Table of contents -->
     <div id="print-main-content">
         <div id="jb-print-toc">
@@ -515,41 +461,7 @@
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#install-slime">Install slime</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#model-and-dataset-download">Model and Dataset Download</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#model-weight-conversion">Model Weight Conversion</a><ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#convert-from-hugging-face-format-to-megatron-format">Convert from Hugging Face Format to Megatron Format</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#convert-from-megatron-format-to-hugging-face-format">Convert from Megatron Format to Hugging Face Format</a></li>
-</ul>
-</li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#training-script-and-parameter-overview">Training Script and Parameter Overview</a><ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#model-args-model-configuration-parameters">MODEL_ARGS: Model Configuration Parameters</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#ckpt-args-checkpoint-and-path-parameters">CKPT_ARGS: Checkpoint and Path Parameters</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-args-data-generation-rollout-parameters">ROLLOUT_ARGS: Data Generation (Rollout) Parameters</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#eval-args-evaluation-parameters">EVAL_ARGS: Evaluation Parameters</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#perf-args-performance-and-parallelism-parameters">PERF_ARGS: Performance and Parallelism Parameters</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#grpo-args-grpo-algorithm-parameters">GRPO_ARGS: GRPO Algorithm Parameters</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#optimizer-args-optimizer-parameters">OPTIMIZER_ARGS: Optimizer Parameters</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-args-sglang-service-parameters">SGLANG_ARGS: SGLang Service Parameters</a></li>
-</ul>
-</li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#feature-introduction">Feature Introduction</a><ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#colocated-actor-and-rollout">Colocated Actor and Rollout</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dynamic-sampling">Dynamic Sampling</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#partial-rollout">Partial Rollout</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#bf16-training-fp8-inference">bf16 Training fp8 Inference</a></li>
-</ul>
-</li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#multiturn-adaptation">Multiturn Adaptation</a><ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#adaptation-strategy-summary">Adaptation Strategy Summary</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#data-preparation-and-mapping">Data Preparation and Mapping</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#step-one-construct-metadata-field-in-dataset">Step One: Construct <code class="docutils literal notranslate"><span class="pre">metadata</span></code> Field in Dataset</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#step-two-specify-mapping-in-training-script">Step Two: Specify Mapping in Training Script</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#writing-custom-generation-function">Writing Custom Generation Function</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#writing-custom-reward-function">Writing Custom Reward Function</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#configure-in-training-script">Configure in Training Script</a></li>
-</ul>
-</li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#multi-node-training-for-large-scale-moe-models">Multi-Node Training for Large-Scale MOE Models</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#mount-the-experiment-paths">Mount the experiment paths</a></li>
 </ul>
             </nav>
         </div>
@@ -561,9 +473,9 @@
 <div id="searchbox"></div>
                 <article class="bd-article">
                   
-  <section class="tex2jax_ignore mathjax_ignore" id="quick-start">
-<h1>Quick Start<a class="headerlink" href="#quick-start" title="Link to this heading">#</a></h1>
-<p>This document will guide you through setting up the environment and getting started with slime within one hour, covering environment configuration, data preparation, training startup, and key code analysis and modifications.</p>
+  <section class="tex2jax_ignore mathjax_ignore" id="environment-setup">
+<h1>Environment setup<a class="headerlink" href="#environment-setup" title="Link to this heading">#</a></h1>
+<p>Start in the <a class="reference internal" href="../index.html#lab"><span class="std std-ref">interactive Quick Start</span></a>. This page prepares the environment used by every generated recipe; the <a class="reference internal" href="experiment-guide.html"><span class="std std-doc">tutorial</span></a> explains the full RL workflow.</p>
 <section id="basic-environment-setup">
 <h2>Basic Environment Setup<a class="headerlink" href="#basic-environment-setup" title="Link to this heading">#</a></h2>
 <p>Use the provided Docker images to get a compatible SGLang, Megatron, and patch stack.</p>
@@ -616,546 +528,10 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 </div>
 </section>
 </section>
-<section id="model-and-dataset-download">
-<h2>Model and Dataset Download<a class="headerlink" href="#model-and-dataset-download" title="Link to this heading">#</a></h2>
-<p>You can download required models and datasets from platforms like Hugging Face, ModelScope, etc. Here are the commands to download example resources using <code class="docutils literal notranslate"><span class="pre">huggingface_hub</span></code>:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Download model weights (GLM-Z1-9B)</span>
-hf<span class="w"> </span>download<span class="w"> </span>zai-org/GLM-Z1-9B-0414<span class="w"> </span>--local-dir<span class="w"> </span>/root/GLM-Z1-9B-0414
-
-<span class="c1"># Download training dataset (dapo-math-17k)</span>
-hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class="w"> </span>dataset<span class="w"> </span>zhuzilin/dapo-math-17k<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--local-dir<span class="w"> </span>/root/dapo-math-17k
-
-<span class="c1"># Download evaluation dataset (aime-2024)</span>
-hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class="w"> </span>dataset<span class="w"> </span>zhuzilin/aime-2024<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--local-dir<span class="w"> </span>/root/aime-2024
-</pre></div>
-</div>
-</section>
-<section id="model-weight-conversion">
-<h2>Model Weight Conversion<a class="headerlink" href="#model-weight-conversion" title="Link to this heading">#</a></h2>
-<section id="convert-from-hugging-face-format-to-megatron-format">
-<h3>Convert from Hugging Face Format to Megatron Format<a class="headerlink" href="#convert-from-hugging-face-format-to-megatron-format" title="Link to this heading">#</a></h3>
-<p>When using Megatron as the training backend, you need to first convert Hugging Face format model weights to Megatron <code class="docutils literal notranslate"><span class="pre">torch_dist</span></code> format.</p>
-<p>First, load the configuration file of the target model. The <code class="docutils literal notranslate"><span class="pre">scripts/models</span></code> directory contains configuration files for supported models. You need to <code class="docutils literal notranslate"><span class="pre">source</span></code> the corresponding model script to load the configuration parameters into the current environment. Here we use GLM4-9B model as an example, and it’s similar for Qwen3-4B, Qwen3.5, Qwen3.6, GLM-4.7-Flash, Qwen3-30B-A3B, etc.</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
-<span class="nb">source</span><span class="w"> </span>scripts/models/glm4-9B.sh
-</pre></div>
-</div>
-<p>Next, run the conversion script. Please note the following parameters:</p>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code>: Specify the path of the downloaded Hugging Face model weights.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">--save</span></code>: Specify the save path for the converted <code class="docutils literal notranslate"><span class="pre">torch_dist</span></code> format weights.</p></li>
-</ul>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">PYTHONPATH</span><span class="o">=</span>/root/Megatron-LM<span class="w"> </span>python<span class="w"> </span>tools/convert_hf_to_torch_dist.py<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span><span class="si">${</span><span class="nv">MODEL_ARGS</span><span class="p">[@]</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--hf-checkpoint<span class="w"> </span>/root/GLM-Z1-9B-0414<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--save<span class="w"> </span>/root/GLM-Z1-9B-0414_torch_dist
-</pre></div>
-</div>
-<p>For larger models, you can use <code class="docutils literal notranslate"><span class="pre">torchrun</span></code> to start the conversion script to convert with multi-gpus or even multi-nodes.
-Note: When converting the kimi-k2 model weights, you need to open config.json in the model path and change “model_type”: “kimi_k2” to “model_type”: “deepseek_v3”.</p>
-</section>
-<section id="convert-from-megatron-format-to-hugging-face-format">
-<h3>Convert from Megatron Format to Hugging Face Format<a class="headerlink" href="#convert-from-megatron-format-to-hugging-face-format" title="Link to this heading">#</a></h3>
-<p>You can use the following script to convert the saved Megatron checkpoints back to Hugging Face format:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">PYTHONPATH</span><span class="o">=</span>/root/Megatron-LM<span class="w"> </span>python<span class="w"> </span>tools/convert_torch_dist_to_hf.py<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--input-dir<span class="w"> </span>/path/to/torch_dist_ckpt/iter_xxx/<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--output-dir<span class="w"> </span>/root/GLM-Z1-9B-0414-iter_xxx<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--origin-hf-dir<span class="w"> </span>/root/GLM-Z1-9B-0414
-</pre></div>
-</div>
-<p>Note that as Megatron will do padding to embedding for better performance, it may happen that the converted embedding is not correct. In that case, please manually set <code class="docutils literal notranslate"><span class="pre">--vocab-size</span></code> during convertion.</p>
-</section>
-</section>
-<section id="training-script-and-parameter-overview">
-<h2>Training Script and Parameter Overview<a class="headerlink" href="#training-script-and-parameter-overview" title="Link to this heading">#</a></h2>
-<p>After completing the above preparation work, you can run the training script.</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
-bash<span class="w"> </span>scripts/run-glm4-9B.sh
-</pre></div>
-</div>
-<p>We still use the <a class="reference external" href="http://run-glm4-9B.sh">run-glm4-9B.sh</a> script as an example to briefly analyze the main parameters.</p>
-<section id="model-args-model-configuration-parameters">
-<h3>MODEL_ARGS: Model Configuration Parameters<a class="headerlink" href="#model-args-model-configuration-parameters" title="Link to this heading">#</a></h3>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">SCRIPT_DIR</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span><span class="nb">cd</span><span class="w"> </span>--<span class="w"> </span><span class="s2">"</span><span class="k">$(</span>dirname<span class="w"> </span>--<span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">BASH_SOURCE</span><span class="p">[0]</span><span class="si">}</span><span class="s2">"</span><span class="k">)</span><span class="s2">"</span><span class="w"> </span><span class="p">&amp;</span>&gt;/dev/null<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">pwd</span><span class="k">)</span><span class="s2">"</span>
-<span class="nb">source</span><span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">SCRIPT_DIR</span><span class="si">}</span><span class="s2">/models/glm4-9B.sh"</span>
-</pre></div>
-</div>
-<p>This part loads model configuration from the <code class="docutils literal notranslate"><span class="pre">scripts/models/glm4-9B.sh</span></code> file through the <code class="docutils literal notranslate"><span class="pre">source</span></code> command. These configurations are all hyperparameters required by Megatron. Since Megatron cannot directly read model configuration from checkpoints, it needs to be manually specified. We provide configuration examples for some commonly used models in the <code class="docutils literal notranslate"><span class="pre">scripts/models/</span></code> directory.</p>
-<blockquote>
-<div><p>⚠️ <strong>Note</strong>:
-Please make sure to check whether the parameters in the model configuration file (such as <code class="docutils literal notranslate"><span class="pre">--rotary-base</span></code>) completely match the model you are currently using. Different versions of the same model structure may use different configuration values. If you need to modify, you can directly override after <code class="docutils literal notranslate"><span class="pre">source</span></code>, for example:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">source</span><span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">SCRIPT_DIR</span><span class="si">}</span><span class="s2">/models/glm4-9B.sh"</span>
-<span class="nv">MODEL_ARGS</span><span class="o">+=(</span>--rotary-base<span class="w"> </span><span class="m">10000</span><span class="o">)</span>
-</pre></div>
-</div>
-</div></blockquote>
-</section>
-<section id="ckpt-args-checkpoint-and-path-parameters">
-<h3>CKPT_ARGS: Checkpoint and Path Parameters<a class="headerlink" href="#ckpt-args-checkpoint-and-path-parameters" title="Link to this heading">#</a></h3>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">CKPT_ARGS</span><span class="o">=(</span>
-<span class="w">   </span><span class="c1"># To load tokenizer and other information, won't actually use model weight parameters from hf path</span>
-<span class="w">   </span>--hf-checkpoint<span class="w"> </span>/root/GLM-Z1-9B-0414
-<span class="w">   </span><span class="c1"># Reference Model's Megatron format checkpoint</span>
-<span class="w">   </span>--ref-load<span class="w"> </span>/root/GLM-Z1-9B-0414_torch_dist
-<span class="w">   </span><span class="c1"># Actor model loading path. Should typically match --save for checkpoint resumption</span>
-<span class="w">   </span><span class="c1"># If empty or doesn't contain a valid checkpoint, loads from --ref-load instead</span>
-<span class="w">   </span>--load<span class="w"> </span>/root/GLM-Z1-9B-0414_slime/
-<span class="w">   </span><span class="c1"># Model save path during training</span>
-<span class="w">   </span>--save<span class="w"> </span>/root/GLM-Z1-9B-0414_slime/
-<span class="w">   </span><span class="c1"># Model save interval (steps)</span>
-<span class="w">   </span>--save-interval<span class="w"> </span><span class="m">20</span>
-<span class="o">)</span>
-</pre></div>
-</div>
-</section>
-<section id="rollout-args-data-generation-rollout-parameters">
-<h3>ROLLOUT_ARGS: Data Generation (Rollout) Parameters<a class="headerlink" href="#rollout-args-data-generation-rollout-parameters" title="Link to this heading">#</a></h3>
-<p>The entire training process can be viewed as a closed loop of <strong>“Data Sampling → Weight Update”</strong>.</p>
-<p><strong>Phase One: Data Sampling (Rollout)</strong></p>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">--rollout-batch-size</span></code>: Defines the <strong>number of Prompts</strong> for each round of sampling</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">--n-samples-per-prompt</span></code>: Defines the <strong>number of responses</strong> generated for each Prompt (used for GRPO-like algorithms)</p></li>
-</ul>
-<blockquote>
-<div><p>The product of the two determines the <strong>total number of samples generated in a single round of sampling</strong>.</p>
-</div></blockquote>
-<p><strong>Phase Two: Model Training (Training)</strong></p>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">--global-batch-size</span></code>: Defines the <strong>sample size required to execute one parameter update (optimizer.step)</strong></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">--num-steps-per-rollout</span></code>: Defines <strong>how many parameter updates to execute</strong> using the current sampled data (we default to 1, using on-policy training)</p></li>
-</ul>
-<blockquote>
-<div><p>The product of the two determines the <strong>total number of samples consumed in a single round of training</strong>.</p>
-</div></blockquote>
-<blockquote>
-<div><p>⚠️ The <strong>parameter update</strong> here refers to the optimizer.step() in the training phase, which is different from the weight synchronization (Weight Sync) initiated by the training engine to the inference engine.</p>
-</div></blockquote>
-<p>In this process, the “output” and “consumption” of each round must be equal, following this constraint:
-<strong><code class="docutils literal notranslate"><span class="pre">(rollout-batch-size</span> <span class="pre">×</span> <span class="pre">n-samples-per-prompt)</span> <span class="pre">=</span> <span class="pre">(global-batch-size</span> <span class="pre">×</span> <span class="pre">num-steps-per-rollout)</span></code></strong></p>
-<ul class="simple">
-<li><p>In slime, if <code class="docutils literal notranslate"><span class="pre">--num-steps-per-rollout</span></code> is set, <code class="docutils literal notranslate"><span class="pre">--global-batch-size</span></code> will be automatically set if not set, and if set, it will be validated using the above formula.</p></li>
-</ul>
-<p><strong>Training Process Count Control</strong></p>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">--num-rollout</span></code>: Controls the <strong>total number of execution rounds</strong> of the entire <strong>“sampling→training”</strong> loop.</p></li>
-</ul>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">ROLLOUT_ARGS</span><span class="o">=(</span>
-<span class="w">   </span><span class="c1"># Prompt dataset, JSONL format</span>
-<span class="w">   </span>--prompt-data<span class="w"> </span>/root/dapo-math-17k/dapo-math-17k.jsonl
-<span class="w">   </span>--input-key<span class="w"> </span>prompt
-<span class="w">   </span>--label-key<span class="w"> </span>label
-<span class="w">   </span><span class="c1"># If the `input_key` of Prompt is in OpenAI message format, apply Chat Template</span>
-<span class="w">   </span>--apply-chat-template
-<span class="w">   </span><span class="c1"># Whether to shuffle data in Rollout phase</span>
-<span class="w">   </span>--rollout-shuffle
-
-<span class="w">   </span><span class="c1"># Reward Model type. slime has built-in multiple types, also supports custom through --custom-rm-path</span>
-<span class="w">   </span>--rm-type<span class="w"> </span>deepscaler
-
-<span class="w">   </span><span class="c1"># These five parameters control the relationship between rollout and train</span>
-<span class="w">   </span>--num-rollout<span class="w"> </span><span class="m">3000</span>
-<span class="w">   </span>--rollout-batch-size<span class="w"> </span><span class="m">16</span>
-<span class="w">   </span>--n-samples-per-prompt<span class="w"> </span><span class="m">8</span>
-<span class="w">   </span>--num-steps-per-rollout<span class="w"> </span><span class="m">1</span>
-<span class="w">   </span>--global-batch-size<span class="w"> </span><span class="m">128</span>
-
-<span class="w">   </span><span class="c1"># Rollout sampling parameters</span>
-<span class="w">   </span>--rollout-max-response-len<span class="w"> </span><span class="m">8192</span>
-<span class="w">   </span>--rollout-temperature<span class="w"> </span><span class="m">1</span>
-
-<span class="w">   </span><span class="c1"># Load balancing for data collected in rollout phase. It ensures that the computational workload allocated to each training process (DP rank) is roughly equal, which may be beneficial for training speed</span>
-<span class="w">   </span>--balance-data
-<span class="o">)</span>
-</pre></div>
-</div>
-</section>
-<section id="eval-args-evaluation-parameters">
-<h3>EVAL_ARGS: Evaluation Parameters<a class="headerlink" href="#eval-args-evaluation-parameters" title="Link to this heading">#</a></h3>
-<p>The evaluation process inherits most of the Rollout parameters, but you can override them with the following parameters to implement evaluation strategies different from training.</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">EVAL_ARGS</span><span class="o">=(</span>
-<span class="w">   </span><span class="c1"># Evaluation interval (number of Rollouts)</span>
-<span class="w">   </span>--eval-interval<span class="w"> </span><span class="m">5</span>
-<span class="w">   </span><span class="c1"># Prompt dataset for evaluation</span>
-<span class="w">   </span>--eval-prompt-data<span class="w"> </span>aime<span class="w"> </span>/root/aime-2024/aime-2024.jsonl
-<span class="w">   </span><span class="c1"># Number of samples per evaluation Prompt</span>
-<span class="w">   </span>--n-samples-per-eval-prompt<span class="w"> </span><span class="m">16</span>
-<span class="w">   </span><span class="c1"># Maximum response length during evaluation</span>
-<span class="w">   </span>--eval-max-response-len<span class="w"> </span><span class="m">16384</span>
-<span class="w">   </span><span class="c1"># Sampling parameters during evaluation</span>
-<span class="w">   </span>--eval-top-p<span class="w"> </span><span class="m">1</span>
-<span class="o">)</span>
-</pre></div>
-</div>
-</section>
-<section id="perf-args-performance-and-parallelism-parameters">
-<h3>PERF_ARGS: Performance and Parallelism Parameters<a class="headerlink" href="#perf-args-performance-and-parallelism-parameters" title="Link to this heading">#</a></h3>
-<p>This part mainly contains Megatron’s parallel configuration. <code class="docutils literal notranslate"><span class="pre">--use-dynamic-batch-size</span></code> and <code class="docutils literal notranslate"><span class="pre">--max-tokens-per-gpu</span></code> are slime-specific optimizations.</p>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">--max-tokens-per-gpu</span></code>: Maximum number of tokens processed per GPU. After enabling dynamic batching (<code class="docutils literal notranslate"><span class="pre">use_dynamic_batch_size</span></code>), the system will intelligently pack samples of varying lengths so that the total token count of each micro-batch approaches this limit, thereby improving training efficiency. If a single sample length exceeds this value, it will form an independent batch. In context parallel (CP) mode, <code class="docutils literal notranslate"><span class="pre">N</span></code> CP cards share the total length of <code class="docutils literal notranslate"><span class="pre">N</span> <span class="pre">*</span> <span class="pre">max_tokens_per_gpu</span></code>.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">--use-dynamic-batch-size</span></code>: Enable dynamic batching. At this time, <code class="docutils literal notranslate"><span class="pre">--micro-batch-size</span></code> will be ignored.</p></li>
-</ul>
-<blockquote>
-<div><p>💡 <strong>Tip</strong>:
-slime always trains models through data packing methods and strictly ensures that per sample loss or per token loss is correct. Therefore, enabling dynamic batch size will not affect loss calculation, and it is strongly recommended to enable it.</p>
-</div></blockquote>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">PERF_ARGS</span><span class="o">=(</span>
-<span class="w">   </span>--tensor-model-parallel-size<span class="w"> </span><span class="m">2</span>
-<span class="w">   </span>--sequence-parallel
-<span class="w">   </span>--pipeline-model-parallel-size<span class="w"> </span><span class="m">1</span>
-<span class="w">   </span>--context-parallel-size<span class="w"> </span><span class="m">2</span>
-<span class="w">   </span>--expert-model-parallel-size<span class="w"> </span><span class="m">1</span>
-<span class="w">   </span>--expert-tensor-parallel-size<span class="w"> </span><span class="m">1</span>
-
-<span class="w">   </span>--recompute-granularity<span class="w"> </span>full
-<span class="w">   </span>--recompute-method<span class="w"> </span>uniform
-<span class="w">   </span>--recompute-num-layers<span class="w"> </span><span class="m">1</span>
-
-<span class="w">   </span><span class="c1"># --micro-batch-size 1 # This item is ignored when dynamic batching is enabled</span>
-<span class="w">   </span>--use-dynamic-batch-size
-<span class="w">   </span>--max-tokens-per-gpu<span class="w"> </span><span class="m">4608</span>
-<span class="o">)</span>
-</pre></div>
-</div>
-</section>
-<section id="grpo-args-grpo-algorithm-parameters">
-<h3>GRPO_ARGS: GRPO Algorithm Parameters<a class="headerlink" href="#grpo-args-grpo-algorithm-parameters" title="Link to this heading">#</a></h3>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">--use-kl-loss</span></code>: Enabling this option will load a reference model and calculate the KL divergence between the current model and the reference model as a monitoring metric. Whether KL divergence is included in the final training loss depends on the <code class="docutils literal notranslate"><span class="pre">--kl-loss-coef</span></code> parameter. If this parameter is set to 0, KL divergence will only be displayed as an observation metric and will not participate in loss calculation.</p></li>
-</ul>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">GRPO_ARGS</span><span class="o">=(</span>
-<span class="w">   </span>--advantage-estimator<span class="w"> </span>grpo
-<span class="w">   </span>--use-kl-loss
-<span class="w">   </span>--kl-loss-coef<span class="w"> </span><span class="m">0</span>.00
-<span class="w">   </span>--kl-loss-type<span class="w"> </span>low_var_kl
-<span class="w">   </span>--entropy-coef<span class="w"> </span><span class="m">0</span>.00
-<span class="w">   </span>--eps-clip<span class="w"> </span><span class="m">0</span>.2
-<span class="w">   </span>--eps-clip-high<span class="w"> </span><span class="m">0</span>.28
-<span class="o">)</span>
-</pre></div>
-</div>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">--advantage-estimator</span></code>: In addition to <a class="reference external" href="https://arxiv.org/abs/2402.03300">GRPO</a>, slime also supports several other training algorithms, such as <a class="reference external" href="https://arxiv.org/abs/2507.18071">GSPO</a>, <a class="reference external" href="https://arxiv.org/abs/2501.03262">Reinforce++</a> and <a class="reference external" href="https://arxiv.org/abs/2501.03262">Reinforce++ Baseline</a>, and <a class="reference external" href="https://arxiv.org/abs/1707.06347">PPO</a>.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">--calculate-per-token-loss</span></code>: By default, slime calculates the loss on a per-sample basis, i.e., <code class="docutils literal notranslate"><span class="pre">mean(sum(sample_i)</span> <span class="pre">/</span> <span class="pre">len(sample_i))</span></code>. To calculate the loss on a per-token basis, i.e., <code class="docutils literal notranslate"><span class="pre">sum(sum(sample_i))</span> <span class="pre">/</span> <span class="pre">sum(len(sample_i))</span></code>, you can enable this flag.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">--use-tis</span></code>: Enable this setting to use TIS (Truncated Importance Sampling), which is introduced by this <a class="reference external" href="https://fengyao.notion.site/off-policy-rl">blog</a>.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">--use-score-centering</span></code>: Enable <a class="reference external" href="https://arxiv.org/abs/2609.20807">Score Centering</a> with the REINFORCE objective, optionally combined with TIS. See <a class="reference internal" href="usage.html#score-centering"><span class="std std-ref">configuration and sampling requirements</span></a>.</p></li>
-</ul>
-</section>
-<section id="optimizer-args-optimizer-parameters">
-<h3>OPTIMIZER_ARGS: Optimizer Parameters<a class="headerlink" href="#optimizer-args-optimizer-parameters" title="Link to this heading">#</a></h3>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">OPTIMIZER_ARGS</span><span class="o">=(</span>
-<span class="w">   </span>--optimizer<span class="w"> </span>adam
-<span class="w">   </span>--lr<span class="w"> </span>1e-6
-<span class="w">   </span>--lr-decay-style<span class="w"> </span>constant
-<span class="w">   </span>--weight-decay<span class="w"> </span><span class="m">0</span>.1
-<span class="w">   </span>--adam-beta1<span class="w"> </span><span class="m">0</span>.9
-<span class="w">   </span>--adam-beta2<span class="w"> </span><span class="m">0</span>.98
-<span class="o">)</span>
-</pre></div>
-</div>
-</section>
-<section id="sglang-args-sglang-service-parameters">
-<h3>SGLANG_ARGS: SGLang Service Parameters<a class="headerlink" href="#sglang-args-sglang-service-parameters" title="Link to this heading">#</a></h3>
-<p>This part of parameters is used to configure SGLang inference service.</p>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus-per-engine</span></code>: Basically equivalent to SGLang’s <code class="docutils literal notranslate"><span class="pre">tp_size</span></code>.</p></li>
-<li><p>Other SGLang parameters can be passed to slime by adding the <code class="docutils literal notranslate"><span class="pre">--sglang-</span></code> prefix, and slime will automatically forward them to SGLang. For example, to set SGLang’s <code class="docutils literal notranslate"><span class="pre">--log-level</span> <span class="pre">INFO</span></code> parameter, just use <code class="docutils literal notranslate"><span class="pre">--sglang-log-level</span> <span class="pre">INFO</span></code>.</p></li>
-</ul>
-<blockquote>
-<div><p>⚠️ <strong>Note</strong>:
-slime uses <code class="docutils literal notranslate"><span class="pre">sgl-router</span></code> to schedule multiple SGLang Servers. Without enabling DP Attention, <code class="docutils literal notranslate"><span class="pre">dp_size</span></code> will be calculated through <code class="docutils literal notranslate"><span class="pre">rollout-num-gpus/rollout-num-gpus-per-engine</span></code>.</p>
-</div></blockquote>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">SGLANG_ARGS</span><span class="o">=(</span>
-<span class="w">   </span>--rollout-num-gpus-per-engine<span class="w"> </span><span class="m">2</span>
-<span class="o">)</span>
-</pre></div>
-</div>
-</section>
-</section>
-<section id="feature-introduction">
-<h2>Feature Introduction<a class="headerlink" href="#feature-introduction" title="Link to this heading">#</a></h2>
-<section id="colocated-actor-and-rollout">
-<h3>Colocated Actor and Rollout<a class="headerlink" href="#colocated-actor-and-rollout" title="Link to this heading">#</a></h3>
-<p>Under the default configuration, training (Actor) and inference (Rollout) resources are specified separately. Ray allocates <code class="docutils literal notranslate"><span class="pre">actor_num_nodes</span> <span class="pre">*</span> <span class="pre">actor_num_gpus_per_node</span></code> GPUs to the training part and <code class="docutils literal notranslate"><span class="pre">rollout_num_gpus</span></code> GPUs to inference, that is, training and inference are separated. When <code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus</span></code> is explicitly set to <code class="docutils literal notranslate"><span class="pre">0</span></code>, slime still parses SGLang arguments and launches the router, but does not launch local SGLang servers.</p>
-<p><strong>Standard (Disaggregated) Configuration</strong>:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>ray<span class="w"> </span>job<span class="w"> </span>submit<span class="w"> </span>...<span class="w"> </span><span class="se">\</span>
-<span class="w">   </span>--<span class="w"> </span>python3<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
-<span class="w">   </span>--actor-num-nodes<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
-<span class="w">   </span>--actor-num-gpus-per-node<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
-<span class="w">   </span>--rollout-num-gpus<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
-<span class="w">   </span>...
-</pre></div>
-</div>
-<p>In the above configuration, Actor uses 4 cards, and Rollout also uses 4 cards, running in parallel.</p>
-<p><strong>Training-Inference Integration (Colocated) Configuration</strong>:
-To deploy training and inference on the same group of GPUs, please add the <code class="docutils literal notranslate"><span class="pre">--colocate</span></code> parameter. By default, this makes the number of cards for training and inference equal. You can explicitly set a different positive <code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus</span></code>, for example to use more rollout GPUs than actor GPUs; the extra GPUs are used as rollout-only resources. If <code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus</span> <span class="pre">0</span></code> is set explicitly, slime launches only the router and no local SGLang servers.</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>ray<span class="w"> </span>job<span class="w"> </span>submit<span class="w"> </span>...<span class="w"> </span><span class="se">\</span>
-<span class="w">   </span>--<span class="w"> </span>python3<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
-<span class="w">   </span>--actor-num-nodes<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
-<span class="w">   </span>--actor-num-gpus-per-node<span class="w"> </span><span class="m">8</span><span class="w"> </span><span class="se">\</span>
-<span class="w">   </span>--colocate<span class="w"> </span><span class="se">\</span>
-<span class="w">   </span>...
-</pre></div>
-</div>
-<p>At this time, training and inference will share all 8 GPUs.</p>
-<blockquote>
-<div><p>⚠️ <strong>Note</strong>:
-In training-inference integration mode, Megatron will occupy a certain amount of GPU memory before it can be offloaded after initialization. You need to adjust the <code class="docutils literal notranslate"><span class="pre">--sglang-mem-fraction-static</span></code> parameter to reduce SGLang’s GPU memory usage ratio to avoid insufficient GPU memory. We usually recommend 0.8.</p>
-</div></blockquote>
-</section>
-<section id="dynamic-sampling">
-<h3>Dynamic Sampling<a class="headerlink" href="#dynamic-sampling" title="Link to this heading">#</a></h3>
-<p>slime supports more complex sampling strategies, such as dynamic sampling used in <a class="reference external" href="https://dapo-sia.github.io/">DAPO</a>. To enable this feature, you need to configure the following parameters:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="w">   </span>--over-sampling-batch-size<span class="w"> </span><span class="m">64</span><span class="w"> </span><span class="se">\</span>
-<span class="w">   </span>--dynamic-sampling-filter-path<span class="w"> </span><span class="se">\</span>
-<span class="w">     </span>slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std
-</pre></div>
-</div>
-<p>Here <code class="docutils literal notranslate"><span class="pre">over_sampling_batch_size</span></code> needs to be greater than <code class="docutils literal notranslate"><span class="pre">rollout_batch_size</span></code>, for example, configured as:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="w">   </span>--rollout-batch-size<span class="w"> </span><span class="m">32</span><span class="w"> </span><span class="se">\</span>
-<span class="w">   </span>--n-samples-per-prompt<span class="w"> </span><span class="m">8</span><span class="w"> </span><span class="se">\</span>
-<span class="w">   </span>--over-sampling-batch-size<span class="w"> </span><span class="m">64</span><span class="w"> </span><span class="se">\</span>
-</pre></div>
-</div>
-<p>Then each sampling will directly sample 64 prompts, and each prompt will be sampled 8 times. Because slime performs asynchronous sampling internally, we will successively obtain 8 responses for each prompt. When receiving responses, the function corresponding to <code class="docutils literal notranslate"><span class="pre">dynamic_sampling_filter_path</span></code> will be used for filtering. If it passes, these 8 pieces of data will be kept; otherwise, they will be discarded.</p>
-<p>The filtering function <code class="docutils literal notranslate"><span class="pre">check_reward_nonzero_std</span></code> in the example will check whether the standard deviation of rewards for a group of samples is greater than zero, ensuring that the reward scores of each group of samples left have differences, thereby avoiding overly homogeneous data and improving data diversity.</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">check_reward_nonzero_std</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">samples</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">],</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
-    <span class="n">rewards</span> <span class="o">=</span> <span class="p">[</span><span class="n">sample</span><span class="o">.</span><span class="n">get_reward_value</span><span class="p">(</span><span class="n">args</span><span class="p">)</span> <span class="k">for</span> <span class="n">sample</span> <span class="ow">in</span> <span class="n">samples</span><span class="p">]</span>
-    <span class="n">keep</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">rewards</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float</span><span class="p">)</span><span class="o">.</span><span class="n">std</span><span class="p">()</span> <span class="o">&gt;</span> <span class="mf">0.0</span>
-    <span class="k">return</span> <span class="n">DynamicFilterOutput</span><span class="p">(</span>
-        <span class="n">keep</span><span class="o">=</span><span class="n">keep</span><span class="p">,</span>
-        <span class="n">reason</span><span class="o">=</span><span class="kc">None</span> <span class="k">if</span> <span class="n">keep</span> <span class="k">else</span> <span class="sa">f</span><span class="s2">"zero_std_</span><span class="si">{</span><span class="nb">round</span><span class="p">(</span><span class="n">rewards</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
-    <span class="p">)</span>
-</pre></div>
-</div>
-<p>If the filtering function is very strict, causing a large number of prompt groups to be discarded, the system will monitor the number of pending tasks in <code class="docutils literal notranslate"><span class="pre">remaining_batch_size</span></code>. Once the number of pending tasks drops below the target number (32) due to too many being discarded, the system will automatically trigger a new round of oversampling, requesting <code class="docutils literal notranslate"><span class="pre">over_sampling_batch_size</span></code> (64) new prompts again to repeat the above process.</p>
-</section>
-<section id="partial-rollout">
-<h3>Partial Rollout<a class="headerlink" href="#partial-rollout" title="Link to this heading">#</a></h3>
-<p>During dynamic sampling, a large number of requests may be aborted early, causing waste of computational resources. By enabling the <code class="docutils literal notranslate"><span class="pre">--partial-rollout</span></code> parameter, these half-generated samples can be cached and continued to be generated in the next Rollout phase, thereby improving performance.</p>
-<p>You can also customize the strategy for extracting data from the cache through <code class="docutils literal notranslate"><span class="pre">--buffer-filter-path</span></code>. The default strategy is <code class="docutils literal notranslate"><span class="pre">pop_first</span></code>, which extracts the required number of samples in first-in-first-out order.</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">pop_first</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">rollout_id</span><span class="p">,</span> <span class="n">buffer</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]],</span> <span class="n">num_samples</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]]:</span>
-    <span class="n">num_to_pop</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">buffer</span><span class="p">),</span> <span class="n">num_samples</span><span class="p">)</span>
-    <span class="n">samples</span> <span class="o">=</span> <span class="n">buffer</span><span class="p">[:</span><span class="n">num_to_pop</span><span class="p">]</span>
-    <span class="k">del</span> <span class="n">buffer</span><span class="p">[:</span><span class="n">num_to_pop</span><span class="p">]</span>
-    <span class="k">return</span> <span class="n">samples</span>
-</pre></div>
-</div>
-<p>That is, take out the first <code class="docutils literal notranslate"><span class="pre">num_samples</span></code> prompts corresponding to <code class="docutils literal notranslate"><span class="pre">num_samples</span> <span class="pre">*</span> <span class="pre">n_samples_per_prompt</span></code> pieces of data each time.</p>
-<blockquote>
-<div><p>💡 <strong>Tip</strong>:
-The <code class="docutils literal notranslate"><span class="pre">sample.metadata</span></code> of each partial rollout sample stores the rollout id of the first generation, which can be used for data filtering.</p>
-</div></blockquote>
-</section>
-<section id="bf16-training-fp8-inference">
-<h3>bf16 Training fp8 Inference<a class="headerlink" href="#bf16-training-fp8-inference" title="Link to this heading">#</a></h3>
-<p>slime directly supports bf16 training and fp8 inference. For Qwen3-4B model, you only need to download the following model:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen3-4B-FP8<span class="w"> </span>--local-dir<span class="w"> </span>/root/Qwen3-4B-FP8
-</pre></div>
-</div>
-<p>And replace <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> with:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="w">   </span><span class="c1"># Used to load tokenizer and other information, actually won't use model weight parameters from hf path</span>
-<span class="w">   </span>--hf-checkpoint<span class="w"> </span>/root/Qwen3-4B-FP8
-
-<span class="w">   </span><span class="c1"># The megatron checkpoint still needs to be the dist weights converted from bf16 huggingface at the beginning, not modified because of FP8 rollout.</span>
-<span class="w">   </span>--ref-load<span class="w"> </span>/root/Qwen3-4B_torch_dist
-</pre></div>
-</div>
-<p>This will trigger fp8 inference. Currently, we will directly cast bf16 weights to fp8, and we will gradually add quantization schemes with less impact on accuracy in the future.</p>
-<p>For long-context rollout, you can also enable FP8 KV cache in SGLang to increase effective KV cache capacity:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--sglang-kv-cache-dtype<span class="w"> </span>fp8_e4m3
-</pre></div>
-</div>
-<p>⚠️ The training megatron checkpoint still needs to be the one converted from bf16 huggingface at the beginning.</p>
-</section>
-</section>
-<section id="multiturn-adaptation">
-<h2>Multiturn Adaptation<a class="headerlink" href="#multiturn-adaptation" title="Link to this heading">#</a></h2>
-<p>The slime framework is highly extensible and supports complex Agent scenarios (such as multi-turn interaction and tool calling). Its core mechanism is to rewrite the default data generation (Rollout) and reward calculation (Reward) logic through custom functions.</p>
-<p>This section uses an implementation based on <a class="reference external" href="https://github.com/PeterGriffinJin/Search-R1">Search-R1</a> as an example to illustrate how to adapt slime to support multi-turn interaction.</p>
-<section id="adaptation-strategy-summary">
-<h3>Adaptation Strategy Summary<a class="headerlink" href="#adaptation-strategy-summary" title="Link to this heading">#</a></h3>
-<p>Adapting slime to support multi-turn interaction mainly includes three steps:</p>
-<ol class="arabic simple">
-<li><p><strong>Data Preparation</strong>: Adapt the multi-turn interaction dataset to slime’s <code class="docutils literal notranslate"><span class="pre">Sample</span></code> objects. Map conversation history, real labels, etc. to <code class="docutils literal notranslate"><span class="pre">prompt</span></code> and <code class="docutils literal notranslate"><span class="pre">label</span></code> fields, and store additional information such as tool definitions and intermediate states in the <code class="docutils literal notranslate"><span class="pre">metadata</span></code> field for subsequent function calls.</p></li>
-<li><p><strong>Implement Custom Generation Function</strong>: Write functions to simulate the interaction loop of “model generates action → executes tool → concatenates observation results”, and correctly handle Loss Masking.</p></li>
-<li><p><strong>Implement Custom Reward Function</strong>: Write functions to evaluate complete interaction trajectories and return final reward scores.</p></li>
-</ol>
-</section>
-<section id="data-preparation-and-mapping">
-<h3>Data Preparation and Mapping<a class="headerlink" href="#data-preparation-and-mapping" title="Link to this heading">#</a></h3>
-<p>To pass complex contextual information to custom functions, you need to aggregate all relevant additional fields during the <strong>data preprocessing stage</strong>.</p>
-<p><strong>Core Idea</strong>: Merge all additional information in the dataset except <code class="docutils literal notranslate"><span class="pre">prompt</span></code> and <code class="docutils literal notranslate"><span class="pre">label</span></code> (such as <code class="docutils literal notranslate"><span class="pre">session_id</span></code>, <code class="docutils literal notranslate"><span class="pre">user_profile</span></code>, <code class="docutils literal notranslate"><span class="pre">tool_code</span></code>, etc.) to construct a <strong>single, structured field</strong> (for example, a column named <code class="docutils literal notranslate"><span class="pre">metadata</span></code> with JSON string content).</p>
-</section>
-<section id="step-one-construct-metadata-field-in-dataset">
-<h3>Step One: Construct <code class="docutils literal notranslate"><span class="pre">metadata</span></code> Field in Dataset<a class="headerlink" href="#step-one-construct-metadata-field-in-dataset" title="Link to this heading">#</a></h3>
-<p>Before training starts, you need to process the original dataset. For example, your original data might be as follows:</p>
-<div class="pst-scrollable-table-container"><table class="table">
-<thead>
-<tr class="row-odd"><th class="head text-left"><p>question</p></th>
-<th class="head text-left"><p>final_answer</p></th>
-<th class="head text-left"><p>session_id</p></th>
-<th class="head text-left"><p>tool_code</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td class="text-left"><p>“…”</p></td>
-<td class="text-left"><p>“…”</p></td>
-<td class="text-left"><p>“sess_123”</p></td>
-<td class="text-left"><p>“code_A”</p></td>
-</tr>
-</tbody>
-</table>
-</div>
-<p>You need to convert it to:</p>
-<div class="pst-scrollable-table-container"><table class="table">
-<thead>
-<tr class="row-odd"><th class="head text-left"><p>question</p></th>
-<th class="head text-left"><p>final_answer</p></th>
-<th class="head text-left"><p>metadata</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td class="text-left"><p>“…”</p></td>
-<td class="text-left"><p>“…”</p></td>
-<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">{&quot;session_id&quot;:</span> <span class="pre">&quot;sess_123&quot;,</span> <span class="pre">&quot;tool_code&quot;:</span> <span class="pre">&quot;code_A&quot;}</span></code></p></td>
-</tr>
-</tbody>
-</table>
-</div>
-</section>
-<section id="step-two-specify-mapping-in-training-script">
-<h3>Step Two: Specify Mapping in Training Script<a class="headerlink" href="#step-two-specify-mapping-in-training-script" title="Link to this heading">#</a></h3>
-<p>After completing data preparation, in the training script, map this preprocessed <code class="docutils literal notranslate"><span class="pre">metadata</span></code> column to slime’s <code class="docutils literal notranslate"><span class="pre">Sample.metadata</span></code> field through <code class="docutils literal notranslate"><span class="pre">ROLLOUT_ARGS</span></code>.</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">ROLLOUT_ARGS</span><span class="o">=(</span>
-<span class="w">   </span><span class="c1"># 1. Specify the preprocessed dataset file</span>
-<span class="w">   </span>--prompt-data<span class="w"> </span>/root/nq_search/train_processed.json
-
-<span class="w">   </span><span class="c1"># 2. Map "question" column to input prompt</span>
-<span class="w">   </span>--input-key<span class="w"> </span>question
-
-<span class="w">   </span><span class="c1"># 3. Map "final_answer" column to evaluation label</span>
-<span class="w">   </span>--label-key<span class="w"> </span>final_answer
-
-<span class="w">   </span><span class="c1"># 4. Load the pre-constructed "metadata" column into Sample.metadata</span>
-<span class="w">   </span><span class="c1">#    slime will automatically parse it as a Python dictionary</span>
-<span class="w">   </span>--metadata-key<span class="w"> </span>metadata
-<span class="o">)</span>
-</pre></div>
-</div>
-<p>Through this approach, you can easily access all pre-prepared structured information through methods like <code class="docutils literal notranslate"><span class="pre">sample.metadata['session_id']</span></code> in custom <code class="docutils literal notranslate"><span class="pre">generate</span></code> or <code class="docutils literal notranslate"><span class="pre">reward</span></code> functions.</p>
-</section>
-<section id="writing-custom-generation-function">
-<h3>Writing Custom Generation Function<a class="headerlink" href="#writing-custom-generation-function" title="Link to this heading">#</a></h3>
-<p>First, specify a custom asynchronous Python function through the <code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code> parameter.</p>
-<p><strong>Function Signature</strong>: <code class="docutils literal notranslate"><span class="pre">async</span> <span class="pre">def</span> <span class="pre">generate(args,</span> <span class="pre">sample:</span> <span class="pre">Sample,</span> <span class="pre">sampling_params)</span> <span class="pre">-&gt;</span> <span class="pre">Sample:</span></code></p>
-<p><strong>Core Implementation Points</strong>:</p>
-<ol class="arabic simple">
-<li><p><strong>Build Interaction Loop</strong>: Create a loop to control maximum interaction rounds (such as <code class="docutils literal notranslate"><span class="pre">for</span> <span class="pre">_</span> <span class="pre">in</span> <span class="pre">range(max_turns):</span></code>).</p></li>
-<li><p><strong>Call Model to Generate Action</strong>: In each round of the loop, call SGLang service to let the model generate the next action (such as <code class="docutils literal notranslate"><span class="pre">&lt;search&gt;query&lt;/search&gt;</span></code>) based on the current conversation history.</p></li>
-<li><p><strong>Parse and Execute Action</strong>: Parse model output, identify actions and parameters, and call external tools or APIs (such as Google search).</p></li>
-<li><p><strong>Build Observation Results</strong>: Format the results returned by tools and append them to the conversation history as input for the next round.</p></li>
-<li><p><strong>Handle Loss Masking</strong>: This is the key to Agent training.</p>
-<ul class="simple">
-<li><p>Note: <code class="docutils literal notranslate"><span class="pre">loss_mask</span></code> should be the same length as <code class="docutils literal notranslate"><span class="pre">response</span></code>, where tokens that need to calculate loss are 1, and masked ones are 0</p></li>
-<li><p><strong>Model-generated</strong> tokens (such as thinking, action instructions) → set <code class="docutils literal notranslate"><span class="pre">loss_mask</span></code> to <code class="docutils literal notranslate"><span class="pre">1</span></code>, participate in loss calculation.</p></li>
-<li><p><strong>Tool or environment returned</strong> tokens (such as API results) → set <code class="docutils literal notranslate"><span class="pre">loss_mask</span></code> to <code class="docutils literal notranslate"><span class="pre">0</span></code>, do not participate in loss calculation.</p></li>
-</ul>
-</li>
-<li><p><strong>Termination Conditions</strong>: End the loop when the model generates termination tags (such as <code class="docutils literal notranslate"><span class="pre">&lt;answer&gt;...</span></code>) or reaches maximum rounds.</p></li>
-<li><p><strong>Encapsulate Return</strong>: Fill the complete interaction history, token IDs, and <code class="docutils literal notranslate"><span class="pre">loss_masks</span></code> into the <code class="docutils literal notranslate"><span class="pre">Sample</span></code> object and return.</p></li>
-</ol>
-<p><strong>Code Example (Pseudocode)</strong>:</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">generate</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">:</span> <span class="n">Sample</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Sample</span><span class="p">:</span>
-    <span class="c1"># ... initialization ...</span>
-    <span class="n">prompt</span><span class="p">,</span> <span class="n">full_response</span><span class="p">,</span> <span class="n">loss_masks</span> <span class="o">=</span> <span class="n">sample</span><span class="o">.</span><span class="n">prompt</span><span class="p">,</span> <span class="s2">""</span><span class="p">,</span> <span class="p">[]</span>
-
-    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">max_turns</span><span class="p">):</span>
-        <span class="c1"># 1. Model generates action</span>
-        <span class="n">model_output</span> <span class="o">=</span> <span class="k">await</span> <span class="n">call_sglang</span><span class="p">(</span><span class="n">prompt</span> <span class="o">+</span> <span class="n">full_response</span><span class="p">,</span> <span class="o">...</span><span class="p">)</span>
-        <span class="c1"># ... tokenization and appending ...</span>
-        <span class="n">loss_masks</span> <span class="o">+=</span> <span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="n">model_tokens</span><span class="p">)</span> <span class="c1"># loss_mask = 1</span>
-        <span class="n">full_response</span> <span class="o">+=</span> <span class="n">model_output</span>
-
-        <span class="c1"># 2. Parse and execute action</span>
-        <span class="n">action</span><span class="p">,</span> <span class="n">content</span> <span class="o">=</span> <span class="n">parse_action</span><span class="p">(</span><span class="n">model_output</span><span class="p">)</span>
-        <span class="k">if</span> <span class="n">action</span> <span class="o">==</span> <span class="s2">"search"</span><span class="p">:</span>
-            <span class="c1"># 3 &amp; 4. Get and append observation results</span>
-            <span class="n">tool_output</span> <span class="o">=</span> <span class="k">await</span> <span class="n">google_search</span><span class="p">(</span><span class="n">content</span><span class="p">)</span>
-            <span class="c1"># ... tokenization and appending ...</span>
-            <span class="n">loss_masks</span> <span class="o">+=</span> <span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="n">tool_tokens</span><span class="p">)</span> <span class="c1"># loss_mask = 0</span>
-            <span class="n">full_response</span> <span class="o">+=</span> <span class="n">tool_output</span>
-
-        <span class="k">elif</span> <span class="n">action</span> <span class="o">==</span> <span class="s2">"answer"</span><span class="p">:</span>
-            <span class="k">break</span> <span class="c1"># end loop</span>
-
-    <span class="c1"># 7. Fill and return Sample object</span>
-    <span class="n">sample</span><span class="o">.</span><span class="n">response</span> <span class="o">=</span> <span class="n">full_response</span>
-    <span class="n">sample</span><span class="o">.</span><span class="n">tokens</span> <span class="o">=</span> <span class="o">...</span>
-    <span class="n">sample</span><span class="o">.</span><span class="n">loss_mask</span> <span class="o">=</span> <span class="n">loss_masks</span>
-    <span class="k">return</span> <span class="n">sample</span>
-</pre></div>
-</div>
-</section>
-<section id="writing-custom-reward-function">
-<h3>Writing Custom Reward Function<a class="headerlink" href="#writing-custom-reward-function" title="Link to this heading">#</a></h3>
-<p>Similarly, specify a custom reward function through <code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code>.</p>
-<p><strong>Function Signature</strong>: <code class="docutils literal notranslate"><span class="pre">async</span> <span class="pre">def</span> <span class="pre">reward_func(args,</span> <span class="pre">sample:</span> <span class="pre">Sample,</span> <span class="pre">**kwargs)</span> <span class="pre">-&gt;</span> <span class="pre">float:</span></code></p>
-<p>This function receives a complete <code class="docutils literal notranslate"><span class="pre">Sample</span></code> object and calculates scores based on the final interaction results. You can implement custom scoring logic here or call external Reward Model services.</p>
-</section>
-<section id="configure-in-training-script">
-<h3>Configure in Training Script<a class="headerlink" href="#configure-in-training-script" title="Link to this heading">#</a></h3>
-<p>Finally, in the training script, enable the above custom functions through the following parameters:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">CUSTOM_ARGS</span><span class="o">=(</span>
-<span class="w">   </span><span class="c1"># Specify the path of custom generation function (format: path.to.your.file:function_name)</span>
-<span class="w">   </span>--custom-generate-function-path<span class="w"> </span>your_module.multiturn_logic.generate
-
-<span class="w">   </span><span class="c1"># Specify the path of custom reward function</span>
-<span class="w">   </span>--custom-rm-path<span class="w"> </span>your_module.multiturn_logic.reward_func
-<span class="o">)</span>
-</pre></div>
-</div>
-</section>
-</section>
-<section id="multi-node-training-for-large-scale-moe-models">
-<h2>Multi-Node Training for Large-Scale MOE Models<a class="headerlink" href="#multi-node-training-for-large-scale-moe-models" title="Link to this heading">#</a></h2>
-<p>To start a multi-node task, you need to first start a Ray cluster. On node 0, run:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Node0 (HEAD)</span>
-ray<span class="w"> </span>start<span class="w"> </span>--head<span class="w"> </span>--node-ip-address<span class="w"> </span><span class="si">${</span><span class="nv">MASTER_ADDR</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--num-gpus<span class="w"> </span><span class="m">8</span><span class="w"> </span>--disable-usage-stats
-
-<span class="c1"># Other Nodes</span>
-ray<span class="w"> </span>start<span class="w"> </span>--address<span class="o">=</span><span class="si">${</span><span class="nv">MASTER_ADDR</span><span class="si">}</span>:6379<span class="w"> </span>--num-gpus<span class="w"> </span><span class="m">8</span>
-</pre></div>
-</div>
-<p>After the Ray cluster has started, you can submit a job from node 0, for example:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>ray<span class="w"> </span>job<span class="w"> </span>submit<span class="w"> </span>--address<span class="o">=</span><span class="s2">"http://127.0.0.1:8265"</span><span class="w"> </span><span class="se">\</span>
-<span class="w">   </span>--runtime-env-json<span class="o">=</span><span class="s1">'{</span>
-<span class="s1">     "env_vars": {</span>
-<span class="s1">        "PYTHONPATH": "/root/Megatron-LM/",</span>
-<span class="s1">        ... # e.g., no_proxy, API variables, etc.</span>
-<span class="s1">     }</span>
-<span class="s1">   }'</span><span class="w"> </span><span class="se">\</span>
-<span class="w">   </span>--<span class="w"> </span>python3<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
-<span class="w">   </span>--...<span class="w"> </span><span class="c1"># Other Megatron/SGLang/slime arguments</span>
-</pre></div>
-</div>
-<p>Optionally, the following environment variables may be needed based on your environment. For example, when there are multiple IPs and the wrong one is chosen in a Docker or SLURM envionment. We provide an example used in a SLURM + enroot multi-node system as follows:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>export SLIME_HOST_IP=$(hostname -I | awk '{print $1}')
-export GLOO_SOCKET_IFNAME=$(ip -o -4 addr show | awk '$4 ~ /^10\\./ {print $2}')
-export NCCL_SOCKET_IFNAME=$(ip -o -4 addr show | awk '$4 ~ /^10\\./ {print $2}')
-export NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME=$(ip -o -4 addr show | awk '$4 ~ /^10\./ {print $2}')
-</pre></div>
-</div>
-<p>slime has been deeply optimized for distributed training of large-scale Mixture of Experts (MoE) models. We provide some end-to-end training cases for reference:</p>
-<ul class="simple">
-<li><p><a class="reference internal" href="../examples/glm4.7-30B-A3B.html"><span class="std std-doc">Example: 8xH100 Training GLM-4.7-Flash</span></a></p></li>
-<li><p><a class="reference internal" href="../examples/glm5.2-744B-A40B.html"><span class="std std-doc">Example: 32xH100 Training GLM-5.2</span></a></p></li>
-<li><p><a class="reference internal" href="../examples/glm4.7-355B-A32B.html"><span class="std std-doc">Example: 64xH100 Training GLM-4.7</span></a></p></li>
-<li><p><a class="reference internal" href="../examples/deepseek-r1.html"><span class="std std-doc">Example: 128xH100 Training DeepSeek-R1</span></a></p></li>
-<li><p>Scripts such as <code class="docutils literal notranslate"><span class="pre">scripts/run_qwen3_30b_a3b.py</span></code> and <code class="docutils literal notranslate"><span class="pre">scripts/run_glm45_355b_a32b.py</span></code> also support multi-node training. Their documentation is still being expanded.</p></li>
-</ul>
+<section id="mount-the-experiment-paths">
+<h2>Mount the experiment paths<a class="headerlink" href="#mount-the-experiment-paths" title="Link to this heading">#</a></h2>
+<p>Mount a data directory when starting the container, for example <code class="docutils literal notranslate"><span class="pre">-v</span> <span class="pre">/shared/data:/data</span></code>, and use those container-visible paths in the lab. Keep the repository and generated configuration directory visible at the same path on all Ray hosts. Install the same dependencies on every node.</p>
+<p>Return to the <a class="reference internal" href="experiment-guide.html#prepare-once-convert-then-run"><span class="std std-ref">tutorial preparation and launch steps</span></a> to download, convert, and train the selected model. Use <a class="reference internal" href="usage.html"><span class="std std-doc">parameter reference</span></a> for existing launchers.</p>
 </section>
 </section>
 
@@ -1171,12 +547,12 @@ export NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME=$(ip -o -4 addr show | awk '$4 ~ /^10\.
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="../index.html"
+       href="experiment-guide.html"
        title="previous page">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">previous</p>
-        <p class="prev-next-title">slime Documentation</p>
+        <p class="prev-next-title">Tutorial: build and understand an RL experiment</p>
       </div>
     </a>
     <a class="right-next"
@@ -1212,41 +588,7 @@ export NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME=$(ip -o -4 addr show | awk '$4 ~ /^10\.
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#install-slime">Install slime</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#model-and-dataset-download">Model and Dataset Download</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#model-weight-conversion">Model Weight Conversion</a><ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#convert-from-hugging-face-format-to-megatron-format">Convert from Hugging Face Format to Megatron Format</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#convert-from-megatron-format-to-hugging-face-format">Convert from Megatron Format to Hugging Face Format</a></li>
-</ul>
-</li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#training-script-and-parameter-overview">Training Script and Parameter Overview</a><ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#model-args-model-configuration-parameters">MODEL_ARGS: Model Configuration Parameters</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#ckpt-args-checkpoint-and-path-parameters">CKPT_ARGS: Checkpoint and Path Parameters</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-args-data-generation-rollout-parameters">ROLLOUT_ARGS: Data Generation (Rollout) Parameters</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#eval-args-evaluation-parameters">EVAL_ARGS: Evaluation Parameters</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#perf-args-performance-and-parallelism-parameters">PERF_ARGS: Performance and Parallelism Parameters</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#grpo-args-grpo-algorithm-parameters">GRPO_ARGS: GRPO Algorithm Parameters</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#optimizer-args-optimizer-parameters">OPTIMIZER_ARGS: Optimizer Parameters</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-args-sglang-service-parameters">SGLANG_ARGS: SGLang Service Parameters</a></li>
-</ul>
-</li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#feature-introduction">Feature Introduction</a><ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#colocated-actor-and-rollout">Colocated Actor and Rollout</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dynamic-sampling">Dynamic Sampling</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#partial-rollout">Partial Rollout</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#bf16-training-fp8-inference">bf16 Training fp8 Inference</a></li>
-</ul>
-</li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#multiturn-adaptation">Multiturn Adaptation</a><ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#adaptation-strategy-summary">Adaptation Strategy Summary</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#data-preparation-and-mapping">Data Preparation and Mapping</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#step-one-construct-metadata-field-in-dataset">Step One: Construct <code class="docutils literal notranslate"><span class="pre">metadata</span></code> Field in Dataset</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#step-two-specify-mapping-in-training-script">Step Two: Specify Mapping in Training Script</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#writing-custom-generation-function">Writing Custom Generation Function</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#writing-custom-reward-function">Writing Custom Reward Function</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#configure-in-training-script">Configure in Training Script</a></li>
-</ul>
-</li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#multi-node-training-for-large-scale-moe-models">Multi-Node Training for Large-Scale MOE Models</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#mount-the-experiment-paths">Mount the experiment paths</a></li>
 </ul>
   </nav></div>
 

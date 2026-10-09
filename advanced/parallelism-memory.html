@@ -1,0 +1,1103 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>GPUs, memory, and parallelism &#8212; slime</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=4418a689" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=5f5cb4b6" />
+  
+  <!-- So that users can add custom icons -->
+  <script defer src="../_static/scripts/fontawesome.js?digest=90905a2f556bf617f1a9"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
+
+    <script src="../_static/documentation_options.js?v=183391d5"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=ccdb6887"></script>
+    <script src="../_static/scripts/sphinx-book-theme.js?v=fab101a9"></script>
+    <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+    <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script type="module">import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.12.1/dist/mermaid.esm.min.mjs";
+
+
+
+
+
+const initStyles = () => {
+    const defaultStyle = document.createElement('style');
+    defaultStyle.textContent = "pre.mermaid {\n    /* Same as .mermaid-container > pre */\n    display: block;\n    width: 100%;\n}\n\npre.mermaid > svg {\n    /* Same as .mermaid-container > pre > svg */\n    height: 500px;\n    width: 100%;\n    max-width: 100% !important;\n}";
+    document.head.appendChild(defaultStyle);
+
+    const fullscreenStyle = document.createElement('style');
+    fullscreenStyle.textContent = ".mermaid-container {\n    position: relative;\n    display: flex;\n    flex-direction: row;\n    width: 100%;\n}\n\n.mermaid-container > pre {\n    display: block;\n    width: 100%;\n}\n\n.mermaid-container > pre > svg {\n    height: 500px;\n    width: 100%;\n    max-width: 100% !important;\n}\n\n.mermaid-fullscreen-btn {\n    position: absolute;\n    width: 28px;\n    height: 28px;\n    background: rgba(255, 255, 255, 0.95);\n    border: 1px solid rgba(0, 0, 0, 0.3);\n    border-radius: 4px;\n    cursor: pointer;\n    display: flex;\n    align-items: center;\n    justify-content: center;\n    transition: all 0.2s;\n    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);\n    font-size: 14px;\n    line-height: 1;\n    padding: 0;\n    color: #333;\n}\n\n.mermaid-fullscreen-btn:hover {\n    opacity: 100% !important;\n    background: rgba(255, 255, 255, 1);\n    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.3);\n    transform: scale(1.1);\n}\n\n.mermaid-fullscreen-btn.dark-theme {\n    background: rgba(50, 50, 50, 0.95);\n    border: 1px solid rgba(255, 255, 255, 0.3);\n    color: #e0e0e0;\n}\n\n.mermaid-fullscreen-btn.dark-theme:hover {\n    background: rgba(60, 60, 60, 1);\n    box-shadow: 0 3px 10px rgba(255, 255, 255, 0.2);\n}\n\n.mermaid-fullscreen-modal {\n    display: none;\n    position: fixed !important;\n    top: 0 !important;\n    left: 0 !important;\n    width: 95vw;\n    height: 100vh;\n    background: rgba(255, 255, 255, 0.98);\n    z-index: 9999;\n    padding: 20px;\n    overflow: auto;\n}\n\n.mermaid-fullscreen-modal.dark-theme {\n    background: rgba(0, 0, 0, 0.98);\n}\n\n.mermaid-fullscreen-modal.active {\n    display: flex;\n    align-items: center;\n    justify-content: center;\n}\n\n.mermaid-container-fullscreen {\n    position: relative;\n    width: 95vw;\n    height: 90vh;\n    max-width: 95vw;\n    max-height: 90vh;\n    background: white;\n    border-radius: 8px;\n    padding: 20px;\n    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);\n    overflow: auto;\n    display: flex;\n    align-items: center;\n    justify-content: center;\n}\n\n.mermaid-container-fullscreen.dark-theme {\n    background: #1a1a1a;\n    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.8);\n}\n\n.mermaid-container-fullscreen pre.mermaid {\n    width: 100%;\n    height: 100%;\n    display: flex;\n    align-items: center;\n    justify-content: center;\n}\n\n.mermaid-container-fullscreen .mermaid svg {\n    height: 100% !important;\n    width: 100% !important;\n    cursor: grab;\n}\n\n.mermaid-fullscreen-close {\n    position: fixed !important;\n    top: 20px !important;\n    right: 20px !important;\n    width: 40px;\n    height: 40px;\n    background: rgba(255, 255, 255, 0.95);\n    border: 1px solid rgba(0, 0, 0, 0.2);\n    border-radius: 50%;\n    cursor: pointer;\n    z-index: 10000;\n    display: flex;\n    align-items: center;\n    justify-content: center;\n    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);\n    transition: all 0.2s;\n    font-size: 24px;\n    line-height: 1;\n    color: #333;\n}\n\n.mermaid-fullscreen-close:hover {\n    background: white;\n    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);\n    transform: scale(1.1);\n}\n\n.mermaid-fullscreen-close.dark-theme {\n    background: rgba(50, 50, 50, 0.95);\n    border: 1px solid rgba(255, 255, 255, 0.2);\n    color: #e0e0e0;\n}\n\n.mermaid-fullscreen-close.dark-theme:hover {\n    background: rgba(60, 60, 60, 1);\n    box-shadow: 0 6px 16px rgba(255, 255, 255, 0.2);\n}\n\n.mermaid-fullscreen-modal .mermaid-fullscreen-btn {\n    display: none !important;\n}";
+    document.head.appendChild(fullscreenStyle);
+}
+
+// Detect if page has dark background
+const isDarkTheme = () => {
+    // We use a set of heuristics:
+    // 1. Check for common dark mode classes or attributes
+    // 2. Check computed background color brightness
+    if (document.documentElement.classList.contains('dark') ||
+        document.documentElement.getAttribute('data-theme') === 'dark' ||
+        document.body.classList.contains('dark') ||
+        document.body.getAttribute('data-theme') === 'dark') {
+        // console.log("Dark theme detected via class/attribute");
+        return true;
+    }
+    if (document.documentElement.classList.contains('light') ||
+        document.documentElement.getAttribute('data-theme') === 'light' ||
+        document.body.classList.contains('light') ||
+        document.body.getAttribute('data-theme') === 'light') {
+        // console.log("Light theme detected via class/attribute");
+        return false;
+    }
+    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        // console.log("Dark theme detected via prefers-color-scheme");
+        return true;
+    }
+    const bgColor = window.getComputedStyle(document.body).backgroundColor;
+    const match = bgColor.match(/rgb\((\d+),\s*(\d+),\s*(\d+)/);
+    if (match) {
+        const r = parseInt(match[1]);
+        const g = parseInt(match[2]);
+        const b = parseInt(match[3]);
+        const brightness = (r * 299 + g * 587 + b * 114) / 1000;
+        // console.log("Background color brightness:", brightness);
+        return brightness < 128;
+    }
+    // console.log("No dark or light theme detected, defaulting to light theme");
+    return false;
+};
+
+let darkTheme = isDarkTheme();
+let modal = null;
+let modalContent = null;
+let previousScrollOffset = [window.scrollX, window.scrollY];
+let _lazyObserver = null;
+let _renderQueue = Promise.resolve();
+let closeModal = () => {};
+
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && modal?.classList.contains('active')) {
+        closeModal();
+    }
+});
+
+// Apply d3 zoom to each SVG. Idempotent: an SVG already wrapped is skipped,
+// so this is safe to call both for the initial batch and for diagrams that
+// render lazily once they become visible.
+const addZoomToSvgs = (svgs) => {
+    svgs.each(function() {
+        if (this.getAttribute('data-zoom-applied') === 'true') return;
+        var svg = d3.select(this);
+        svg.html("<g class='wrapper'>" + svg.html() + "</g>");
+        var inner = svg.select("g");
+        var zoom = d3.zoom().on("zoom", function(event) {
+            inner.attr("transform", event.transform);
+        });
+        svg.call(zoom);
+        this.setAttribute('data-zoom-applied', 'true');
+    });
+};
+
+const runMermaid = async (rerun) => {
+    console.log("Running mermaid diagrams, rerun =", rerun);
+    // clear all existing mermaid charts
+    let all_mermaids = document.querySelectorAll(".mermaid");
+
+    if (rerun) {
+        // Disconnect any previous lazy rendering observer
+        if (_lazyObserver) {
+            _lazyObserver.disconnect();
+            _lazyObserver = null;
+        }
+
+        all_mermaids.forEach((el) => {
+            el.removeAttribute('data-mermaid-deferred');
+            el.removeAttribute('data-mermaid-render-failed');
+            if(!el.hasAttribute("data-original-code")) {
+                // store original code
+                // console.log(`Storing original code for first run: `, el.innerHTML);
+                el.setAttribute('data-original-code', el.innerHTML);
+            }
+            if(el.getAttribute("data-processed") === "true") {
+                // remove and restore original
+                el.removeAttribute("data-processed");
+                // console.log(`Restoring original code for re-run: `, el.getAttribute('data-original-code'));
+                el.innerHTML = el.getAttribute('data-original-code');
+            } else {
+                // store original code
+                // console.log(`Storing original code for re-run: `, el.innerHTML);
+                el.setAttribute('data-original-code', el.innerHTML);
+            }
+        });
+
+        // Separate visible and hidden elements. Mermaid's layout engine measures
+        // text dimensions via the DOM, which fails for elements hidden by a parent
+        // (e.g., Reveal.js non-active slides, sphinx-design unopened tabs),
+        // producing broken SVGs. Render visible elements now, defer hidden ones.
+        const visible = [];
+        const hidden = [];
+        all_mermaids.forEach((el) => {
+            // offsetParent is null for display:none ancestors.
+            // getClientRects().length > 0 catches position:fixed elements
+            // (which also have null offsetParent but are still visible).
+            if (el.offsetParent !== null || el.getClientRects().length > 0) {
+                visible.push(el);
+            } else {
+                hidden.push(el);
+                el.setAttribute('data-mermaid-deferred', 'true');
+            }
+        });
+
+        if (visible.length > 0) {
+            try {
+                await mermaid.run({ nodes: visible });
+            } catch (e) {
+                console.error("Mermaid rendering failed:", e);
+            }
+        }
+
+        // Lazily render hidden elements when they become visible.
+        // Uses a promise chain (_renderQueue) to serialize rendering,
+        // since IntersectionObserver may report multiple entries at once
+        // and mermaid.run() is not safe to call concurrently.
+        if (hidden.length > 0) {
+            if (typeof IntersectionObserver === 'undefined') {
+                console.warn("IntersectionObserver not available; hidden mermaid diagrams will not render.");
+            } else {
+                _renderQueue = Promise.resolve();
+                _lazyObserver = new IntersectionObserver((entries) => {
+                    for (const entry of entries) {
+                        if (entry.isIntersecting && entry.target.getAttribute("data-processed") !== "true") {
+                            _lazyObserver.unobserve(entry.target);
+                            const el = entry.target;
+                            _renderQueue = _renderQueue.then(async () => {
+                                try {
+                                    await mermaid.run({ nodes: [el] });
+                                    el.removeAttribute('data-mermaid-deferred');
+                                    // Apply zoom to the now-rendered diagram, matching
+                                    // the decoration visible diagrams receive.
+                                    if (false) {
+                                        addZoomToSvgs(d3.selectAll("").select(function() {
+                                            return this.querySelector("svg");
+                                        }));
+                                    }
+                                } catch (e) {
+                                    console.error("Mermaid deferred rendering failed:", e);
+                                    el.removeAttribute('data-mermaid-deferred');
+                                    el.setAttribute('data-mermaid-render-failed', 'true');
+                                }
+                            });
+                        }
+                    }
+                });
+                hidden.forEach((el) => _lazyObserver.observe(el));
+            }
+        }
+    }
+
+    all_mermaids = document.querySelectorAll(".mermaid");
+    // Exclude deferred (hidden) and render-failed elements from completion checks
+    const mermaids_active = document.querySelectorAll(".mermaid:not([data-mermaid-deferred]):not([data-mermaid-render-failed])");
+    const mermaids_processed = document.querySelectorAll(".mermaid:not([data-mermaid-deferred]):not([data-mermaid-render-failed])[data-processed='true']");
+
+    if (false) {
+        const mermaids_to_add_zoom = 0 === -1 ? mermaids_active.length : 0;
+        if(mermaids_to_add_zoom > 0) {
+            var svgs = d3.selectAll("").select(function() {
+                return this.querySelector("svg");
+            });
+            // Wait until every active (visible) diagram has rendered. Deferred
+            // diagrams are excluded, so a fixed d3_node_count that counts a
+            // hidden diagram no longer loops forever waiting for its SVG.
+            if(mermaids_active.length !== mermaids_processed.length) {
+                setTimeout(() => runMermaid(false), 200);
+                return;
+            }
+            addZoomToSvgs(svgs);
+        }
+    } else if(mermaids_active.length !== mermaids_processed.length) {
+        // Wait for mermaid to process all diagrams
+        setTimeout(() => runMermaid(false), 200);
+        return;
+    }
+
+    // Stop here if not adding fullscreen capability
+    if (!true) return;
+
+    if (modal !== null ) {
+        // Destroy existing modal
+        modal.remove();
+        modal = null;
+        modalContent = null;
+    }
+
+    modal = document.createElement('div');
+    modal.className = 'mermaid-fullscreen-modal' + (darkTheme ? ' dark-theme' : '');
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-label', 'Fullscreen diagram viewer');
+    modal.innerHTML = `
+        <button class="mermaid-fullscreen-close${darkTheme ? ' dark-theme' : ''}" aria-label="Close fullscreen">✕</button>
+        <div class="mermaid-container-fullscreen${darkTheme ? ' dark-theme' : ''}"></div>
+    `;
+    document.body.appendChild(modal);
+
+    modalContent = modal.querySelector('.mermaid-container-fullscreen');
+    const closeBtn = modal.querySelector('.mermaid-fullscreen-close');
+
+    closeModal = () => {
+        modal.classList.remove('active');
+        modalContent.innerHTML = '';
+        document.body.style.overflow = ''
+        window.scrollTo({left: previousScrollOffset[0], top: previousScrollOffset[1], behavior: 'instant'});
+    };
+
+    closeBtn.addEventListener('click', closeModal);
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) closeModal();
+    });
+    document.querySelectorAll('.mermaid').forEach((mermaidDiv) => {
+        if (mermaidDiv.parentNode.classList.contains('mermaid-container') ||
+            mermaidDiv.closest('.mermaid-fullscreen-modal')) {
+            // Already processed, adjust button class if needed
+            const existingBtn = mermaidDiv.parentNode.querySelector('.mermaid-fullscreen-btn');
+            if (existingBtn) {
+                existingBtn.className = 'mermaid-fullscreen-btn' + (darkTheme ? ' dark-theme' : '');
+            }
+            return;
+        }
+
+        const container = document.createElement('div');
+        container.className = 'mermaid-container';
+        mermaidDiv.parentNode.insertBefore(container, mermaidDiv);
+        container.appendChild(mermaidDiv);
+
+        const fullscreenBtn = document.createElement('button');
+        fullscreenBtn.className = 'mermaid-fullscreen-btn' + (darkTheme ? ' dark-theme' : '');
+        fullscreenBtn.setAttribute('aria-label', 'View diagram in fullscreen');
+        fullscreenBtn.textContent = "\u26f6";
+        fullscreenBtn.style.opacity = "50%";
+
+        // Calculate dynamic position based on diagram's margin and padding
+        const diagramStyle = window.getComputedStyle(mermaidDiv);
+        const marginTop = parseFloat(diagramStyle.marginTop) || 0;
+        const marginRight = parseFloat(diagramStyle.marginRight) || 0;
+        const paddingTop = parseFloat(diagramStyle.paddingTop) || 0;
+        const paddingRight = parseFloat(diagramStyle.paddingRight) || 0;
+        fullscreenBtn.style.top = `${marginTop + paddingTop + 4}px`;
+        fullscreenBtn.style.right = `${marginRight + paddingRight + 4}px`;
+
+        fullscreenBtn.addEventListener('click', () => {
+            previousScrollOffset = [window.scrollX, window.scrollY];
+            const clone = mermaidDiv.cloneNode(true);
+            modalContent.innerHTML = '';
+            modalContent.appendChild(clone);
+
+            const svg = clone.querySelector('svg');
+            if (svg) {
+                svg.removeAttribute('width');
+                svg.removeAttribute('height');
+                svg.style.width = '100%';
+                svg.style.height = 'auto';
+                svg.style.maxWidth = '100%';
+                svg.style.display = 'block';
+
+                if (false) {
+                    setTimeout(() => {
+                        const g = svg.querySelector('g');
+                        if (g) {
+                            var svgD3 = d3.select(svg);
+                            svgD3.html("<g class='wrapper'>" + svgD3.html() + "</g>");
+                            var inner = svgD3.select("g");
+                            var zoom = d3.zoom().on("zoom", function(event) {
+                                inner.attr("transform", event.transform);
+                            });
+                            svgD3.call(zoom);
+                        }
+                    }, 100);
+                }
+            }
+
+            modal.classList.add('active');
+            document.body.style.overflow = 'hidden';
+        });
+        container.appendChild(fullscreenBtn);
+    });
+};
+
+
+
+const load = async () => {
+    initStyles();
+
+
+    await runMermaid(true);
+
+    const reRunIfThemeChanges = async () => {
+        const newDarkTheme = isDarkTheme();
+        if (newDarkTheme !== darkTheme) {
+            darkTheme = newDarkTheme;
+            console.log("Theme change detected, re-running mermaid with", darkTheme ? "dark" : "default", "theme");
+            await mermaid.initialize(
+                {...{"startOnLoad": false},
+                ...{ darkMode: darkTheme, theme: darkTheme ? "dark" : "default" },
+                }
+            );
+            await runMermaid(true);
+        }
+    };
+
+    // Update theme classes when theme changes
+    const themeObserver = new MutationObserver(reRunIfThemeChanges);
+    themeObserver.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ['class', 'style', 'data-theme']
+    });
+    themeObserver.observe(document.body, {
+        attributes: true,
+        attributeFilter: ['class', 'style', 'data-theme']
+    });
+};
+
+
+
+
+
+console.log("Initializing mermaid with", darkTheme ? "dark" : "default", "theme");
+mermaid.initialize(
+    {...{"startOnLoad": false},
+    ...{ darkMode: darkTheme, theme: darkTheme ? "dark" : "default" },
+    }
+);
+
+window.addEventListener("load", load);
+window.runMermaid = runMermaid;</script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'advanced/parallelism-memory';</script>
+    <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
+    <script data-layout="root" src="../_static/js/lang-toggle.js?v=9e8f3a3a"></script>
+    <link rel="icon" href="../_static/logo.ico"/>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Low Precision Training and Rollout" href="low-precision.html" />
+    <link rel="prev" title="From policy gradients to train–rollout consistency" href="policy-mismatch.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="0.4.0" />
+    <meta name="docbuild:last-update" content="Oct 09, 2026"/>
+  
+    
+    <script src="../_static/searchtools.js"></script>
+    <script src="../_static/language_data.js"></script>
+    <script src="../searchindex.js"></script>
+  
+  </head>
+  <body data-default-mode="">
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+  
+  
+  
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search..."
+         aria-label="Search..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header id="pst-header" class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class="col-lg-9 navbar-header-items">
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+        </div>
+      
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+    </div>
+  
+
+  
+    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="On this page">
+      <span class="fa-solid fa-outdent"></span>
+    </button>
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/logo.jpg" class="logo__image only-light" alt="slime - Home"/>
+    <img src="../_static/logo.jpg" class="logo__image only-dark pst-js-only" alt="slime - Home"/>
+  
+  
+</a></div>
+        <div class="sidebar-primary-item">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button></div>
+        <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
+    <div class="bd-toc-item navbar-nav active">
+        <ul class="current nav bd-sidenav">
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="../library.html">Documentation library</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../get_started/index.html">Start here</a></li>
+<li class="toctree-l2 current active has-children"><a class="reference internal" href="../training/index.html">Training &amp; algorithms</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="policy-mismatch.html">From policy gradients to train–rollout consistency</a></li>
+<li class="toctree-l3 current active"><a class="current reference internal" href="#">GPUs, memory, and parallelism</a></li>
+<li class="toctree-l3"><a class="reference internal" href="low-precision.html">Low Precision Training and Rollout</a></li>
+<li class="toctree-l3"><a class="reference internal" href="reproducibility.html">Reproducibility</a></li>
+<li class="toctree-l3"><a class="reference internal" href="on-policy-distillation.html">On-Policy Distillation</a></li>
+<li class="toctree-l3"><a class="reference internal" href="megatron-config.html">Megatron Config: Role-Based Training Overrides</a></li>
+<li class="toctree-l3"><a class="reference internal" href="arch-support-beyond-megatron.html">Supporting Model Architectures Beyond Megatron-LM</a></li>
+</ul>
+</details></li>
+<li class="toctree-l2"><a class="reference internal" href="../rollout/index.html">Rollout &amp; scheduling</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../operations/index.html">Debugging, profiling &amp; recovery</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../examples/index.html">Task tutorials</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../developer_guide/index.html">Development &amp; CI</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../platform_support/index.html">Hardware platforms</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../blogs/index.html">Design notes &amp; releases</a></li>
+</ul>
+</details></li>
+</ul>
+
+    </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+
+<div class="sbt-scroll-pixel-helper"></div>
+
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item"><button class="sidebar-toggle primary-toggle btn btn-sm" title="Toggle primary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <span class="fa-solid fa-bars"></span>
+</button></div>
+      
+    </div>
+  
+  
+    <div class="header-article-items__end">
+      
+        <div class="header-article-item">
+
+<div class="article-header-buttons">
+
+
+
+
+
+<div class="dropdown dropdown-source-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Source repositories">
+    <i class="fab fa-github"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime" target="_blank"
+   class="btn btn-sm btn-source-repository-button dropdown-item"
+   title="Source repository"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fab fa-github"></i>
+  </span>
+<span class="btn__text-container">Repository</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/blob/main/docs/en/advanced/parallelism-memory.md?plain=1" target="_blank"
+   class="btn btn-sm btn-source-file-button dropdown-item"
+   title="Show source"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-code"></i>
+  </span>
+<span class="btn__text-container">Show source</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/edit/main/docs/en/advanced/parallelism-memory.md" target="_blank"
+   class="btn btn-sm btn-source-edit-button dropdown-item"
+   title="Suggest edit"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-pencil-alt"></i>
+  </span>
+<span class="btn__text-container">Suggest edit</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/issues/new?title=Issue%20on%20page%20%2Fadvanced/parallelism-memory.html&body=Your%20issue%20content%20here." target="_blank"
+   class="btn btn-sm btn-source-issues-button dropdown-item"
+   title="Open an issue"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-lightbulb"></i>
+  </span>
+<span class="btn__text-container">Open issue</span>
+</a>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+
+
+<div class="dropdown dropdown-download-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Download this page">
+    <i class="fas fa-download"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="../_sources/advanced/parallelism-memory.md" target="_blank"
+   class="btn btn-sm btn-download-source-button dropdown-item"
+   title="Download source file"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file"></i>
+  </span>
+<span class="btn__text-container">.md</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li>
+<button onclick="window.print()"
+  class="btn btn-sm btn-download-pdf-button dropdown-item"
+  title="Print to PDF"
+  data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file-pdf"></i>
+  </span>
+<span class="btn__text-container">.pdf</span>
+</button>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+<button onclick="toggleFullScreen()"
+  class="btn btn-sm btn-fullscreen-button pst-navbar-icon"
+  title="Fullscreen mode"
+  data-bs-placement="bottom" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-expand"></i>
+  </span>
+
+</button>
+
+
+
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="Light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="Dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>Light</button></li>
+    <li><button class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>Dark</button></li>
+  </ul>
+</div>
+
+
+<button class="btn btn-sm pst-navbar-icon search-button search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass fa-lg"></i>
+</button>
+<button class="sidebar-toggle secondary-toggle btn btn-sm pst-navbar-icon" title="Toggle secondary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <span class="fa-solid fa-list"></span>
+</button>
+</div></div>
+      
+    </div>
+  
+</div>
+</div>
+              
+              
+
+<div id="jb-print-docs-body" class="onlyprint">
+    <h1>GPUs, memory, and parallelism</h1>
+    <!-- Table of contents -->
+    <div id="print-main-content">
+        <div id="jb-print-toc">
+            
+            <div>
+                <h2> Contents </h2>
+            </div>
+            <nav aria-label="Page">
+                <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#starting-gpu-allocations">Starting GPU allocations</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#the-memory-ledger">The memory ledger</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#tp-split-one-layer">TP: split one layer</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#pp-split-model-layers">PP: split model layers</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#ep-split-moe-experts">EP: split MoE experts</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#cp-split-tokens">CP: split tokens</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#zero-and-distributed-optimizer">ZeRO and distributed optimizer</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#cpu-adam-and-recomputation">CPU Adam and recomputation</a></li>
+</ul>
+            </nav>
+        </div>
+    </div>
+</div>
+
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section class="tex2jax_ignore mathjax_ignore" id="gpus-memory-and-parallelism">
+<h1>GPUs, memory, and parallelism<a class="headerlink" href="#gpus-memory-and-parallelism" title="Link to this heading">#</a></h1>
+<p>Open <strong>Placement</strong> in the <a class="reference internal" href="../index.html#lab"><span class="std std-ref">interactive lab</span></a> to explore the diagrams. First establish that each phase fits and learns correctly, then optimize useful samples per second.</p>
+<section id="starting-gpu-allocations">
+<h2>Starting GPU allocations<a class="headerlink" href="#starting-gpu-allocations" title="Link to this heading">#</a></h2>
+<p>The lab assumes eight GPUs per training node and starts from repository recipes for H100/H200-class servers with fast interconnects. These are recipe-based starting points, not measured minimums or guarantees for every GPU in that class. The short experiment uses a 4,096-token response limit, eight prompts and eight responses per prompt. Prompt length still counts toward memory. MoE and Qwen profiles enable CPU Adam and recomputation.</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Model</p></th>
+<th class="head text-right"><p>Training GPUs</p></th>
+<th class="head"><p>TP / PP / CP / EP</p></th>
+<th class="head text-right"><p>GPUs per serving engine</p></th>
+<th class="head"><p>Source</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>GLM-4-9B</p></td>
+<td class="text-right"><p>8</p></td>
+<td><p>2 / 1 / 2 / 1</p></td>
+<td class="text-right"><p>2</p></td>
+<td><p><a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-glm4-9B.sh">9B</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>GLM-4.7-Flash</p></td>
+<td class="text-right"><p>8</p></td>
+<td><p>2 / 2 / 2 / 4</p></td>
+<td class="text-right"><p>8</p></td>
+<td><p><a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-glm4.7-30B-A3B.sh">Flash</a></p></td>
+</tr>
+<tr class="row-even"><td><p>GLM-4.7</p></td>
+<td class="text-right"><p>64</p></td>
+<td><p>8 / 4 / 2 / 16</p></td>
+<td class="text-right"><p>32</p></td>
+<td><p><a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-glm4.7-355B-A32B.sh">355B</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>GLM-5.3</p></td>
+<td class="text-right"><p>256</p></td>
+<td><p>4 / 8 / 8 / 32</p></td>
+<td class="text-right"><p>64</p></td>
+<td><p><a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-glm5.2-744B-A40B.sh">744B</a></p></td>
+</tr>
+<tr class="row-even"><td><p>DeepSeek-R1</p></td>
+<td class="text-right"><p>128</p></td>
+<td><p>8 / 4 / 4 / 32</p></td>
+<td class="text-right"><p>64</p></td>
+<td><p><a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-deepseek-r1.sh">R1</a></p></td>
+</tr>
+<tr class="row-odd"><td><p>Qwen3.8-27B</p></td>
+<td class="text-right"><p>32</p></td>
+<td><p>4 / 2 / 4 / 1</p></td>
+<td class="text-right"><p>2</p></td>
+<td><p><a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-qwen3.5-27B.sh">Matching architecture</a></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>The Flash lab profile uses EP4 so EP × PP fits eight GPUs. Qwen3.8 reuses a matching architecture configuration; this documentation change has not GPU-validated its checkpoint. Start with 9B or Flash to learn the loop, then measure peak memory on your target model before reserving a long job.</p>
+<p>Colocation reserves one pool; separate placement reserves training plus rollout GPUs. PD divides the rollout pool into whole prefill/decode engines. External serving capacity is outside the trainer’s Ray allocation. Adding GPUs without changing model parallelism can simply add replicas rather than reducing per-GPU model memory.</p>
+</section>
+<section id="the-memory-ledger">
+<h2>The memory ledger<a class="headerlink" href="#the-memory-ledger" title="Link to this heading">#</a></h2>
+<p>For an illustrative mixed-precision Adam with <span class="math notranslate nohighlight">\(P\)</span> parameters, BF16 weights take <span class="math notranslate nohighlight">\(2P\)</span> bytes, FP32 gradients <span class="math notranslate nohighlight">\(4P\)</span>, FP32 master weights <span class="math notranslate nohighlight">\(4P\)</span>, and two FP32 moments <span class="math notranslate nohighlight">\(8P\)</span>:</p>
+<div class="math notranslate nohighlight">
+\[M_{\rm states}=(2+4+4+8)P=18P\ \text{bytes}.\]</div>
+<p>Actual precision-aware optimizer state dtypes can differ. Activations, buffers, temporary casts, allocator reserve, reference-policy copies and KV cache are additional. A 30B model has about 60 GB of BF16 weights and 240 GB of FP32 moments before sharding. For MoE storage use total parameters, not only active parameters.</p>
+<pre  class="mermaid">
+        flowchart TB
+    T[Training memory] --&gt; W[Weights + gradients]
+    T --&gt; O[Optimizer states]
+    T --&gt; A[Saved activations]
+    T --&gt; B[Buffers + temporaries]
+    O --&gt; C[CPU Adam: host memory and compute]
+    A --&gt; R[Recomputation: save less, compute again]
+    S[Serving memory] --&gt; SW[Weights]
+    S --&gt; KV[KV cache + workspace]
+    </pre><p>With ideal phase offload, colocated GPU demand approaches <span class="math notranslate nohighlight">\(\max(M_{\rm train},M_{\rm rollout})\)</span>; resident buffers and transitions add overhead. Separate pools have independent capacity constraints.</p>
+</section>
+<section id="tp-split-one-layer">
+<h2>TP: split one layer<a class="headerlink" href="#tp-split-one-layer" title="Link to this heading">#</a></h2>
+<p>Split a matrix by columns:</p>
+<div class="math notranslate nohighlight">
+\[W=[W_0\;W_1],\qquad Y=XW=[XW_0\;XW_1].\]</div>
+<p>Each GPU computes a slice. A following row-partitioned layer needs <span class="math notranslate nohighlight">\(Z=Y_0V_0+Y_1V_1\)</span>, a reduction of partial outputs. This explains both memory savings and frequent communication. Use fast links for TP. Sequence parallelism partitions additional activation operations; it does not replace CP. See the <a class="reference external" href="https://arxiv.org/abs/2104.04473">Megatron paper</a> and <a class="reference external" href="https://docs.nvidia.com/megatron-core/developer-guide/latest/user-guide/parallelism-guide.html">parallelism guide</a>.</p>
+</section>
+<section id="pp-split-model-layers">
+<h2>PP: split model layers<a class="headerlink" href="#pp-split-model-layers" title="Link to this heading">#</a></h2>
+<pre  class="mermaid">
+        flowchart LR
+    A[Early layers] --&gt;|activations| B[Middle layers]
+    B --&gt;|activations| C[Late layers]
+    C --&gt;|gradients| B
+    B --&gt;|gradients| A
+    </pre><p>Each stage stores its layers. For <span class="math notranslate nohighlight">\(p\)</span> equal-cost stages, <span class="math notranslate nohighlight">\(m\)</span> microbatches and stage time <span class="math notranslate nohighlight">\(\tau\)</span>, a simple forward pipeline takes <span class="math notranslate nohighlight">\((m+p-1)\tau\)</span>. Utilization is <span class="math notranslate nohighlight">\(m/(m+p-1)\)</span> and the fill/drain bubble fraction is <span class="math notranslate nohighlight">\((p-1)/(m+p-1)\)</span>. Backward scheduling, communication and unequal layer costs change actual training efficiency. More microbatches amortize bubbles but each must still fit. See the <a class="reference external" href="https://arxiv.org/abs/2104.04473">Megatron paper</a>.</p>
+</section>
+<section id="ep-split-moe-experts">
+<h2>EP: split MoE experts<a class="headerlink" href="#ep-split-moe-experts" title="Link to this heading">#</a></h2>
+<p>For selected experts <span class="math notranslate nohighlight">\(K(x)\)</span>:</p>
+<div class="math notranslate nohighlight">
+\[y(x)=\sum_{e\in K(x)}g_e(x)E_e(x).\]</div>
+<p>GPUs hold different experts. All-to-all dispatch sends tokens to their owners; combine returns weighted outputs. Uneven expert traffic can bottleneck an otherwise balanced weight allocation. See <a class="reference external" href="https://arxiv.org/abs/2006.16668">GShard</a>.</p>
+<p>Dense-layer rank accounting commonly uses <span class="math notranslate nohighlight">\(N=TP\cdot PP\cdot CP\cdot DP\)</span>. Experts use another grouping with expert TP and expert DP: do not multiply EP on top of the dense identity. With expert TP=1, the lab checks divisibility by both <span class="math notranslate nohighlight">\(TP\cdot PP\cdot CP\)</span> and <span class="math notranslate nohighlight">\(EP\cdot PP\)</span>. Model dimensions and Megatron impose further constraints.</p>
+</section>
+<section id="cp-split-tokens">
+<h2>CP: split tokens<a class="headerlink" href="#cp-split-tokens" title="Link to this heading">#</a></h2>
+<p>CP distributes queries by token position. Attention still needs remote keys/values, introducing communication. CP reduces local sequence activations; it does not itself shard weights.</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Layout: 8 tokens, CP2</p></th>
+<th class="head"><p>Rank 0</p></th>
+<th class="head"><p>Rank 1</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Default zigzag</p></td>
+<td><p>0, 1, 6, 7</p></td>
+<td><p>2, 3, 4, 5</p></td>
+</tr>
+<tr class="row-odd"><td><p>slime allgather CP</p></td>
+<td><p>0, 1, 2, 3</p></td>
+<td><p>4, 5, 6, 7</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Zigzag splits each padded sequence into <span class="math notranslate nohighlight">\(2c\)</span> chunks. Rank <span class="math notranslate nohighlight">\(r\)</span> gets chunks <span class="math notranslate nohighlight">\(r\)</span> and <span class="math notranslate nohighlight">\(2c-r-1\)</span>. Pairing early and late positions balances causal attention: for eight tokens, contiguous ranks process 10 and 26 query-key pairs, while these zigzag ranks each process 18. This counts pairs, not sparse-kernel runtime.</p>
+<p>slime <code class="docutils literal notranslate"><span class="pre">--allgather-cp</span></code> packs sequences and assigns contiguous slices of the padded stream. The DSA backend gathers needed remote attention/index data; loss processing restores sample ownership. This is different from zigzag per-sequence splitting. A backend-incompatible flag can scramble token order.</p>
+<pre  class="mermaid">
+        flowchart LR
+    A[Rank 0 local queries] --&gt; C[Attention over required keys]
+    B[Rank 1 keys / values] --&gt;|backend communication| C
+    C --&gt; D[Rank 0 local outputs]
+    </pre><p>Zigzag describes placement, not one universal ring algorithm. The attention backend chooses communication. Allgather can materialize large tensors, so CP does not divide every memory allocation equally.</p>
+<p>At CP &gt; 1, slime permits allgather CP only for <code class="docutils literal notranslate"><span class="pre">DeepseekV32ForCausalLM</span></code> and <code class="docutils literal notranslate"><span class="pre">GlmMoeDsaForCausalLM</span></code>. The GLM-5.3 lab profile enables it through its model config. Other profiles retain their supported layout; diagram buttons do not change runtime flags. See <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/backends/megatron_utils/arguments.py">validation</a>, <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/backends/megatron_utils/data.py">packing</a>, <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/backends/megatron_utils/cp_utils.py">CP indexing</a>, and the <a class="reference external" href="https://docs.nvidia.com/megatron-core/developer-guide/latest/user-guide/parallelism-guide.html">Megatron guide</a>.</p>
+</section>
+<section id="zero-and-distributed-optimizer">
+<h2>ZeRO and distributed optimizer<a class="headerlink" href="#zero-and-distributed-optimizer" title="Link to this heading">#</a></h2>
+<p>Data-parallel replicas process different samples. ZeRO progressively shards optimizer states (stage 1), gradients (stage 2), then parameters (stage 3). For <span class="math notranslate nohighlight">\(D\)</span> replicas and the illustrative 18-byte state budget:</p>
+<div class="math notranslate nohighlight">
+\[M_0=18P,\quad M_1=6P+12P/D,\quad M_2=2P+16P/D,\quad M_3=18P/D.\]</div>
+<p>Derive these by first dividing master weights plus moments by <span class="math notranslate nohighlight">\(D\)</span>, then gradients, then BF16 weights. These ideal persistent-state formulas omit transient communication buffers. <span class="math notranslate nohighlight">\(P\)</span> may be a local model-parallel shard and <span class="math notranslate nohighlight">\(D\)</span> its applicable replica group; expert groups can differ. See <a class="reference external" href="https://arxiv.org/abs/1910.02054">ZeRO</a>.</p>
+<p>slime enables Megatron’s <code class="docutils literal notranslate"><span class="pre">use_distributed_optimizer</span></code> by default: shard optimizer state/work, then gather updated parameters. This does not imply full ZeRO-3 parameter sharding or a DeepSpeed runtime. See <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/backends/megatron_utils/arguments.py">backend defaults</a>.</p>
+</section>
+<section id="cpu-adam-and-recomputation">
+<h2>CPU Adam and recomputation<a class="headerlink" href="#cpu-adam-and-recomputation" title="Link to this heading">#</a></h2>
+<p>Adam maintains moments and uses bias-corrected estimates:</p>
+<div class="math notranslate nohighlight">
+\[m_t=\beta_1m_{t-1}+(1-\beta_1)g_t,\quad v_t=\beta_2v_{t-1}+(1-\beta_2)g_t^2,\]</div>
+<div class="math notranslate nohighlight">
+\[\hat m_t=m_t/(1-\beta_1^t),\quad\hat v_t=v_t/(1-\beta_2^t),\quad\theta_{t+1}=\theta_t-\eta\hat m_t/(\sqrt{\hat v_t}+\epsilon).\]</div>
+<p>CPU Adam keeps optimizer state and computes updates on the host. The switch exports <code class="docutils literal notranslate"><span class="pre">--optimizer-cpu-offload</span></code>, <code class="docutils literal notranslate"><span class="pre">--overlap-cpu-optimizer-d2h-h2d</span></code> and <code class="docutils literal notranslate"><span class="pre">--use-precision-aware-optimizer</span></code>. Sharding decides which rank owns state; offload decides where that rank stores/updates it. Host RAM, CPU throughput and PCIe bandwidth replace part of the GPU burden; activations and KV cache are unaffected. See <a class="reference external" href="https://arxiv.org/abs/1412.6980">Adam</a> and <a class="reference external" href="https://arxiv.org/abs/2101.06840">ZeRO-Offload</a> for background; slime uses Megatron’s implementation.</p>
+<p>The independent recomputation switch saves boundaries and repeats forward work during backward, trading FLOPs for activation memory. See <a class="reference external" href="https://arxiv.org/abs/1604.06174">activation checkpointing</a>. For training OOM, identify whether states or activations dominate before choosing offload, more model parallelism, or smaller token microbatches. For serving OOM, examine weights, KV dtype, concurrency, response length and engine size. Measure each change with <a class="reference internal" href="../developer_guide/profiling.html"><span class="std std-doc">profiling</span></a>.</p>
+</section>
+</section>
+
+
+                </article>
+              
+
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="policy-mismatch.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">From policy gradients to train–rollout consistency</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="low-precision.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">Low Precision Training and Rollout</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item"><div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> Contents
+  </div>
+  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#starting-gpu-allocations">Starting GPU allocations</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#the-memory-ledger">The memory ledger</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#tp-split-one-layer">TP: split one layer</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#pp-split-model-layers">PP: split model layers</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#ep-split-moe-experts">EP: split MoE experts</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#cp-split-tokens">CP: split tokens</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#zero-and-distributed-optimizer">ZeRO and distributed optimizer</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#cpu-adam-and-recomputation">CPU Adam and recomputation</a></li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+<div class="bd-footer-content__inner container">
+  
+  <div class="footer-item">
+    
+<p class="component-author">
+By slime Team
+</p>
+
+  </div>
+  
+  <div class="footer-item">
+    
+
+  <p class="copyright">
+    
+      © Copyright 2025-2026, slime.
+      <br/>
+    
+  </p>
+
+  </div>
+  
+  <div class="footer-item">
+    <p class="last-updated">
+  Last updated on Oct 09, 2026.
+  <br/>
+</p>
+  </div>
+  
+  <div class="footer-item">
+    
+  </div>
+  
+</div>
+          </footer>
+        
+
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9"></script>
+<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9"></script>
+
+  <footer class="bd-footer">
+  </footer>
+  </body>
+</html>

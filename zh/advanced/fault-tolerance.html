@@ -33,7 +33,7 @@
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=4418a689" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=ad20845f" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=5f5cb4b6" />
   
   <!-- So that users can add custom icons -->
   <script defer src="../_static/scripts/fontawesome.js?digest=90905a2f556bf617f1a9"></script>
@@ -42,20 +42,20 @@
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
     <script src="../_static/documentation_options.js?v=ceb54874"></script>
-    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../_static/copybutton.js?v=ccdb6887"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?v=fab101a9"></script>
     <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'advanced/fault-tolerance';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
-    <script data-layout="root" src="../_static/js/lang-toggle.js?v=082004b6"></script>
+    <script data-layout="root" src="../_static/js/lang-toggle.js?v=9e8f3a3a"></script>
     <link rel="icon" href="../_static/logo.ico"/>
     <link rel="index" title="索引" href="../genindex.html" />
     <link rel="search" title="搜索" href="../search.html" />
-    <link rel="next" title="使用 straw 持久化 rollout" href="straw.html" />
-    <link rel="prev" title="Reproducibility" href="reproducibility.html" />
+    <link rel="next" title="任务教程" href="../examples/index.html" />
+    <link rel="prev" title="观测" href="observability.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.4.0" />
@@ -202,80 +202,25 @@
 </button></div>
         <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
     <div class="bd-toc-item navbar-nav active">
-        <p aria-level="2" class="caption" role="heading"><span class="caption-text">开始使用</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../get_started/quick_start.html">快速使用</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/usage.html">使用文档</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/customization.html">自定义指南</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/agent.html">Agentic RL 训练路线图</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/qa.html">常见 Q&amp;A</a></li>
+        <ul class="current nav bd-sidenav">
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="../library.html">文档资料库</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../get_started/index.html">从这里开始</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../training/index.html">训练与算法</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../rollout/index.html">Rollout 与调度</a></li>
+<li class="toctree-l2 current active has-children"><a class="reference internal" href="../operations/index.html">调试、性能分析与恢复</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="../developer_guide/debug.html">Debug 指南</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../developer_guide/trace.html">Trace 可视化</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../developer_guide/profiling.html">性能分析 (Profiling)</a></li>
+<li class="toctree-l3"><a class="reference internal" href="observability.html">观测</a></li>
+<li class="toctree-l3 current active"><a class="current reference internal" href="#">容灾</a></li>
 </ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Dense</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4B.html">8xH100 训练 Qwen3-4B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm4-9B.html">8xH100 训练 GLM4-9B</a></li>
+</details></li>
+<li class="toctree-l2"><a class="reference internal" href="../examples/index.html">任务教程</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../developer_guide/index.html">开发与 CI</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../platform_support/index.html">硬件平台</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../blogs/index.html">设计文章与版本发布</a></li>
 </ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">MoE</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-30B-A3B.html">8×H100 训练 GLM-4.7-Flash</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-30B-A3B.html">8xH100 训练 Qwen3-30B-A3B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-next-80B-A3B.html">Qwen3-Next-80B-A3B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm5.2-744B-A40B.html">256xH100 训练 GLM-5.2 744B-A40B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-355B-A32B.html">64xH100 训练 GLM-4.7</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/deepseek-r1.html">128xH100 训练 DeepSeek R1</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">高级特性</span></p>
-<ul class="current nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="on-policy-distillation.html">在策略蒸馏 (On-Policy Distillation)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="speculative-decoding.html">投机采样</a></li>
-<li class="toctree-l1"><a class="reference internal" href="low-precision.html">低精度训练与 Rollout</a></li>
-<li class="toctree-l1"><a class="reference internal" href="reproducibility.html">Reproducibility</a></li>
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">容灾</a></li>
-<li class="toctree-l1"><a class="reference internal" href="straw.html">使用 straw 持久化 rollout</a></li>
-<li class="toctree-l1"><a class="reference internal" href="observability.html">观测</a></li>
-<li class="toctree-l1"><a class="reference internal" href="pd-disaggregation.html">PD 分离</a></li>
-<li class="toctree-l1"><a class="reference internal" href="external-rollout-engines.html">External Rollout Engines 配置路线图</a></li>
-<li class="toctree-l1"><a class="reference internal" href="delta-weight-sync.html">Delta 权重同步</a></li>
-<li class="toctree-l1"><a class="reference internal" href="sglang-config.html">SGLang Config：高级引擎部署</a></li>
-<li class="toctree-l1"><a class="reference internal" href="megatron-config.html">Megatron Config：按角色覆盖训练参数</a></li>
-<li class="toctree-l1"><a class="reference internal" href="arch-support-beyond-megatron.html">在 Megatron-LM 中快速支持新模型架构</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">其他用法</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4b-base-openhermes.html">SFT Qwen3-4B-Base</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/search-r1/README.html">Search-R1 lite</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/fully_async/README.html">Fully-Async Rollout Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/coding_agent_rl/README.html">Coding-Agent RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/delta_weight_sync/README.html">Delta Weight Sync</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/eval_multi_task/README.html">Multi-Task Evaluation Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/geo3k_vlm/README.html">VLM Single-Turn RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/geo3k_vlm_multi_turn/README.html">VLM Multi-Turn (geo3k dataset)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/on_policy_distillation/README.html">On-Policy Distillation Example</a></li>
-
-
-
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/strands_sglang/README.html">slime x Strands-SGLang</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/tau-bench/README.html">Tau bench</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/train_infer_mismatch_helper/README.html">Rollout Correction Methods</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">开发指南</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/ci.html">CI（持续集成）</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/debug.html">Debug 指南</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/trace.html">Trace 可视化</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/profiling.html">性能分析 (Profiling)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/install_flashqla.html">安装 FlashQLA</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">硬件平台</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../platform_support/amd_tutorial.html">AMD ROCm</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">博客</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../blogs/release_v0.1.0.html">v0.1.0: 重新定义高性能 RL 训练框架</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../blogs/introducing_slime.html">slime：为 RL Scaling 设计的 SGLang-Native 后训练框架</a></li>
+</details></li>
 </ul>
 
     </div>
@@ -531,16 +476,16 @@
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="id1">
-<h1>容灾<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h1>
-<p>slime 会检查 SGLang 推理引擎是否正常工作，移除失效的引擎，并在下次更新权重前重启它们。使用 Straw 传输或保存 rollout 调试数据时，还支持在 Megatron 训练失败后保留推理集群，调整训练配置，再继续训练。</p>
+<h1>容灾<a class="headerlink" href="#id1" title="Link to this heading">#</a></h1>
+<p>slime 会检查 SGLang 推理引擎是否正常工作，移除失效的引擎，并在下次更新权重前重启它们。使用 straw 传输或保存 rollout 调试数据时，还支持在 Megatron 训练失败后保留推理集群，调整训练配置，再继续训练。</p>
 <p>这些能力默认对 slime 启动的推理集群生效，不需要传入 <code class="docutils literal notranslate"><span class="pre">--use-fault-tolerance</span></code>。该参数保留用于兼容旧命令；使用外部推理集群时，仍按原来的策略处理。</p>
 <section id="megatron">
-<h2>Megatron 失败后如何继续训练<a class="headerlink" href="#megatron" title="链接到此标题。">#</a></h2>
+<h2>Megatron 失败后如何继续训练<a class="headerlink" href="#megatron" title="Link to this heading">#</a></h2>
 <p>这个恢复流程要求 <strong>Ray 集群仍在运行</strong>。训练入口进程或 <code class="docutils literal notranslate"><span class="pre">RolloutManager</span></code> 退出，不会销毁 SGLang 引擎和路由器；重新提交训练任务后，slime 会找到原来的推理集群并继续使用。整个流程不需要修改 SGLang，也不会自动重试训练任务。</p>
 <section id="id2">
-<h3>首次启动时保留恢复数据<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h3>
+<h3>首次启动时保留恢复数据<a class="headerlink" href="#id2" title="Link to this heading">#</a></h3>
 <p>以下两种方式任选其一。选择后，slime 会自动保存恢复所需的数据，不依赖 <code class="docutils literal notranslate"><span class="pre">--use-fault-tolerance</span></code>。</p>
-<p>使用 Straw 保存 rollout 和训练数据：</p>
+<p>使用 straw 保存 rollout 和训练数据：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--rollout-data-transport<span class="w"> </span>straw<span class="w"> </span>--rollout-data-dir<span class="w"> </span>/shared/my-run/queue
 </pre></div>
 </div>
@@ -554,7 +499,7 @@
 <p>如果保存大 MoE 的优化器时显存不足，可以使用 <code class="docutils literal notranslate"><span class="pre">--distrib-optim-fully-reshardable-mem-efficient</span></code>。Megatron 会通过 Gloo 在 CPU 上聚合 checkpoint 张量，仍支持重新分片，但会增加主机内存和保存时间的开销。<code class="docutils literal notranslate"><span class="pre">--overlap-grad-reduce</span> <span class="pre">--ddp-bucket-size</span> <span class="pre">40000000</span></code> 可以限制每次聚合的临时缓冲区大小；还需为完整的优化器状态预留主机内存。</p>
 </section>
 <section id="id3">
-<h3>失败后重新提交<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h3>
+<h3>失败后重新提交<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
 <p>例如，Megatron 因 OOM 退出后：</p>
 <ol class="arabic simple">
 <li><p>等待失败的训练任务结束。</p></li>
@@ -566,18 +511,18 @@
 <p>两次提交之间不要停止 Ray、重建推理服务容器，或执行 <code class="docutils literal notranslate"><span class="pre">pkill</span> <span class="pre">sglang</span></code> 等清理命令。<code class="docutils literal notranslate"><span class="pre">slime.utils.external_utils.command_utils.execute_train</span></code> 会保留正在运行的 Ray head 和 SGLang；如果使用的 shell 脚本每次启动都会清理进程，重启时需要跳过这一步。训练正常结束后，slime 会释放保留的会话及其资源。</p>
 </section>
 <section id="id4">
-<h3>从哪一步恢复<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h3>
+<h3>从哪一步恢复<a class="headerlink" href="#id4" title="Link to this heading">#</a></h3>
 <p>新训练进程会加载最近一次成功保存的模型、scheduler、随机数状态，以及有状态优化器的状态，并重新训练该 checkpoint 之后的批次。已经训练完成、但模型更新尚未保存的批次也会重放；如果还没有 checkpoint，则从最初的模型开始重放。</p>
 <p>保留的数据包括生成结果、token 和 reward 后处理结果。修改训练并行配置后，slime 会重新分片这些数据，不会重新生成样本，也不会再次执行 reward 后处理。恢复数据会保留到对应的模型 checkpoint 提交成功，或训练正常结束。推理侧的权重版本号在重启后继续递增。</p>
 <p>Megatron 会在并行布局兼容时恢复随机数状态；TP/PP 改变时会重新初始化。因此，改变并行布局后可以继续训练，但不保证结果逐比特一致。</p>
 </section>
 </section>
 <section id="id5">
-<h2>如何找到原来的推理集群<a class="headerlink" href="#id5" title="链接到此标题。">#</a></h2>
+<h2>如何找到原来的推理集群<a class="headerlink" href="#id5" title="Link to this heading">#</a></h2>
 <p>slime 使用具名 Ray actor 管理推理集群。新任务根据会话名称找到该 actor，由它返回已有的路由器和引擎信息，不需要扫描路由器进程。</p>
 <p>可以用 <code class="docutils literal notranslate"><span class="pre">--rollout-session-id</span></code> 显式指定会话标识。未指定时，按以下顺序选择标识来源，再计算哈希得到稳定的名称：</p>
 <ol class="arabic simple">
-<li><p>使用 Straw 时，取存储目录的绝对路径和 <code class="docutils literal notranslate"><span class="pre">--rollout-queue-run-id</span></code>。</p></li>
+<li><p>使用 straw 时，取存储目录的绝对路径和 <code class="docutils literal notranslate"><span class="pre">--rollout-queue-run-id</span></code>。</p></li>
 <li><p>否则，取 <code class="docutils literal notranslate"><span class="pre">--save-debug-rollout-data</span></code> 路径模板的绝对路径。</p></li>
 <li><p>未保存调试数据时，取 <code class="docutils literal notranslate"><span class="pre">--save</span></code> 目录的绝对路径。</p></li>
 <li><p>以上都没有时，取模型和 rollout 配置。</p></li>
@@ -585,9 +530,9 @@
 <p>同一任务的两次提交需要使用相同标识；独立任务应使用不同标识，避免接入同一个推理集群。</p>
 <p>代码中有三个组件负责恢复：</p>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">ServingCluster</span></code> 管理路由器、SGLang 引擎、GPU 资源、Straw 队列控制器和权重更新锁。它是具名的 detached Ray actor，不会随创建它的训练任务退出。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">ServingCluster</span></code> 管理路由器、SGLang 引擎、GPU 资源、straw 队列控制器和权重更新锁。它是具名的 detached Ray actor，不会随创建它的训练任务退出。</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">RolloutManager</span></code> 负责生成、读取数据、转换样本和划分训练数据。它可以继续使用，也可以在退出后重建；重建不会销毁 <code class="docutils literal notranslate"><span class="pre">ServingCluster</span></code> 持有的资源。</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">TrainingRecovery</span></code> 管理模型 checkpoint 边界，并保留该边界之后需要重放的批次。原始批次和转换结果是否已接收，由 Straw 接收日志中的回执决定；manager 或 RPC 在更新恢复日志前失败时，会根据回执补齐记录。转换结果只存一份，各 DP rank 获取自己的索引视图，改变并行配置只需重建视图。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">TrainingRecovery</span></code> 管理模型 checkpoint 边界，并保留该边界之后需要重放的批次。原始批次和转换结果是否已接收，由 straw 接收日志中的回执决定；manager 或 RPC 在更新恢复日志前失败时，会根据回执补齐记录。转换结果只存一份，各 DP rank 获取自己的索引视图，改变并行配置只需重建视图。</p></li>
 </ul>
 <p>如果 <code class="docutils literal notranslate"><span class="pre">RolloutManager</span></code> 还活着，它会暂停接收新的生成任务。如果它已经退出，新实例会接回 <code class="docutils literal notranslate"><span class="pre">ServingCluster</span></code>，恢复数据源进度，并由队列控制器阻止旧读取进程继续取任务。已经完成、但尚未交给训练的预取结果仍可使用。训练进程也登记在 <code class="docutils literal notranslate"><span class="pre">ServingCluster</span></code> 中，因此 manager 退出后仍能清理旧训练进程。</p>
 <p>训练 driver 负责本次训练尝试的退出策略，也负责启动中途失败后的回滚。失败时，先限时等待 manager 暂停，再直接通知 serving 释放 trainer；无法暂停的 manager 会被终止，由下一次尝试重建。正常结束时分别清理 manager 和 serving，因此自定义 data source 的 <code class="docutils literal notranslate"><span class="pre">close()</span></code> 报错也不会跳过 serving 清理。清理失败会记录日志，保留原始训练异常。</p>
@@ -595,7 +540,7 @@
 <p>Checkpoint 选择会返回独立的配置与恢复计划。恢复边界通过不可变对象交接，每次训练尝试根据它和 serving 权重版本生成自己的配置副本；data source 和长驻 rollout worker 保留原来的配置。所有 custom function 仍使用原有的 args 接口。</p>
 </section>
 <section id="id6">
-<h2>推理引擎的健康检查与重启<a class="headerlink" href="#id6" title="链接到此标题。">#</a></h2>
+<h2>推理引擎的健康检查与重启<a class="headerlink" href="#id6" title="Link to this heading">#</a></h2>
 <p>rollout 过程中，slime 定期请求 SGLang 的 <code class="docutils literal notranslate"><span class="pre">/health_generate</span></code> 接口，检查引擎是否正常响应。rollout 结束时还会立即检查一次，<strong>不受后台检查间隔和首次等待时间限制</strong>。</p>
 <p>同步 rollout 在发送中止生成和等待请求结束的控制命令前，会先从路由器中移除失效的服务。返回训练前，<code class="docutils literal notranslate"><span class="pre">ServingCluster</span></code> 会再次检查引擎，注销失效服务并清除对应的 Ray actor 引用，避免后续显存卸载或权重更新请求访问已经停止的引擎。HTTP 请求和 Ray 调用都有超时限制。</p>
 <p>缺失的引擎在下一次更新权重前重启，随后加载训练侧的权重。后台检查和 rollout 收尾检查使用同一套故障处理流程；更新权重或调整显存占用时会暂停后台检查。</p>
@@ -633,7 +578,7 @@
 <p>如果负载高峰导致健康检查误判，可以增大超时。如果引擎在权重更新后反复失败，应检查 SGLang 日志和最近保存的 rollout 数据。</p>
 </section>
 <section id="id7">
-<h2>分开调试推理和训练<a class="headerlink" href="#id7" title="链接到此标题。">#</a></h2>
+<h2>分开调试推理和训练<a class="headerlink" href="#id7" title="Link to this heading">#</a></h2>
 <p>保存 rollout 数据后，可以固定训练输入，单独排查训练问题：</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">--debug-rollout-only</span></code>：只初始化推理侧，不训练；可配合保存参数检查生成和打分结果。</p></li>
@@ -644,8 +589,8 @@
 <p>对于耗时较长的生成请求，可以用<a class="reference internal" href="../developer_guide/trace.html"><span class="std std-doc">请求追踪</span></a>查看生成、打分和模型调用各自的耗时，再用<a class="reference internal" href="../developer_guide/profiling.html"><span class="std std-doc">性能分析</span></a>定位瓶颈。多模型或 PD 分离部署的配置见 <a class="reference internal" href="sglang-config.html"><span class="std std-doc">SGLang 配置</span></a>。</p>
 </section>
 <section id="id8">
-<h2>恢复范围与限制<a class="headerlink" href="#id8" title="链接到此标题。">#</a></h2>
-<p>未使用 Straw、也未保存 rollout 调试数据时，仍可保留推理集群，但无法重放未保存到 checkpoint 的训练批次。</p>
+<h2>恢复范围与限制<a class="headerlink" href="#id8" title="Link to this heading">#</a></h2>
+<p>未使用 straw、也未保存 rollout 调试数据时，仍可保留推理集群，但无法重放未保存到 checkpoint 的训练批次。</p>
 <p><code class="docutils literal notranslate"><span class="pre">RolloutManager</span></code> 重建支持内置数据源。自定义数据源需要提供兼容的 <code class="docutils literal notranslate"><span class="pre">state_dict</span></code> / <code class="docutils literal notranslate"><span class="pre">load_state_dict</span></code>，并让自己的队列控制器独立于 manager 存活；数据源构造函数和 rollout hook 的签名不变。</p>
 <p>如果 <code class="docutils literal notranslate"><span class="pre">ServingCluster</span></code> 或整个 Ray 集群已经丢失，需要重新启动推理服务并从 checkpoint 恢复。集群抢占和节点丢失仍需要调度系统与 checkpoint 配合处理。</p>
 <p>更多调试方式见<a class="reference internal" href="../developer_guide/debug.html"><span class="std std-doc">调试指南</span></a>，恢复测试的覆盖范围见<a class="reference internal" href="../developer_guide/ci.html"><span class="std std-doc">持续集成</span></a>。</p>
@@ -664,20 +609,20 @@
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="reproducibility.html"
+       href="observability.html"
        title="上一页">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">上一页</p>
-        <p class="prev-next-title">Reproducibility</p>
+        <p class="prev-next-title">观测</p>
       </div>
     </a>
     <a class="right-next"
-       href="straw.html"
+       href="../examples/index.html"
        title="下一页">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">下一页</p>
-        <p class="prev-next-title">使用 straw 持久化 rollout</p>
+        <p class="prev-next-title">任务教程</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>

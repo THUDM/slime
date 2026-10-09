@@ -33,7 +33,7 @@
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=4418a689" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=ad20845f" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=5f5cb4b6" />
   
   <!-- So that users can add custom icons -->
   <script defer src="../_static/scripts/fontawesome.js?digest=90905a2f556bf617f1a9"></script>
@@ -42,20 +42,20 @@
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
     <script src="../_static/documentation_options.js?v=ceb54874"></script>
-    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../_static/copybutton.js?v=ccdb6887"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?v=fab101a9"></script>
     <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'get_started/usage';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
-    <script data-layout="root" src="../_static/js/lang-toggle.js?v=082004b6"></script>
+    <script data-layout="root" src="../_static/js/lang-toggle.js?v=9e8f3a3a"></script>
     <link rel="icon" href="../_static/logo.ico"/>
     <link rel="index" title="索引" href="../genindex.html" />
     <link rel="search" title="搜索" href="../search.html" />
     <link rel="next" title="自定义指南" href="customization.html" />
-    <link rel="prev" title="快速使用" href="quick_start.html" />
+    <link rel="prev" title="运行环境准备" href="quick_start.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.4.0" />
@@ -202,80 +202,26 @@
 </button></div>
         <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
     <div class="bd-toc-item navbar-nav active">
-        <p aria-level="2" class="caption" role="heading"><span class="caption-text">开始使用</span></p>
-<ul class="current nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="quick_start.html">快速使用</a></li>
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">使用文档</a></li>
-<li class="toctree-l1"><a class="reference internal" href="customization.html">自定义指南</a></li>
-<li class="toctree-l1"><a class="reference internal" href="agent.html">Agentic RL 训练路线图</a></li>
-<li class="toctree-l1"><a class="reference internal" href="qa.html">常见 Q&amp;A</a></li>
+        <ul class="current nav bd-sidenav">
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="../library.html">文档资料库</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2 current active has-children"><a class="reference internal" href="index.html">从这里开始</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="experiment-guide.html">Tutorial：搭建并理解一个 RL 实验</a></li>
+<li class="toctree-l3"><a class="reference internal" href="quick_start.html">运行环境准备</a></li>
+<li class="toctree-l3 current active"><a class="current reference internal" href="#">使用文档</a></li>
+<li class="toctree-l3"><a class="reference internal" href="customization.html">自定义指南</a></li>
+<li class="toctree-l3"><a class="reference internal" href="agent.html">Agentic RL 训练路线图</a></li>
+<li class="toctree-l3"><a class="reference internal" href="qa.html">常见 Q&amp;A</a></li>
 </ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Dense</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4B.html">8xH100 训练 Qwen3-4B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm4-9B.html">8xH100 训练 GLM4-9B</a></li>
+</details></li>
+<li class="toctree-l2"><a class="reference internal" href="../training/index.html">训练与算法</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../rollout/index.html">Rollout 与调度</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../operations/index.html">调试、性能分析与恢复</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../examples/index.html">任务教程</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../developer_guide/index.html">开发与 CI</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../platform_support/index.html">硬件平台</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../blogs/index.html">设计文章与版本发布</a></li>
 </ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">MoE</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-30B-A3B.html">8×H100 训练 GLM-4.7-Flash</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-30B-A3B.html">8xH100 训练 Qwen3-30B-A3B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-next-80B-A3B.html">Qwen3-Next-80B-A3B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm5.2-744B-A40B.html">256xH100 训练 GLM-5.2 744B-A40B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-355B-A32B.html">64xH100 训练 GLM-4.7</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/deepseek-r1.html">128xH100 训练 DeepSeek R1</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">高级特性</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../advanced/on-policy-distillation.html">在策略蒸馏 (On-Policy Distillation)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/speculative-decoding.html">投机采样</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/low-precision.html">低精度训练与 Rollout</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/reproducibility.html">Reproducibility</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/fault-tolerance.html">容灾</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/straw.html">使用 straw 持久化 rollout</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/observability.html">观测</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/pd-disaggregation.html">PD 分离</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/external-rollout-engines.html">External Rollout Engines 配置路线图</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/delta-weight-sync.html">Delta 权重同步</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/sglang-config.html">SGLang Config：高级引擎部署</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/megatron-config.html">Megatron Config：按角色覆盖训练参数</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/arch-support-beyond-megatron.html">在 Megatron-LM 中快速支持新模型架构</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">其他用法</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4b-base-openhermes.html">SFT Qwen3-4B-Base</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/search-r1/README.html">Search-R1 lite</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/fully_async/README.html">Fully-Async Rollout Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/coding_agent_rl/README.html">Coding-Agent RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/delta_weight_sync/README.html">Delta Weight Sync</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/eval_multi_task/README.html">Multi-Task Evaluation Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/geo3k_vlm/README.html">VLM Single-Turn RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/geo3k_vlm_multi_turn/README.html">VLM Multi-Turn (geo3k dataset)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/on_policy_distillation/README.html">On-Policy Distillation Example</a></li>
-
-
-
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/strands_sglang/README.html">slime x Strands-SGLang</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/tau-bench/README.html">Tau bench</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/train_infer_mismatch_helper/README.html">Rollout Correction Methods</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">开发指南</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/ci.html">CI（持续集成）</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/debug.html">Debug 指南</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/trace.html">Trace 可视化</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/profiling.html">性能分析 (Profiling)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/install_flashqla.html">安装 FlashQLA</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">硬件平台</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../platform_support/amd_tutorial.html">AMD ROCm</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">博客</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../blogs/release_v0.1.0.html">v0.1.0: 重新定义高性能 RL 训练框架</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../blogs/introducing_slime.html">slime：为 RL Scaling 设计的 SGLang-Native 后训练框架</a></li>
+</details></li>
 </ul>
 
     </div>
@@ -557,9 +503,9 @@
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="id1">
-<h1>使用文档<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h1>
+<h1>使用文档<a class="headerlink" href="#id1" title="Link to this heading">#</a></h1>
 <section id="slime">
-<h2>slime 参数简介<a class="headerlink" href="#slime" title="链接到此标题。">#</a></h2>
+<h2>slime 参数简介<a class="headerlink" href="#slime" title="Link to this heading">#</a></h2>
 <p>在使用 slime 时，传参主要是为了如下几件事：</p>
 <ol class="arabic simple">
 <li><p>把集群中一部分 GPU 分配做训练，一部分分配做推理；</p></li>
@@ -569,7 +515,7 @@
 </ol>
 <p>按照这个顺序，我们需要配置这些参数：</p>
 <section id="id2">
-<h3>集群资源分配<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h3>
+<h3>集群资源分配<a class="headerlink" href="#id2" title="Link to this heading">#</a></h3>
 <p>集群资源分配主要有这样的 4 个参数：</p>
 <ul>
 <li><p><code class="docutils literal notranslate"><span class="pre">--actor-num-nodes</span></code>：RL 的 actor 训练需要多少节点；</p></li>
@@ -587,12 +533,12 @@
 <p>此外，slime 支持 Prefill 和 Decode 的分离部署 (PD Disaggregation)，可以通过设置 <code class="docutils literal notranslate"><span class="pre">--prefill-num-servers</span></code> 参数来指定用于 Prefill 的服务器数量。</p>
 </section>
 <section id="id3">
-<h3>选择训练后端<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h3>
+<h3>选择训练后端<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
 <p>slime 当前使用 Megatron-LM 作为训练后端。为了兼容已有脚本，仍然可以显式传入
 <code class="docutils literal notranslate"><span class="pre">--train-backend</span> <span class="pre">megatron</span></code>。</p>
 </section>
 <section id="megatron">
-<h3>加载 megatron<a class="headerlink" href="#megatron" title="链接到此标题。">#</a></h3>
+<h3>加载 megatron<a class="headerlink" href="#megatron" title="Link to this heading">#</a></h3>
 <p>megatron 与 sglang, vllm 或者 huggingface trainer 之类的工具不同，他不能直接读取 huggingface ckpt，而是需要用户配置好要训练的模型的参数，并且加载 megatron 自己的 ckpt。</p>
 <p>一般来说，我们需要做 3 点准备：</p>
 <ul class="simple">
@@ -602,7 +548,7 @@
 </ul>
 <p>对于一些 megatron 的自定义以及 slime 引入 megatron 的原理，请见 megatron 使用方法一节。</p>
 <section id="id4">
-<h4>配置模型参数<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h4>
+<h4>配置模型参数<a class="headerlink" href="#id4" title="Link to this heading">#</a></h4>
 <p>这里以 qwen3 4B 为例，我们需要这些参数：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">MODEL_ARGS</span><span class="o">=(</span>
 <span class="w">   </span>--num-layers<span class="w"> </span><span class="m">36</span>
@@ -634,7 +580,7 @@
 </ul>
 </section>
 <section id="id5">
-<h4>设置各种并行与重计算<a class="headerlink" href="#id5" title="链接到此标题。">#</a></h4>
+<h4>设置各种并行与重计算<a class="headerlink" href="#id5" title="Link to this heading">#</a></h4>
 <p>megatron 是目前优化最为齐全的训练框架，大家使用 megatron 的一个主要目的就是追求其卓越的性能，这里简单介绍一些 megatron 的并行和重计算的配置方法。</p>
 <ul class="simple">
 <li><p>这里我们简单陈列 megatron 的并行策略，关于这些并行策略之间的 trade-off 请参考更专业的一些讨论：</p>
@@ -657,7 +603,7 @@
 </ul>
 </section>
 <section id="megatron-ckpt">
-<h4>加载 megatron ckpt<a class="headerlink" href="#megatron-ckpt" title="链接到此标题。">#</a></h4>
+<h4>加载 megatron ckpt<a class="headerlink" href="#megatron-ckpt" title="Link to this heading">#</a></h4>
 <p>megatron 支持多种其自定义的 ckpt 格式，这里介绍 2 种比较主流的格式，</p>
 <ul class="simple">
 <li><p>曾经比较主流的 torch 格式（对应 <code class="docutils literal notranslate"><span class="pre">--ckpt-format</span> <span class="pre">torch</span></code>）；</p></li>
@@ -691,7 +637,7 @@
 </section>
 </section>
 <section id="sglang">
-<h3>加载 sglang<a class="headerlink" href="#sglang" title="链接到此标题。">#</a></h3>
+<h3>加载 sglang<a class="headerlink" href="#sglang" title="Link to this heading">#</a></h3>
 <p>sglang 的加载非常简单，只需要：</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code>：初始化 sglang 用的 huggingface ckpt；</p></li>
@@ -707,7 +653,7 @@
 <p>对于一些 sglang 的自定义以及 slime 引入 sglang 的原理，请见 sglang 使用方法一节。</p>
 </section>
 <section id="id6">
-<h3>数据格式<a class="headerlink" href="#id6" title="链接到此标题。">#</a></h3>
+<h3>数据格式<a class="headerlink" href="#id6" title="Link to this heading">#</a></h3>
 <p>原始数据统一由 DataSource 管理。有 <code class="docutils literal notranslate"><span class="pre">--prompt-data</span></code> 时内置 DataSource 会加载数据；需要自行管理数据时可通过 <code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code> 提供自定义实现。</p>
 <p>slime 支持加载 <code class="docutils literal notranslate"><span class="pre">.jsonl</span></code> 和 <code class="docutils literal notranslate"><span class="pre">.parquet</span></code> 格式文件；读取 Parquet 需要安装 <code class="docutils literal notranslate"><span class="pre">pyarrow</span></code>。两种格式中的每条记录都应包含 <code class="docutils literal notranslate"><span class="pre">--input-key</span></code> 和 <code class="docutils literal notranslate"><span class="pre">--label-key</span></code> 指定的字段。下面是一条 JSONL 数据展开后的示例：</p>
 <div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
@@ -743,7 +689,7 @@
 <p>推荐把 source 标识放在 <code class="docutils literal notranslate"><span class="pre">metadata[&quot;source_name&quot;]</span></code> 中；自定义 data source 如果已经动态设置了 <code class="docutils literal notranslate"><span class="pre">sample.source</span></code>，slime 也会识别。rollout 转换成训练数据时，slime 会为每个样本生成 <code class="docutils literal notranslate"><span class="pre">source_names</span></code> 并传到训练侧。source 的读取优先级为动态 <code class="docutils literal notranslate"><span class="pre">sample.source</span></code>、<code class="docutils literal notranslate"><span class="pre">metadata[&quot;source_name&quot;]</span></code>，都不存在时为 <code class="docutils literal notranslate"><span class="pre">&quot;unknown&quot;</span></code>。这可以用于自定义 reward、filter、日志统计，以及后续按 source 路由 OPD teacher 等需要分 source 处理的场景。</p>
 </section>
 <section id="rl">
-<h3>RL 训练需要的超参<a class="headerlink" href="#rl" title="链接到此标题。">#</a></h3>
+<h3>RL 训练需要的超参<a class="headerlink" href="#rl" title="Link to this heading">#</a></h3>
 <ul>
 <li><p><code class="docutils literal notranslate"><span class="pre">--advantage-estimator</span></code>: 当前训练需要的 RL 算法，目前支持：</p>
 <ul class="simple">
@@ -760,7 +706,7 @@
 <li><p><code class="docutils literal notranslate"><span class="pre">--use-score-centering</span></code>：启用 <a class="reference external" href="https://arxiv.org/abs/2609.20807">Score Centering</a>，可与 TIS 组合使用，详见下方的 <a class="reference internal" href="#score-centering"><span class="std std-ref">Score Centering</span></a>。</p></li>
 </ul>
 <section id="grpo">
-<h4>GRPO 算法<a class="headerlink" href="#grpo" title="链接到此标题。">#</a></h4>
+<h4>GRPO 算法<a class="headerlink" href="#grpo" title="Link to this heading">#</a></h4>
 <p>GRPO（Group Relative Policy Optimization）是 DeepSeek-Math 中提出的一种 RL 算法，其核心思想是通过组内相对比较来计算 advantage，而不需要额外的 critic 模型。</p>
 <p>使用 GRPO 时，需要设置：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--advantage-estimator<span class="w"> </span>grpo
@@ -780,7 +726,7 @@
 </ul>
 </section>
 <section id="ppo">
-<h4>PPO 算法<a class="headerlink" href="#ppo" title="链接到此标题。">#</a></h4>
+<h4>PPO 算法<a class="headerlink" href="#ppo" title="Link to this heading">#</a></h4>
 <p>PPO（Proximal Policy Optimization）是经典的 RL 算法，使用 critic 模型来估计 value function，从而计算 advantage。</p>
 <p>使用 PPO 时，需要设置：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--advantage-estimator<span class="w"> </span>ppo
@@ -803,7 +749,7 @@
 </ul>
 </section>
 <section id="score-centering">
-<h4>Score Centering<a class="headerlink" href="#score-centering" title="链接到此标题。">#</a></h4>
+<h4>Score Centering<a class="headerlink" href="#score-centering" title="Link to this heading">#</a></h4>
 <p><a class="reference external" href="https://arxiv.org/abs/2609.20807">Score Centering Stabilizes Off-policy Reinforcement Learning</a> 提出了一种加性修正，用于减轻训练与推理不一致引起的梯度漂移，也可以与重要性采样组合使用。slime 的 score centering（SC）目前支持 Megatron backend 和非流式 SGLang rollout。</p>
 <p>在已有的 RL 启动命令中加入以下配置：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--use-score-centering<span class="w"> </span><span class="se">\</span>
@@ -832,7 +778,7 @@
 </section>
 </section>
 <section id="megatron-megatron-config-path">
-<h3>高级 Megatron 配置（--megatron-config-path）<a class="headerlink" href="#megatron-megatron-config-path" title="链接到此标题。">#</a></h3>
+<h3>高级 Megatron 配置（--megatron-config-path）<a class="headerlink" href="#megatron-megatron-config-path" title="Link to this heading">#</a></h3>
 <p>对于 PPO 场景，可以使用 <code class="docutils literal notranslate"><span class="pre">--megatron-config-path</span></code> 指定一个 YAML 文件，对 actor / critic 分别覆盖 Megatron 参数。常见用途包括给 critic 设置不同的 <code class="docutils literal notranslate"><span class="pre">lr</span></code>，或者分别指定 <code class="docutils literal notranslate"><span class="pre">load</span></code> / <code class="docutils literal notranslate"><span class="pre">save</span></code> 等路径。</p>
 <div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">megatron</span><span class="p">:</span>
 <span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">default</span>
@@ -851,7 +797,7 @@
 </section>
 </section>
 <section id="rollout">
-<h2>自定义 rollout 函数<a class="headerlink" href="#rollout" title="链接到此标题。">#</a></h2>
+<h2>自定义 rollout 函数<a class="headerlink" href="#rollout" title="Link to this heading">#</a></h2>
 <p>slime 支持不同程度的自定义数据生成（rollout）。</p>
 <ul>
 <li><p>默认会使用 <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/rollout/sglang_rollout.py">slime/rollout/sglang_rollout.py</a> 中的 <code class="docutils literal notranslate"><span class="pre">generate_rollout</span></code> 函数进行数据生成。这个文件中实现了基于 sglang 的异步（asyncio）数据生成流程，并支持了例如 dynamic sampling，partial rollout 等功能；</p></li>
@@ -929,7 +875,7 @@
 <li><p>有的时候，我们还需要支持自定义的 reward model，可以通过配置 <code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code> 来进行配置。</p></li>
 </ul>
 <section id="rollout-fully-async">
-<h3>持久化 rollout 队列和分布式 fully async<a class="headerlink" href="#rollout-fully-async" title="链接到此标题。">#</a></h3>
+<h3>持久化 rollout 队列和分布式 fully async<a class="headerlink" href="#rollout-fully-async" title="Link to this heading">#</a></h3>
 <p>默认 rollout 传输为 Ray <code class="docutils literal notranslate"><span class="pre">object-store</span></code>，不需要共享目录。<code class="docutils literal notranslate"><span class="pre">--rollout-data-transport</span> <span class="pre">nixl</span></code> 选择 Ray 的 NIXL 张量传输。需要跨机持久化队列和打包张量存储时，使用 <a class="reference internal" href="../advanced/straw.html"><span class="std std-doc">straw</span></a> 和共享 JuiceFS 目录。</p>
 <p>启用使用 straw 的分布式 fully async rollout：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--rollout-function-path<span class="w"> </span>slime.rollout.fully_async_rollout.generate_rollout_fully_async<span class="w"> </span><span class="se">\</span>
@@ -941,7 +887,7 @@
 <p>使用 straw 时，<code class="docutils literal notranslate"><span class="pre">--use-rollout-routing-replay</span></code> 和 <code class="docutils literal notranslate"><span class="pre">--use-score-centering</span></code> 将 R3、SC 张量随 sample 持久化，也支持 partial continuation。<code class="docutils literal notranslate"><span class="pre">--rollout-queue-online-gc</span></code> 可开启未使用存储的回收，默认关闭。恢复使用 <code class="docutils literal notranslate"><span class="pre">--load</span></code>、<code class="docutils literal notranslate"><span class="pre">--save</span></code> 和可选的 <code class="docutils literal notranslate"><span class="pre">--ckpt-step</span></code>。调度、checkpoint 恢复和 debug 回放见 <a class="reference internal" href="../advanced/straw.html"><span class="std std-doc">straw 指南</span></a>，自定义 rollout 函数见<a class="reference internal" href="customization.html"><span class="std std-doc">自定义功能</span></a>。</p>
 </section>
 <section id="kv-pipelinerl">
-<h3>跨权重更新保留 KV（PipelineRL）<a class="headerlink" href="#kv-pipelinerl" title="链接到此标题。">#</a></h3>
+<h3>跨权重更新保留 KV（PipelineRL）<a class="headerlink" href="#kv-pipelinerl" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">--flush-cache-interval</span></code> 控制权重同步时的缓存刷新策略：</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
@@ -983,10 +929,10 @@ fully async worker 会将其重新排队生成。</p>
 </section>
 </section>
 <section id="id7">
-<h2>sglang 使用方法<a class="headerlink" href="#id7" title="链接到此标题。">#</a></h2>
+<h2>sglang 使用方法<a class="headerlink" href="#id7" title="Link to this heading">#</a></h2>
 <p>slime 通过 <code class="docutils literal notranslate"><span class="pre">HttpServerEngineAdapter</span></code> 作为中介，实现了基于 sglang 的 server based engine。</p>
 <section id="id8">
-<h3>SGLang 参数<a class="headerlink" href="#id8" title="链接到此标题。">#</a></h3>
+<h3>SGLang 参数<a class="headerlink" href="#id8" title="Link to this heading">#</a></h3>
 <p>slime 通过引入 sglang 的 <code class="docutils literal notranslate"><span class="pre">ServerArgs.add_cli_args</span></code>，从而引入了几乎所有的 sglang 参数，在设置一个 sglang 参数的时候，需要在参数前加上 <code class="docutils literal notranslate"><span class="pre">--sglang</span></code> 的前缀，例如：</p>
 <ul class="simple">
 <li><p>在训推一体的训练时，往往需要限制 <code class="docutils literal notranslate"><span class="pre">--mem-fraction-static</span></code>，这个参数需要转变为 <code class="docutils literal notranslate"><span class="pre">--sglang-mem-fraction-static</span></code>；</p></li>
@@ -1001,13 +947,13 @@ fully async worker 会将其重新排队生成。</p>
 <p>sglang 参数引入 slime 的方式可以参考 <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/backends/sglang_utils/arguments.py">slime/backends/sglang_utils/arguments.py</a>。</p>
 </section>
 <section id="router">
-<h3>router 使用方法<a class="headerlink" href="#router" title="链接到此标题。">#</a></h3>
+<h3>router 使用方法<a class="headerlink" href="#router" title="Link to this heading">#</a></h3>
 <p>slime 会用 <a class="reference external" href="https://github.com/sgl-project/sglang/tree/main/sgl-router">sglang-router</a> 来管理训练过程中的 sglang server。可以通过 <code class="docutils literal notranslate"><span class="pre">--sglang-router-ip</span></code> 与 <code class="docutils literal notranslate"><span class="pre">--sglang-router-port</span></code> 来配置 <a class="reference external" href="https://github.com/sgl-project/sglang/tree/main/sgl-router">sglang-router</a> 的地址。如果不进行配置，则会在集群中默认启动一个 router。</p>
 <p>所有的 sglang server 在启动后，会通过 <code class="docutils literal notranslate"><span class="pre">/add_worker</span></code> 申请加入 router。在实际进行数据生成的时候，只需要向 router 发送 http 请求，router 会进行 load balancing 操作，将请求转发给 server 们。</p>
 <p>当通过 <code class="docutils literal notranslate"><span class="pre">--sglang-router-ip</span></code> 与 <code class="docutils literal notranslate"><span class="pre">--sglang-router-port</span></code> 来配置传入一个外部的 router，此时 slime 不再会在内部启动一个 router，而是会把所有的 server 都注册在这个外部 router 上。这时可以利用这个外部的 router 地址来实现更复杂的数据生成流程。注意 router 是支持 openai compatible api 的。</p>
 </section>
 <section id="sglang-config">
-<h3>高级引擎配置（--sglang-config）<a class="headerlink" href="#sglang-config" title="链接到此标题。">#</a></h3>
+<h3>高级引擎配置（--sglang-config）<a class="headerlink" href="#sglang-config" title="Link to this heading">#</a></h3>
 <p>对于高级部署场景，可以使用 <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> 指定一个 YAML 文件，来配置服务器组、多模型部署以及选择性权重更新。</p>
 <p><strong>多模型部署</strong>允许同时服务多个模型（例如一个接收权重更新的 actor 模型和一个冻结的 reference/reward 模型）：</p>
 <div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">sglang</span><span class="p">:</span>
@@ -1036,10 +982,10 @@ fully async worker 会将其重新排队生成。</p>
 </section>
 </section>
 <section id="id9">
-<h2>megatron 使用方法<a class="headerlink" href="#id9" title="链接到此标题。">#</a></h2>
+<h2>megatron 使用方法<a class="headerlink" href="#id9" title="Link to this heading">#</a></h2>
 <p>slime 通过复用 <code class="docutils literal notranslate"><span class="pre">megatron.training</span></code> 目录下的常规函数，如 <code class="docutils literal notranslate"><span class="pre">parse_args</span></code>， <code class="docutils literal notranslate"><span class="pre">save_checkpoint</span></code>，<code class="docutils literal notranslate"><span class="pre">load_checkpoint</span></code>，从而实现对不同版本以及轻度魔改的 megatron 的支持。所以在使用时，需要保证 <code class="docutils literal notranslate"><span class="pre">PYTHONPATH</span></code> 中能访问到 megatron，例如在运行时加入 <code class="docutils literal notranslate"><span class="pre">export</span> <span class="pre">PYTHONPATH=/root/Megatron-LM</span></code>。</p>
 <section id="id10">
-<h3>Megatron 参数<a class="headerlink" href="#id10" title="链接到此标题。">#</a></h3>
+<h3>Megatron 参数<a class="headerlink" href="#id10" title="Link to this heading">#</a></h3>
 <p>slime 通过直接引入 <code class="docutils literal notranslate"><span class="pre">from</span> <span class="pre">megatron.training.arguments</span> <span class="pre">import</span> <span class="pre">parse_args</span></code> 引入了当前环境中 megatron 的所有参数。如果当前使用的 megatron 有在 <code class="docutils literal notranslate"><span class="pre">parse_args</span></code> 之外的参数，可以通过像 <a class="reference external" href="https://github.com/THUDM/slime/blob/main/train.py">train.py</a> 中传入参数来进行配置，例如：</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">"__main__"</span><span class="p">:</span>
     <span class="k">try</span><span class="p">:</span>
@@ -1052,7 +998,7 @@ fully async worker 会将其重新排队生成。</p>
 </div>
 </section>
 <section id="id11">
-<h3>自定义参数<a class="headerlink" href="#id11" title="链接到此标题。">#</a></h3>
+<h3>自定义参数<a class="headerlink" href="#id11" title="Link to this heading">#</a></h3>
 <p>在一些定制版 megatron 的实现中，需要在初始化，或者训练步的前后进行特殊的操作。目前我们加入如下的插件：</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">--custom-megatron-init-path</span></code>：会增加一些 init 的调用；</p></li>
@@ -1080,7 +1026,7 @@ fully async worker 会将其重新排队生成。</p>
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">上一页</p>
-        <p class="prev-next-title">快速使用</p>
+        <p class="prev-next-title">运行环境准备</p>
       </div>
     </a>
     <a class="right-next"

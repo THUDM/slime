@@ -33,7 +33,7 @@
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=4418a689" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=ad20845f" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=5f5cb4b6" />
   
   <!-- So that users can add custom icons -->
   <script defer src="../_static/scripts/fontawesome.js?digest=90905a2f556bf617f1a9"></script>
@@ -42,20 +42,20 @@
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
     <script src="../_static/documentation_options.js?v=ceb54874"></script>
-    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../_static/copybutton.js?v=ccdb6887"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?v=fab101a9"></script>
     <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'advanced/megatron-config';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
-    <script data-layout="root" src="../_static/js/lang-toggle.js?v=082004b6"></script>
+    <script data-layout="root" src="../_static/js/lang-toggle.js?v=9e8f3a3a"></script>
     <link rel="icon" href="../_static/logo.ico"/>
     <link rel="index" title="索引" href="../genindex.html" />
     <link rel="search" title="搜索" href="../search.html" />
     <link rel="next" title="在 Megatron-LM 中快速支持新模型架构" href="arch-support-beyond-megatron.html" />
-    <link rel="prev" title="SGLang Config：高级引擎部署" href="sglang-config.html" />
+    <link rel="prev" title="在策略蒸馏 (On-Policy Distillation)" href="on-policy-distillation.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.4.0" />
@@ -202,80 +202,27 @@
 </button></div>
         <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
     <div class="bd-toc-item navbar-nav active">
-        <p aria-level="2" class="caption" role="heading"><span class="caption-text">开始使用</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../get_started/quick_start.html">快速使用</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/usage.html">使用文档</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/customization.html">自定义指南</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/agent.html">Agentic RL 训练路线图</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../get_started/qa.html">常见 Q&amp;A</a></li>
+        <ul class="current nav bd-sidenav">
+<li class="toctree-l1 current active has-children"><a class="reference internal" href="../library.html">文档资料库</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../get_started/index.html">从这里开始</a></li>
+<li class="toctree-l2 current active has-children"><a class="reference internal" href="../training/index.html">训练与算法</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l3"><a class="reference internal" href="policy-mismatch.html">从策略梯度到训推一致性</a></li>
+<li class="toctree-l3"><a class="reference internal" href="parallelism-memory.html">卡数、显存与并行方式</a></li>
+<li class="toctree-l3"><a class="reference internal" href="low-precision.html">低精度训练与 Rollout</a></li>
+<li class="toctree-l3"><a class="reference internal" href="reproducibility.html">Reproducibility</a></li>
+<li class="toctree-l3"><a class="reference internal" href="on-policy-distillation.html">在策略蒸馏 (On-Policy Distillation)</a></li>
+<li class="toctree-l3 current active"><a class="current reference internal" href="#">Megatron Config：按角色覆盖训练参数</a></li>
+<li class="toctree-l3"><a class="reference internal" href="arch-support-beyond-megatron.html">在 Megatron-LM 中快速支持新模型架构</a></li>
 </ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">Dense</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4B.html">8xH100 训练 Qwen3-4B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm4-9B.html">8xH100 训练 GLM4-9B</a></li>
+</details></li>
+<li class="toctree-l2"><a class="reference internal" href="../rollout/index.html">Rollout 与调度</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../operations/index.html">调试、性能分析与恢复</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../examples/index.html">任务教程</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../developer_guide/index.html">开发与 CI</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../platform_support/index.html">硬件平台</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../blogs/index.html">设计文章与版本发布</a></li>
 </ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">MoE</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-30B-A3B.html">8×H100 训练 GLM-4.7-Flash</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-30B-A3B.html">8xH100 训练 Qwen3-30B-A3B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-next-80B-A3B.html">Qwen3-Next-80B-A3B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm5.2-744B-A40B.html">256xH100 训练 GLM-5.2 744B-A40B</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-355B-A32B.html">64xH100 训练 GLM-4.7</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../examples/deepseek-r1.html">128xH100 训练 DeepSeek R1</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">高级特性</span></p>
-<ul class="current nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="on-policy-distillation.html">在策略蒸馏 (On-Policy Distillation)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="speculative-decoding.html">投机采样</a></li>
-<li class="toctree-l1"><a class="reference internal" href="low-precision.html">低精度训练与 Rollout</a></li>
-<li class="toctree-l1"><a class="reference internal" href="reproducibility.html">Reproducibility</a></li>
-<li class="toctree-l1"><a class="reference internal" href="fault-tolerance.html">容灾</a></li>
-<li class="toctree-l1"><a class="reference internal" href="straw.html">使用 straw 持久化 rollout</a></li>
-<li class="toctree-l1"><a class="reference internal" href="observability.html">观测</a></li>
-<li class="toctree-l1"><a class="reference internal" href="pd-disaggregation.html">PD 分离</a></li>
-<li class="toctree-l1"><a class="reference internal" href="external-rollout-engines.html">External Rollout Engines 配置路线图</a></li>
-<li class="toctree-l1"><a class="reference internal" href="delta-weight-sync.html">Delta 权重同步</a></li>
-<li class="toctree-l1"><a class="reference internal" href="sglang-config.html">SGLang Config：高级引擎部署</a></li>
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">Megatron Config：按角色覆盖训练参数</a></li>
-<li class="toctree-l1"><a class="reference internal" href="arch-support-beyond-megatron.html">在 Megatron-LM 中快速支持新模型架构</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">其他用法</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4b-base-openhermes.html">SFT Qwen3-4B-Base</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/search-r1/README.html">Search-R1 lite</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/fully_async/README.html">Fully-Async Rollout Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/coding_agent_rl/README.html">Coding-Agent RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/delta_weight_sync/README.html">Delta Weight Sync</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/eval_multi_task/README.html">Multi-Task Evaluation Example</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/geo3k_vlm/README.html">VLM Single-Turn RL</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/geo3k_vlm_multi_turn/README.html">VLM Multi-Turn (geo3k dataset)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/on_policy_distillation/README.html">On-Policy Distillation Example</a></li>
-
-
-
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/strands_sglang/README.html">slime x Strands-SGLang</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/tau-bench/README.html">Tau bench</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/train_infer_mismatch_helper/README.html">Rollout Correction Methods</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">开发指南</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/ci.html">CI（持续集成）</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/debug.html">Debug 指南</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/trace.html">Trace 可视化</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/profiling.html">性能分析 (Profiling)</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_guide/install_flashqla.html">安装 FlashQLA</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">硬件平台</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../platform_support/amd_tutorial.html">AMD ROCm</a></li>
-</ul>
-<p aria-level="2" class="caption" role="heading"><span class="caption-text">博客</span></p>
-<ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../blogs/release_v0.1.0.html">v0.1.0: 重新定义高性能 RL 训练框架</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../blogs/introducing_slime.html">slime：为 RL Scaling 设计的 SGLang-Native 后训练框架</a></li>
+</details></li>
 </ul>
 
     </div>
@@ -536,12 +483,12 @@
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="megatron-config">
-<h1>Megatron Config：按角色覆盖训练参数<a class="headerlink" href="#megatron-config" title="链接到此标题。">#</a></h1>
+<h1>Megatron Config：按角色覆盖训练参数<a class="headerlink" href="#megatron-config" title="Link to this heading">#</a></h1>
 <p><code class="docutils literal notranslate"><span class="pre">--megatron-config-path</span></code> 是一个基于 YAML 的配置系统，用于在公共 Megatron CLI 参数之上，为不同训练角色追加覆盖。目前它主要用于 PPO 场景中的 actor / critic 配置。</p>
 <p>与 <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> 不同，<code class="docutils literal notranslate"><span class="pre">--megatron-config-path</span></code> 不负责部署、路由或 GPU 资源编排；它只负责决定“这个角色最终使用哪些训练参数”。</p>
 <hr class="docutils" />
 <section id="id1">
-<h2>设计概览<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h2>
+<h2>设计概览<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
 <p>默认情况下（不使用 <code class="docutils literal notranslate"><span class="pre">--megatron-config-path</span></code>），actor 和 critic 都直接继承命令行中的 Megatron / slime 参数。</p>
 <p>使用 <code class="docutils literal notranslate"><span class="pre">--megatron-config-path</span></code> 后，配置会分成两层：</p>
 <ul class="simple">
@@ -557,7 +504,7 @@
 </section>
 <hr class="docutils" />
 <section id="id2">
-<h2>配置格式<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h2>
+<h2>配置格式<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
 <p>配置文件是一个 YAML 文档，顶层 <code class="docutils literal notranslate"><span class="pre">megatron</span></code> 键包含一个角色定义列表：</p>
 <div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">megatron</span><span class="p">:</span>
 <span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">default</span>
@@ -573,7 +520,7 @@
 </pre></div>
 </div>
 <section id="id3">
-<h3>字段说明<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h3>
+<h3>字段说明<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>字段</p></th>
@@ -613,7 +560,7 @@
 </section>
 <hr class="docutils" />
 <section id="id4">
-<h2>使用方式<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h2>
+<h2>使用方式<a class="headerlink" href="#id4" title="Link to this heading">#</a></h2>
 <p>一个典型的 PPO 用法如下：</p>
 <div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="c1"># megatron_ppo.yaml</span>
 <span class="nt">megatron</span><span class="p">:</span>
@@ -648,7 +595,7 @@
 <li><p>YAML 负责 actor / critic 的差异项，比如 <code class="docutils literal notranslate"><span class="pre">lr</span></code>、<code class="docutils literal notranslate"><span class="pre">load</span></code>、<code class="docutils literal notranslate"><span class="pre">save</span></code>、optimizer 或 scheduler 相关参数。</p></li>
 </ul>
 <section id="id5">
-<h3>只覆盖一个角色<a class="headerlink" href="#id5" title="链接到此标题。">#</a></h3>
+<h3>只覆盖一个角色<a class="headerlink" href="#id5" title="Link to this heading">#</a></h3>
 <p>你也可以只为一个角色写覆盖，另一个角色自动继承公共 CLI 参数。例如只调整 critic 学习率：</p>
 <div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">megatron</span><span class="p">:</span>
 <span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">default</span>
@@ -662,7 +609,7 @@
 </section>
 <hr class="docutils" />
 <section id="id6">
-<h2>当前限制<a class="headerlink" href="#id6" title="链接到此标题。">#</a></h2>
+<h2>当前限制<a class="headerlink" href="#id6" title="Link to this heading">#</a></h2>
 <ul class="simple">
 <li><p><strong>目前只支持 PPO。</strong> <code class="docutils literal notranslate"><span class="pre">--megatron-config-path</span></code> 当前主要用于 PPO 工作流中的 actor / critic 角色配置。对于 GRPO、REINFORCE++ 等不依赖 critic 的流程，目前不建议使用这套角色配置。</p></li>
 <li><p><strong>当前 PPO 下，actor 和 critic 的 Megatron 并行配置必须一致。</strong> 特别是 <code class="docutils literal notranslate"><span class="pre">tensor_model_parallel_size</span></code>、<code class="docutils literal notranslate"><span class="pre">pipeline_model_parallel_size</span></code>、<code class="docutils literal notranslate"><span class="pre">context_parallel_size</span></code>、<code class="docutils literal notranslate"><span class="pre">expert_model_parallel_size</span></code>、<code class="docutils literal notranslate"><span class="pre">expert_tensor_parallel_size</span></code>、<code class="docutils literal notranslate"><span class="pre">sequence_parallel</span></code> 等拓扑相关参数，不应在 actor 和 critic 之间配置成不同的值。</p></li>
@@ -673,13 +620,13 @@
 </section>
 <hr class="docutils" />
 <section id="faq">
-<h2>FAQ<a class="headerlink" href="#faq" title="链接到此标题。">#</a></h2>
+<h2>FAQ<a class="headerlink" href="#faq" title="Link to this heading">#</a></h2>
 <section id="q-actor-critic">
-<h3>Q: 可以只写 actor 或只写 critic 吗？<a class="headerlink" href="#q-actor-critic" title="链接到此标题。">#</a></h3>
+<h3>Q: 可以只写 actor 或只写 critic 吗？<a class="headerlink" href="#q-actor-critic" title="Link to this heading">#</a></h3>
 <p>可以。缺失角色会自动继承公共 CLI 参数，不需要把所有参数都重复写一遍。</p>
 </section>
 <section id="q-yaml">
-<h3>Q: 可以把资源配置写进 YAML 吗？<a class="headerlink" href="#q-yaml" title="链接到此标题。">#</a></h3>
+<h3>Q: 可以把资源配置写进 YAML 吗？<a class="headerlink" href="#q-yaml" title="Link to this heading">#</a></h3>
 <p>不可以。当前资源分配和 placement group 仍由 CLI 参数控制，YAML 中对应字段会被忽略。其中 <code class="docutils literal notranslate"><span class="pre">--actor-num-nodes</span></code> / <code class="docutils literal notranslate"><span class="pre">--actor-num-gpus-per-node</span></code> 决定 PPO 的 train 资源规模；critic 的节点数和每节点 GPU 数会跟随 actor 配置，不能独立配置。</p>
 </section>
 </section>
@@ -697,12 +644,12 @@
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="sglang-config.html"
+       href="on-policy-distillation.html"
        title="上一页">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">上一页</p>
-        <p class="prev-next-title">SGLang Config：高级引擎部署</p>
+        <p class="prev-next-title">在策略蒸馏 (On-Policy Distillation)</p>
       </div>
     </a>
     <a class="right-next"
