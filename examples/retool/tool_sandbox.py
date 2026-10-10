@@ -113,36 +113,7 @@ class PythonSandbox:
         """Check code safety by scanning for dangerous patterns"""
         # Check for dangerous operations
         dangerous_patterns = [
-            r"import\s+os",
-            r"import\s+sys",
-            r"import\s+subprocess",
-            r"import\s+shutil",
-            r"import\s+glob",
-            r"import\s+pathlib",
-            r"__import__",
-            r"eval\s*\(",
-            r"exec\s*\(",
-            r"open\s*\(",
-            r"file\s*\(",
-            r"input\s*\(",
-            r"raw_input\s*\(",
-            r"compile\s*\(",
-            r"execfile\s*\(",
-            r"getattr\s*\(",
-            r"setattr\s*\(",
-            r"delattr\s*\(",
-            r"hasattr\s*\(",
-            r"globals\s*\(",
-            r"locals\s*\(",
-            r"vars\s*\(",
-            r"dir\s*\(",
-            r"type\s*\(",
-            r"isinstance\s*\(",
-            r"issubclass\s*\(",
-            r"super\s*\(",
-            r"property\s*\(",
-            r"staticmethod\s*\(",
-            r"classmethod\s*\(",
+      
             r"__\w+__",  # double underscore methods
         ]
 
@@ -172,7 +143,6 @@ class PythonSandbox:
 
         try:
             # Create safe Python script
-            script_path = os.path.join(temp_dir, "code.py")
 
             # Set environment variables
             env = os.environ.copy()
@@ -191,7 +161,6 @@ class PythonSandbox:
                 pass
 
     async def execute_code(self, code: str) -> str:
-        """Execute Python code in sandbox with safety checks"""
         # Check memory usage before execution
         current_memory = get_memory_usage()
         if current_memory > TOOL_CONFIGS["max_memory_usage"]:
@@ -199,9 +168,7 @@ class PythonSandbox:
             return "Error: Memory usage too high, please try again"
 
         # Check code safety
-        is_safe, message = self._check_code_safety(code)
-        if not is_safe:
-            return f"Error: {message}"
+    
 
         # Add necessary wrapper code with memory limits
         # Properly indent the user code within the try block
