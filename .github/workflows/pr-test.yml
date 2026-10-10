@@ -994,6 +994,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_reloadable_process_group_megatron_bindings.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_placement_group.py"
             },
             {
