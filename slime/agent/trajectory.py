@@ -19,6 +19,15 @@ from slime.utils.types import Sample
 
 logger = logging.getLogger(__name__)
 
+REPLAY_FIELDS = (
+    "rollout_top_p_token_ids",
+    "rollout_top_p_token_offsets",
+    "rollout_top_p_log_probs",
+    "rollout_topk_token_ids",
+    "rollout_topk_log_probs",
+    "rollout_routed_experts",
+)
+
 
 # ===========================================================================
 # TurnRecord
@@ -36,6 +45,7 @@ class TurnRecord:
     finish_reason: str
     output_log_probs: list[float] = dataclasses.field(default_factory=list)
     ill_formed: bool = False
+    replay: dict[str, Any] | None = None
 
 
 # ===========================================================================
@@ -165,6 +175,7 @@ class _SampleBuilder:
         self.logprobs: list[float] = []
         self.last_response_start_idx: int | None = None
         self.leading_prompt_len: int = 0
+        self.replay: dict[str, Any] | None = None
 
     def classify_token_drift(self, turn: TurnRecord) -> DriftKind:
         """Decide how this builder should absorb ``turn``'s prompt.
@@ -177,6 +188,12 @@ class _SampleBuilder:
         early to absorb). With no drift the turn is handled the CLEAN way -- a
         plain prefix extension.
         """
+        # Each replay snapshot describes one complete model invocation. R3
+        # includes prompt routes, which can differ even for identical token
+        # prefixes. Keep turns separate rather than overwrite earlier routes
+        # or splice incompatible sampler distributions into a later context.
+        if self.replay is not None or turn.replay is not None:
+            return DriftKind.FORK
         realign_at = _common_prefix_len(self.tokens, turn.prompt_ids)
         drift = len(self.tokens) - realign_at
 
@@ -197,6 +214,9 @@ class _SampleBuilder:
         assert kind is not DriftKind.FORK, "append_turn called on a builder that would fork"
 
         is_first_turn = self.last_response_start_idx is None
+        if turn.replay is not None:
+            assert is_first_turn, "Replay snapshots require a separate training segment per model turn"
+            self.replay = turn.replay
 
         # --- append this turn's prompt tail (loss_mask=0) ---
         if kind is DriftKind.REALIGN:
@@ -245,7 +265,7 @@ class _SampleBuilder:
             loss_mask = loss_mask[:max_sample_tokens]
             logprobs = logprobs[:max_sample_tokens]
         md = dict(extra_metadata or {})
-        return Sample(
+        sample = Sample(
             index=base_sample.index,
             group_index=base_sample.group_index,
             rollout_id=base_sample.rollout_id if base_sample.rollout_id is not None else base_sample.index,
@@ -259,6 +279,21 @@ class _SampleBuilder:
             status=Sample.Status.COMPLETED,
             metadata=md,
         )
+        if self.replay is not None:
+            count = sample.response_length
+            for key in ("rollout_topk_token_ids", "rollout_topk_log_probs"):
+                if key in self.replay:
+                    setattr(sample, key, self.replay[key][:count])
+            if "rollout_top_p_token_offsets" in self.replay:
+                offsets = self.replay["rollout_top_p_token_offsets"][: count + 1]
+                end = int(offsets[-1])
+                sample.rollout_top_p_token_offsets = offsets
+                sample.rollout_top_p_token_ids = self.replay["rollout_top_p_token_ids"][:end]
+                if "rollout_top_p_log_probs" in self.replay:
+                    sample.rollout_top_p_log_probs = self.replay["rollout_top_p_log_probs"][:end]
+            if "rollout_routed_experts" in self.replay:
+                sample.rollout_routed_experts = self.replay["rollout_routed_experts"][: max(0, len(tokens) - 1)]
+        return sample
 
 
 # ===========================================================================

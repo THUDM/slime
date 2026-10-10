@@ -29,22 +29,23 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
-from slime.agent.adapters import AnthropicAdapter, OpenAIAdapter
+from slime.agent.adapters import AnthropicAdapter, ResponsesAdapter
 from slime.agent.aiohttp_threaded import FilteredAccessLogger, run_app_in_thread
 from slime.agent.harness import ClaudeCodeHarness, CodexHarness
-from slime.agent.sandbox import E2BSandbox
-from slime.utils.misc import SingletonMeta
+from slime.agent.sandbox import Sandbox
+from slime.utils.misc import SingletonMeta, get_current_node_ip
 from slime.utils.processing_utils import load_tokenizer
 from slime.utils.types import Sample
 
 from . import swe
+from .sandbox import create_sandbox
 
 logger = logging.getLogger(__name__)
 logging.getLogger("e2b").setLevel(logging.WARNING)
 
 _AGENTS = {
     "claude_code": (ClaudeCodeHarness, AnthropicAdapter),
-    "codex": (CodexHarness, OpenAIAdapter),
+    "codex": (CodexHarness, ResponsesAdapter),
 }
 AGENT_NAME = os.environ.get("SWE_AGENT", "claude_code")
 if AGENT_NAME not in _AGENTS:
@@ -71,7 +72,7 @@ class SweConfig:
         agent_time_budget = int(os.environ.get("SWE_AGENT_TIME_BUDGET_SEC", "1800"))
         eval_timeout = int(os.environ.get("SWE_EVAL_TIMEOUT_SEC", "600"))
         guard = int(os.environ.get("SWE_ROLLOUT_GUARD_SEC", "0") or 0) or (agent_time_budget + eval_timeout + 180)
-        fork = int(v) if (v := os.environ.get("SLIME_FORK_MERGE_MAX_RESPONSE_TOKENS")) else None
+        fork = int(os.environ.get("SLIME_FORK_MERGE_MAX_RESPONSE_TOKENS") or "0")
         return cls(
             eval_protocol=os.environ.get("SWE_EVAL_PROTOCOL", swe.PROTOCOL_SCALESWE),
             train_protocol=os.environ.get("SWE_TRAIN_PROTOCOL", swe.PROTOCOL_SCALESWE),
@@ -93,8 +94,8 @@ _BOOT_SEM = asyncio.Semaphore(CONFIG.boot_concurrency)
 
 
 @asynccontextmanager
-async def boot_agent_sandbox(image: str, instance_id: str) -> AsyncIterator[E2BSandbox]:
-    """Boot a fresh E2B sandbox and install the selected harness toolchain.
+async def boot_agent_sandbox(image: str, instance_id: str) -> AsyncIterator[Sandbox]:
+    """Boot a fresh sandbox and install the selected harness toolchain.
 
     Create the sandbox from the dataset image, install Node 22 + the harness CLI
     from host tarballs, retry transient boot/install failures, and close the
@@ -103,7 +104,7 @@ async def boot_agent_sandbox(image: str, instance_id: str) -> AsyncIterator[E2BS
     sb = None
     last_err: Exception | None = None
     for attempt in range(CONFIG.boot_retries):
-        cand = E2BSandbox(image)
+        cand = create_sandbox(image)
         try:
             async with _BOOT_SEM:
                 await cand.__aenter__()
@@ -153,6 +154,7 @@ class _AdapterService(metaclass=SingletonMeta):
             tool_parser=self.tool_parser,
             reasoning_parser=self.reasoning_parser,
             fork_threshold_tokens=CONFIG.fork_merge_threshold,
+            rollout_args=args,
         )
         # handler_cancellation=True so a client disconnect cancels the handler
         # coroutine, arming the fire-and-forget /abort_request in the adapter.
@@ -168,7 +170,8 @@ class _AdapterService(metaclass=SingletonMeta):
                 "access_log_class": FilteredAccessLogger,
             },
         )
-        self.adapter_url = f"http://{CONFIG.adapter_public_host}:{self.app_handle.port}"
+        public_host = get_current_node_ip() if CONFIG.adapter_public_host == "auto" else CONFIG.adapter_public_host
+        self.adapter_url = f"http://{public_host}:{self.app_handle.port}"
         logger.info(
             "[coding_agent_rl] tokenizer=%s adapter=%s max_context_len=%s tool_parser=%s reasoning_parser=%s",
             args.hf_checkpoint,
@@ -196,6 +199,10 @@ async def generate(args, base_sample: Sample, sampling_params: dict[str, Any], e
         session_id,
         sampling_defaults=sampling_params,
         max_context_tokens=state.max_context_len,
+        apply_chat_template_kwargs={
+            **(getattr(args, "apply_chat_template_kwargs", None) or {}),
+            **(base_sample.apply_chat_template_kwargs or {}),
+        },
     )
     t0 = time.time()
     try:

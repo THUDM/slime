@@ -34,8 +34,10 @@ from typing import Any, NamedTuple
 
 from slime.agent import sandbox as agent_sandbox
 from slime.agent.adapters.common import flatten_content
-from slime.agent.sandbox import E2BSandbox, Sandbox, exec_and_wait
+from slime.agent.sandbox import Sandbox, exec_and_wait
 from slime.utils.types import Sample
+
+from .sandbox import create_sandbox
 
 try:
     from swebench.harness.grading import get_eval_report  # type: ignore
@@ -104,6 +106,7 @@ def _metadata_scaleswe(sample: Sample) -> dict[str, Any]:
         "grading": {
             "swepro": swepro,
             "eval_cmd": eval_cmd,
+            "eval_user": m.get("eval_user", "agent"),
             "f2p_script": f2p_script,
             "pre_commands": m.get("pre_commands") or rem.get("pre_commands"),
         },
@@ -266,7 +269,7 @@ async def _grade_scaleswe(md: dict, diff_text: str, timeout_sec: int) -> EvalRes
         logger.warning("[swe.scaleswe] no swepro/eval_cmd/f2p_script; reward=0")
         return EvalResult(0.0, True)
 
-    async with E2BSandbox(image) as ev:
+    async with create_sandbox(image) as ev:
         await agent_sandbox.ensure_agent_user(ev, workdir)
         if swepro:
             await _setup_swepro_assets(ev, swepro)
@@ -281,7 +284,7 @@ async def _grade_scaleswe(md: dict, diff_text: str, timeout_sec: int) -> EvalRes
         if swepro:
             r = await _run_swepro(ev, workdir, swepro, timeout_sec)
         elif eval_cmd:
-            r = await _run_eval_cmd(ev, workdir, eval_cmd, timeout_sec)
+            r = await _run_eval_cmd(ev, workdir, eval_cmd, timeout_sec, user=grading.get("eval_user", "agent"))
         else:
             r = await _run_f2p_script(ev, workdir, f2p_script, timeout_sec)
         return EvalResult(r, True)
@@ -338,8 +341,8 @@ async def _run_swepro(ev: Sandbox, workdir: str, swepro: dict, timeout: int) -> 
     return 1.0 if solved else 0.0
 
 
-async def _run_eval_cmd(ev: Sandbox, workdir: str, cmd: str, timeout: int) -> float:
-    ec, _, _ = await ev.exec(f"cd {workdir} && {cmd}", user="agent", check=False, timeout=timeout)
+async def _run_eval_cmd(ev: Sandbox, workdir: str, cmd: str, timeout: int, *, user: str = "agent") -> float:
+    ec, _, _ = await ev.exec(f"cd {workdir} && {cmd}", user=user, check=False, timeout=timeout)
     return 1.0 if ec == 0 else 0.0
 
 
@@ -462,7 +465,7 @@ async def _grade_swebench(md: dict, diff_text: str, timeout_sec: int) -> EvalRes
         logger.warning("[swe.swebench] %s: missing image; reward=0", instance_id)
         return EvalResult(0.0, True)
 
-    async with E2BSandbox(image) as ev:
+    async with create_sandbox(image) as ev:
         await asyncio.gather(
             ev.write_file("/tmp/patch.diff", diff_text or "", user="root"),
             ev.write_file("/tmp/eval.sh", eval_sh, user="root"),

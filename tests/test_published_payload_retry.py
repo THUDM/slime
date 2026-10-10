@@ -1,4 +1,4 @@
-"""Publication visibility belongs to Straw, including plain synchronous readers."""
+"""Publication visibility belongs to straw, including plain synchronous readers."""
 
 import asyncio
 import os
@@ -47,7 +47,7 @@ def test_result_and_shelve_payloads_recover_at_the_storage_layer(tmp_path, loade
         assert result == value
     finally:
         timer.join()
-    assert "Straw extent visibility retry" in capfd.readouterr().err
+    assert "straw extent visibility retry" in capfd.readouterr().err.lower()
 
 
 @pytest.mark.parametrize("message", ["Invalid segment header", "Record payload checksum mismatch"])

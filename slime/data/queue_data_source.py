@@ -177,7 +177,7 @@ class RolloutQueueController:
 
     def _check_gc_error(self):
         if self._gc_error is not None:
-            raise RuntimeError("Straw online GC failed; queue work has stopped") from self._gc_error
+            raise RuntimeError("straw online GC failed; queue work has stopped") from self._gc_error
 
     def _start_gc(self):
         if getattr(self.args, "rollout_queue_online_gc", False) and self._gc_thread is None:

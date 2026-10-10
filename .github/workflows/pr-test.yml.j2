@@ -175,10 +175,23 @@
       'cpu': True,
       'tests': [
         {'test_file': 'test_agent/test_trajectory_manager_branching.py', 'num_gpus': 0},
+        {'test_file': 'test_agent/test_token_contract.py', 'num_gpus': 0},
+        {'test_file': 'test_agent/test_sampler_replay.py', 'num_gpus': 0},
+        {'test_file': 'test_grouped_rewards.py', 'num_gpus': 0},
         {'test_file': 'test_agent/test_adapters.py', 'num_gpus': 0},
+        {'test_file': 'test_agent/test_responses.py', 'num_gpus': 0},
         {'test_file': 'test_agent/test_harness.py', 'num_gpus': 0},
         {'test_file': 'test_agent/test_sandbox_exec_and_wait.py', 'num_gpus': 0},
         {'test_file': 'test_agent/test_agent_rollout_cpu.py', 'num_gpus': 0},
+        {'test_file': 'test_agent/test_sunabako_provider.py', 'num_gpus': 0},
+      ],
+    },
+
+    'e2e-test-agent': {
+      'label': 'run-ci-agent',
+      'timeout_minutes': 15,
+      'tests': [
+        {'test_file': 'test_agent_sunabako_codex_e2e.py', 'num_gpus': 8},
       ],
     },
 
@@ -260,6 +273,9 @@ jobs:
     runs-on: ubuntu-latest
 <% else %>
     runs-on: self-hosted
+<% endif %>
+<% if config.get('timeout_minutes') %>
+    timeout-minutes: << config.timeout_minutes >>
 <% endif %>
     strategy:
       fail-fast: false
@@ -365,6 +381,9 @@ jobs:
               set -euo pipefail
               python -m pip install --upgrade --no-deps --only-binary=straw-queue --break-system-packages straw-queue
               pip install -e . --no-deps --break-system-packages
+              if [[ "${TEST_FILE##*/}" == "test_agent_sunabako_codex_e2e.py" ]]; then
+                source tests/ci/setup_agent_e2e.sh
+              fi
               TEST_PATH="$TEST_FILE"
               if [[ "$TEST_PATH" != tests/* ]]; then
                 TEST_PATH="tests/$TEST_PATH"
@@ -381,6 +400,14 @@ jobs:
               fi
             '
 <% endif %>
+      - name: Upload agent E2E evidence
+        if: always() && matrix.info.test_file == 'test_agent_sunabako_codex_e2e.py'
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-e2e-<< job_name >>
+          path: ${{ github.workspace }}/.agent-e2e/
+          include-hidden-files: true
+          if-no-files-found: ignore
 <% endfor %>
 
   e2e-test-changed-detect:
@@ -482,6 +509,9 @@ jobs:
               set -euo pipefail
               python -m pip install --upgrade --no-deps --only-binary=straw-queue --break-system-packages straw-queue
               pip install -e . --no-deps --break-system-packages
+              if [[ "${TEST_FILE##*/}" == "test_agent_sunabako_codex_e2e.py" ]]; then
+                source tests/ci/setup_agent_e2e.sh
+              fi
               TEST_PATH="$TEST_FILE"
               if [[ "$TEST_PATH" != tests/* ]]; then
                 TEST_PATH="tests/$TEST_PATH"
@@ -497,3 +527,11 @@ jobs:
                 python tests/ci/gpu_lock_exec.py --count "$NUM_GPUS" -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
               fi
             '
+      - name: Upload agent E2E evidence
+        if: always() && endsWith(matrix.info.test_file, 'test_agent_sunabako_codex_e2e.py')
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-e2e-changed
+          path: ${{ github.workspace }}/.agent-e2e/
+          include-hidden-files: true
+          if-no-files-found: ignore

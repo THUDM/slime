@@ -24,7 +24,7 @@ slime 的设计目标，是让这两大能力彼此强化，同时避免把系�
 
 ## 支持的模型
 
-除 GLM 系列外，slime 还支持 Qwen（Qwen3.6、Qwen3.5、Qwen3-Next、Qwen3 MoE、Qwen3、Qwen2.5）、DeepSeek（V3、V3.1、R1）和 Llama 3。模型配置见 [scripts/models](scripts/models/)，训练示例见[在线文档](https://thudm.github.io/slime/zh/)。
+除 GLM 系列外，slime 还支持 Qwen（Qwen3.8、Qwen3.6、Qwen3.5、Qwen3-Next、Qwen3 MoE、Qwen3、Qwen2.5）、DeepSeek（V3、V3.1、R1）和 Llama 3。模型配置见 [scripts/models](scripts/models/)，训练示例见[在线文档](https://thudm.github.io/slime/zh/)。
 
 ## 引擎配置与部署
 
@@ -86,7 +86,7 @@ CPU 测试覆盖核心行为和自定义接口约定；GPU 测试覆盖 dense/Mo
 - [`examples/multi_agent`](examples/multi_agent/README.md)：在标准 rollout 循环内通过 `--custom-generate-function-path` 实现多智能体生成。
 - [`examples/search-r1`](examples/search-r1/)：通过 `--custom-generate-function-path` 实现搜索/RAG 风格的多轮生成。
 - [`examples/fully_async`](examples/fully_async/README.md)：全异步 rollout，适合样本生成耗时差异较大的长尾任务。
-- [`examples/coding_agent_rl`](examples/coding_agent_rl/README.md)：端到端代码智能体 RL，包含沙盒工具调用、基于测试的奖励和 token 级训练轨迹。
+- [`examples/coding_agent_rl`](examples/coding_agent_rl/README.md)：使用 Qwen3.8-27B、小米 MiMo SWE 数据和 sunabako 沙盒，运行代码智能体 RL，保留官方测试奖励和 token 级训练轨迹。
 
 如何为智能体工作流选择合适的接口，请参考 [自定义指南](docs/zh/get_started/customization.md)。
 

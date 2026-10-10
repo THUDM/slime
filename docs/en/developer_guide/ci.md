@@ -7,7 +7,8 @@ slime runs CPU tests when a PR is opened or updated, when code is pushed to `mai
 | Trigger | CI job | Environment | Coverage |
 |---|---|---|---|
 | Automatic | `cpu-unittest` | CPU | Argument validation, batch scheduling, metrics, rewards, samples, checkpoint utilities, and extension interfaces. |
-| Automatic | `agent-adapter-test` | CPU | Agent adapters, with the required model-provider SDKs installed. |
+| Automatic | `agent-test` | CPU | Agent adapters, with the required model-provider SDKs installed. |
+| `run-ci-agent` | `e2e-test-agent` | 8 GPUs | Real Codex, sunabako, independent MiMo grading and a Qwen3.8-27B parameter update. |
 | `run-ci-sglang-config` | `e2e-test-sglang-config` | CPU/GPU | SGLang deployment configuration, including multiple models, engine layouts, and fault recovery with memory offload. |
 | `run-ci-megatron` | `e2e-test-megatron` | GPU | Megatron training, including dense models, MoE, PPO, MTP, OPD, fully async rollout, PD/Mooncake, and debug replay. |
 | `run-ci-precision` | `e2e-test-precision` | CPU/GPU | Numerical precision and consistency across parallel configurations. |
@@ -34,7 +35,7 @@ CPU jobs run on GitHub-hosted `ubuntu-latest` runners. They install CPU PyTorch 
 - `Sample` behavior, rollout validation, and agent trajectory merging;
 - Hugging Face checkpoint saving and interface contracts for custom rollout, generation functions, and runtime hooks.
 
-Agent adapter tests run in a separate `agent-adapter-test` job because they also require SDKs such as `openai`, `openai-agents`, and `anthropic`.
+Agent adapter tests run in a separate `agent-test` job because they also require SDKs such as `openai`, `openai-agents`, and `anthropic`.
 
 CPU test entries marked with `straw: true` install the latest `straw-queue` wheel from PyPI. They do not need a Rust toolchain or the straw source repository. `test_optional_straw.py` deliberately runs without straw to check that default data transport still works and that explicitly selecting straw produces a clear installation hint.
 
@@ -69,6 +70,72 @@ NUM_GPUS = 0
 These jobs still run in Docker on self-hosted machines, but do not acquire GPUs when `NUM_GPUS = 0`.
 
 ## Data Transport and Recovery Tests
+
+### Coding-agent training
+
+`tests/test_agent_sunabako_codex_e2e.py` uses Codex **0.162.1** and a single small
+MiMo task, `format-code-task-000003` (implementing smol-evm's missing `SHL` opcode).
+Training, SGLang, and both sandbox roles run on one host with eight H100 80GB GPUs.
+It covers reading an existing repository, editing source, executing commands,
+multi-turn Responses API translation, sampled-token/logprob capture, grading in
+a fresh sandbox, and one real optimizer step. The unchanged repository must
+fail because `SHL` is missing; the agent must earn reward 1 by passing the official
+bitwise tests, including six new left-shift cases for ordinary values, zero shifts,
+overflow and shifts at least 256 bits wide. Each training rank must report finite nonzero gradients and changed
+model parameters. Reward normalization is disabled for this one-sample smoke
+test so a successful rollout produces a learning signal. Sampling uses temperature 1,
+`top_p=0.95`, disabled top-k and score centering. Both nucleus IDs/offsets and the
+original sampler probabilities are checked against the actual training tensors.
+R3 is disabled because Qwen3.8-27B is dense; CPU tests cover replay metadata
+through agent forks.
+
+This is one task, one sample and one update, with a 180-second agent budget and
+a 600-second training-job deadline. The dedicated CI job has a 15-minute limit
+including setup. It records and validates the complete agent episode, then
+trains on its first and last real segments, unchanged, to bound repeated-context
+training cost. `agent-full.pt` retains every segment; the full example continues
+to train on the entire trajectory. No solution or hidden tests are supplied to
+the agent.
+Model, dataset and image downloads, plus TileLang/Triton
+compilation, are cached. Populate the shared cache before the first timed CI run:
+cold downloads and compilation can exceed the 15-minute job limit.
+It does not run a SWE benchmark or the full example dataset.
+The `run-ci-agent` label selects the GPU job; automatic `agent-test` CPU checks
+continue to cover edge cases. `run-ci-changed` also discovers this top-level test.
+
+Measured on 2026-10-10 with eight H100 80GB GPUs, cached assets/compilation and
+a local sandbox cluster in RSS test mode: **457 seconds total**, including
+**68 seconds for the agent and independent grading**. The grader passed 10/10
+tests and all eight training ranks changed parameters. All 2,271 sampled tokens
+across 13 turns passed the token/replay audit; the bounded update trained the
+first and last segments (318 tokens). `sc_correction` was -0.00255 and mean
+absolute train/rollout logprob difference was 0.00989.
+
+CI installs sunabako from `examples/coding_agent_rl/requirements-sunabako.txt`,
+so the pinned sunabako wheel must first be available on PyPI. It imports the OCI
+image with skopeo/umoci and uses the native runtime in the existing privileged
+CI container, without starting a Docker daemon. The explicitly enabled RSS test
+mode is only a bounded functional check, **not aggregate hard RAM enforcement**.
+Production sunabako still requires a writable delegated cgroup and fails closed.
+
+For a preconfigured cluster, install the same requirements and run:
+
+```bash
+HF_CHECKPOINT=/path/to/Qwen3.8-27B \
+SUNABAKO_CLUSTER=/path/to/cluster.json \
+SUNABAKO_IMAGES=/path/to/images.json \
+ADAPTER_PUBLIC_HOST=<training-node-ip> \
+python tests/test_agent_sunabako_codex_e2e.py
+```
+
+The image map must include the selected task on every sandbox node. Set
+`SUNABAKO_ALLOW_TEST_MEMORY=1` explicitly only when testing without hard cgroups.
+Optional `SLIME_AGENT_TEST_DATA` reuses the downloaded MiMo parquet/mapping;
+`SLIME_AGENT_CODEX_NATIVE_TARBALL` reuses the official platform archive.
+`SLIME_AGENT_TEST_RUN_DIR` must name a new directory and retains the CLI logs,
+grader output, rollout/train tensors, optimizer evidence and `result.json`.
+The test owns its Ray head and does not stop unrelated clusters. GitHub Actions
+uploads the evidence on success and failure.
 
 ### straw
 
@@ -131,7 +198,7 @@ if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
 ```
 
-To run a test automatically, register it in the `cpu-unittest` or `agent-adapter-test` list in `.github/workflows/pr-test.yml.j2`, then regenerate the workflow.
+To run a test automatically, register it in the `cpu-unittest` or `agent-test` list in `.github/workflows/pr-test.yml.j2`, then regenerate the workflow.
 
 ### Adding GPU End-to-End Tests
 

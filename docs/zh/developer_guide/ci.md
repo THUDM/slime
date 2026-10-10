@@ -7,7 +7,8 @@
 | 触发方式 | CI 任务 | 运行环境 | 覆盖范围 |
 |---|---|---|---|
 | 自动运行 | `cpu-unittest` | CPU | 参数校验、批次调度、指标、奖励计算、样本处理、checkpoint 工具和扩展接口。 |
-| 自动运行 | `agent-adapter-test` | CPU | Agent 适配器，额外安装所需的模型服务 SDK。 |
+| 自动运行 | `agent-test` | CPU | Agent 适配器，额外安装所需的模型服务 SDK。 |
+| `run-ci-agent` | `e2e-test-agent` | 8 GPU | 真实 codex、sunabako、小米独立评分与 Qwen3.8-27B 参数更新。 |
 | `run-ci-sglang-config` | `e2e-test-sglang-config` | CPU/GPU | SGLang 部署配置，包括多模型、不同引擎布局和显存卸载后的故障恢复。 |
 | `run-ci-megatron` | `e2e-test-megatron` | GPU | Megatron 训练，包括 Dense、MoE、PPO、MTP、OPD、全异步 rollout、PD/Mooncake 和调试数据重放。 |
 | `run-ci-precision` | `e2e-test-precision` | CPU/GPU | 数值精度，以及不同并行配置下的结果一致性。 |
@@ -34,7 +35,7 @@ CPU 任务运行在 GitHub 托管的 `ubuntu-latest` 环境中，安装 CPU 版 
 - `Sample`、rollout 数据校验和 agent 轨迹合并；
 - Hugging Face checkpoint 保存，以及自定义 rollout、生成函数和运行时 hook 的接口约定。
 
-Agent 适配器测试放在独立的 `agent-adapter-test` 任务中，因为它们还需要 `openai`、`openai-agents`、`anthropic` 等 SDK。
+Agent 适配器测试放在独立的 `agent-test` 任务中，因为它们还需要 `openai`、`openai-agents`、`anthropic` 等 SDK。
 
 CPU 测试列表中带有 `straw: true` 的条目，会从 PyPI 安装最新版 `straw-queue` wheel。测试不需要 Rust 工具链或 straw 源码仓库。`test_optional_straw.py` 则刻意不安装 straw，检查默认数据传输仍可运行，以及显式选择 straw 时是否给出清晰的安装提示。
 
@@ -69,6 +70,57 @@ NUM_GPUS = 0
 这类任务仍在自托管机器的 Docker 容器中执行，但 `NUM_GPUS = 0` 时不会申请 GPU。
 
 ## 数据传输与恢复测试
+
+### Agent 训练
+
+`tests/test_agent_sunabako_codex_e2e.py` 使用 **codex 0.162.1**，只选择小米数据中的
+`format-code-task-000003`：给 smol-evm 补上缺失的 `SHL` 左移指令。
+训练、SGLang、agent 沙箱和评分沙箱都在同一台八卡 H100 80GB 机器上运行。
+任务很小，但覆盖读已有仓库、修改源码、执行命令、Responses 多轮协议转换、原始 token
+及 logprob 捕获、新沙箱独立评分，以及一次真实优化器更新。原始代码必须无法通过官方
+测试，失败原因必须是缺少 `SHL`；agent 修改后必须得到 reward 1、通过官方位运算测试，
+包括普通左移、零位移、溢出和超大位移等六个新用例。每个训练 rank 都要提供
+有限非零梯度与模型参数确实发生变化的证据。这个单样本测试关闭 reward normalization，
+让成功轨迹能够产生训练信号。采样使用 temperature=1、`top_p=0.95`，禁用 top-k，
+启用 SC。测试逐项比对原始 nucleus ID/offset、sampler 概率与实际训练张量。
+Qwen3.8-27B 是 dense 模型，因此关闭 R3；CPU 测试覆盖 agent 分叉中的 replay 数据传递。
+
+CI 只运行一个任务、采样一次、更新一次。agent 上限 180 秒，训练任务上限 600 秒，
+专用 CI job 连同准备阶段上限 15 分钟。完整运行并校验 agent episode 后，CI 只取首尾两个
+真实片段做训练，保留原始 token、logprob 和 reward，以控制重复上下文的训练开销。
+`agent-full.pt` 保存所有片段，正式 example 仍训练完整轨迹。不给 agent 提供答案或隐藏测试。
+模型、数据、镜像和 TileLang/Triton 编译结果会缓存，
+首次计时 CI 前应准备好共享缓存；冷启动的下载与编译可能超过 15 分钟 job 上限。
+`run-ci-agent` 标签触发 GPU e2e，自动运行的 `agent-test` 继续覆盖 CPU 边界情况；
+`run-ci-changed` 也能发现这个顶层测试文件。完整小米数据训练仍由 example 提供。
+
+2026-10-10 在单机八张 H100 80GB、模型/镜像/编译缓存就绪、已有本机沙箱集群的
+RSS 测试模式下，实测**全程 457 秒**，其中 agent 与独立评分约 **68 秒**。官方测试
+10/10 通过，八个训练 rank 均发生参数变化。13 轮共 2,271 个采样 token 全部通过
+token/replay 校验；限时训练使用首尾两个片段，共 318 个 token。`sc_correction`
+为 -0.00255，训推 logprob 平均绝对差为 0.00989。
+
+CI 从 `examples/coding_agent_rl/requirements-sunabako.txt` 安装 sunabako，因此固定版本的
+wheel 需要先发布到 PyPI。镜像由 skopeo/umoci 导入，在现有特权 CI 容器内使用 native
+runtime，无需启动 Docker daemon。CI 明确启用的 RSS 模式只用于有界功能测试，
+**不证明总内存硬限制**；生产环境仍需可写、已委派的 cgroup，缺失时拒绝启动。
+
+已有沙箱集群时，安装相同 requirements 后运行：
+
+```bash
+HF_CHECKPOINT=/path/to/Qwen3.8-27B \
+SUNABAKO_CLUSTER=/path/to/cluster.json \
+SUNABAKO_IMAGES=/path/to/images.json \
+ADAPTER_PUBLIC_HOST=<training-node-ip> \
+python tests/test_agent_sunabako_codex_e2e.py
+```
+
+镜像映射必须在每台沙箱节点包含该任务。只在无硬 cgroup 的功能测试中，显式设置
+`SUNABAKO_ALLOW_TEST_MEMORY=1`。可用 `SLIME_AGENT_TEST_DATA` 复用已下载的小米 parquet
+和镜像映射，用 `SLIME_AGENT_CODEX_NATIVE_TARBALL` 复用官方平台安装包。
+`SLIME_AGENT_TEST_RUN_DIR` 必须是新目录，会保留 CLI 日志、评分输出、rollout/train
+张量、参数更新证据与 `result.json`。测试自行管理专用 Ray head，不停止其他集群；
+GitHub Actions 在成功或失败后都会上传这些产物。
 
 ### straw
 
@@ -131,7 +183,7 @@ if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
 ```
 
-需要自动运行的测试，还应注册到 `.github/workflows/pr-test.yml.j2` 的 `cpu-unittest` 或 `agent-adapter-test` 列表中，再重新生成工作流。
+需要自动运行的测试，还应注册到 `.github/workflows/pr-test.yml.j2` 的 `cpu-unittest` 或 `agent-test` 列表中，再重新生成工作流。
 
 ### 添加 GPU 端到端测试
 

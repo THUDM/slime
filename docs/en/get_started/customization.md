@@ -143,6 +143,7 @@ async def custom_generate(args, sample: Sample, sampling_params: dict) -> list[S
         s.response = segment.response
         s.response_length = segment.response_length
         s.loss_mask = segment.loss_mask
+        s.rollout_log_probs = segment.rollout_log_probs
         s.reward = segment.reward
         s.status = Sample.Status.COMPLETED
         s.rollout_id = rollout_id
@@ -150,7 +151,7 @@ async def custom_generate(args, sample: Sample, sampling_params: dict) -> list[S
     return samples
 ```
 
-If one full trajectory has a single total reward but is split into `K` training segments, a common pattern is to distribute that reward across the segments, for example by assigning `reward / K` to each segment, so the same rollout reward is not amplified.
+If one full trajectory has a single outcome reward, assign that same reward to every segment and preserve the original `group_index`. GRPO computes prompt-group statistics over distinct `rollout_id` values and copies each rollout's advantage to its segments. The loss reducer already averages over all unmasked tokens in the rollout, including across microbatches, so dividing the reward by the segment count would underweight trajectories with more segments. Shared generated prefixes must contribute loss only once.
 
 **Example**: See [examples/search-r1/generate_with_search.py](../../../examples/search-r1/generate_with_search.py) and [examples/multi_agent/rollout_with_multi_agents.py](../../../examples/multi_agent/rollout_with_multi_agents.py)
 

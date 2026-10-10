@@ -72,6 +72,7 @@ jobs:
 
     runs-on: self-hosted
 
+
     strategy:
       fail-fast: false
       matrix:
@@ -160,6 +161,9 @@ jobs:
               set -euo pipefail
               python -m pip install --upgrade --no-deps --only-binary=straw-queue --break-system-packages straw-queue
               pip install -e . --no-deps --break-system-packages
+              if [[ "${TEST_FILE##*/}" == "test_agent_sunabako_codex_e2e.py" ]]; then
+                source tests/ci/setup_agent_e2e.sh
+              fi
               TEST_PATH="$TEST_FILE"
               if [[ "$TEST_PATH" != tests/* ]]; then
                 TEST_PATH="tests/$TEST_PATH"
@@ -176,6 +180,14 @@ jobs:
               fi
             '
 
+      - name: Upload agent E2E evidence
+        if: always() && matrix.info.test_file == 'test_agent_sunabako_codex_e2e.py'
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-e2e-e2e-test-sglang-config
+          path: ${{ github.workspace }}/.agent-e2e/
+          include-hidden-files: true
+          if-no-files-found: ignore
 
   e2e-test-megatron:
 
@@ -183,6 +195,7 @@ jobs:
 
 
     runs-on: self-hosted
+
 
     strategy:
       fail-fast: false
@@ -476,6 +489,9 @@ jobs:
               set -euo pipefail
               python -m pip install --upgrade --no-deps --only-binary=straw-queue --break-system-packages straw-queue
               pip install -e . --no-deps --break-system-packages
+              if [[ "${TEST_FILE##*/}" == "test_agent_sunabako_codex_e2e.py" ]]; then
+                source tests/ci/setup_agent_e2e.sh
+              fi
               TEST_PATH="$TEST_FILE"
               if [[ "$TEST_PATH" != tests/* ]]; then
                 TEST_PATH="tests/$TEST_PATH"
@@ -492,6 +508,14 @@ jobs:
               fi
             '
 
+      - name: Upload agent E2E evidence
+        if: always() && matrix.info.test_file == 'test_agent_sunabako_codex_e2e.py'
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-e2e-e2e-test-megatron
+          path: ${{ github.workspace }}/.agent-e2e/
+          include-hidden-files: true
+          if-no-files-found: ignore
 
   e2e-test-precision:
 
@@ -499,6 +523,7 @@ jobs:
 
 
     runs-on: self-hosted
+
 
     strategy:
       fail-fast: false
@@ -570,6 +595,9 @@ jobs:
               set -euo pipefail
               python -m pip install --upgrade --no-deps --only-binary=straw-queue --break-system-packages straw-queue
               pip install -e . --no-deps --break-system-packages
+              if [[ "${TEST_FILE##*/}" == "test_agent_sunabako_codex_e2e.py" ]]; then
+                source tests/ci/setup_agent_e2e.sh
+              fi
               TEST_PATH="$TEST_FILE"
               if [[ "$TEST_PATH" != tests/* ]]; then
                 TEST_PATH="tests/$TEST_PATH"
@@ -586,6 +614,14 @@ jobs:
               fi
             '
 
+      - name: Upload agent E2E evidence
+        if: always() && matrix.info.test_file == 'test_agent_sunabako_codex_e2e.py'
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-e2e-e2e-test-precision
+          path: ${{ github.workspace }}/.agent-e2e/
+          include-hidden-files: true
+          if-no-files-found: ignore
 
   e2e-test-ckpt:
 
@@ -593,6 +629,7 @@ jobs:
 
 
     runs-on: self-hosted
+
 
     strategy:
       fail-fast: false
@@ -686,6 +723,9 @@ jobs:
               set -euo pipefail
               python -m pip install --upgrade --no-deps --only-binary=straw-queue --break-system-packages straw-queue
               pip install -e . --no-deps --break-system-packages
+              if [[ "${TEST_FILE##*/}" == "test_agent_sunabako_codex_e2e.py" ]]; then
+                source tests/ci/setup_agent_e2e.sh
+              fi
               TEST_PATH="$TEST_FILE"
               if [[ "$TEST_PATH" != tests/* ]]; then
                 TEST_PATH="tests/$TEST_PATH"
@@ -702,6 +742,14 @@ jobs:
               fi
             '
 
+      - name: Upload agent E2E evidence
+        if: always() && matrix.info.test_file == 'test_agent_sunabako_codex_e2e.py'
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-e2e-e2e-test-ckpt
+          path: ${{ github.workspace }}/.agent-e2e/
+          include-hidden-files: true
+          if-no-files-found: ignore
 
   cpu-unittest:
 
@@ -709,6 +757,7 @@ jobs:
 
 
     runs-on: ubuntu-latest
+
 
     strategy:
       fail-fast: false
@@ -1120,6 +1169,14 @@ jobs:
             python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
           fi
 
+      - name: Upload agent E2E evidence
+        if: always() && matrix.info.test_file == 'test_agent_sunabako_codex_e2e.py'
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-e2e-cpu-unittest
+          path: ${{ github.workspace }}/.agent-e2e/
+          include-hidden-files: true
+          if-no-files-found: ignore
 
   agent-test:
 
@@ -1127,6 +1184,7 @@ jobs:
 
 
     runs-on: ubuntu-latest
+
 
     strategy:
       fail-fast: false
@@ -1139,7 +1197,23 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_agent/test_token_contract.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_agent/test_sampler_replay.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_grouped_rewards.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_agent/test_adapters.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_agent/test_responses.py"
             },
             {
               "num_gpus": 0,
@@ -1152,6 +1226,10 @@ jobs:
             {
               "num_gpus": 0,
               "test_file": "test_agent/test_agent_rollout_cpu.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_agent/test_sunabako_provider.py"
             }
           ]
     defaults:
@@ -1210,6 +1288,118 @@ jobs:
             python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
           fi
 
+      - name: Upload agent E2E evidence
+        if: always() && matrix.info.test_file == 'test_agent_sunabako_codex_e2e.py'
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-e2e-agent-test
+          path: ${{ github.workspace }}/.agent-e2e/
+          include-hidden-files: true
+          if-no-files-found: ignore
+
+  e2e-test-agent:
+
+    if: (github.event_name == 'workflow_dispatch') || (github.event.pull_request && contains(github.event.pull_request.labels.*.name, 'run-ci-agent'))
+
+
+    runs-on: self-hosted
+
+
+    timeout-minutes: 15
+
+    strategy:
+      fail-fast: false
+      matrix:
+        info:
+          [
+            {
+              "num_gpus": 8,
+              "test_file": "test_agent_sunabako_codex_e2e.py"
+            }
+          ]
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
+    env:
+      GITHUB_COMMIT_NAME: ${{ github.sha }}_${{ github.event.pull_request.number || 'non-pr' }}
+      WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+      SLIME_TEST_ENABLE_INFINITE_RUN: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.infinite_run) || 'false' }}
+      SLIME_TEST_USE_DEEPEP: ${{ matrix.info.use_deepep || '0' }}
+      SLIME_TEST_USE_FP8_ROLLOUT: ${{ matrix.info.use_fp8_rollout || '0' }}
+      SLIME_TEST_ENABLE_EVAL: ${{ matrix.info.enable_eval || '1' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+
+
+      - name: Execute
+        shell: bash
+        run: |
+
+          docker run --pull=always --rm \
+            --privileged \
+            --cap-add SYS_NICE \
+            --security-opt seccomp=unconfined \
+            --network host \
+            --gpus all \
+            --ipc=host \
+            --shm-size=16g \
+            --ulimit memlock=-1 \
+            --ulimit stack=67108864 \
+            --memory=0 \
+            --memory-swap=0 \
+            -e http_proxy \
+            -e https_proxy \
+            -e HTTP_PROXY \
+            -e HTTPS_PROXY \
+            -e GITHUB_COMMIT_NAME \
+            -e WANDB_API_KEY \
+            -e SLIME_TEST_ENABLE_INFINITE_RUN \
+            -e SLIME_TEST_USE_DEEPEP \
+            -e SLIME_TEST_USE_FP8_ROLLOUT \
+            -e SLIME_TEST_ENABLE_EVAL \
+            -e TEST_FILE="${{ matrix.info.test_file }}" \
+            -e TEST_ARGS="${{ matrix.info.test_args || '' }}" \
+            -e NUM_GPUS="${{ matrix.info.num_gpus }}" \
+            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -v /mnt/nvme0n1/slime_ci:/data/slime_ci \
+            -v /mnt/nvme0n1/slime_ci/models:/root/models \
+            -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets \
+            -w "$GITHUB_WORKSPACE" \
+            slimerl/slime:latest \
+            bash -lc '
+              set -euo pipefail
+              python -m pip install --upgrade --no-deps --only-binary=straw-queue --break-system-packages straw-queue
+              pip install -e . --no-deps --break-system-packages
+              if [[ "${TEST_FILE##*/}" == "test_agent_sunabako_codex_e2e.py" ]]; then
+                source tests/ci/setup_agent_e2e.sh
+              fi
+              TEST_PATH="$TEST_FILE"
+              if [[ "$TEST_PATH" != tests/* ]]; then
+                TEST_PATH="tests/$TEST_PATH"
+              fi
+              if [[ -n "$TEST_ARGS" ]]; then
+                read -r -a TEST_ARGS_ARRAY < <(printf "%s\n" "$TEST_ARGS")
+              else
+                TEST_ARGS_ARRAY=()
+              fi
+              if [ "$NUM_GPUS" = "0" ]; then
+                python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+              else
+                python tests/ci/gpu_lock_exec.py --count "$NUM_GPUS" -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
+              fi
+            '
+
+      - name: Upload agent E2E evidence
+        if: always() && matrix.info.test_file == 'test_agent_sunabako_codex_e2e.py'
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-e2e-e2e-test-agent
+          path: ${{ github.workspace }}/.agent-e2e/
+          include-hidden-files: true
+          if-no-files-found: ignore
 
   e2e-test-image:
 
@@ -1217,6 +1407,7 @@ jobs:
 
 
     runs-on: self-hosted
+
 
     strategy:
       fail-fast: false
@@ -1510,6 +1701,9 @@ jobs:
               set -euo pipefail
               python -m pip install --upgrade --no-deps --only-binary=straw-queue --break-system-packages straw-queue
               pip install -e . --no-deps --break-system-packages
+              if [[ "${TEST_FILE##*/}" == "test_agent_sunabako_codex_e2e.py" ]]; then
+                source tests/ci/setup_agent_e2e.sh
+              fi
               TEST_PATH="$TEST_FILE"
               if [[ "$TEST_PATH" != tests/* ]]; then
                 TEST_PATH="tests/$TEST_PATH"
@@ -1526,6 +1720,14 @@ jobs:
               fi
             '
 
+      - name: Upload agent E2E evidence
+        if: always() && matrix.info.test_file == 'test_agent_sunabako_codex_e2e.py'
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-e2e-e2e-test-image
+          path: ${{ github.workspace }}/.agent-e2e/
+          include-hidden-files: true
+          if-no-files-found: ignore
 
 
   e2e-test-changed-detect:
@@ -1627,6 +1829,9 @@ jobs:
               set -euo pipefail
               python -m pip install --upgrade --no-deps --only-binary=straw-queue --break-system-packages straw-queue
               pip install -e . --no-deps --break-system-packages
+              if [[ "${TEST_FILE##*/}" == "test_agent_sunabako_codex_e2e.py" ]]; then
+                source tests/ci/setup_agent_e2e.sh
+              fi
               TEST_PATH="$TEST_FILE"
               if [[ "$TEST_PATH" != tests/* ]]; then
                 TEST_PATH="tests/$TEST_PATH"
@@ -1642,3 +1847,11 @@ jobs:
                 python tests/ci/gpu_lock_exec.py --count "$NUM_GPUS" -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
               fi
             '
+      - name: Upload agent E2E evidence
+        if: always() && endsWith(matrix.info.test_file, 'test_agent_sunabako_codex_e2e.py')
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-e2e-changed
+          path: ${{ github.workspace }}/.agent-e2e/
+          include-hidden-files: true
+          if-no-files-found: ignore

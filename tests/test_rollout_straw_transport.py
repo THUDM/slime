@@ -878,7 +878,7 @@ def test_debug_archive_replay_rejects_changing_storage(args, tmp_path, different
     manager = object.__new__(RolloutManager.__ray_metadata__.modified_class)
     manager.serving = None
     manager.args = args
-    with pytest.raises(ValueError, match="same Straw storage pool and run"):
+    with pytest.raises(ValueError, match="same straw storage pool and run"):
         manager._get_rollout_data(1)
     assert args.rollout_data_dir == str(tmp_path)
     assert args.rollout_queue_run_id == "rollout"

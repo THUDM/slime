@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
+import importlib.util
 import sys
 import types
 from pathlib import Path
@@ -43,7 +44,7 @@ if str(REPO_ROOT) not in sys.path:
 # CPU-only CI env for this test. We never touch a real tokenizer (load_tokenizer
 # is patched with FakeTokenizer below), so stub transformers before the import
 # so the chain resolves without it.
-if "transformers" not in sys.modules:
+if "transformers" not in sys.modules and importlib.util.find_spec("transformers") is None:
     _tf_stub = types.ModuleType("transformers")
     for _name in ("AutoProcessor", "AutoTokenizer", "PreTrainedTokenizerBase", "ProcessorMixin"):
         setattr(_tf_stub, _name, type(_name, (), {}))
@@ -142,8 +143,8 @@ def _patch_generate(monkeypatch, tokenizer: FakeTokenizer, sandbox_factory) -> N
         ),
     )
     monkeypatch.setattr(gen, "load_tokenizer", lambda *a, **k: tokenizer)
-    monkeypatch.setattr(gen, "E2BSandbox", sandbox_factory)  # boot sandbox
-    monkeypatch.setattr(swe, "E2BSandbox", sandbox_factory)  # eval sandbox
+    monkeypatch.setattr(gen, "create_sandbox", sandbox_factory)  # boot sandbox
+    monkeypatch.setattr(swe, "create_sandbox", sandbox_factory)  # eval sandbox
     monkeypatch.setattr(ClaudeCodeHarness, "install_cli", _noop_install)
     monkeypatch.setattr(harness_common.asyncio, "sleep", _fast_sleep)
     monkeypatch.setattr(
