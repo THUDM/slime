@@ -351,7 +351,7 @@ index bd9d7eafa1c9721a01d98c397deebf17e95a06dc..c74f7666a9972ba7ee5b0c94c805189e
  
 +@app.post("/post_process_weights")
 +@auth_level(AuthLevel.ADMIN_OPTIONAL)
-+async def post_process_weights(req: PostProcessWeightsReqInput, request: Request):
++async def post_process_weights(req: Annotated[PostProcessWeightsReqInput, Body()], request: Request):
 +    """Optional post-processing for updated weights, e.g. quantization packing."""
 +    success, message = await _global_state.tokenizer_manager.post_process_weights(
 +        req, request
