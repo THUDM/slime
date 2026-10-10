@@ -13,6 +13,7 @@ protocols handle identically.
 from __future__ import annotations
 
 import asyncio
+import copy
 import dataclasses
 import logging
 import math
@@ -33,6 +34,13 @@ __all__ = ["TurnRecord"]
 
 
 @dataclasses.dataclass
+class PromptPrefix:
+    messages: list[dict]
+    tools: list[dict] | None
+    turn: TurnRecord
+
+
+@dataclasses.dataclass
 class Session:
     """Per-sid adapter state: sampling defaults and context budget.
 
@@ -43,6 +51,7 @@ class Session:
     sampling_defaults: dict = dataclasses.field(default_factory=dict)
     max_context_tokens: int = 0
     apply_chat_template_kwargs: dict = dataclasses.field(default_factory=dict)
+    prompt_prefixes: list[PromptPrefix] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass
@@ -76,6 +85,52 @@ def _render_token_ids(
     )
     ids = enc["input_ids"] if hasattr(enc, "__getitem__") and "input_ids" in enc else enc
     return list(ids)
+
+
+def _session_prompt_ids(messages, tokenizer, *, tools, session: Session) -> list[int]:
+    """Extend a replayed assistant message using its original model tokens.
+
+    Wire clients can omit reasoning and reformat tool arguments. Match the
+    complete message history and tool schema first, then use the template only
+    for the new suffix. A changed/compacted history remains a separate branch.
+    The end-of-message special token is the splice boundary; if the template
+    cannot prove that boundary, leave its normal rendering intact.
+    """
+    kwargs = session.apply_chat_template_kwargs
+    rendered = _render_token_ids(messages, tokenizer, tools=tools, apply_chat_template_kwargs=kwargs)
+    special_ids = set(getattr(tokenizer, "all_special_ids", ()))
+    for prefix in sorted(session.prompt_prefixes, key=lambda p: len(p.messages), reverse=True):
+        turn = prefix.turn
+        depth = len(prefix.messages)
+        if (
+            prefix.tools != tools
+            or depth >= len(messages)
+            or prefix.messages != messages[:depth]
+            or turn.finish_reason != "stop"
+            or not turn.output_ids
+            or turn.output_ids[-1] not in special_ids
+        ):
+            continue
+        # Two branches may have identical visible replies but different hidden
+        # reasoning. Without a unique token history, do not guess which one the
+        # client echoed.
+        if any(
+            other.messages == prefix.messages
+            and other.tools == tools
+            and (other.turn.prompt_ids != turn.prompt_ids or other.turn.output_ids != turn.output_ids)
+            for other in session.prompt_prefixes
+        ):
+            continue
+        anchor = _render_token_ids(
+            messages[:depth], tokenizer, tools=tools, add_generation_prompt=False, apply_chat_template_kwargs=kwargs
+        )
+        if rendered[: len(anchor)] != anchor:
+            continue
+        end = next((i for i in range(len(anchor) - 1, -1, -1) if anchor[i] == turn.output_ids[-1]), None)
+        if end is None or tokenizer.decode(anchor[end + 1 :], skip_special_tokens=False).strip():
+            continue
+        return turn.prompt_ids + turn.output_ids + rendered[end + 1 :]
+    return rendered
 
 
 def flatten_content(c: Any) -> str:
@@ -348,12 +403,11 @@ class BaseAdapter:
         t0 = time.monotonic()
         try:
             translated, tools_schema = self._translate(body)
-            prompt_ids = _render_token_ids(
+            prompt_ids = _session_prompt_ids(
                 translated,
                 tok,
                 tools=tools_schema,
-                add_generation_prompt=True,
-                apply_chat_template_kwargs=s.apply_chat_template_kwargs,
+                session=s,
             )
 
             turn = await call_sglang_generate(prompt_ids, s, body, adapter=self, session_id=sid)
@@ -402,6 +456,9 @@ class BaseAdapter:
                 prompt_messages=translated,
                 response_message=reply.manager_message,
                 metadata={"sid": sid},
+            )
+            s.prompt_prefixes.append(
+                PromptPrefix(copy.deepcopy(translated + [reply.manager_message]), copy.deepcopy(tools_schema), turn)
             )
             return response
         finally:
@@ -474,15 +531,28 @@ async def call_sglang_generate(
     if getattr(adapter.rollout_args, "use_rollout_routing_replay", False):
         request_options["return_routed_experts"] = True
 
-    if session.max_context_tokens > 0:
-        remaining_context = session.max_context_tokens - len(prompt_ids)
+    context_limit = session.max_context_tokens
+    server_context = int(getattr(adapter.rollout_args, "sglang_context_length", 0) or context_limit)
+    bounded_context = context_limit > 0 or server_context > 0
+    if server_context > 0:
+        algorithm = str(getattr(adapter.rollout_args, "sglang_speculative_algorithm", "") or "").upper()
+        if algorithm in {"EAGLE", "EAGLE3", "NEXTN"}:
+            # SGLang reserves draft output slots in addition to max_new_tokens.
+            # Keep that server limit separate from a smaller rollout budget.
+            topk = int(getattr(adapter.rollout_args, "sglang_speculative_eagle_topk", 1) or 1)
+            steps = int(getattr(adapter.rollout_args, "sglang_speculative_num_steps", 0) or 0)
+            drafts = int(getattr(adapter.rollout_args, "sglang_speculative_num_draft_tokens", 0) or 0)
+            server_context -= max(topk * steps, drafts)
+        context_limit = min(context_limit, server_context) if context_limit > 0 else server_context
+    if bounded_context:
+        remaining_context = context_limit - len(prompt_ids)
         if remaining_context <= 0:
             logger.warning(
                 "[%s] sid=%s prompt exceeds max_context_tokens (%d >= %d)",
                 adapter.log_prefix,
                 session_id,
                 len(prompt_ids),
-                session.max_context_tokens,
+                context_limit,
             )
             return TurnRecord(prompt_ids=list(prompt_ids), output_ids=[], finish_reason="length")
         sp["max_new_tokens"] = min(int(sp.get("max_new_tokens", remaining_context)), remaining_context)

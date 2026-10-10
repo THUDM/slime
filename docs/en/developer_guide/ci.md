@@ -72,53 +72,57 @@ These jobs still run in Docker on self-hosted machines, but do not acquire GPUs 
 
 ### Coding-agent training
 
-`tests/test_agent_sunabako_codex_e2e.py` uses Codex **0.162.1** and a single small
-MiMo task, `format-code-task-000003` (implementing smol-evm's missing `SHL` opcode).
-Training, SGLang, and both sandbox roles run on one host with eight H100 80GB GPUs.
-It covers reading an existing repository, editing source, executing commands,
-multi-turn Responses API translation, sampled-token/logprob capture, grading in
-a fresh sandbox, and one real optimizer step. The unchanged repository must
-fail because `SHL` is missing; the agent must earn reward 1 by passing the official
-bitwise tests, including six new left-shift cases for ordinary values, zero shifts,
-overflow and shifts at least 256 bits wide. Each training rank must report finite nonzero gradients and changed
-model parameters. Reward normalization is disabled for this one-sample smoke
-test so a successful rollout produces a learning signal. Sampling uses temperature 1,
-`top_p=0.95`, disabled top-k and score centering. Both nucleus IDs/offsets and the
-original sampler probabilities are checked against the actual training tensors.
-R3 is disabled because Qwen3.8-27B is dense; CPU tests cover replay metadata
-through agent forks.
+`tests/test_agent_sunabako_codex_e2e.py` uses Codex **0.162.1**, Claude Code
+**2.1.296**, Qwen3.8-27B and two small MiMo tasks with separate pinned images:
 
-This is one task, one sample and one update, with a 180-second agent budget and
-a 600-second training-job deadline. Its Megatron CI matrix entry has a 15-minute limit
-including setup. It records and validates the complete agent episode, then
-trains on its first and last real segments, unchanged, to bound repeated-context
-training cost. `agent-full.pt` retains every segment; the full example continues
-to train on the entire trajectory. No solution or hidden tests are supplied to
-the agent.
-Model, dataset and image downloads, plus TileLang/Triton
-compilation, are cached. Populate the shared cache before the first timed CI run:
-cold downloads and compilation can exceed the 15-minute job limit.
-It does not run a SWE benchmark or the full example dataset.
-The `run-ci-megatron` label includes this GPU test; automatic `agent-test` CPU checks
-continue to cover edge cases. `run-ci-changed` also discovers this top-level test.
+- `format-code-task-000003`: implement smol-evm's missing `SHL` opcode.
+- `format-code-task-000045`: preserve object quick replies in BootBot.
 
-Measured on 2026-10-10 with eight H100 80GB GPUs, cached assets/compilation and
-a local sandbox cluster in RSS test mode: **457 seconds total**, including
-**68 seconds for the agent and independent grading**. The grader passed 10/10
-tests and all eight training ranks changed parameters. All 2,271 sampled tokens
-across 13 turns passed the token/replay audit; the bounded update trained the
-first and last segments (318 tokens). `sc_correction` was -0.00255 and mean
-absolute train/rollout logprob difference was 0.00989.
+Each step samples **eight independent agents concurrently: four on each task**,
+grades each patch in a fresh sandbox, and performs one GRPO optimizer step.
+The first step uses Codex; the second uses Claude Code to sample both tasks again
+with the updated model. Both CLIs use the same trace stitching and training path. There are exactly
+sixteen agent runs and two training steps, without reward-based filtering or extra resampling.
+Both unchanged repositories must fail their official tests before training.
+Failed solutions retain reward 0 and participate in training alongside reward 1
+solutions. GRPO normalizes each task's four outcomes separately: it subtracts the prompt-group mean and divides by its sample standard
+deviation plus epsilon; a uniform group correctly has zero advantages.
 
-The shared `tests/ci/setup_agent_e2e.sh` upgrades sunabako to the latest PyPI wheel
-with `pip install --upgrade --no-deps --only-binary=sunabako sunabako` inside the test
-container, then installs the example requirements. This applies to
-`run-ci-megatron`, `run-ci-image`, and `run-ci-changed`; publishing a new sunabako
-wheel is enough for CI to use it without rebuilding the slime image. It imports the OCI
-image with skopeo/umoci and uses the native runtime in the existing privileged
-CI container, without starting a Docker daemon. The explicitly enabled RSS test
-mode is only a bounded functional check, **not aggregate hard RAM enforcement**.
-Production sunabako still requires a writable delegated cgroup and fails closed.
+The test compares the trainer's actual token advantages with those group statistics,
+and records both optimizer calls on all eight training ranks. Gradients and
+parameters must stay finite; nonzero gradients must produce parameter changes.
+Sampling uses temperature 1, `top_p=0.95`, disabled top-k and score centering.
+Inference enables the checkpoint's MTP head through SGLang EAGLE (three draft
+steps, four draft tokens) and checks that draft tokens were actually accepted.
+The 64K context budget reserves space for those draft tokens. Claude Code uses
+the example's six code tools: Bash, Read, Edit, Write, Glob and Grep.
+Original token IDs, masks, sampler probabilities and nucleus replay data are
+checked against the actual training tensors. Qwen3.8-27B is dense, so R3 is disabled.
+
+Each agent has a 600-second budget. The training-job deadline is 1,800 seconds and
+the GitHub matrix timeout is 35 minutes including setup. Continuous model turns
+are merged using their original tokens and sampler distributions. Every segment of each
+real trajectory enters training, as in the normal example.
+`agents/<sample-index>/agent-full.pt` retains its complete trajectory.
+The agent receives the original problem statement
+and repository, while hidden tests stay in the independent grading sandbox.
+
+Model files, the selected two task images, both CLI archives and TileLang/Triton
+compilation results are cached. Interrupted image downloads resume and cached
+blobs are verified. `--prepare-only` populates assets before GPU locks are acquired;
+cold downloads can exceed the timed job limit. Proxy variables are propagated to
+the container, with local Ray and sandbox traffic bypassing the proxy.
+The `run-ci-megatron` label includes this GPU test; `run-ci-changed` also discovers
+it. Automatic `agent-test` jobs cover the CPU contracts.
+
+`tests/ci/setup_agent_e2e.sh` installs the released `sunabako==0.1.1` wheel from PyPI,
+as pinned in `examples/coding_agent_rl/requirements-sunabako.txt`. This version
+supports native guest users with `uid_range_size`; the local node reserves 65,536 UIDs/GIDs for each of eight
+sandboxes. State is mounted under `/workspace` so mapped users can traverse its
+parent directories. This runs inside the existing privileged Docker container
+without an inner Docker daemon or PRoot. The explicitly enabled RSS test mode is
+a bounded functional check, **not aggregate hard RAM enforcement**. Production
+sunabako still requires a writable delegated cgroup and fails closed.
 
 For a preconfigured cluster, install the same requirements and run:
 
@@ -130,10 +134,11 @@ ADAPTER_PUBLIC_HOST=<training-node-ip> \
 python tests/test_agent_sunabako_codex_e2e.py
 ```
 
-The image map must include the selected task on every sandbox node. Set
+The image map must include both selected tasks on every sandbox node, with capacity for eight concurrent sandboxes. Set
 `SUNABAKO_ALLOW_TEST_MEMORY=1` explicitly only when testing without hard cgroups.
 Optional `SLIME_AGENT_TEST_DATA` reuses the downloaded MiMo parquet/mapping;
-`SLIME_AGENT_CODEX_NATIVE_TARBALL` reuses the official platform archive.
+`SLIME_AGENT_CODEX_NATIVE_TARBALL` and `SLIME_AGENT_CC_NATIVE_TARBALL` reuse the
+official platform archives without downloading toolchains inside the sandboxes.
 `SLIME_AGENT_TEST_RUN_DIR` must name a new directory and retains the CLI logs,
 grader output, rollout/train tensors, optimizer evidence and `result.json`.
 The test owns its Ray head and does not stop unrelated clusters. GitHub Actions

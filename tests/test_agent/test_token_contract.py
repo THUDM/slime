@@ -5,6 +5,7 @@ import copy
 import sys
 from dataclasses import asdict
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from aiohttp import web
@@ -112,6 +113,57 @@ def test_model_wire_uses_token_ids_and_requires_complete_logprobs(corruption):
                 assert turn.prompt_ids == [51, 52]
                 assert turn.output_ids == [101, 102]
                 assert turn.output_log_probs == [-0.1, -0.2]
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "algorithm,topk,steps,drafts,rollout_limit,server_limit,prompt_len,expected",
+    [
+        (None, 1, 3, 4, 16, 16, 6, 10),
+        ("EAGLE", 1, 3, 4, 16, 16, 6, 6),
+        ("EAGLE3", 2, 3, 4, 16, 16, 6, 4),
+        ("EAGLE", 1, 3, 4, 10, 20, 6, 4),
+        ("EAGLE", 1, 3, 4, 16, None, 6, 6),
+        ("EAGLE", 1, 3, 4, 0, 16, 6, 6),
+        ("EAGLE", 1, 3, 4, 16, 16, 12, 0),
+        ("EAGLE", 1, 3, 4, 16, 16, 13, 0),
+        ("EAGLE", 1, 3, 4, 4, 4, 1, 0),
+    ],
+)
+def test_generation_budget_reserves_speculative_slots(
+    algorithm, topk, steps, drafts, rollout_limit, server_limit, prompt_len, expected
+):
+    async def run():
+        requests = []
+
+        async def reply(request):
+            payload = await request.json()
+            requests.append(payload)
+            assert payload["sampling_params"]["max_new_tokens"] == expected
+            return web.json_response({"meta_info": {"output_token_logprobs": [[-0.1, 101]]}})
+
+        app = web.Application()
+        app.router.add_post("/generate", reply)
+        async with TestServer(app) as server:
+            adapter = OpenAIAdapter(
+                tokenizer=FakeTokenizer(),
+                sglang_url=str(server.make_url("")).rstrip("/"),
+                rollout_args=SimpleNamespace(
+                    sglang_context_length=server_limit,
+                    sglang_speculative_algorithm=algorithm,
+                    sglang_speculative_eagle_topk=topk,
+                    sglang_speculative_num_steps=steps,
+                    sglang_speculative_num_draft_tokens=drafts,
+                ),
+            )
+            turn = await call_sglang_generate(
+                [51] * prompt_len, Session(max_context_tokens=rollout_limit), {}, adapter=adapter
+            )
+            assert bool(requests) == bool(expected)
+            assert turn.output_ids == ([101] if expected else [])
+            if not expected:
+                assert turn.finish_reason == "length"
 
     asyncio.run(run())
 

@@ -1,8 +1,10 @@
 # Coding-agent RL with Qwen3.8-27B, MiMo SWE and sunabako
 
-The real Codex training smoke test is documented in the
+The real Codex / Claude Code training smoke test is documented in the
 [CI guide](https://github.com/THUDM/slime/blob/main/docs/en/developer_guide/ci.md#coding-agent-training).
-It uses one small MiMo task, one sample and one optimizer update on eight GPUs.
+Each of its two GRPO steps uses the same two small MiMo tasks, with four samples per task (eight concurrent agents) on eight GPUs.
+Step one uses Codex; step two uses Claude Code with the updated model.
+Per-sample `metadata.agent` selects `codex` or `claude_code`; `SWE_AGENT` supplies the default.
 
 This example trains **Qwen3.8-27B** on the **code subset of
 [Xiaomi MiMo's public RL dataset](https://huggingface.co/datasets/XiaomiMiMo/MiMo-V2.6-RL-oss)**.
@@ -10,6 +12,9 @@ Claude Code uses the served model to read and edit a repository in a sunabako
 sandbox. A second fresh sandbox applies the resulting `git diff` and runs the
 official MiMo tests to produce the reward. Model tokens, loss masks and rollout
 log-probabilities are returned to slime for GRPO training.
+Patch extraction compares the actual workspace before and after the agent runs,
+so files already shipped in the image are not counted as agent edits. It preserves
+the repository's HEAD and index while capturing staged, unstaged and new files.
 
 The main launcher is `run_qwen38_27b_sunabako_2plus2.sh`: two 8-GPU nodes run
 training and model serving; two other nodes run the agent and grader sandboxes.
@@ -51,11 +56,8 @@ Start with the standard slime training environment. On both training nodes:
 python -m pip install -r examples/coding_agent_rl/requirements-sunabako.txt
 ```
 
-To test a local sunabako build, install its wheel and the data tools:
-
-```bash
-python -m pip install /path/to/sunabako-0.1.0-*.whl 'pyarrow>=18' 'huggingface-hub>=0.34'
-```
+This installs the released `sunabako==0.1.1` package from PyPI, including native
+guest-user support.
 
 Provision both sandbox nodes with the sunabako CLI, its patched PRoot dependency,
 `skopeo`, `umoci`, and node configuration. Set a cgroup memory-pool limit on each
@@ -303,6 +305,7 @@ module defaults unless the corresponding variables are exported.
 | `ADAPTER_PUBLIC_HOST` | `auto` | Routable address advertised to sandbox nodes. |
 | `ADAPTER_BIND_HOST` / `ADAPTER_PORT` | `0.0.0.0` / `18091` | Adapter listening address. |
 | `SLIME_AGENT_NODE_TARBALL` / `SLIME_AGENT_CC_TARBALL` | Files in `$DATA_ROOT/toolchain` | Host-side Node 22 and Claude Code tarballs. |
+| `SLIME_AGENT_CC_NATIVE_TARBALL` | Unset | Optional official Claude Code platform archive; takes precedence over the Node/npm installation. |
 | `SLIME_AGENT_CC_EXTRA_ARGS` | Six code tools, max 40 turns | Claude CLI flags. |
 | `SLIME_AGENT_CC_EXTRA_ENVS` | Context/output/thinking limits | JSON overrides merged into the CLI environment. |
 | `SWE_AGENT_TIME_BUDGET_SEC` | `1200` | Agent CLI wall-clock budget. |
@@ -328,8 +331,12 @@ are the same tokens the rollout model actually sampled.
 The shared adapter accepts messages from the agent and uses **token in, token out**
 at the model and training boundary:
 
-- Each incoming message history is rendered with the served model's chat
-  template and sent to SGLang as `input_ids`.
+- The first message history is rendered with the served model's chat template
+  and sent to SGLang as `input_ids`. When the client echoes an unchanged history
+  and tool schema, the adapter reuses the original prompt and output tokens,
+  including thinking omitted by the client, and renders only the new suffix.
+  Changed or compacted histories, ambiguous matches and unverified message
+  boundaries fall back to normal template rendering and may create branches.
 - Parallel Anthropic tool results are matched by `tool_use_id` and restored to
   call order before rendering. Qwen's template omits those IDs, so preserving
   asynchronous completion order would associate file contents with the wrong
@@ -342,14 +349,23 @@ at the model and training boundary:
   The decoded `response` field is only a readable sidecar; it is not
   re-tokenized to recover the training sequence.
 
-Multi-turn agents still force the adapter to tokenize later message
-histories, because tool observations and the agent's compacted messages
-arrive as strings. `slime.agent.trajectory.TrajectoryManager` routes
-those later prompts against the saved token stream:
+For unchanged message histories, the adapter reuses the original model input
+and output token IDs, including reasoning omitted by the wire client. It
+matches the complete message prefix and tool schema, locates the template's
+end-of-message boundary, and appends only the newly rendered context. This
+happens before the next SGLang request, so sampling and training use the same
+continuous history. Changed histories, compaction, or an unverified boundary
+fall back to the template's full rendering.
+
+`slime.agent.trajectory.TrajectoryManager` assembles the saved token stream:
 
 - New prompt suffixes that are tool/user/environment context are appended with
   `loss_mask=0`.
 - Fresh model outputs from SGLang are appended with `loss_mask=1`.
+- Top-p and score-centering distributions are concatenated with their original
+  generated tokens. Masked tool/context tokens get empty top-p spans or finite
+  dummy top-k distributions. R3 prompt routing snapshots remain separate,
+  because their routes can differ even for identical token prefixes.
 - If a later prompt no longer token-matches an earlier sampled output, the
   example starts a new training segment. The earlier output keeps its original
   prompt, token IDs and logprobs. Re-rendered history in the new segment is
@@ -382,12 +398,12 @@ prompt-base restarts.
 - Sub-agent dispatch and auto-compaction increase the number of segments, so the
   flattened sample count can exceed `rollout_batch_size * n_samples_per_prompt`.
 
-The short GPU CI retains and audits every real model turn, then trains the first
-and last segments to bound runtime. It checks exact token/logprob identity again
-in the trainer's saved tensors and confirms real parameter updates. CPU tests
+The GPU CI retains, audits and trains every segment of every real agent trajectory.
+It checks exact token/logprob identity again in the trainer's saved tensors and
+verifies each task's group-normalized advantages, optimizer calls and parameter changes.
+Uniform outcome groups correctly have zero advantages. CPU tests
 cover unequal fork counts, shuffled prompt groups, shared prefixes and singleton
-groups; the single-rollout GPU smoke test disables reward normalization so it can
-exercise a nonzero optimizer update. Normal training consumes all segments.
+groups. CI and normal training both consume all segments.
 
 ## Porting to a New Sandbox Backend
 

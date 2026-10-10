@@ -4,8 +4,8 @@
 
 generate() is a four-stage orchestrator: swe.prepare_workspace + harness.run
 -> swe.git_diff -> swe.run_evaluation -> adapter.finish_session. The (harness,
-adapter) pair is chosen by the SWE_AGENT env var (claude_code | codex); see
-_AGENTS below.
+adapter) pair is chosen by sample.metadata.agent, falling back to SWE_AGENT
+(claude_code | codex); see _AGENTS below.
 Sandbox-side work is split across three layers: the provider-agnostic sandbox
 contract (slime.agent.sandbox), the swappable harness lifecycle
 (slime.agent.harness), and the SWE task layer (examples.coding_agent_rl.swe --
@@ -53,6 +53,13 @@ if AGENT_NAME not in _AGENTS:
 HARNESS_CLS, ADAPTER_CLS = _AGENTS[AGENT_NAME]
 
 
+def agent_name_for(sample: Sample) -> str:
+    name = (sample.metadata or {}).get("agent", AGENT_NAME)
+    if name not in _AGENTS:
+        raise ValueError(f"Unknown coding agent {name!r}; expected one of {sorted(_AGENTS)}")
+    return name
+
+
 @dataclass(frozen=True)
 class SweConfig:
     eval_protocol: str  # eval-path schema/grader (SWE_EVAL_PROTOCOL)
@@ -94,7 +101,7 @@ _BOOT_SEM = asyncio.Semaphore(CONFIG.boot_concurrency)
 
 
 @asynccontextmanager
-async def boot_agent_sandbox(image: str, instance_id: str) -> AsyncIterator[Sandbox]:
+async def boot_agent_sandbox(image: str, instance_id: str, *, harness=None) -> AsyncIterator[Sandbox]:
     """Boot a fresh sandbox and install the selected harness toolchain.
 
     Create the sandbox from the dataset image, install Node 22 + the harness CLI
@@ -109,7 +116,7 @@ async def boot_agent_sandbox(image: str, instance_id: str) -> AsyncIterator[Sand
             async with _BOOT_SEM:
                 await cand.__aenter__()
                 try:
-                    await HARNESS_CLS().install_cli(cand)
+                    await (harness or HARNESS_CLS()).install_cli(cand)
                 except BaseException:
                     await cand.__aexit__(None, None, None)
                     raise
@@ -137,54 +144,68 @@ async def boot_agent_sandbox(image: str, instance_id: str) -> AsyncIterator[Sand
 
 class _AdapterService(metaclass=SingletonMeta):
     def __init__(self, args) -> None:
+        self.args = args
         self.tokenizer = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
         self.max_context_len = int(getattr(args, "rollout_max_context_len", 0) or 0)
         self.tool_parser = getattr(args, "sglang_tool_call_parser", None) or None
         self.reasoning_parser = getattr(args, "sglang_reasoning_parser", None) or None
-        sglang_url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}"
+        self.sglang_url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}"
         if not CONFIG.adapter_public_host:
             raise RuntimeError(
                 "ADAPTER_PUBLIC_HOST is not set. Export it to the host IP that "
                 "sandboxes can reach for reverse-connection to the adapter; "
                 "without it the sandbox cannot dial back and the rollout aborts."
             )
-        self.adapter = ADAPTER_CLS(
+        self._endpoints = {}
+        self.adapter, self.adapter_url, self.app_handle = self.endpoint(AGENT_NAME)
+
+    def endpoint(self, agent_name):
+        if agent_name in self._endpoints:
+            return self._endpoints[agent_name]
+        _, adapter_cls = _AGENTS[agent_name]
+        adapter = adapter_cls(
             tokenizer=self.tokenizer,
-            sglang_url=sglang_url,
+            sglang_url=self.sglang_url,
             tool_parser=self.tool_parser,
             reasoning_parser=self.reasoning_parser,
             fork_threshold_tokens=CONFIG.fork_merge_threshold,
-            rollout_args=args,
+            rollout_args=self.args,
         )
         # handler_cancellation=True so a client disconnect cancels the handler
         # coroutine, arming the fire-and-forget /abort_request in the adapter.
         # Otherwise a cancelled client leaves an inflight sglang /generate that
         # races the next release_memory_occupation and trips its idle assertion.
-        self.app_handle = run_app_in_thread(
-            self.adapter.app,
+        app_handle = run_app_in_thread(
+            adapter.app,
             host=CONFIG.adapter_bind_host,
-            port=CONFIG.adapter_port,
-            thread_name="anthropic-adapter",
+            port=CONFIG.adapter_port if not self._endpoints else 0,
+            thread_name=f"{agent_name}-adapter",
             runner_kwargs={
                 "handler_cancellation": True,
                 "access_log_class": FilteredAccessLogger,
             },
         )
         public_host = get_current_node_ip() if CONFIG.adapter_public_host == "auto" else CONFIG.adapter_public_host
-        self.adapter_url = f"http://{public_host}:{self.app_handle.port}"
+        adapter_url = f"http://{public_host}:{app_handle.port}"
         logger.info(
-            "[coding_agent_rl] tokenizer=%s adapter=%s max_context_len=%s tool_parser=%s reasoning_parser=%s",
-            args.hf_checkpoint,
-            self.adapter_url,
+            "[coding_agent_rl] agent=%s tokenizer=%s adapter=%s max_context_len=%s tool_parser=%s reasoning_parser=%s",
+            agent_name,
+            self.args.hf_checkpoint,
+            adapter_url,
             self.max_context_len,
             self.tool_parser,
             self.reasoning_parser,
         )
+        self._endpoints[agent_name] = (adapter, adapter_url, app_handle)
+        return self._endpoints[agent_name]
 
 
 async def generate(args, base_sample: Sample, sampling_params: dict[str, Any], evaluation: bool = False):
     """Per-sample agent function with wall-clock guard (see rollout_guard_sec)."""
     state = _AdapterService(args)
+    agent_name = agent_name_for(base_sample)
+    harness = _AGENTS[agent_name][0]()
+    adapter, adapter_url, _ = state.endpoint(agent_name)
     protocol = CONFIG.eval_protocol if evaluation else CONFIG.train_protocol
     md = swe.get_metadata(base_sample, protocol)
     instance_id = md["instance_id"]
@@ -195,7 +216,7 @@ async def generate(args, base_sample: Sample, sampling_params: dict[str, Any], e
         return _abort_result(base_sample, f"unevaluatable:{reason}", instance_id)
 
     session_id = base_sample.session_id = _session_id(base_sample, instance_id)
-    state.adapter.open_session(
+    adapter.open_session(
         session_id,
         sampling_defaults=sampling_params,
         max_context_tokens=state.max_context_len,
@@ -207,17 +228,17 @@ async def generate(args, base_sample: Sample, sampling_params: dict[str, Any], e
     t0 = time.time()
     try:
         async with asyncio.timeout(CONFIG.rollout_guard_sec):
-            async with boot_agent_sandbox(md["image"], instance_id) as sb:
-                await swe.prepare_workspace(sb, md["workdir"], md)
-                agent_exit_code = await HARNESS_CLS().run(
+            async with boot_agent_sandbox(md["image"], instance_id, harness=harness) as sb:
+                baseline = await swe.prepare_workspace(sb, md["workdir"], md)
+                agent_exit_code = await harness.run(
                     sb,
                     workdir=md["workdir"],
                     session_id=session_id,
-                    adapter_url=state.adapter_url,
+                    adapter_url=adapter_url,
                     time_budget_sec=CONFIG.agent_time_budget_sec,
                     prompt=swe.SWE_PROMPT,
                 )
-                diff_text = await swe.git_diff(sb, md["workdir"])
+                diff_text = await swe.git_diff(sb, md["workdir"], baseline)
 
             reward, applied_cleanly = await swe.run_evaluation(
                 md,
@@ -241,13 +262,14 @@ async def generate(args, base_sample: Sample, sampling_params: dict[str, Any], e
                     instance_id=instance_id,
                 )
 
-            samples = await state.adapter.finish_session(
+            samples = await adapter.finish_session(
                 session_id,
                 base_sample=base_sample,
                 reward=float(reward),
                 extra_metadata={
                     "grading_solved": float(reward) == 1.0,
                     "instance_id": instance_id,
+                    "agent": agent_name,
                 },
             )
             if not samples:
@@ -286,7 +308,7 @@ async def generate(args, base_sample: Sample, sampling_params: dict[str, Any], e
         )
         return _abort_result(base_sample, f"exception:{type(e).__name__}", instance_id)
     finally:
-        await state.adapter.drop_session(session_id, wait_timeout=30)  # cleanup only, idempotent
+        await adapter.drop_session(session_id, wait_timeout=30)  # cleanup only, idempotent
         await asyncio.sleep(10)
 
 

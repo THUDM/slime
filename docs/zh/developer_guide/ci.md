@@ -72,39 +72,46 @@ NUM_GPUS = 0
 
 ### Agent 训练
 
-`tests/test_agent_sunabako_codex_e2e.py` 使用 **codex 0.162.1**，只选择小米数据中的
-`format-code-task-000003`：给 smol-evm 补上缺失的 `SHL` 左移指令。
-训练、SGLang、agent 沙箱和评分沙箱都在同一台八卡 H100 80GB 机器上运行。
-任务很小，但覆盖读已有仓库、修改源码、执行命令、Responses 多轮协议转换、原始 token
-及 logprob 捕获、新沙箱独立评分，以及一次真实优化器更新。原始代码必须无法通过官方
-测试，失败原因必须是缺少 `SHL`；agent 修改后必须得到 reward 1、通过官方位运算测试，
-包括普通左移、零位移、溢出和超大位移等六个新用例。每个训练 rank 都要提供
-有限非零梯度与模型参数确实发生变化的证据。这个单样本测试关闭 reward normalization，
-让成功轨迹能够产生训练信号。采样使用 temperature=1、`top_p=0.95`，禁用 top-k，
-启用 SC。测试逐项比对原始 nucleus ID/offset、sampler 概率与实际训练张量。
-Qwen3.8-27B 是 dense 模型，因此关闭 R3；CPU 测试覆盖 agent 分叉中的 replay 数据传递。
+`tests/test_agent_sunabako_codex_e2e.py` 使用 **Codex 0.162.1**、**Claude Code 2.1.296**、
+Qwen3.8-27B 和两个独立镜像中的小米任务：
 
-CI 只运行一个任务、采样一次、更新一次。agent 上限 180 秒，训练任务上限 600 秒，
-Megatron 测试矩阵中的该项连同准备阶段上限 15 分钟。完整运行并校验 agent episode 后，CI 只取首尾两个
-真实片段做训练，保留原始 token、logprob 和 reward，以控制重复上下文的训练开销。
-`agent-full.pt` 保存所有片段，正式 example 仍训练完整轨迹。不给 agent 提供答案或隐藏测试。
-模型、数据、镜像和 TileLang/Triton 编译结果会缓存，
-首次计时 CI 前应准备好共享缓存；冷启动的下载与编译可能超过 15 分钟 job 上限。
-`run-ci-megatron` 标签包含这项 GPU e2e，自动运行的 `agent-test` 继续覆盖 CPU 边界情况；
-`run-ci-changed` 也能发现这个顶层测试文件。完整小米数据训练仍由 example 提供。
+- `format-code-task-000003`：给 smol-evm 补上缺失的 `SHL` 左移指令。
+- `format-code-task-000045`：让 BootBot 保留对象形式的 quick replies。
 
-2026-10-10 在单机八张 H100 80GB、模型/镜像/编译缓存就绪、已有本机沙箱集群的
-RSS 测试模式下，实测**全程 457 秒**，其中 agent 与独立评分约 **68 秒**。官方测试
-10/10 通过，八个训练 rank 均发生参数变化。13 轮共 2,271 个采样 token 全部通过
-token/replay 校验；限时训练使用首尾两个片段，共 318 个 token。`sc_correction`
-为 -0.00255，训推 logprob 平均绝对差为 0.00989。
+每一步都使用这两道题，**每题 4 条，共 8 个独立 agent 并行**，分别在新沙箱中评分，
+然后执行一次 GRPO 优化器更新。**第一步使用 Codex，第二步使用 Claude Code**，
+第二步使用更新后的模型，对相同两道题重新采样。两个 CLI 共用 trace 拼接和训练路径。
+总共运行 16 条轨迹、训练 2 步，不按 reward 过滤或额外重采。
+两道题的原始代码都必须无法通过官方测试；失败轨迹保留 reward 0，与 reward 1 的轨迹
+一起参与训练。每道题的 4 条结果独立归一化，使用组内均值与样本标准差加 epsilon；
+整组同分时，advantage 正常为 0。
 
-共用的 `tests/ci/setup_agent_e2e.sh` 会在测试容器内通过
-`pip install --upgrade --no-deps --only-binary=sunabako sunabako` 安装 PyPI 最新版 sunabako wheel，
-再安装 example 的其他依赖。`run-ci-megatron`、`run-ci-image` 和 `run-ci-changed`
-都使用这个脚本；新版本发布到 PyPI 后即可用于 CI，无需重建 slime 镜像。
-镜像由 skopeo/umoci 导入，在现有特权 CI 容器内使用 native
-runtime，无需启动 Docker daemon。CI 明确启用的 RSS 模式只用于有界功能测试，
+测试会从实际训练张量中核对每个 token 的 advantage，并记录 8 个训练 rank 上的两次
+优化器调用。梯度与参数必须有限；非零梯度必须带来参数变化。采样使用 temperature=1、
+`top_p=0.95`，禁用 top-k，启用 SC，并校验原始 token、mask、sampler 概率及 nucleus
+replay 数据。Qwen3.8-27B 是 dense 模型，因此关闭 R3。
+推理通过 SGLang EAGLE 启用 checkpoint 中的 MTP head（3 个 draft step、4 个 draft token），
+并检查日志中确实出现已接受的 draft token。
+上下文额度为 64K，并给 draft token 预留空间。Claude Code 使用与 example 相同的
+六个代码工具：Bash、Read、Edit、Write、Glob 和 Grep。
+
+每个 agent 上限 600 秒，训练任务上限 1,800 秒，GitHub job 连同准备阶段上限 35 分钟。
+连续的模型调用会保留原始 token 和采样分布，合并成训练轨迹；历史实际改写时才分支。
+CI 与正式 example 一样，训练每条真实轨迹中的全部片段，保持 token、logprob 和
+reward 原样；`agents/<sample-index>/agent-full.pt` 保存完整轨迹。
+agent 只收到原始题目和仓库，隐藏测试保留在独立评分沙箱中。
+
+模型、选中的两个任务镜像、两个 CLI 安装包和 TileLang/Triton 编译结果均使用缓存。
+镜像下载支持断点续传与完整性校验，`--prepare-only` 在申请 GPU 锁之前准备资源。
+首次下载可能超过计时 CI 的上限。代理变量会传入容器，本机 Ray 和沙箱流量绕过代理。
+`run-ci-megatron` 包含这项 GPU e2e，`run-ci-changed` 也能发现它，自动 `agent-test`
+任务覆盖 CPU 合约检查。
+
+`tests/ci/setup_agent_e2e.sh` 按 `examples/coding_agent_rl/requirements-sunabako.txt`
+安装 PyPI 发布的 `sunabako==0.1.1` wheel。该版本通过 `uid_range_size` 支持 native 用户，
+本地节点为 8 个沙箱分别保留 65,536 个 UID/GID，
+state 挂载到 `/workspace`，保证映射后的用户能遍历父目录。测试在现有特权 Docker
+容器中运行，无需内层 Docker daemon 或 PRoot。RSS 模式只用于有界功能验证，
 **不证明总内存硬限制**；生产环境仍需可写、已委派的 cgroup，缺失时拒绝启动。
 
 已有沙箱集群时，安装相同 requirements 后运行：
@@ -117,9 +124,10 @@ ADAPTER_PUBLIC_HOST=<training-node-ip> \
 python tests/test_agent_sunabako_codex_e2e.py
 ```
 
-镜像映射必须在每台沙箱节点包含该任务。只在无硬 cgroup 的功能测试中，显式设置
+镜像映射必须在每台沙箱节点包含两个任务，并提供至少 8 个并发沙箱的容量。只在无硬 cgroup 的功能测试中，显式设置
 `SUNABAKO_ALLOW_TEST_MEMORY=1`。可用 `SLIME_AGENT_TEST_DATA` 复用已下载的小米 parquet
-和镜像映射，用 `SLIME_AGENT_CODEX_NATIVE_TARBALL` 复用官方平台安装包。
+和镜像映射，用 `SLIME_AGENT_CODEX_NATIVE_TARBALL` 和 `SLIME_AGENT_CC_NATIVE_TARBALL`
+复用官方平台安装包，无需在沙箱中下载工具链。
 `SLIME_AGENT_TEST_RUN_DIR` 必须是新目录，会保留 CLI 日志、评分输出、rollout/train
 张量、参数更新证据与 `result.json`。测试自行管理专用 Ray head，不停止其他集群；
 GitHub Actions 在成功或失败后都会上传这些产物。

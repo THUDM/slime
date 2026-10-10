@@ -93,7 +93,10 @@ def capture(top_p, sc, r3, missing=None):
     return asyncio.run(run())
 
 
-@pytest.mark.parametrize("top_p,sc,r3", [(0.95, False, False), (0.95, True, True), (1.0, True, True)])
+@pytest.mark.parametrize(
+    "top_p,sc,r3",
+    [(0.95, False, False), (0.95, True, False), (1.0, True, False), (0.95, True, True), (1.0, True, True)],
+)
 @pytest.mark.parametrize("truncate", [False, True])
 def test_replay_survives_exact_prefix_extensions_and_context_limit(top_p, sc, r3, truncate):
     first = capture(top_p, sc, r3)
@@ -115,21 +118,24 @@ def test_replay_survives_exact_prefix_extensions_and_context_limit(top_p, sc, r3
     samples = manager.get_trajectory(
         "s", base_sample=Sample(index=4, group_index=2), reward=1, max_sample_tokens=7 if truncate else 0
     )
-    assert len(samples) == 2
+    assert len(samples) == (2 if r3 else 1)
     assert {(s.index, s.rollout_id, s.group_index, s.reward) for s in samples} == {(4, 4, 2, 1)}
     if not truncate:
         report = audit_token_records(samples, [asdict(first), asdict(second)])
         assert set(report["replay_metadata_fields_verified"]) == set(replay)
     else:
         sample = samples[-1]
-        assert sample.response_length == 1 and sample.tokens == prompt + [101]
+        assert sample.response_length == (1 if r3 else 4) and sample.tokens == prompt + [101]
+        assert sample.loss_mask == ([1] if r3 else [1, 1, 0, 1])
         if top_p < 1:
-            assert sample.rollout_top_p_token_offsets.tolist() == [0, 2]
-            assert sample.rollout_top_p_token_ids.tolist() == [101, 201]
+            assert sample.rollout_top_p_token_offsets.tolist() == ([0, 2] if r3 else [0, 2, 4, 4, 6])
+            assert sample.rollout_top_p_token_ids.tolist() == ([101, 201] if r3 else [101, 201, 102, 202, 101, 201])
             if sc:
-                assert len(sample.rollout_top_p_log_probs) == 2
+                assert len(sample.rollout_top_p_log_probs) == (2 if r3 else 6)
         else:
-            assert sample.rollout_topk_token_ids.tolist() == [[101, 201]]
+            assert sample.rollout_topk_token_ids.tolist() == (
+                [[101, 201]] if r3 else [[101, 201], [102, 202], [0, 1], [101, 201]]
+            )
         if r3:
             assert sample.rollout_routed_experts.shape == (6, 2, 2)
 
@@ -138,6 +144,45 @@ def test_replay_survives_exact_prefix_extensions_and_context_limit(top_p, sc, r3
 def test_missing_requested_replay_metadata_fails_closed(missing):
     with pytest.raises(ValueError):
         capture(0.95, True, True, missing)
+
+
+def test_merged_ragged_distributions_follow_tokens_and_shared_branches_train_once():
+    first = capture(0.95, True, False)
+    second = replace(
+        first,
+        prompt_ids=first.prompt_ids + first.output_ids + [9, 8, 7],
+        output_ids=[103, 104, 105],
+        output_log_probs=[-0.1, -0.2, -0.3],
+        replay={
+            "rollout_top_p_token_ids": torch.tensor([103, 104, 204, 105], dtype=torch.int32),
+            "rollout_top_p_token_offsets": torch.tensor([0, 1, 3, 4], dtype=torch.int32),
+            "rollout_top_p_log_probs": torch.tensor([-0.1, -0.2, -1.0, -0.3]),
+        },
+    )
+    third = replace(second, prompt_ids=first.prompt_ids + first.output_ids + [6, 5])
+    user, assistant = {"role": "user", "content": "repair"}, {"role": "assistant", "content": "inspect"}
+    manager = TrajectoryManager(fork_threshold_tokens=0)
+    manager.record_turn("s", turn=first, prompt_messages=[user], response_message=assistant)
+    for turn, branch in [(second, "left"), (third, "right")]:
+        manager.record_turn(
+            "s",
+            turn=turn,
+            prompt_messages=[user, assistant, {"role": "tool", "content": branch}],
+            response_message={"role": "assistant", "content": "fixed"},
+        )
+    samples = manager.get_trajectory("s", base_sample=Sample(index=4, group_index=2), reward=1)
+    assert len(samples) == 2
+    assert samples[0].loss_mask == [1, 1, 0, 0, 0, 1, 1, 1]
+    assert samples[1].loss_mask == [0, 0, 0, 0, 1, 1, 1]
+    assert samples[1].rollout_log_probs[:2] == first.output_log_probs
+    assert samples[0].rollout_top_p_token_offsets.tolist() == [0, 2, 4, 4, 4, 4, 5, 7, 8]
+    assert samples[0].rollout_top_p_token_ids.tolist() == [101, 201, 102, 202, 103, 104, 204, 105]
+    turns = [asdict(t) for t in (first, second, third)]
+    report = audit_token_records(samples, turns)
+    assert report["sampled_tokens"] == 8
+    samples[0].rollout_top_p_log_probs[-1] -= 0.5
+    with pytest.raises(ValueError, match="sampler distribution must include the sampled token"):
+        audit_token_records(samples, turns)
 
 
 if __name__ == "__main__":

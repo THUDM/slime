@@ -285,6 +285,8 @@ class FakeSandbox:
         for needle, result in self.responses:
             if needle in cmd:
                 return result
+        if "git write-tree" in cmd:
+            return 0, "0" * 40 + "\n", ""
         return 0, "", ""
 
     async def write_file(self, sandbox_path, content, *, user="root") -> None:

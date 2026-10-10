@@ -126,7 +126,18 @@ jobs:
         shell: bash
         run: |
 
-          docker run --pull=always --rm \
+          SLIME_CI_CONTAINER_DIR=$(mktemp -d)
+          cleanup_ci_container() {
+            if [ -s "$SLIME_CI_CONTAINER_DIR/container.cid" ]; then
+              docker rm -f "$(cat "$SLIME_CI_CONTAINER_DIR/container.cid")" >/dev/null 2>&1 || true
+            fi
+            rm -f "$SLIME_CI_CONTAINER_DIR/container.cid"
+            rmdir "$SLIME_CI_CONTAINER_DIR"
+          }
+          trap cleanup_ci_container EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          docker run --pull=always --rm --init --cidfile "$SLIME_CI_CONTAINER_DIR/container.cid" \
             --privileged \
             --cap-add SYS_NICE \
             --security-opt seccomp=unconfined \
@@ -142,6 +153,10 @@ jobs:
             -e https_proxy \
             -e HTTP_PROXY \
             -e HTTPS_PROXY \
+            -e all_proxy \
+            -e ALL_PROXY \
+            -e no_proxy \
+            -e NO_PROXY \
             -e GITHUB_COMMIT_NAME \
             -e WANDB_API_KEY \
             -e SLIME_TEST_ENABLE_INFINITE_RUN \
@@ -151,7 +166,9 @@ jobs:
             -e TEST_FILE="${{ matrix.info.test_file }}" \
             -e TEST_ARGS="${{ matrix.info.test_args || '' }}" \
             -e NUM_GPUS="${{ matrix.info.num_gpus }}" \
+            -e SLIME_AGENT_TEST_RUN_DIR=/workspace/.agent-e2e/run \
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -v "$GITHUB_WORKSPACE:/workspace" \
             -v /mnt/nvme0n1/slime_ci:/data/slime_ci \
             -v /mnt/nvme0n1/slime_ci/models:/root/models \
             -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets \
@@ -207,7 +224,7 @@ jobs:
             {
               "num_gpus": 8,
               "test_file": "test_agent_sunabako_codex_e2e.py",
-              "timeout_minutes": 15
+              "timeout_minutes": 35
             },
             {
               "num_gpus": 4,
@@ -461,7 +478,18 @@ jobs:
         shell: bash
         run: |
 
-          docker run --pull=always --rm \
+          SLIME_CI_CONTAINER_DIR=$(mktemp -d)
+          cleanup_ci_container() {
+            if [ -s "$SLIME_CI_CONTAINER_DIR/container.cid" ]; then
+              docker rm -f "$(cat "$SLIME_CI_CONTAINER_DIR/container.cid")" >/dev/null 2>&1 || true
+            fi
+            rm -f "$SLIME_CI_CONTAINER_DIR/container.cid"
+            rmdir "$SLIME_CI_CONTAINER_DIR"
+          }
+          trap cleanup_ci_container EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          docker run --pull=always --rm --init --cidfile "$SLIME_CI_CONTAINER_DIR/container.cid" \
             --privileged \
             --cap-add SYS_NICE \
             --security-opt seccomp=unconfined \
@@ -477,6 +505,10 @@ jobs:
             -e https_proxy \
             -e HTTP_PROXY \
             -e HTTPS_PROXY \
+            -e all_proxy \
+            -e ALL_PROXY \
+            -e no_proxy \
+            -e NO_PROXY \
             -e GITHUB_COMMIT_NAME \
             -e WANDB_API_KEY \
             -e SLIME_TEST_ENABLE_INFINITE_RUN \
@@ -486,7 +518,9 @@ jobs:
             -e TEST_FILE="${{ matrix.info.test_file }}" \
             -e TEST_ARGS="${{ matrix.info.test_args || '' }}" \
             -e NUM_GPUS="${{ matrix.info.num_gpus }}" \
+            -e SLIME_AGENT_TEST_RUN_DIR=/workspace/.agent-e2e/run \
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -v "$GITHUB_WORKSPACE:/workspace" \
             -v /mnt/nvme0n1/slime_ci:/data/slime_ci \
             -v /mnt/nvme0n1/slime_ci/models:/root/models \
             -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets \
@@ -567,7 +601,18 @@ jobs:
         shell: bash
         run: |
 
-          docker run --pull=always --rm \
+          SLIME_CI_CONTAINER_DIR=$(mktemp -d)
+          cleanup_ci_container() {
+            if [ -s "$SLIME_CI_CONTAINER_DIR/container.cid" ]; then
+              docker rm -f "$(cat "$SLIME_CI_CONTAINER_DIR/container.cid")" >/dev/null 2>&1 || true
+            fi
+            rm -f "$SLIME_CI_CONTAINER_DIR/container.cid"
+            rmdir "$SLIME_CI_CONTAINER_DIR"
+          }
+          trap cleanup_ci_container EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          docker run --pull=always --rm --init --cidfile "$SLIME_CI_CONTAINER_DIR/container.cid" \
             --privileged \
             --cap-add SYS_NICE \
             --security-opt seccomp=unconfined \
@@ -583,6 +628,10 @@ jobs:
             -e https_proxy \
             -e HTTP_PROXY \
             -e HTTPS_PROXY \
+            -e all_proxy \
+            -e ALL_PROXY \
+            -e no_proxy \
+            -e NO_PROXY \
             -e GITHUB_COMMIT_NAME \
             -e WANDB_API_KEY \
             -e SLIME_TEST_ENABLE_INFINITE_RUN \
@@ -592,7 +641,9 @@ jobs:
             -e TEST_FILE="${{ matrix.info.test_file }}" \
             -e TEST_ARGS="${{ matrix.info.test_args || '' }}" \
             -e NUM_GPUS="${{ matrix.info.num_gpus }}" \
+            -e SLIME_AGENT_TEST_RUN_DIR=/workspace/.agent-e2e/run \
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -v "$GITHUB_WORKSPACE:/workspace" \
             -v /mnt/nvme0n1/slime_ci:/data/slime_ci \
             -v /mnt/nvme0n1/slime_ci/models:/root/models \
             -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets \
@@ -695,7 +746,18 @@ jobs:
         shell: bash
         run: |
 
-          docker run --pull=always --rm \
+          SLIME_CI_CONTAINER_DIR=$(mktemp -d)
+          cleanup_ci_container() {
+            if [ -s "$SLIME_CI_CONTAINER_DIR/container.cid" ]; then
+              docker rm -f "$(cat "$SLIME_CI_CONTAINER_DIR/container.cid")" >/dev/null 2>&1 || true
+            fi
+            rm -f "$SLIME_CI_CONTAINER_DIR/container.cid"
+            rmdir "$SLIME_CI_CONTAINER_DIR"
+          }
+          trap cleanup_ci_container EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          docker run --pull=always --rm --init --cidfile "$SLIME_CI_CONTAINER_DIR/container.cid" \
             --privileged \
             --cap-add SYS_NICE \
             --security-opt seccomp=unconfined \
@@ -711,6 +773,10 @@ jobs:
             -e https_proxy \
             -e HTTP_PROXY \
             -e HTTPS_PROXY \
+            -e all_proxy \
+            -e ALL_PROXY \
+            -e no_proxy \
+            -e NO_PROXY \
             -e GITHUB_COMMIT_NAME \
             -e WANDB_API_KEY \
             -e SLIME_TEST_ENABLE_INFINITE_RUN \
@@ -720,7 +786,9 @@ jobs:
             -e TEST_FILE="${{ matrix.info.test_file }}" \
             -e TEST_ARGS="${{ matrix.info.test_args || '' }}" \
             -e NUM_GPUS="${{ matrix.info.num_gpus }}" \
+            -e SLIME_AGENT_TEST_RUN_DIR=/workspace/.agent-e2e/run \
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -v "$GITHUB_WORKSPACE:/workspace" \
             -v /mnt/nvme0n1/slime_ci:/data/slime_ci \
             -v /mnt/nvme0n1/slime_ci/models:/root/models \
             -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets \
@@ -1208,6 +1276,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_agent/test_prompt_continuity.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_agent/test_sampler_replay.py"
             },
             {
@@ -1237,6 +1309,18 @@ jobs:
             {
               "num_gpus": 0,
               "test_file": "test_agent/test_sunabako_provider.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_agent/test_e2e_asset_cache.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_agent/test_e2e_grpo_contract.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_agent/test_swe_workspace_diff.py"
             }
           ]
     defaults:
@@ -1322,7 +1406,7 @@ jobs:
             {
               "num_gpus": 8,
               "test_file": "test_agent_sunabako_codex_e2e.py",
-              "timeout_minutes": 15
+              "timeout_minutes": 35
             },
             {
               "num_gpus": 4,
@@ -1576,7 +1660,18 @@ jobs:
         shell: bash
         run: |
 
-          docker run --pull=always --rm \
+          SLIME_CI_CONTAINER_DIR=$(mktemp -d)
+          cleanup_ci_container() {
+            if [ -s "$SLIME_CI_CONTAINER_DIR/container.cid" ]; then
+              docker rm -f "$(cat "$SLIME_CI_CONTAINER_DIR/container.cid")" >/dev/null 2>&1 || true
+            fi
+            rm -f "$SLIME_CI_CONTAINER_DIR/container.cid"
+            rmdir "$SLIME_CI_CONTAINER_DIR"
+          }
+          trap cleanup_ci_container EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          docker run --pull=always --rm --init --cidfile "$SLIME_CI_CONTAINER_DIR/container.cid" \
             --privileged \
             --cap-add SYS_NICE \
             --security-opt seccomp=unconfined \
@@ -1592,6 +1687,10 @@ jobs:
             -e https_proxy \
             -e HTTP_PROXY \
             -e HTTPS_PROXY \
+            -e all_proxy \
+            -e ALL_PROXY \
+            -e no_proxy \
+            -e NO_PROXY \
             -e GITHUB_COMMIT_NAME \
             -e WANDB_API_KEY \
             -e SLIME_TEST_ENABLE_INFINITE_RUN \
@@ -1601,7 +1700,9 @@ jobs:
             -e TEST_FILE="${{ matrix.info.test_file }}" \
             -e TEST_ARGS="${{ matrix.info.test_args || '' }}" \
             -e NUM_GPUS="${{ matrix.info.num_gpus }}" \
+            -e SLIME_AGENT_TEST_RUN_DIR=/workspace/.agent-e2e/run \
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -v "$GITHUB_WORKSPACE:/workspace" \
             -v /mnt/nvme0n1/slime_ci:/data/slime_ci \
             -v /mnt/nvme0n1/slime_ci/models:/root/models \
             -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets \
@@ -1704,7 +1805,18 @@ jobs:
       - name: Execute
         shell: bash
         run: |
-          docker run --pull=always --rm \
+          SLIME_CI_CONTAINER_DIR=$(mktemp -d)
+          cleanup_ci_container() {
+            if [ -s "$SLIME_CI_CONTAINER_DIR/container.cid" ]; then
+              docker rm -f "$(cat "$SLIME_CI_CONTAINER_DIR/container.cid")" >/dev/null 2>&1 || true
+            fi
+            rm -f "$SLIME_CI_CONTAINER_DIR/container.cid"
+            rmdir "$SLIME_CI_CONTAINER_DIR"
+          }
+          trap cleanup_ci_container EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          docker run --pull=always --rm --init --cidfile "$SLIME_CI_CONTAINER_DIR/container.cid" \
             --privileged \
             --cap-add SYS_NICE \
             --security-opt seccomp=unconfined \
@@ -1720,6 +1832,10 @@ jobs:
             -e https_proxy \
             -e HTTP_PROXY \
             -e HTTPS_PROXY \
+            -e all_proxy \
+            -e ALL_PROXY \
+            -e no_proxy \
+            -e NO_PROXY \
             -e GITHUB_COMMIT_NAME \
             -e WANDB_API_KEY \
             -e SLIME_TEST_ENABLE_INFINITE_RUN \
@@ -1729,7 +1845,9 @@ jobs:
             -e TEST_FILE="${{ matrix.info.test_file }}" \
             -e TEST_ARGS="${{ matrix.info.test_args || '' }}" \
             -e NUM_GPUS="${{ matrix.info.num_gpus }}" \
+            -e SLIME_AGENT_TEST_RUN_DIR=/workspace/.agent-e2e/run \
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -v "$GITHUB_WORKSPACE:/workspace" \
             -v /mnt/nvme0n1/slime_ci:/data/slime_ci \
             -v /mnt/nvme0n1/slime_ci/models:/root/models \
             -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets \

@@ -77,6 +77,11 @@ class SunabakoSandbox:
     async def _save_artifacts(self, folder: Path) -> None:
         self._save_manifest(folder)
         (folder / "commands.json").write_text(json.dumps(self._commands, indent=2))
+        try:
+            info = await self._sandbox.get_info()
+            (folder / "status.json").write_text(json.dumps(info.get("status", info), indent=2))
+        except Exception:
+            logger.exception("[sunabako] could not inspect %s before cleanup", self.sandbox_id)
         for path in (f"{self._workdir}/.harness/trajectory.jsonl", "/tmp/.harness-npm-install.out", "/tmp/.eval.out"):
             try:
                 contents = await self._sandbox.read_file(path)
