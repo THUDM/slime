@@ -8,6 +8,8 @@ export HTTP_PROXY="$http_proxy" HTTPS_PROXY="$https_proxy"
 export all_proxy="${all_proxy:-${ALL_PROXY:-}}" ALL_PROXY="${all_proxy:-${ALL_PROXY:-}}"
 export no_proxy="localhost,127.0.0.1,::1,${no_proxy:-${NO_PROXY:-}}"
 export NO_PROXY="$no_proxy"
+# Keep the Ray head, job CLI and Python clients on the same authentication mode.
+export RAY_AUTH_MODE="${RAY_AUTH_MODE:-token}"
 if ! command -v skopeo >/dev/null || ! command -v umoci >/dev/null; then
     apt-get update -qq
     apt-get install -y --no-install-recommends skopeo umoci

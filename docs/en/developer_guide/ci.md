@@ -99,8 +99,8 @@ the example's six code tools: Bash, Read, Edit, Write, Glob and Grep.
 Original token IDs, masks, sampler probabilities and nucleus replay data are
 checked against the actual training tensors. Qwen3.8-27B is dense, so R3 is disabled.
 
-Each agent has a 600-second budget. The training-job deadline is 1,800 seconds and
-the GitHub matrix timeout is 35 minutes including setup. Continuous model turns
+Each agent has a 600-second budget. The GitHub matrix timeout is 35 minutes
+including setup. Continuous model turns
 are merged using their original tokens and sampler distributions. Every segment of each
 real trajectory enters training, as in the normal example.
 `agents/<sample-index>/agent-full.pt` retains its complete trajectory.
@@ -128,6 +128,7 @@ For a preconfigured cluster, install the same requirements and run:
 
 ```bash
 HF_CHECKPOINT=/path/to/Qwen3.8-27B \
+RAY_AUTH_MODE=token \
 SUNABAKO_CLUSTER=/path/to/cluster.json \
 SUNABAKO_IMAGES=/path/to/images.json \
 ADAPTER_PUBLIC_HOST=<training-node-ip> \
@@ -141,8 +142,11 @@ Optional `SLIME_AGENT_TEST_DATA` reuses the downloaded MiMo parquet/mapping;
 official platform archives without downloading toolchains inside the sandboxes.
 `SLIME_AGENT_TEST_RUN_DIR` must name a new directory and retains the CLI logs,
 grader output, rollout/train tensors, optimizer evidence and `result.json`.
-The test owns its Ray head and does not stop unrelated clusters. GitHub Actions
-uploads the evidence on success and failure.
+The test uses the same `U.execute_train()` launcher as the other E2E tests, with
+the agent environment passed through `extra_env_vars`. Ray's CLI prints training
+logs directly to the GitHub Actions console. After training, the test archives
+the job's log as `train.log` for the MTP and training-metric assertions.
+GitHub Actions uploads the evidence on success and failure.
 
 ### straw
 

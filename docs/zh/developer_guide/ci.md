@@ -95,7 +95,7 @@ replay 数据。Qwen3.8-27B 是 dense 模型，因此关闭 R3。
 上下文额度为 64K，并给 draft token 预留空间。Claude Code 使用与 example 相同的
 六个代码工具：Bash、Read、Edit、Write、Glob 和 Grep。
 
-每个 agent 上限 600 秒，训练任务上限 1,800 秒，GitHub job 连同准备阶段上限 35 分钟。
+每个 agent 上限 600 秒，GitHub job 连同准备阶段上限 35 分钟。
 连续的模型调用会保留原始 token 和采样分布，合并成训练轨迹；历史实际改写时才分支。
 CI 与正式 example 一样，训练每条真实轨迹中的全部片段，保持 token、logprob 和
 reward 原样；`agents/<sample-index>/agent-full.pt` 保存完整轨迹。
@@ -118,6 +118,7 @@ state 挂载到 `/workspace`，保证映射后的用户能遍历父目录。测�
 
 ```bash
 HF_CHECKPOINT=/path/to/Qwen3.8-27B \
+RAY_AUTH_MODE=token \
 SUNABAKO_CLUSTER=/path/to/cluster.json \
 SUNABAKO_IMAGES=/path/to/images.json \
 ADAPTER_PUBLIC_HOST=<training-node-ip> \
@@ -129,7 +130,9 @@ python tests/test_agent_sunabako_codex_e2e.py
 和镜像映射，用 `SLIME_AGENT_CODEX_NATIVE_TARBALL` 和 `SLIME_AGENT_CC_NATIVE_TARBALL`
 复用官方平台安装包，无需在沙箱中下载工具链。
 `SLIME_AGENT_TEST_RUN_DIR` 必须是新目录，会保留 CLI 日志、评分输出、rollout/train
-张量、参数更新证据与 `result.json`。测试自行管理专用 Ray head，不停止其他集群；
+张量、参数更新证据与 `result.json`。测试与其他 E2E 一样调用 `U.execute_train()`，
+通过 `extra_env_vars` 传入 agent 环境。Ray CLI 直接向 GitHub Actions 控制台输出训练日志；
+训练结束后将该任务日志保存为 `train.log`，用于检查 MTP 和训练指标。
 GitHub Actions 在成功或失败后都会上传这些产物。
 
 ### straw

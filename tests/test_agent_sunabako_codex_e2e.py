@@ -35,6 +35,7 @@ TRAINING_STEPS = 2
 CODEX_VERSION = "0.162.1"
 CLAUDE_CODE_VERSION = "2.1.296"
 MODEL = "Qwen/Qwen3.8-27B"
+MODEL_TYPE = "qwen3.5-27B"
 MODEL_REVISION = "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0"
 DATASET = "XiaomiMiMo/MiMo-V2.6-RL-oss"
 DATA_REVISION = "639865fd3374018d6cb29b9fb82dd531406fcf5f"
@@ -252,23 +253,18 @@ def prepare(run_dir):
     return checkpoint, version
 
 
-def execute(run_dir, checkpoint):
+def training_environment():
     import ray
-    from ray.job_submission import JobStatus, JobSubmissionClient
 
-    # Own a fresh Ray head, rather than stopping or reusing another test's job.
     host = os.environ.get("MASTER_ADDR") or ray.util.get_node_ip_address()
     proxy_bypass = ",".join(filter(None, ["localhost,127.0.0.1", host, os.environ.get("no_proxy")]))
-    os.environ.update(no_proxy=proxy_bypass, NO_PROXY=proxy_bypass)
-    environment = {
+    os.environ.update(MASTER_ADDR=host, no_proxy=proxy_bypass, NO_PROXY=proxy_bypass)
+    return {
         "PYTHONPATH": f"{REPO_ROOT}:{REPO_ROOT / 'tests'}:{os.environ.get('MEGATRON_DIR', '/root/Megatron-LM')}",
         "PYTHONUNBUFFERED": "1",
-        "CUDA_DEVICE_MAX_CONNECTIONS": "1",
         "NCCL_NVLS_ENABLE": "0",
-        "RAY_USE_UVLOOP": "0",
         "OMP_NUM_THREADS": "1",
         "OPENBLAS_NUM_THREADS": "1",
-        "MASTER_ADDR": host,
         "SLIME_HOST_IP": host,
         **{
             k: v
@@ -282,6 +278,8 @@ def execute(run_dir, checkpoint):
                 "HTTP_PROXY",
                 "HTTPS_PROXY",
                 "NO_PROXY",
+                "RAY_AUTH_MODE",
+                "RAY_AUTH_TOKEN_PATH",
                 "GLOO_SOCKET_IFNAME",
                 "NCCL_SOCKET_IFNAME",
                 "TP_SOCKET_IFNAME",
@@ -291,23 +289,36 @@ def execute(run_dir, checkpoint):
             }
         },
     }
-    model_args = (
-        subprocess.check_output(
-            [
-                "bash",
-                "-c",
-                'source "$1"; printf "%s\\0" "${MODEL_ARGS[@]}"',
-                "_",
-                str(REPO_ROOT / "scripts/models/qwen3.5-27B.sh"),
-            ]
-        )
-        .decode()
-        .strip("\0")
-        .split("\0")
-    )
+
+
+def save_training_log(run_dir):
+    """Archive the completed job's log for the existing MTP and training assertions."""
+    from ray.job_submission import JobSubmissionClient
+
+    try:
+        client = JobSubmissionClient("http://127.0.0.1:8265")
+        jobs = [
+            job
+            for job in client.list_jobs()
+            if job.submission_id and str(run_dir / "train.jsonl") in shlex.split(job.entrypoint)
+        ]
+        if len(jobs) != 1:
+            raise RuntimeError(f"Expected one training job for {run_dir}, found {len(jobs)}")
+        (run_dir / "train.log").write_text(client.get_job_logs(jobs[0].submission_id))
+    except Exception as error:
+        # A failed submission may have no Ray head. Preserve the original error;
+        # the Ray CLI already prints training output to the CI console.
+        print(f"Could not archive the training log: {error}", flush=True)
+
+
+def execute(run_dir, checkpoint):
+    import slime.utils.external_utils.command_utils as U
+
+    environment = training_environment()
     # Coarser masked padding limits shape-specific training-kernel compilation
     # while retaining every original token from every agent turn.
-    flags = shlex.split("""
+    flags = shlex.split(
+        """
         --actor-num-nodes 1 --actor-num-gpus-per-node 8 --num-gpus-per-node 8 --colocate
         --custom-generate-function-path agent_e2e_helpers.generate
         --custom-megatron-before-train-step-hook-path agent_e2e_helpers.before_train_step
@@ -331,7 +342,8 @@ def execute(run_dir, checkpoint):
         --sglang-mamba-scheduler-strategy extra_buffer
         --attention-dropout 0 --hidden-dropout 0 --accumulate-allreduce-grads-in-fp32
         --attention-softmax-in-fp32 --attention-backend flash
-    """)
+    """
+    )
     flags += [
         "--hf-checkpoint",
         str(checkpoint),
@@ -346,7 +358,6 @@ def execute(run_dir, checkpoint):
         "--save-debug-train-data",
         str(run_dir / "train_{rollout_id}.pt"),
     ]
-    client, job = None, None
     # Match worker imports before spending time loading the 27B model. Some
     # environments contain an unrelated installed package named ``tests``.
     subprocess.run(
@@ -355,44 +366,14 @@ def execute(run_dir, checkpoint):
         check=True,
     )
     try:
-        context = ray.init(
-            address="local",
-            num_gpus=NUM_GPUS,
-            num_cpus=32,
-            include_dashboard=True,
-            dashboard_host="127.0.0.1",
-            dashboard_port=free_port(),
-            _node_ip_address=host,
-            _temp_dir=tempfile.mkdtemp(prefix="slime-agent-ray-"),
-            object_store_memory=2 * 1024**3,
+        U.execute_train(
+            train_args=shlex.join(flags),
+            num_gpus_per_node=NUM_GPUS,
+            megatron_model_type=MODEL_TYPE,
+            extra_env_vars=environment,
         )
-        client = JobSubmissionClient("http://" + context.address_info["webui_url"])
-        job = client.submit_job(
-            entrypoint=shlex.join([sys.executable, "-u", str(REPO_ROOT / "train.py"), *model_args, *flags]),
-            runtime_env={"env_vars": environment},
-        )
-        deadline = time.monotonic() + int(os.environ.get("SLIME_AGENT_TEST_TIMEOUT", "1800"))
-        while True:
-            status = client.get_job_status(job)
-            (run_dir / "train.log").write_text(client.get_job_logs(job))
-            if status.is_terminal():
-                assert status == JobStatus.SUCCEEDED, f"Training {status}: see {run_dir / 'train.log'}"
-                break
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError(f"Agent training exceeded its deadline; see {run_dir / 'train.log'}")
-            print(f"Agent training job {job}: {status}; logs: {run_dir / 'train.log'}", flush=True)
-            time.sleep(min(20, remaining))
     finally:
-        if client and job:
-            try:
-                if not client.get_job_status(job).is_terminal():
-                    client.stop_job(job)
-                (run_dir / "train.log").write_text(client.get_job_logs(job))
-            finally:
-                ray.shutdown()
-        else:
-            ray.shutdown()
+        save_training_log(run_dir)
 
 
 def cleanup_sandboxes(run_dir):
