@@ -924,8 +924,8 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 choices=["ppo", "reinforce"],
                 default=None,
                 help=(
-                    "Policy gradient objective. Defaults to REINFORCE with score centering, "
-                    "otherwise preserves the existing PPO/CISPO objective."
+                    "Policy gradient objective. Defaults to REINFORCE with score centering or "
+                    "--advantage-estimator flash_reinforce, otherwise preserves the existing PPO/CISPO objective."
                 ),
             )
             parser.add_argument(
@@ -1053,10 +1053,13 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "reinforce_plus_plus",
                     "reinforce_plus_plus_baseline",
                     "ppo",
+                    "flash_reinforce",
                 ],
                 default="grpo",
                 help=(
-                    "Advantage estimator to use. Note: on-policy distillation (OPD) is now orthogonal "
+                    "Advantage estimator to use. flash_reinforce (FlashREINFORCE) subtracts the mean reward of "
+                    "the whole rollout batch, without per-prompt groups or std normalization, and is meant for "
+                    "--n-samples-per-prompt 1. Note: on-policy distillation (OPD) is now orthogonal "
                     "to the advantage estimator. Use --opd-kl-coef > 0 to enable OPD on top of any estimator."
                 ),
             )
@@ -1183,6 +1186,17 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=float,
                 default=0,
                 help="Lower bound clipping threshold C for importance sampling ratios to control variance.",
+            )
+            parser.add_argument(
+                "--tis-binary-kl-threshold",
+                type=float,
+                default=5e-3,
+                help=(
+                    "Trust region of slime.backends.megatron_utils.loss.binary_kl_trust_region_function "
+                    "(FlashREINFORCE): drop a sequence whose mean sampled-token binary KL between the rollout "
+                    "and training policies exceeds this value; kept sequences carry their unclipped per-token "
+                    "IS weight. inf disables the gate."
+                ),
             )
             parser.add_argument(
                 "--custom-tis-function-path",
@@ -2031,6 +2045,10 @@ def slime_validate_args(args):
 
     if args.use_rollout_logprobs and get_pg_loss_type(args) != "reinforce":
         assert not args.use_tis, "use_rollout_logprobs and use_tis cannot be set at the same time."
+
+    # `not x > 0` also rejects NaN; inf disables the trust region.
+    if not args.tis_binary_kl_threshold > 0:
+        raise ValueError("--tis-binary-kl-threshold must be > 0 (inf disables the trust region).")
 
     if args.get_mismatch_metrics:
         assert (
