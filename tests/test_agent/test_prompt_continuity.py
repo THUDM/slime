@@ -3,7 +3,9 @@
 import asyncio
 import copy
 import sys
+import threading
 from dataclasses import asdict
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -21,6 +23,7 @@ from tests.test_agent._fakes import FakeSGLangServer
 from slime.agent.adapters.anthropic import AnthropicAdapter
 from slime.agent.adapters.common import PromptPrefix, Session, _render_token_ids, _session_prompt_ids
 from slime.agent.adapters.responses import ResponsesAdapter
+from slime.agent.adapters.tokenizer_worker import TokenizerWorker
 from slime.agent.parsing import ParsedModelOutput, parse_xml_tool_uses
 from slime.agent.trajectory import TurnRecord
 from slime.utils.types import Sample
@@ -94,6 +97,42 @@ def test_reasoning_and_noncanonical_whitespace_are_reused_before_sampling(tokeni
     second_history.append({"role": "tool", "content": "more files"})
     third_prompt = _session_prompt_ids(second_history, tokenizer, tools=None, session=session)
     assert third_prompt[: len(second.prompt_ids + second.output_ids)] == second.prompt_ids + second.output_ids
+
+
+@pytest.mark.parametrize("change", [None, "tools", "compaction"])
+def test_session_prompt_worker_matches_sync_and_offloads_boundary_render(tokenizer, monkeypatch, change):
+    session = Session()
+    history, first = completed_prefix(tokenizer, session, [{"role": "user", "content": "Read the files."}])
+    messages = history + [{"role": "tool", "content": "file contents"}]
+    tools = None
+    if change == "tools":
+        tools = [{"type": "function", "function": {"name": "write"}}]
+    elif change == "compaction":
+        messages = [{"role": "user", "content": "Summary: already read the files."}]
+    expected = _session_prompt_ids(messages, tokenizer, tools=tools, session=session)
+    caller_thread = threading.get_ident()
+    render_threads = []
+    render = tokenizer.apply_chat_template
+
+    def record_render(*args, **kwargs):
+        render_threads.append(threading.get_ident())
+        return render(*args, **kwargs)
+
+    monkeypatch.setattr(tokenizer, "apply_chat_template", record_render)
+
+    async def run():
+        worker = TokenizerWorker()
+        try:
+            return await worker.render(partial(_session_prompt_ids, messages, tokenizer, tools=tools, session=session))
+        finally:
+            await worker.close()
+
+    actual = asyncio.run(run())
+    assert actual == expected
+    assert render_threads and all(thread != caller_thread for thread in render_threads)
+    if change is None:
+        assert len(render_threads) == 2  # Full history and the canonical splice boundary.
+        assert actual[: len(first.prompt_ids + first.output_ids)] == first.prompt_ids + first.output_ids
 
 
 @pytest.mark.parametrize("change", ["user", "assistant", "tools", "compaction", "unfinished", "no_boundary"])
