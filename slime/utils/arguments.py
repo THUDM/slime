@@ -1972,6 +1972,12 @@ def slime_validate_args(args):
 
     if args.eval_interval is not None:
         assert args.eval_datasets, "Evaluation datasets must be configured when eval_interval is set."
+        skips_sglang = args.debug_train_only or args.load_debug_rollout_data is not None
+        if skips_sglang and args.eval_function_path is None:
+            raise ValueError(
+                "--debug-train-only skips SGLang initialization, so periodic evaluation requires an explicit "
+                "--eval-function-path that can run without SGLang."
+            )
 
     if importlib.util.find_spec("straw") is None:
         if args.rollout_data_transport == "straw":
