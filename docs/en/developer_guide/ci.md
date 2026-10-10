@@ -8,9 +8,8 @@ slime runs CPU tests when a PR is opened or updated, when code is pushed to `mai
 |---|---|---|---|
 | Automatic | `cpu-unittest` | CPU | Argument validation, batch scheduling, metrics, rewards, samples, checkpoint utilities, and extension interfaces. |
 | Automatic | `agent-test` | CPU | Agent adapters, with the required model-provider SDKs installed. |
-| `run-ci-agent` | `e2e-test-agent` | 8 GPUs | Real Codex, sunabako, independent MiMo grading and a Qwen3.8-27B parameter update. |
 | `run-ci-sglang-config` | `e2e-test-sglang-config` | CPU/GPU | SGLang deployment configuration, including multiple models, engine layouts, and fault recovery with memory offload. |
-| `run-ci-megatron` | `e2e-test-megatron` | GPU | Megatron training, including dense models, MoE, PPO, MTP, OPD, fully async rollout, PD/Mooncake, and debug replay. |
+| `run-ci-megatron` | `e2e-test-megatron` | GPU | Megatron training, including dense models, MoE, PPO, MTP, OPD, fully async rollout, PD/Mooncake, debug replay, and Codex/sunabako agent training. |
 | `run-ci-precision` | `e2e-test-precision` | CPU/GPU | Numerical precision and consistency across parallel configurations. |
 | `run-ci-ckpt` | `e2e-test-ckpt` | GPU | Checkpoint saving and loading, including CPU/GPU optimizer states and async saves. |
 | `run-ci-image` | `e2e-test-image` | GPU | The same tests as `run-ci-megatron`, using the `slimerl/slime-test:latest` image. |
@@ -90,7 +89,7 @@ R3 is disabled because Qwen3.8-27B is dense; CPU tests cover replay metadata
 through agent forks.
 
 This is one task, one sample and one update, with a 180-second agent budget and
-a 600-second training-job deadline. The dedicated CI job has a 15-minute limit
+a 600-second training-job deadline. Its Megatron CI matrix entry has a 15-minute limit
 including setup. It records and validates the complete agent episode, then
 trains on its first and last real segments, unchanged, to bound repeated-context
 training cost. `agent-full.pt` retains every segment; the full example continues
@@ -100,7 +99,7 @@ Model, dataset and image downloads, plus TileLang/Triton
 compilation, are cached. Populate the shared cache before the first timed CI run:
 cold downloads and compilation can exceed the 15-minute job limit.
 It does not run a SWE benchmark or the full example dataset.
-The `run-ci-agent` label selects the GPU job; automatic `agent-test` CPU checks
+The `run-ci-megatron` label includes this GPU test; automatic `agent-test` CPU checks
 continue to cover edge cases. `run-ci-changed` also discovers this top-level test.
 
 Measured on 2026-10-10 with eight H100 80GB GPUs, cached assets/compilation and
@@ -111,8 +110,11 @@ across 13 turns passed the token/replay audit; the bounded update trained the
 first and last segments (318 tokens). `sc_correction` was -0.00255 and mean
 absolute train/rollout logprob difference was 0.00989.
 
-CI installs sunabako from `examples/coding_agent_rl/requirements-sunabako.txt`,
-so the pinned sunabako wheel must first be available on PyPI. It imports the OCI
+The shared `tests/ci/setup_agent_e2e.sh` upgrades sunabako to the latest PyPI wheel
+with `pip install --upgrade --no-deps --only-binary=sunabako sunabako` inside the test
+container, then installs the example requirements. This applies to
+`run-ci-megatron`, `run-ci-image`, and `run-ci-changed`; publishing a new sunabako
+wheel is enough for CI to use it without rebuilding the slime image. It imports the OCI
 image with skopeo/umoci and uses the native runtime in the existing privileged
 CI container, without starting a Docker daemon. The explicitly enabled RSS test
 mode is only a bounded functional check, **not aggregate hard RAM enforcement**.

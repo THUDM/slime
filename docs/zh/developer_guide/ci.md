@@ -8,9 +8,8 @@
 |---|---|---|---|
 | 自动运行 | `cpu-unittest` | CPU | 参数校验、批次调度、指标、奖励计算、样本处理、checkpoint 工具和扩展接口。 |
 | 自动运行 | `agent-test` | CPU | Agent 适配器，额外安装所需的模型服务 SDK。 |
-| `run-ci-agent` | `e2e-test-agent` | 8 GPU | 真实 codex、sunabako、小米独立评分与 Qwen3.8-27B 参数更新。 |
 | `run-ci-sglang-config` | `e2e-test-sglang-config` | CPU/GPU | SGLang 部署配置，包括多模型、不同引擎布局和显存卸载后的故障恢复。 |
-| `run-ci-megatron` | `e2e-test-megatron` | GPU | Megatron 训练，包括 Dense、MoE、PPO、MTP、OPD、全异步 rollout、PD/Mooncake 和调试数据重放。 |
+| `run-ci-megatron` | `e2e-test-megatron` | GPU | Megatron 训练，包括 Dense、MoE、PPO、MTP、OPD、全异步 rollout、PD/Mooncake、调试数据重放和 codex/sunabako agent 训练。 |
 | `run-ci-precision` | `e2e-test-precision` | CPU/GPU | 数值精度，以及不同并行配置下的结果一致性。 |
 | `run-ci-ckpt` | `e2e-test-ckpt` | GPU | Checkpoint 保存和加载，包括 CPU/GPU 优化器状态和异步保存。 |
 | `run-ci-image` | `e2e-test-image` | GPU | 在 `slimerl/slime-test:latest` 镜像上运行与 `run-ci-megatron` 相同的测试。 |
@@ -86,12 +85,12 @@ NUM_GPUS = 0
 Qwen3.8-27B 是 dense 模型，因此关闭 R3；CPU 测试覆盖 agent 分叉中的 replay 数据传递。
 
 CI 只运行一个任务、采样一次、更新一次。agent 上限 180 秒，训练任务上限 600 秒，
-专用 CI job 连同准备阶段上限 15 分钟。完整运行并校验 agent episode 后，CI 只取首尾两个
+Megatron 测试矩阵中的该项连同准备阶段上限 15 分钟。完整运行并校验 agent episode 后，CI 只取首尾两个
 真实片段做训练，保留原始 token、logprob 和 reward，以控制重复上下文的训练开销。
 `agent-full.pt` 保存所有片段，正式 example 仍训练完整轨迹。不给 agent 提供答案或隐藏测试。
 模型、数据、镜像和 TileLang/Triton 编译结果会缓存，
 首次计时 CI 前应准备好共享缓存；冷启动的下载与编译可能超过 15 分钟 job 上限。
-`run-ci-agent` 标签触发 GPU e2e，自动运行的 `agent-test` 继续覆盖 CPU 边界情况；
+`run-ci-megatron` 标签包含这项 GPU e2e，自动运行的 `agent-test` 继续覆盖 CPU 边界情况；
 `run-ci-changed` 也能发现这个顶层测试文件。完整小米数据训练仍由 example 提供。
 
 2026-10-10 在单机八张 H100 80GB、模型/镜像/编译缓存就绪、已有本机沙箱集群的
@@ -100,8 +99,11 @@ RSS 测试模式下，实测**全程 457 秒**，其中 agent 与独立评分约
 token/replay 校验；限时训练使用首尾两个片段，共 318 个 token。`sc_correction`
 为 -0.00255，训推 logprob 平均绝对差为 0.00989。
 
-CI 从 `examples/coding_agent_rl/requirements-sunabako.txt` 安装 sunabako，因此固定版本的
-wheel 需要先发布到 PyPI。镜像由 skopeo/umoci 导入，在现有特权 CI 容器内使用 native
+共用的 `tests/ci/setup_agent_e2e.sh` 会在测试容器内通过
+`pip install --upgrade --no-deps --only-binary=sunabako sunabako` 安装 PyPI 最新版 sunabako wheel，
+再安装 example 的其他依赖。`run-ci-megatron`、`run-ci-image` 和 `run-ci-changed`
+都使用这个脚本；新版本发布到 PyPI 后即可用于 CI，无需重建 slime 镜像。
+镜像由 skopeo/umoci 导入，在现有特权 CI 容器内使用 native
 runtime，无需启动 Docker daemon。CI 明确启用的 RSS 模式只用于有界功能测试，
 **不证明总内存硬限制**；生产环境仍需可写、已委派的 cgroup，缺失时拒绝启动。
 
