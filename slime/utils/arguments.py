@@ -628,7 +628,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=int,
                 default=None,
                 help=(
-                    "Override Straw's pack target size in MiB (Straw defaults to 1 GiB). "
+                    "Override straw's pack target size in MiB (straw defaults to 1 GiB). "
                     "A single larger publication is kept intact."
                 ),
             )
@@ -652,7 +652,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--rollout-session-id",
                 type=str,
                 default=None,
-                help="Identity for retained internal serving. Defaults to the Straw pool/run, debug dump, save directory, or model/rollout configuration.",
+                help="Identity for retained internal serving. Defaults to the straw pool/run, debug dump, save directory, or model/rollout configuration.",
             )
             parser.add_argument(
                 "--use-fault-tolerance",

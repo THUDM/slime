@@ -216,21 +216,43 @@ class BatchBuilder:
             self.args.advantage_estimator in ["grpo", "gspo", "cispo", "reinforce_plus_plus_baseline"]
             and self.args.rewards_normalization
         ):
-            # group norm
-            rewards = torch.tensor(raw_rewards, dtype=torch.float)
-            if rewards.shape[-1] == self.args.n_samples_per_prompt * self.args.rollout_batch_size:
-                rewards = rewards.reshape(-1, self.args.n_samples_per_prompt)
-            else:
-                # when samples count are not equal in each group
-                rewards = rewards.view(-1, rewards.shape[-1])
-            mean = rewards.mean(dim=-1, keepdim=True)
-            rewards = rewards - mean
+            # Agent rollouts can emit unequal numbers of training segments.
+            # Compute prompt-group statistics over unique rollout outcomes,
+            # then copy each rollout's advantage to all of its segments.
+            has_groups = any(sample.group_index is not None for sample in samples)
+            if has_groups and any(sample.group_index is None for sample in samples):
+                raise ValueError("Reward normalization requires group_index on every sample or none of them")
+            rollouts = {}
+            sample_rollouts = []
+            for position, (sample, reward) in enumerate(zip(samples, raw_rewards, strict=True)):
+                rid = sample.rollout_id if sample.rollout_id is not None else sample.index
+                key = ("rollout", rid) if rid is not None else ("position", position)
+                if key in rollouts:
+                    group, previous_reward, _ = rollouts[key]
+                    if group != sample.group_index or previous_reward != reward:
+                        raise ValueError(f"Segments of rollout {rid} must share a prompt group and outcome reward")
+                else:
+                    rollouts[key] = (sample.group_index, reward, len(rollouts))
+                sample_rollouts.append(rollouts[key][2])
 
-            if self.args.advantage_estimator in ["grpo", "gspo", "cispo"] and self.args.grpo_std_normalization:
-                std = rewards.std(dim=-1, keepdim=True)
-                rewards = rewards / (std + 1e-6)
-
-            return raw_rewards, rewards.flatten().tolist()
+            groups = {}
+            legacy_complete_batch = len(rollouts) == self.args.n_samples_per_prompt * self.args.rollout_batch_size
+            for group, _, position in rollouts.values():
+                if not has_groups:
+                    # Preserve the positional convention for older flat generators.
+                    group = position // self.args.n_samples_per_prompt if legacy_complete_batch else 0
+                groups.setdefault(group, []).append(position)
+            rewards = torch.tensor([value[1] for value in rollouts.values()], dtype=torch.float)
+            for positions in groups.values():
+                centered = rewards[positions] - rewards[positions].mean()
+                if (
+                    self.args.advantage_estimator in ["grpo", "gspo", "cispo"]
+                    and self.args.grpo_std_normalization
+                    and len(positions) > 1
+                ):
+                    centered = centered / (centered.std() + 1e-6)
+                rewards[positions] = centered
+            return raw_rewards, rewards[sample_rollouts].tolist()
 
         return raw_rewards, raw_rewards
 
@@ -246,7 +268,7 @@ class BatchBuilder:
         assert len(raw_rewards) == len(samples)
         assert len(rewards) == len(samples)
 
-        rollout_ids = [sample.rollout_id for sample in samples]
+        rollout_ids = [sample.rollout_id if sample.rollout_id is not None else sample.index for sample in samples]
         existed_rollout_id_values = set(rid for rid in rollout_ids if rid is not None)
         tmp_id = 0
         for i in range(len(rollout_ids)):

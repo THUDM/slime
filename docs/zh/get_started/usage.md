@@ -286,7 +286,7 @@ PPO 相关参数：
 
 **采样要求：** temperature 必须为正，使用 `0 < top_p <= 1`、`top_k=-1`、`min_p=0`，不启用 repetition/frequency/presence penalty 或约束解码。temperature 不为 1 或 top_p 小于 1 时，所有 sampler worker 上的 `SGLANG_RETURN_ORIGINAL_LOGPROB` 必须未设置或为 false。目前不支持逐请求修改 temperature 或 top_p，也不支持流式 SC。评估不会请求 SC 数据，可以使用独立的采样配置。
 
-**与 top-p replay 组合：** 将上面的 `--rollout-top-p 1.0` 改为例如 `--rollout-top-p 0.9`，SC 会自动改用精确支持集求和，`--score-centering-top-k` 不再生效。rollout 返回每个 token 完整的 replay 支持集及其截断、归一化后的 sampler logprobs；trainer 在同一份支持集上归一化，并计算 `sum(stop_gradient(q * weight) * log p)` 的校正项。不使用论文的长尾近似，也不把支持集外的 token 纳入求和。训练端的完整 logits 本身无法恢复 sampler 概率，因此仍需要保存原始采样概率。传输量随每步支持集大小变化，top-p 接近 1 时可能明显大于固定的 top-k。精确性针对保存的 replay 支持集；沿用 replay 对边界 sampled token 的保留规则。
+**与 top-p replay 组合：** 将上面的 `--rollout-top-p 1.0` 改为例如 `--rollout-top-p 0.9`，SC 会自动改用精确支持集求和，`--score-centering-top-k` 不再生效。rollout 返回每个 token 完整的 replay 支持集及其截断、归一化后的 sampler logprobs；trainer 在同一份支持集上归一化，并计算 `sum(stop_gradient(q * weight - weight(1) * p) * log p)` 的校正项，与非 top-p 路径在完整支持集上的中心化口径一致。减去的基线具有零 score 梯度，因此训练更新不变；训推分布一致时，`sc_correction` 为零（允许舍入误差）。不使用论文的长尾近似，也不把支持集外的 token 纳入求和。训练端的完整 logits 本身无法恢复 sampler 概率，因此仍需要保存原始采样概率。传输量随每步支持集大小变化，top-p 接近 1 时可能明显大于固定的 top-k。精确性针对保存的 replay 支持集；沿用 replay 对边界 sampled token 的保留规则。
 
 **SGLang 支持：** 使用包含 `docker/patch/latest/sglang-top_p.patch` 的镜像，该 patch 提供二进制 top-k 输出和完整 top-p 概率输出。`top_p=1` 时 slime 通过 `top_logprobs_num=k` 请求 top-k；`top_p<1` 时通过 `custom_params.return_top_p_log_probs` 请求整个 replay 支持集的概率，保存原始采样时的概率，不使用更新后的 checkpoint 重新计算这些概率。自定义 generator 应调用 `slime.utils.score_centering` 中的 `score_centering_request`，并将响应 metadata 传给 `Sample.append_response_tokens`。
 

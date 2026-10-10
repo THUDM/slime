@@ -18,6 +18,7 @@ class ClaudeCodeHarness(BaseHarness):
     # host paths + CLI knobs, all under the agent-layer SLIME_AGENT_* prefix
     node_tarball_env = "SLIME_AGENT_NODE_TARBALL"
     cli_tarball_env = "SLIME_AGENT_CC_TARBALL"
+    native_tarball_env = "SLIME_AGENT_CC_NATIVE_TARBALL"
     extra_args_env = "SLIME_AGENT_CC_EXTRA_ARGS"
     extra_envs_env = "SLIME_AGENT_CC_EXTRA_ENVS"
 
@@ -34,6 +35,17 @@ class ClaudeCodeHarness(BaseHarness):
     }
 
     async def install_cli(self, sb: Sandbox) -> None:
+        if archive := os.environ.get(self.native_tarball_env):
+            await sb.write_file("/tmp/claude-native.tgz", Path(archive))
+            await sb.exec(
+                "set -e; mkdir -p /opt/claude-code /usr/local/bin; "
+                "tar xzf /tmp/claude-native.tgz -C /opt/claude-code --strip-components=1; "
+                "ln -sf /opt/claude-code/claude /usr/local/bin/claude; claude --version",
+                user="root",
+                timeout=180,
+                check=True,
+            )
+            return
         await install_npm_cli(
             sb,
             node_runtime=Path(os.environ[self.node_tarball_env]),

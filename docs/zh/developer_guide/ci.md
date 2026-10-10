@@ -7,9 +7,9 @@
 | 触发方式 | CI 任务 | 运行环境 | 覆盖范围 |
 |---|---|---|---|
 | 自动运行 | `cpu-unittest` | CPU | 参数校验、批次调度、指标、奖励计算、样本处理、checkpoint 工具和扩展接口。 |
-| 自动运行 | `agent-adapter-test` | CPU | Agent 适配器，额外安装所需的模型服务 SDK。 |
+| 自动运行 | `agent-test` | CPU | Agent 适配器，额外安装所需的模型服务 SDK。 |
 | `run-ci-sglang-config` | `e2e-test-sglang-config` | CPU/GPU | SGLang 部署配置，包括多模型、不同引擎布局和显存卸载后的故障恢复。 |
-| `run-ci-megatron` | `e2e-test-megatron` | GPU | Megatron 训练，包括 Dense、MoE、PPO、MTP、OPD、全异步 rollout、PD/Mooncake 和调试数据重放。 |
+| `run-ci-megatron` | `e2e-test-megatron` | GPU | Megatron 训练，包括 Dense、MoE、PPO、MTP、OPD、全异步 rollout、PD/Mooncake、调试数据重放和 codex/sunabako agent 训练。 |
 | `run-ci-precision` | `e2e-test-precision` | CPU/GPU | 数值精度，以及不同并行配置下的结果一致性。 |
 | `run-ci-ckpt` | `e2e-test-ckpt` | GPU | Checkpoint 保存和加载，包括 CPU/GPU 优化器状态和异步保存。 |
 | `run-ci-image` | `e2e-test-image` | GPU | 在 `slimerl/slime-test:latest` 镜像上运行与 `run-ci-megatron` 相同的测试。 |
@@ -34,7 +34,7 @@ CPU 任务运行在 GitHub 托管的 `ubuntu-latest` 环境中，安装 CPU 版 
 - `Sample`、rollout 数据校验和 agent 轨迹合并；
 - Hugging Face checkpoint 保存，以及自定义 rollout、生成函数和运行时 hook 的接口约定。
 
-Agent 适配器测试放在独立的 `agent-adapter-test` 任务中，因为它们还需要 `openai`、`openai-agents`、`anthropic` 等 SDK。
+Agent 适配器测试放在独立的 `agent-test` 任务中，因为它们还需要 `openai`、`openai-agents`、`anthropic` 等 SDK。
 
 CPU 测试列表中带有 `straw: true` 的条目，会从 PyPI 安装最新版 `straw-queue` wheel。测试不需要 Rust 工具链或 straw 源码仓库。`test_optional_straw.py` 则刻意不安装 straw，检查默认数据传输仍可运行，以及显式选择 straw 时是否给出清晰的安装提示。
 
@@ -69,6 +69,73 @@ NUM_GPUS = 0
 这类任务仍在自托管机器的 Docker 容器中执行，但 `NUM_GPUS = 0` 时不会申请 GPU。
 
 ## 数据传输与恢复测试
+
+### Agent 训练
+
+`tests/test_agent_sunabako_codex_e2e.py` 使用 **Codex 0.162.1**、**Claude Code 2.1.296**、
+Qwen3.8-27B 和两个独立镜像中的小米任务：
+
+- `format-code-task-000003`：给 smol-evm 补上缺失的 `SHL` 左移指令。
+- `format-code-task-000045`：让 BootBot 保留对象形式的 quick replies。
+
+每一步都使用这两道题，**每题 4 条，共 8 个独立 agent 并行**，分别在新沙箱中评分，
+然后执行一次 GRPO 优化器更新。**第一步使用 Codex，第二步使用 Claude Code**，
+第二步使用更新后的模型，对相同两道题重新采样。两个 CLI 共用 trace 拼接和训练路径。
+总共运行 16 条轨迹、训练 2 步，不按 reward 过滤或额外重采。
+两道题的原始代码都必须无法通过官方测试；失败轨迹保留 reward 0，与 reward 1 的轨迹
+一起参与训练。每道题的 4 条结果独立归一化，使用组内均值与样本标准差加 epsilon；
+整组同分时，advantage 正常为 0。
+
+测试会从实际训练张量中核对每个 token 的 advantage，并记录 8 个训练 rank 上的两次
+优化器调用。梯度与参数必须有限；非零梯度必须带来参数变化。采样使用 temperature=1、
+`top_p=0.95`，禁用 top-k，启用 SC，并校验原始 token、mask、sampler 概率及 nucleus
+replay 数据。Qwen3.8-27B 是 dense 模型，因此关闭 R3。
+推理通过 SGLang EAGLE 启用 checkpoint 中的 MTP head（3 个 draft step、4 个 draft token），
+并检查日志中确实出现已接受的 draft token。
+上下文额度为 64K，并给 draft token 预留空间。Claude Code 使用与 example 相同的
+六个代码工具：Bash、Read、Edit、Write、Glob 和 Grep。
+
+每个 agent 上限 600 秒，GitHub job 连同准备阶段上限 35 分钟。
+连续的模型调用会保留原始 token 和采样分布，合并成训练轨迹；历史实际改写时才分支。
+CI 与正式 example 一样，训练每条真实轨迹中的全部片段，保持 token、logprob 和
+reward 原样；`agents/<sample-index>/agent-full.pt` 保存完整轨迹。
+agent 只收到原始题目和仓库，隐藏测试保留在独立评分沙箱中。
+
+模型、选中的两个任务镜像、两个 CLI 安装包和 TileLang/Triton 编译结果均使用缓存。
+镜像下载支持断点续传与完整性校验，`--prepare-only` 在申请 GPU 锁之前准备资源。
+首次下载可能超过计时 CI 的上限。代理变量会传入容器，本机 Ray 和沙箱流量绕过代理。
+`run-ci-megatron` 包含这项 GPU e2e，`run-ci-changed` 也能发现它，自动 `agent-test`
+任务覆盖 CPU 合约检查。
+
+`tests/ci/setup_agent_e2e.sh` 按 `examples/coding_agent_rl/requirements-sunabako.txt`
+安装 PyPI 发布的 `sunabako==0.1.1` wheel，并在启动 Ray head 前准备认证 token；
+已有 token 会复用，其内容不会打印到 CI 日志。该版本通过 `uid_range_size` 支持 native 用户，
+本地节点为 8 个沙箱分别保留 65,536 个 UID/GID，
+state 挂载到 `/workspace`，保证映射后的用户能遍历父目录。测试在现有特权 Docker
+容器中运行，无需内层 Docker daemon 或 PRoot。RSS 模式只用于有界功能验证，
+**不证明总内存硬限制**；生产环境仍需可写、已委派的 cgroup，缺失时拒绝启动。
+
+已有沙箱集群时，安装相同 requirements 后运行：
+
+```bash
+(umask 077; ray get-auth-token --generate >/dev/null)
+HF_CHECKPOINT=/path/to/Qwen3.8-27B \
+RAY_AUTH_MODE=token \
+SUNABAKO_CLUSTER=/path/to/cluster.json \
+SUNABAKO_IMAGES=/path/to/images.json \
+ADAPTER_PUBLIC_HOST=<training-node-ip> \
+python tests/test_agent_sunabako_codex_e2e.py
+```
+
+镜像映射必须在每台沙箱节点包含两个任务，并提供至少 8 个并发沙箱的容量。只在无硬 cgroup 的功能测试中，显式设置
+`SUNABAKO_ALLOW_TEST_MEMORY=1`。可用 `SLIME_AGENT_TEST_DATA` 复用已下载的小米 parquet
+和镜像映射，用 `SLIME_AGENT_CODEX_NATIVE_TARBALL` 和 `SLIME_AGENT_CC_NATIVE_TARBALL`
+复用官方平台安装包，无需在沙箱中下载工具链。
+`SLIME_AGENT_TEST_RUN_DIR` 必须是新目录，会保留 CLI 日志、评分输出、rollout/train
+张量、参数更新证据与 `result.json`。测试与其他 E2E 一样调用 `U.execute_train()`，
+通过 `extra_env_vars` 传入 agent 环境。Ray CLI 直接向 GitHub Actions 控制台输出训练日志；
+训练结束后将该任务日志保存为 `train.log`，用于检查 MTP 和训练指标。
+GitHub Actions 在成功或失败后都会上传这些产物。
 
 ### straw
 
@@ -131,7 +198,7 @@ if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
 ```
 
-需要自动运行的测试，还应注册到 `.github/workflows/pr-test.yml.j2` 的 `cpu-unittest` 或 `agent-adapter-test` 列表中，再重新生成工作流。
+需要自动运行的测试，还应注册到 `.github/workflows/pr-test.yml.j2` 的 `cpu-unittest` 或 `agent-test` 列表中，再重新生成工作流。
 
 ### 添加 GPU 端到端测试
 

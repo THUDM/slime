@@ -24,7 +24,7 @@ This makes slime one of the most battle-tested open RL post-training frameworks:
 
 ## Supported Models
 
-Alongside the GLM family, slime supports Qwen (Qwen3.6, Qwen3.5, Qwen3-Next, Qwen3 MoE, Qwen3, Qwen2.5), DeepSeek (V3, V3.1, R1), and Llama 3. See the model configurations in [scripts/models](scripts/models/) and the [training examples](https://thudm.github.io/slime/).
+Alongside the GLM family, slime supports Qwen (Qwen3.8, Qwen3.6, Qwen3.5, Qwen3-Next, Qwen3 MoE, Qwen3, Qwen2.5), DeepSeek (V3, V3.1, R1), and Llama 3. See the model configurations in [scripts/models](scripts/models/) and the [training examples](https://thudm.github.io/slime/).
 
 ## Engine Configuration and Deployment
 
@@ -84,7 +84,7 @@ These agentic RL examples use the standard rollout and data buffer interfaces:
 - [`examples/multi_agent`](examples/multi_agent/README.md): Multi-agent generation via `--custom-generate-function-path` inside the standard rollout loop.
 - [`examples/search-r1`](examples/search-r1/): Search/RAG-style multi-turn generation via `--custom-generate-function-path`.
 - [`examples/fully_async`](examples/fully_async/README.md): Fully-async rollout, useful for long-tail agentic generation where some samples take much longer than others.
-- [`examples/coding_agent_rl`](examples/coding_agent_rl/README.md): End-to-end SWE coding-agent RL with sandboxed tool use, test-based rewards, and token-correct trajectory segments via `--custom-generate-function-path`.
+- [`examples/coding_agent_rl`](examples/coding_agent_rl/README.md): Qwen3.8-27B coding-agent RL on Xiaomi MiMo SWE data, using sunabako sandboxes, official test rewards, and token-correct trajectories.
 
 See the [Customization Guide](docs/en/get_started/customization.md) for which interface to use for a given agentic workflow.
 

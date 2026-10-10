@@ -1,6 +1,6 @@
 """Lose a manager or RPC reply at persistence boundaries and consume its replay.
 
-Two local Ray nodes run the production manager, distributed generators and Straw
+Two local Ray nodes run the production manager, distributed generators and straw
 controller. Inference and the optimizer use CPU fixtures; this does not exercise
 SGLang or Megatron GPU recovery.
 """

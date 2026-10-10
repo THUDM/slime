@@ -7,9 +7,9 @@ slime runs CPU tests when a PR is opened or updated, when code is pushed to `mai
 | Trigger | CI job | Environment | Coverage |
 |---|---|---|---|
 | Automatic | `cpu-unittest` | CPU | Argument validation, batch scheduling, metrics, rewards, samples, checkpoint utilities, and extension interfaces. |
-| Automatic | `agent-adapter-test` | CPU | Agent adapters, with the required model-provider SDKs installed. |
+| Automatic | `agent-test` | CPU | Agent adapters, with the required model-provider SDKs installed. |
 | `run-ci-sglang-config` | `e2e-test-sglang-config` | CPU/GPU | SGLang deployment configuration, including multiple models, engine layouts, and fault recovery with memory offload. |
-| `run-ci-megatron` | `e2e-test-megatron` | GPU | Megatron training, including dense models, MoE, PPO, MTP, OPD, fully async rollout, PD/Mooncake, and debug replay. |
+| `run-ci-megatron` | `e2e-test-megatron` | GPU | Megatron training, including dense models, MoE, PPO, MTP, OPD, fully async rollout, PD/Mooncake, debug replay, and Codex/sunabako agent training. |
 | `run-ci-precision` | `e2e-test-precision` | CPU/GPU | Numerical precision and consistency across parallel configurations. |
 | `run-ci-ckpt` | `e2e-test-ckpt` | GPU | Checkpoint saving and loading, including CPU/GPU optimizer states and async saves. |
 | `run-ci-image` | `e2e-test-image` | GPU | The same tests as `run-ci-megatron`, using the `slimerl/slime-test:latest` image. |
@@ -34,7 +34,7 @@ CPU jobs run on GitHub-hosted `ubuntu-latest` runners. They install CPU PyTorch 
 - `Sample` behavior, rollout validation, and agent trajectory merging;
 - Hugging Face checkpoint saving and interface contracts for custom rollout, generation functions, and runtime hooks.
 
-Agent adapter tests run in a separate `agent-adapter-test` job because they also require SDKs such as `openai`, `openai-agents`, and `anthropic`.
+Agent adapter tests run in a separate `agent-test` job because they also require SDKs such as `openai`, `openai-agents`, and `anthropic`.
 
 CPU test entries marked with `straw: true` install the latest `straw-queue` wheel from PyPI. They do not need a Rust toolchain or the straw source repository. `test_optional_straw.py` deliberately runs without straw to check that default data transport still works and that explicitly selecting straw produces a clear installation hint.
 
@@ -69,6 +69,87 @@ NUM_GPUS = 0
 These jobs still run in Docker on self-hosted machines, but do not acquire GPUs when `NUM_GPUS = 0`.
 
 ## Data Transport and Recovery Tests
+
+### Coding-agent training
+
+`tests/test_agent_sunabako_codex_e2e.py` uses Codex **0.162.1**, Claude Code
+**2.1.296**, Qwen3.8-27B and two small MiMo tasks with separate pinned images:
+
+- `format-code-task-000003`: implement smol-evm's missing `SHL` opcode.
+- `format-code-task-000045`: preserve object quick replies in BootBot.
+
+Each step samples **eight independent agents concurrently: four on each task**,
+grades each patch in a fresh sandbox, and performs one GRPO optimizer step.
+The first step uses Codex; the second uses Claude Code to sample both tasks again
+with the updated model. Both CLIs use the same trace stitching and training path. There are exactly
+sixteen agent runs and two training steps, without reward-based filtering or extra resampling.
+Both unchanged repositories must fail their official tests before training.
+Failed solutions retain reward 0 and participate in training alongside reward 1
+solutions. GRPO normalizes each task's four outcomes separately: it subtracts the prompt-group mean and divides by its sample standard
+deviation plus epsilon; a uniform group correctly has zero advantages.
+
+The test compares the trainer's actual token advantages with those group statistics,
+and records both optimizer calls on all eight training ranks. Gradients and
+parameters must stay finite; nonzero gradients must produce parameter changes.
+Sampling uses temperature 1, `top_p=0.95`, disabled top-k and score centering.
+Inference enables the checkpoint's MTP head through SGLang EAGLE (three draft
+steps, four draft tokens) and checks that draft tokens were actually accepted.
+The 64K context budget reserves space for those draft tokens. Claude Code uses
+the example's six code tools: Bash, Read, Edit, Write, Glob and Grep.
+Original token IDs, masks, sampler probabilities and nucleus replay data are
+checked against the actual training tensors. Qwen3.8-27B is dense, so R3 is disabled.
+
+Each agent has a 600-second budget. The GitHub matrix timeout is 35 minutes
+including setup. Continuous model turns
+are merged using their original tokens and sampler distributions. Every segment of each
+real trajectory enters training, as in the normal example.
+`agents/<sample-index>/agent-full.pt` retains its complete trajectory.
+The agent receives the original problem statement
+and repository, while hidden tests stay in the independent grading sandbox.
+
+Model files, the selected two task images, both CLI archives and TileLang/Triton
+compilation results are cached. Interrupted image downloads resume and cached
+blobs are verified. `--prepare-only` populates assets before GPU locks are acquired;
+cold downloads can exceed the timed job limit. Proxy variables are propagated to
+the container, with local Ray and sandbox traffic bypassing the proxy.
+The `run-ci-megatron` label includes this GPU test; `run-ci-changed` also discovers
+it. Automatic `agent-test` jobs cover the CPU contracts.
+
+`tests/ci/setup_agent_e2e.sh` installs the released `sunabako==0.1.1` wheel from PyPI,
+as pinned in `examples/coding_agent_rl/requirements-sunabako.txt`. It also prepares
+the Ray authentication token before starting the head, reusing any existing token
+and keeping its value out of CI logs. This sunabako release
+supports native guest users with `uid_range_size`; the local node reserves 65,536 UIDs/GIDs for each of eight
+sandboxes. State is mounted under `/workspace` so mapped users can traverse its
+parent directories. This runs inside the existing privileged Docker container
+without an inner Docker daemon or PRoot. The explicitly enabled RSS test mode is
+a bounded functional check, **not aggregate hard RAM enforcement**. Production
+sunabako still requires a writable delegated cgroup and fails closed.
+
+For a preconfigured cluster, install the same requirements and run:
+
+```bash
+(umask 077; ray get-auth-token --generate >/dev/null)
+HF_CHECKPOINT=/path/to/Qwen3.8-27B \
+RAY_AUTH_MODE=token \
+SUNABAKO_CLUSTER=/path/to/cluster.json \
+SUNABAKO_IMAGES=/path/to/images.json \
+ADAPTER_PUBLIC_HOST=<training-node-ip> \
+python tests/test_agent_sunabako_codex_e2e.py
+```
+
+The image map must include both selected tasks on every sandbox node, with capacity for eight concurrent sandboxes. Set
+`SUNABAKO_ALLOW_TEST_MEMORY=1` explicitly only when testing without hard cgroups.
+Optional `SLIME_AGENT_TEST_DATA` reuses the downloaded MiMo parquet/mapping;
+`SLIME_AGENT_CODEX_NATIVE_TARBALL` and `SLIME_AGENT_CC_NATIVE_TARBALL` reuse the
+official platform archives without downloading toolchains inside the sandboxes.
+`SLIME_AGENT_TEST_RUN_DIR` must name a new directory and retains the CLI logs,
+grader output, rollout/train tensors, optimizer evidence and `result.json`.
+The test uses the same `U.execute_train()` launcher as the other E2E tests, with
+the agent environment passed through `extra_env_vars`. Ray's CLI prints training
+logs directly to the GitHub Actions console. After training, the test archives
+the job's log as `train.log` for the MTP and training-metric assertions.
+GitHub Actions uploads the evidence on success and failure.
 
 ### straw
 
@@ -131,7 +212,7 @@ if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
 ```
 
-To run a test automatically, register it in the `cpu-unittest` or `agent-adapter-test` list in `.github/workflows/pr-test.yml.j2`, then regenerate the workflow.
+To run a test automatically, register it in the `cpu-unittest` or `agent-test` list in `.github/workflows/pr-test.yml.j2`, then regenerate the workflow.
 
 ### Adding GPU End-to-End Tests
 

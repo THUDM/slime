@@ -74,7 +74,7 @@ def _run_default_without_straw():
     assert pack_rollout_payload(groups, args, 0) is groups
     assert pack_rollout_group(groups[0], args, 0) is groups[0]
     assert finalize_rollout_groups(args, 0, groups).samples is groups
-    # Dynamic filters also discard ordinary groups in installations without Straw.
+    # Dynamic filters also discard ordinary groups in installations without straw.
     assert group_lease(groups[0]) is None
     discard_rollout_group(groups[0], args)
     builder = BatchBuilder(args)
@@ -86,7 +86,7 @@ def _run_default_without_straw():
         return groups
 
     fully_async_rollout._generate_rollout_async = generate
-    # The source owns its consumer; no distributed (Straw) imports are needed.
+    # The source owns its consumer; no distributed (straw) imports are needed.
     source = SimpleNamespace(consumers={"fully_async": object.__new__(fully_async_rollout.AsyncRolloutWorker)})
     assert fully_async_rollout.generate_rollout_fully_async(args, 0, source) is groups
 

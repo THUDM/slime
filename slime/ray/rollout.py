@@ -501,7 +501,7 @@ class RolloutManager:
                         archive.store.backend.root != Path(self.args.rollout_data_dir).resolve()
                         or archive.manifest.manifest.segment.run_id != self.args.rollout_queue_run_id
                     ):
-                        raise ValueError("Debug rollout archives must belong to the same Straw storage pool and run")
+                        raise ValueError("Debug rollout archives must belong to the same straw storage pool and run")
                     data = archive.load_samples()
                     refs = [archive.contents["raw"]] if "raw" in archive.contents else archive.contents["chunks"]
                     self.batch_builder.raw_ref = accept_raw_rollout(

@@ -51,7 +51,7 @@ def resolve_rollout_data_dir(args):
             )
             paths = sorted(glob.glob(str(Path(pattern).expanduser())))
             if not paths:
-                raise FileNotFoundError(f"No Straw rollout archive matches {debug_path}")
+                raise FileNotFoundError(f"No straw rollout archive matches {debug_path}")
             path = paths[0]
         else:
             path = Path(debug_path.format(rollout_id=start)).expanduser()
@@ -62,7 +62,7 @@ def resolve_rollout_data_dir(args):
         args.rollout_queue_run_id = RecordSetRef.from_dict(index["manifest"]).manifest.segment.run_id
     if args.rollout_data_dir is None:
         if args.save is None:
-            raise ValueError("Straw rollout transport requires --rollout-data-dir or --save on shared storage")
+            raise ValueError("straw rollout transport requires --rollout-data-dir or --save on shared storage")
         args.rollout_data_dir = str(Path(args.save) / "rollout_data")
     args.rollout_data_dir = str(Path(args.rollout_data_dir).expanduser().resolve())
 
@@ -90,7 +90,7 @@ def rollout_store(args):
     key = (os.getpid(), root, run_id, profile, segment_mib, online_gc, json.dumps(declaration, sort_keys=True))
     with _writers_lock:
         if key not in _writers:
-            # Omit the override unless requested, so Straw owns its default.
+            # Omit the override unless requested, so straw owns its default.
             pack_options = {} if segment_mib is None else {"segment_target_bytes": segment_mib * 1024**2}
             store = SharedFilesystemStore(
                 root,
@@ -198,7 +198,7 @@ def group_lease(group):
     leases = [getattr(sample, "_queue_lease", None) for sample in samples]
     if not any(leases):
         return None
-    # Ordinary in-memory groups have no queue lease and do not require Straw.
+    # Ordinary in-memory groups have no queue lease and do not require straw.
     from straw.protocol import Lease
 
     if not all(value == leases[0] for value in leases):
@@ -408,7 +408,7 @@ def unpack_rollout_payload(value):
 
 
 async def unpack_published_payload(value):
-    """Load off the event loop; Straw handles visibility for every read path."""
+    """Load off the event loop; straw handles visibility for every read path."""
     if not isinstance(value, DiskPayloadRef):
         return await asyncio.to_thread(unpack_rollout_payload, value)
     from straw.errors import CorruptData

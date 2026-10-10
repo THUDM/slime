@@ -1040,7 +1040,15 @@ def get_score_centering_terms(args, batch, logits):
                 coefficients = q.exp() * importance_weights((p - q).exp(), **weighting)
                 q_mass = q.new_zeros(len(rows)).scatter_add_(0, row_ids, q.exp())
                 p_mass = p.new_zeros(len(rows)).scatter_add_(0, row_ids, p.exp())
-            correction = p.new_zeros(len(rows)).scatter_add_(0, row_ids, coefficients * p)
+                # Match the head/tail path's centered scalar convention.
+                # The complete support has no tail: rho = 1, alpha = w(1),
+                # matching score_centering_correction's zero-tail case.
+                # Sum_a stop_gradient(p_a) * grad(log p_a) == 0 on the
+                # complete replay support, so this baseline preserves the
+                # original weighted score gradient (including TIS/MIS).
+                alpha = importance_weights(torch.ones_like(q_mass), **weighting)
+                residual = coefficients - alpha[row_ids] * p.exp()
+            correction = p.new_zeros(len(rows)).scatter_add_(0, row_ids, residual * p)
             for key, value in zip(res, (correction, q_mass, p_mass), strict=True):
                 res[key].append(value)
         if allgather_cp:

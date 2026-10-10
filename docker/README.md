@@ -12,7 +12,7 @@ SGLang, Megatron and dependency revisions below.
 Current build configuration:
 
 - sglang v0.5.15.post1 (0b3bb0cbe31873994c9f989fddfe2f87ca839fdd), Megatron Core v0.19.2 (4b4acac9a1d28ea6829c8d4f566d75698a21249d)
-- Build version: `nightly-dev-20261007a` in `docker/version.txt` (Slime `0.4.0`).
+- Build version: `nightly-dev-20261010a` in `docker/version.txt` (Slime `0.4.0`).
 
 Previous build configurations:
 
