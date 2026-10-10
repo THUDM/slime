@@ -116,7 +116,9 @@ The `run-ci-megatron` label includes this GPU test; `run-ci-changed` also discov
 it. Automatic `agent-test` jobs cover the CPU contracts.
 
 `tests/ci/setup_agent_e2e.sh` installs the released `sunabako==0.1.1` wheel from PyPI,
-as pinned in `examples/coding_agent_rl/requirements-sunabako.txt`. This version
+as pinned in `examples/coding_agent_rl/requirements-sunabako.txt`. It also prepares
+the Ray authentication token before starting the head, reusing any existing token
+and keeping its value out of CI logs. This sunabako release
 supports native guest users with `uid_range_size`; the local node reserves 65,536 UIDs/GIDs for each of eight
 sandboxes. State is mounted under `/workspace` so mapped users can traverse its
 parent directories. This runs inside the existing privileged Docker container
@@ -127,6 +129,7 @@ sunabako still requires a writable delegated cgroup and fails closed.
 For a preconfigured cluster, install the same requirements and run:
 
 ```bash
+(umask 077; ray get-auth-token --generate >/dev/null)
 HF_CHECKPOINT=/path/to/Qwen3.8-27B \
 RAY_AUTH_MODE=token \
 SUNABAKO_CLUSTER=/path/to/cluster.json \

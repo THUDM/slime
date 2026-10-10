@@ -21,6 +21,7 @@ from tests.test_agent._fakes import FakeSGLangServer
 from slime.agent.adapters.anthropic import AnthropicAdapter
 from slime.agent.adapters.common import PromptPrefix, Session, _render_token_ids, _session_prompt_ids
 from slime.agent.adapters.responses import ResponsesAdapter
+from slime.agent.parsing import ParsedModelOutput, parse_xml_tool_uses
 from slime.agent.trajectory import TurnRecord
 from slime.utils.types import Sample
 
@@ -57,6 +58,23 @@ def completed_prefix(tokenizer, session, messages, tools=None):
     history = messages + [{"role": "assistant", "content": "Reading."}]
     session.prompt_prefixes.append(PromptPrefix(copy.deepcopy(history), copy.deepcopy(tools), turn))
     return history, turn
+
+
+@pytest.fixture
+def scripted_model_parser(monkeypatch):
+    """Keep model-format parsing outside these CPU continuity regressions.
+
+    HTTP, tokenization, history translation and trajectory stitching stay real;
+    the GPU E2E exercises the actual SGLang parsers.
+    """
+
+    def parse(raw_output, *, tools_schema, tool_parser_name, reasoning_parser_name):
+        assert tool_parser_name == "qwen3_coder" and reasoning_parser_name == "qwen3"
+        reasoning, body = raw_output.split("</think>", 1)
+        text, tool_uses = parse_xml_tool_uses(body, tools_schema)
+        return ParsedModelOutput(reasoning=reasoning.strip(), text=text.strip(), tool_uses=tool_uses)
+
+    monkeypatch.setattr("slime.agent.adapters.common.parse_model_output", parse)
 
 
 def test_reasoning_and_noncanonical_whitespace_are_reused_before_sampling(tokenizer):
@@ -132,7 +150,7 @@ def test_identical_visible_replies_with_different_reasoning_are_ambiguous(tokeni
     )
 
 
-def test_responses_http_roundtrip_trains_original_thinking_and_tools_in_one_sample(tokenizer):
+def test_responses_http_roundtrip_trains_original_thinking_and_tools_in_one_sample(tokenizer, scripted_model_parser):
     async def run():
         raw = (
             "Check both paths.\n</think>\n\nInspecting.\n\n"
@@ -186,7 +204,7 @@ def test_responses_http_roundtrip_trains_original_thinking_and_tools_in_one_samp
     asyncio.run(run())
 
 
-def test_anthropic_http_roundtrip_merges_thinking_and_tool_results(tokenizer):
+def test_anthropic_http_roundtrip_merges_thinking_and_tool_results(tokenizer, scripted_model_parser):
     async def run():
         outputs = [
             tokenizer.encode(text, add_special_tokens=False)

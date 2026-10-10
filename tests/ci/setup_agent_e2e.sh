@@ -10,6 +10,11 @@ export no_proxy="localhost,127.0.0.1,::1,${no_proxy:-${NO_PROXY:-}}"
 export NO_PROXY="$no_proxy"
 # Keep the Ray head, job CLI and Python clients on the same authentication mode.
 export RAY_AUTH_MODE="${RAY_AUTH_MODE:-token}"
+if [[ "${RAY_AUTH_MODE,,}" == "token" ]]; then
+    # Fresh containers need a token before `ray start`; reuse existing tokens.
+    # The CLI prints the token to stdout, so keep it out of CI logs.
+    (umask 077; ray get-auth-token --generate >/dev/null)
+fi
 if ! command -v skopeo >/dev/null || ! command -v umoci >/dev/null; then
     apt-get update -qq
     apt-get install -y --no-install-recommends skopeo umoci
