@@ -25,7 +25,7 @@ fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-source "${SCRIPT_DIR}/../scripts/models/qwen3-30B-A3B.sh"
+source "${SCRIPT_DIR}/../models/qwen3-30B-A3B.sh"
 
 # Base directory for checkpoints and related files (adjust if necessary)
 BASE_DIR="/root" 
