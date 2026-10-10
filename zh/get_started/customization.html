@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="2026 年 10 月 09 日"/>
+    <meta name="docbuild:last-update" content="2026 年 10 月 10 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -684,6 +684,7 @@
         <span class="n">s</span><span class="o">.</span><span class="n">response</span> <span class="o">=</span> <span class="n">segment</span><span class="o">.</span><span class="n">response</span>
         <span class="n">s</span><span class="o">.</span><span class="n">response_length</span> <span class="o">=</span> <span class="n">segment</span><span class="o">.</span><span class="n">response_length</span>
         <span class="n">s</span><span class="o">.</span><span class="n">loss_mask</span> <span class="o">=</span> <span class="n">segment</span><span class="o">.</span><span class="n">loss_mask</span>
+        <span class="n">s</span><span class="o">.</span><span class="n">rollout_log_probs</span> <span class="o">=</span> <span class="n">segment</span><span class="o">.</span><span class="n">rollout_log_probs</span>
         <span class="n">s</span><span class="o">.</span><span class="n">reward</span> <span class="o">=</span> <span class="n">segment</span><span class="o">.</span><span class="n">reward</span>
         <span class="n">s</span><span class="o">.</span><span class="n">status</span> <span class="o">=</span> <span class="n">Sample</span><span class="o">.</span><span class="n">Status</span><span class="o">.</span><span class="n">COMPLETED</span>
         <span class="n">s</span><span class="o">.</span><span class="n">rollout_id</span> <span class="o">=</span> <span class="n">rollout_id</span>
@@ -691,7 +692,7 @@
     <span class="k">return</span> <span class="n">samples</span>
 </pre></div>
 </div>
-<p>如果一个完整 trajectory 只有一个总奖励、但被拆成了 <code class="docutils literal notranslate"><span class="pre">K</span></code> 个训练片段，常见做法是在这些片段之间分配这个奖励（例如每个片段写入 <code class="docutils literal notranslate"><span class="pre">reward</span> <span class="pre">/</span> <span class="pre">K</span></code>），避免把同一次 rollout 的奖励重复放大。</p>
+<p>如果完整 trajectory 只有一个最终奖励，每个片段应保留同一个完整奖励及原始 <code class="docutils literal notranslate"><span class="pre">group_index</span></code>。GRPO 在每个题目组内按不同的 <code class="docutils literal notranslate"><span class="pre">rollout_id</span></code> 统计均值和标准差，再把同一 rollout 的 advantage 传给其所有片段。loss 已按整条 rollout 中未被屏蔽的 token 总数归一化，包括分布在不同 microbatch 中的片段，因此再把 reward 除以片段数会降低多片段轨迹的权重。多个分支共享的生成前缀也只能计算一次 loss。</p>
 <p><strong>示例</strong>: 参见 <a class="reference download internal" download="" href="../_downloads/bee5a872ccae7eb6b44c1ed0e0f6eb4a/generate_with_search.py"><span class="xref download myst">examples/search-r1/generate_with_search.py</span></a> 和 <a class="reference download internal" download="" href="../_downloads/fcb74b88a8b414d1a6f967a6f94cdf7b/rollout_with_multi_agents.py"><span class="xref download myst">examples/multi_agent/rollout_with_multi_agents.py</span></a></p>
 </section>
 </section>
@@ -1177,7 +1178,7 @@ engine 读取之前，在每个训练 rank 上调用。用于在非 POSIX 共享
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 10 月 09 日.
+  最后更新于 2026 年 10 月 10 日.
   <br/>
 </p>
   </div>

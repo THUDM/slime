@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Coding-Agent RL &#8212; slime</title>
+    <title>Coding-agent RL with Qwen3.8-27B, MiMo SWE and sunabako &#8212; slime</title>
   
   
   
@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="Oct 09, 2026"/>
+    <meta name="docbuild:last-update" content="Oct 10, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -213,7 +213,7 @@
 <li class="toctree-l4"><a class="reference internal" href="../search-r1/README.html">Search-R1 lite</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../retool/README.html">Retool: from SFT to RL</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../multi_agent/README.html">Multi-Agent RL</a></li>
-<li class="toctree-l4 current active"><a class="current reference internal" href="#">Coding-Agent RL</a></li>
+<li class="toctree-l4 current active"><a class="current reference internal" href="#">Coding-agent RL with Qwen3.8-27B, MiMo SWE and sunabako</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../strands_sglang/README.html">slime x Strands-SGLang</a></li>
 <li class="toctree-l4"><a class="reference internal" href="../tau-bench/README.html">Tau bench</a></li>
 </ul>
@@ -450,7 +450,7 @@
               
 
 <div id="jb-print-docs-body" class="onlyprint">
-    <h1>Coding-Agent RL</h1>
+    <h1>Coding-agent RL with Qwen3.8-27B, MiMo SWE and sunabako</h1>
     <!-- Table of contents -->
     <div id="print-main-content">
         <div id="jb-print-toc">
@@ -460,12 +460,14 @@
             </div>
             <nav aria-label="Page">
                 <ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#environment-setup">Environment Setup</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#dataset-format">Dataset Format</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#running-the-script">Running the Script</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#new-arguments">New Arguments</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#swe-specific-environment-knobs">SWE-specific Environment Knobs</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#string-in-token-out-trajectories">String-in, Token-out Trajectories</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#codex-compatibility">Codex compatibility</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#install-and-configure-the-sandbox-nodes">Install and configure the sandbox nodes</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#prepare-the-xiaomi-mimo-code-dataset">Prepare the Xiaomi MiMo code dataset</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#run-qwen3-8-27b-on-two-training-nodes-and-two-sandbox-nodes">Run Qwen3.8-27B on two training nodes and two sandbox nodes</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#check-real-rollouts-before-training">Check real rollouts before training</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#modules-and-data-contract">Modules and data contract</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#environment-settings">Environment settings</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#token-in-token-out-model-calls">Token-in, token-out model calls</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#fan-out-semantics">Fan-out Semantics</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#porting-to-a-new-sandbox-backend">Porting to a New Sandbox Backend</a></li>
 </ul>
@@ -479,222 +481,408 @@
 <div id="searchbox"></div>
                 <article class="bd-article">
                   
-  <section class="tex2jax_ignore mathjax_ignore" id="coding-agent-rl">
-<h1>Coding-Agent RL<a class="headerlink" href="#coding-agent-rl" title="Link to this heading">#</a></h1>
-<p>This directory provides an example of running end-to-end <strong>SWE (Software-Engineering) coding-agent RL</strong> with slime: a real coding agent (claude-code CLI) drives <code class="docutils literal notranslate"><span class="pre">Read/Edit/Grep/Bash/Agent</span></code> tools inside a fresh sandbox per sample, the model produces a <code class="docutils literal notranslate"><span class="pre">git</span> <span class="pre">diff</span></code>, and the diff is graded against the dataset’s test harness in a second clean sandbox (no test-cheating).</p>
-<p>Two example files, the shared harness package, and one shared adapter implement the loop:</p>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">generate.py</span></code> — per-sample <code class="docutils literal notranslate"><span class="pre">generate()</span></code> registered via <code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code>. Boots the sandbox, prepares the SWE workspace, runs the coding harness (claude-code), captures the diff, scores it, and emits one or more <code class="docutils literal notranslate"><span class="pre">Sample</span></code>s back to slime.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">slime.agent.adapters.AnthropicAdapter</span></code> — the shared Anthropic Messages adapter. claude-code talks to it as if it were Anthropic; the adapter tokenizes the current message history each turn, records prompt/output token snapshots, preserves model-generated tokens (<code class="docutils literal notranslate"><span class="pre">loss_mask=1</span></code>) only while later prompts stitch onto them, and masks template/observation tokens (<code class="docutils literal notranslate"><span class="pre">0</span></code>). Each turn is routed into a per-session message tree inside <code class="docutils literal notranslate"><span class="pre">slime.agent.trajectory.TrajectoryManager</span></code>; any divergence in the prompt prefix forks a new branch, so sub-agent dispatches and auto-compaction are handled as separate root-to-leaf chains. <code class="docutils literal notranslate"><span class="pre">get_trajectory</span></code> linearizes each leaf chain into one <code class="docutils literal notranslate"><span class="pre">Sample</span></code>.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">slime.agent.harness</span></code> — harness-agnostic coding-agent lifecycle (install CLI, write config, spawn detached, poll done-marker). <code class="docutils literal notranslate"><span class="pre">BaseHarness</span></code> defines the contract; <code class="docutils literal notranslate"><span class="pre">CLAUDE_CODE</span></code> / <code class="docutils literal notranslate"><span class="pre">CODEX</span></code> are the shipped implementations. Adding a harness is one new file. The shared sandbox contract lives in <code class="docutils literal notranslate"><span class="pre">slime.agent.sandbox.Sandbox</span></code>.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">swe.py</span></code> — harness-agnostic SWE task layer built on <code class="docutils literal notranslate"><span class="pre">slime.agent.sandbox</span></code>: <code class="docutils literal notranslate"><span class="pre">prepare_workspace</span></code> (pre_commands + PROBLEM_STATEMENT.md), <code class="docutils literal notranslate"><span class="pre">git_diff</span></code> (patch capture), and <code class="docutils literal notranslate"><span class="pre">evaluate</span></code> (fresh-sandbox grading). <code class="docutils literal notranslate"><span class="pre">SWE_PROMPT</span></code> is the task instruction handed to whichever harness runs.</p></li>
-</ul>
-<p><code class="docutils literal notranslate"><span class="pre">generate.py</span></code> owns one <code class="docutils literal notranslate"><span class="pre">AnthropicAdapter</span></code> instance. For each sample it calls
-<code class="docutils literal notranslate"><span class="pre">adapter.open_session(...)</span></code> before starting claude-code, serves <code class="docutils literal notranslate"><span class="pre">adapter.app</span></code> as
-the Anthropic-compatible endpoint, and drains trainable <code class="docutils literal notranslate"><span class="pre">TokenSegment</span></code>s with
-<code class="docutils literal notranslate"><span class="pre">await</span> <span class="pre">adapter.finish_session(...)</span></code> when the trajectory ends.</p>
-<section id="environment-setup">
-<h2>Environment Setup<a class="headerlink" href="#environment-setup" title="Link to this heading">#</a></h2>
-<p>The slime training stack itself follows the standard setup. On top of that you need:</p>
-<ol class="arabic simple">
-<li><p><strong>An E2B-compatible sandbox cluster</strong> (or any provider that speaks the E2B SDK). Configure via <code class="docutils literal notranslate"><span class="pre">E2B_API_KEY</span></code> (e.g. the standard <code class="docutils literal notranslate"><span class="pre">e2b_xxx</span></code> key from <a class="reference external" href="https://e2b.dev">https://e2b.dev</a>, or any internal endpoint that accepts the same SDK). The official SDK validates this value locally, so internal gateways that ignore auth still need a syntactically valid <code class="docutils literal notranslate"><span class="pre">e2b_</span></code> + 40 hex-character placeholder.</p></li>
-<li><p><strong>Host-side tarballs</strong> that get uploaded into each sandbox at boot:</p>
-<ul class="simple">
-<li><p>Node 22 (<code class="docutils literal notranslate"><span class="pre">node-v22.x-linux-x64.tar.xz</span></code>) — exported as <code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_NODE_TARBALL</span></code>.</p></li>
-<li><p>Claude Code CLI npm tarball (<code class="docutils literal notranslate"><span class="pre">anthropic-ai-claude-code-local-linux-x64.tgz</span></code>) — exported as <code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_CC_TARBALL</span></code>.</p></li>
-</ul>
-</li>
-<li><p><strong>An image routing key</strong> (<code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY</span></code>, legacy <code class="docutils literal notranslate"><span class="pre">SWE_SANDBOX_IMAGE_METADATA_KEY</span></code> still accepted) — the metadata key your E2B gateway uses to route a boot to a specific image (e.g. <code class="docutils literal notranslate"><span class="pre">image</span></code>). Each sample’s <code class="docutils literal notranslate"><span class="pre">metadata.image</span></code> is passed under this key when booting the sandbox.</p></li>
-<li><p><strong>Network reachability</strong>: each sandbox dials back to the host’s Anthropic adapter over <code class="docutils literal notranslate"><span class="pre">http://${ADAPTER_PUBLIC_HOST}:${ADAPTER_PORT}</span></code>. The adapter host must be reachable from inside the sandboxes (set <code class="docutils literal notranslate"><span class="pre">ADAPTER_PUBLIC_HOST</span></code> to a routable IP, not <code class="docutils literal notranslate"><span class="pre">127.0.0.1</span></code>).</p></li>
-</ol>
+  <section class="tex2jax_ignore mathjax_ignore" id="coding-agent-rl-with-qwen3-8-27b-mimo-swe-and-sunabako">
+<h1>Coding-agent RL with Qwen3.8-27B, MiMo SWE and sunabako<a class="headerlink" href="#coding-agent-rl-with-qwen3-8-27b-mimo-swe-and-sunabako" title="Link to this heading">#</a></h1>
+<p>The real Codex / Claude Code training smoke test is documented in the
+<a class="reference external" href="https://github.com/THUDM/slime/blob/main/docs/en/developer_guide/ci.md#coding-agent-training">CI guide</a>.
+Each of its two GRPO steps uses the same two small MiMo tasks, with four samples per task (eight concurrent agents) on eight GPUs.
+Step one uses Codex; step two uses Claude Code with the updated model.
+Per-sample <code class="docutils literal notranslate"><span class="pre">metadata.agent</span></code> selects <code class="docutils literal notranslate"><span class="pre">codex</span></code> or <code class="docutils literal notranslate"><span class="pre">claude_code</span></code>; <code class="docutils literal notranslate"><span class="pre">SWE_AGENT</span></code> supplies the default.</p>
+<p>This example trains <strong>Qwen3.8-27B</strong> on the <strong>code subset of
+<a class="reference external" href="https://huggingface.co/datasets/XiaomiMiMo/MiMo-V2.6-RL-oss">Xiaomi MiMo’s public RL dataset</a></strong>.
+Claude Code uses the served model to read and edit a repository in a sunabako
+sandbox. A second fresh sandbox applies the resulting <code class="docutils literal notranslate"><span class="pre">git</span> <span class="pre">diff</span></code> and runs the
+official MiMo tests to produce the reward. Model tokens, loss masks and rollout
+log-probabilities are returned to slime for GRPO training.
+Patch extraction compares the actual workspace before and after the agent runs,
+so files already shipped in the image are not counted as agent edits. It preserves
+the repository’s HEAD and index while capturing staged, unstaged and new files.</p>
+<p>The main launcher is <code class="docutils literal notranslate"><span class="pre">run_qwen38_27b_sunabako_2plus2.sh</span></code>: two 8-GPU nodes run
+training and model serving; two other nodes run the agent and grader sandboxes.
+<strong>sunabako is the default sandbox provider.</strong> Install its independent package
+into slime’s environment; dataset preparation and training code live here.</p>
+<section id="codex-compatibility">
+<h2>Codex compatibility<a class="headerlink" href="#codex-compatibility" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">SWE_AGENT=codex</span></code> selects <code class="docutils literal notranslate"><span class="pre">CodexHarness</span></code> and <code class="docutils literal notranslate"><span class="pre">ResponsesAdapter</span></code>. The harness is
+tested with <strong>Codex CLI 0.162.1</strong> (npm latest checked on 2026-10-10).
+Current Codex supports the <a class="reference external" href="https://learn.chatgpt.com/docs/config-file/config-reference">Responses protocol</a>
+for custom providers. The adapter implements stateless <code class="docutils literal notranslate"><span class="pre">/v1/responses</span></code> requests
+with full history and <code class="docutils literal notranslate"><span class="pre">store=false</span></code>, JSON/SSE replies, function tools, custom
+text tools and namespaced tools. It preserves parallel call/result correlation
+and the model’s original tokens and logprobs. The separate <code class="docutils literal notranslate"><span class="pre">OpenAIAdapter</span></code>
+continues to serve legacy Chat Completions clients.</p>
+<p>Set <code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_CODEX_NATIVE_TARBALL</span></code> to the official platform npm archive
+<code class="docutils literal notranslate"><span class="pre">&#64;openai/codex&#64;0.162.1-linux-x64</span></code>. The harness installs its native binary and
+resources offline; Node is unnecessary for this path. The existing
+<code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_NODE_TARBALL</span></code> + <code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_CODEX_TARBALL</span></code> npm installation path is
+also supported. <code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_CODEX_EXTRA_ARGS</span></code> and
+<code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_CODEX_EXTRA_ENVS</span></code> (a JSON object) pass additional CLI settings.
+The CI test downloads and integrity-checks its pinned platform archive.</p>
+<p>Codex runs noninteractively with JSON event logs inside the outer sandbox;
+sunabako owns isolation. Its provider URL points to the local slime adapter,
+and the bearer value is a rollout session ID. No OpenAI account or paid API
+is involved: the served Qwen model generates the training tokens. Web search,
+WebSockets and subagents are disabled by default. Stored responses,
+<code class="docutils literal notranslate"><span class="pre">previous_response_id</span></code>, hosted tools, multimodal output and the server-side
+<code class="docutils literal notranslate"><span class="pre">/v1/responses/compact</span></code> endpoint are not implemented.</p>
 </section>
-<section id="dataset-format">
-<h2>Dataset Format<a class="headerlink" href="#dataset-format" title="Link to this heading">#</a></h2>
-<p>Standard slime JSONL with three keys:</p>
-<div class="highlight-javascript notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
-<span class="w">  </span><span class="s2">"prompt"</span><span class="o">:</span><span class="w"> </span><span class="s2">"&lt;falls back here if metadata.problem_statement is missing&gt;"</span><span class="p">,</span>
-<span class="w">  </span><span class="s2">"label"</span><span class="o">:</span><span class="w"> </span><span class="s2">"&lt;instance_id or grader label&gt;"</span><span class="p">,</span>
-<span class="w">  </span><span class="s2">"metadata"</span><span class="o">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="s2">"image"</span><span class="o">:</span><span class="w"> </span><span class="s2">"your-registry/swe-image:&lt;tag&gt;"</span><span class="p">,</span><span class="w">  </span><span class="c1">// sandbox image reference</span>
-<span class="w">    </span><span class="s2">"workdir"</span><span class="o">:</span><span class="w"> </span><span class="s2">"/workspace/&lt;repo&gt;"</span><span class="p">,</span><span class="w">            </span><span class="c1">// repo path inside the sandbox</span>
-<span class="w">    </span><span class="s2">"problem_statement"</span><span class="o">:</span><span class="w"> </span><span class="s2">"&lt;issue body&gt;"</span><span class="p">,</span>
-<span class="w">    </span><span class="c1">// exactly one of the following two graders:</span>
-<span class="w">    </span><span class="s2">"swepro"</span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="cm">/* SWE-bench Pro test harness — preferred */</span><span class="w"> </span><span class="p">},</span>
-<span class="w">    </span><span class="s2">"eval_cmd"</span><span class="o">:</span><span class="w"> </span><span class="s2">"pytest -x tests/..."</span><span class="w">          </span><span class="c1">// last-resort: exit 0 = solved</span>
-<span class="w">    </span><span class="c1">// sweb-style rows: metadata.remote_env_info.f2p_script (Python file</span>
-<span class="w">    </span><span class="c1">// ending in `sys.exit(pytest.main(...))`) is auto-wrapped into eval_cmd.</span>
+<section id="install-and-configure-the-sandbox-nodes">
+<h2>Install and configure the sandbox nodes<a class="headerlink" href="#install-and-configure-the-sandbox-nodes" title="Link to this heading">#</a></h2>
+<p>Start with the standard slime training environment. On both training nodes:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>-r<span class="w"> </span>examples/coding_agent_rl/requirements-sunabako.txt
+</pre></div>
+</div>
+<p>This installs the released <code class="docutils literal notranslate"><span class="pre">sunabako==0.1.1</span></code> package from PyPI, including native
+guest-user support.</p>
+<p>Provision both sandbox nodes with the sunabako CLI, its patched PRoot dependency,
+<code class="docutils literal notranslate"><span class="pre">skopeo</span></code>, <code class="docutils literal notranslate"><span class="pre">umoci</span></code>, and node configuration. Set a cgroup memory-pool limit on each
+node. Create <code class="docutils literal notranslate"><span class="pre">$DATA_ROOT/cluster.json</span></code> with <strong>only the two sandbox nodes</strong>:</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="nt">"nodes"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"sandbox-0"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"host"</span><span class="p">:</span><span class="w"> </span><span class="s2">"&lt;first-sandbox-node-ip&gt;"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"port"</span><span class="p">:</span><span class="w"> </span><span class="mi">22</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"state_dir"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/var/lib/sunabako"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"binary"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/usr/local/bin/sunabako"</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">"name"</span><span class="p">:</span><span class="w"> </span><span class="s2">"sandbox-1"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"host"</span><span class="p">:</span><span class="w"> </span><span class="s2">"&lt;second-sandbox-node-ip&gt;"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"port"</span><span class="p">:</span><span class="w"> </span><span class="mi">22</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"state_dir"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/var/lib/sunabako"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"binary"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/usr/local/bin/sunabako"</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>SSH uses the allocation’s existing credentials. The sandbox nodes must be able
+to reach the training/serving nodes’ adapter HTTP port. For this example,
+sunabako uses the outer container’s network and does not publish ports.</p>
+<p>sunabako defaults to cgroup enforcement. <code class="docutils literal notranslate"><span class="pre">SUNABAKO_ALLOW_TEST_MEMORY=1</span></code> is an
+explicit functional-test setting for machines without delegated writable
+cgroups, and also requires the node’s test-only flag. RSS monitoring cannot
+enforce a hard aggregate memory limit. Production runs use delegated cgroups
+and <code class="docutils literal notranslate"><span class="pre">SUNABAKO_ALLOW_TEST_MEMORY=0</span></code>.</p>
+</section>
+<section id="prepare-the-xiaomi-mimo-code-dataset">
+<h2>Prepare the Xiaomi MiMo code dataset<a class="headerlink" href="#prepare-the-xiaomi-mimo-code-dataset" title="Link to this heading">#</a></h2>
+<p>Run from the slime checkout. Use a shared directory available at the same path
+on both training nodes:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">DATA_ROOT</span><span class="o">=</span>/shared/slime-mimo
+hf<span class="w"> </span>download<span class="w"> </span>XiaomiMiMo/MiMo-V2.6-RL-oss<span class="w"> </span>code.parquet<span class="w"> </span>image-mapping.jsonl<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--repo-type<span class="w"> </span>dataset<span class="w"> </span>--local-dir<span class="w"> </span><span class="s2">"</span><span class="nv">$DATA_ROOT</span><span class="s2">/data"</span>
+
+python<span class="w"> </span>examples/coding_agent_rl/prepare_mimo.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--data<span class="w"> </span><span class="s2">"</span><span class="nv">$DATA_ROOT</span><span class="s2">/data"</span><span class="w"> </span>--output<span class="w"> </span><span class="s2">"</span><span class="nv">$DATA_ROOT</span><span class="s2">/train.jsonl"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--ids<span class="w"> </span>format-code-task-002661<span class="w"> </span>format-code-task-002829
+</pre></div>
+</div>
+<p>These two tasks provide a small first run. The Qwen3.8-27B rollout check on
+<code class="docutils literal notranslate"><span class="pre">format-code-task-002661</span></code> earned reward 1 with <strong>8/8 official tests passing</strong>;
+the original image failed three tests. The other task completed normally with
+reward 0. This verifies one successful model-produced fix, not full-dataset
+accuracy or a completed positive-reward training update.</p>
+<p>Omit <code class="docutils literal notranslate"><span class="pre">--ids</span></code> to convert the full code dataset (2,698 tasks in the checked
+snapshot):</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>examples/coding_agent_rl/prepare_mimo.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--data<span class="w"> </span><span class="s2">"</span><span class="nv">$DATA_ROOT</span><span class="s2">/data"</span><span class="w"> </span>--output<span class="w"> </span><span class="s2">"</span><span class="nv">$DATA_ROOT</span><span class="s2">/train-full.jsonl"</span>
+</pre></div>
+</div>
+<p>The converter maps dataset image names through the official
+<code class="docutils literal notranslate"><span class="pre">image-mapping.jsonl</span></code>. It puts only the public problem statement into the agent
+prompt; the official test patch and test command stay in the grading payload.
+The fresh grader resets official test paths before applying the test patch.
+MiMo graders run as root because some images initialize their toolchain from
+root’s login profile; the coding CLI runs as <code class="docutils literal notranslate"><span class="pre">agent</span></code>.</p>
+<p>On <strong>each sandbox node</strong>, import the selected tasks’ images. Supply that node
+with the prepared JSONL and run this example’s image helper:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>examples/coding_agent_rl/prepare_sunabako_images.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--data<span class="w"> </span><span class="s2">"</span><span class="nv">$DATA_ROOT</span><span class="s2">/train.jsonl"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--root<span class="w"> </span>/var/lib/sunabako-images/mimo<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--output<span class="w"> </span><span class="s2">"</span><span class="nv">$DATA_ROOT</span><span class="s2">/images.json"</span>
+</pre></div>
+</div>
+<p>Use the same absolute image root on both nodes. If <code class="docutils literal notranslate"><span class="pre">DATA_ROOT</span></code> is not shared
+with sandbox nodes, copy the JSONL to each node and copy the resulting
+<code class="docutils literal notranslate"><span class="pre">images.json</span></code> back to the training nodes. The helper imports OCI images using
+sunabako, reuses matching bundles, preserves their environment, and uses the
+dataset’s repository working directory rather than the image’s entrypoint
+working directory. No Docker daemon is needed. The resulting mapping has this
+shape:</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="nt">"docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-002661"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"rootfs"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/var/lib/sunabako-images/mimo/format-code-task-002661/rootfs"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"workdir"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/testbed"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"env"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">"PATH"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"</span><span class="p">}</span>
 <span class="w">  </span><span class="p">}</span>
 <span class="p">}</span>
 </pre></div>
 </div>
-<p>Wire it up with <code class="docutils literal notranslate"><span class="pre">--input-key</span> <span class="pre">prompt</span> <span class="pre">--label-key</span> <span class="pre">label</span> <span class="pre">--metadata-key</span> <span class="pre">metadata</span></code>.</p>
+<p>For the full dataset, pass <code class="docutils literal notranslate"><span class="pre">train-full.jsonl</span></code> to the image helper as well.
+Importing all task images can consume substantial disk space. Some images keep
+Python under <code class="docutils literal notranslate"><span class="pre">/root/.pyenv</span></code>; adjust their mapping’s <code class="docutils literal notranslate"><span class="pre">env.PATH</span></code> so the <code class="docutils literal notranslate"><span class="pre">agent</span></code>
+user can invoke the image’s toolchain. This does not change the official tests.</p>
 </section>
-<section id="running-the-script">
-<h2>Running the Script<a class="headerlink" href="#running-the-script" title="Link to this heading">#</a></h2>
-<p>Override the paths at the top of the launcher, then run from a long-lived shell on the Ray head node (do <strong>not</strong> wrap in <code class="docutils literal notranslate"><span class="pre">nohup</span></code> — Ray child processes get cleaned up with it):</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>slime/
-
-<span class="nb">export</span><span class="w"> </span><span class="nv">HF_CHECKPOINT</span><span class="o">=</span>/path/to/Qwen3.6-35B-A3B
-<span class="nb">export</span><span class="w"> </span><span class="nv">REF_MODEL_PATH</span><span class="o">=</span>/path/to/Qwen3.6-35B-A3B_torch_dist
-<span class="nb">export</span><span class="w"> </span><span class="nv">PROMPT_DATA</span><span class="o">=</span>/path/to/swe_train.jsonl
-<span class="nb">export</span><span class="w"> </span><span class="nv">SLIME_AGENT_NODE_TARBALL</span><span class="o">=</span>/path/to/node-v22.20.0-linux-x64.tar.xz
-<span class="nb">export</span><span class="w"> </span><span class="nv">SLIME_AGENT_CC_TARBALL</span><span class="o">=</span>/path/to/anthropic-ai-claude-code-local-linux-x64.tgz
-
-<span class="c1"># Sandbox provider:</span>
-<span class="nb">export</span><span class="w"> </span><span class="nv">E2B_API_KEY</span><span class="o">=</span>e2b_xxx<span class="w">                       </span><span class="c1"># real key for e2b.dev; a syntactically</span>
-<span class="w">                                                 </span><span class="c1"># valid placeholder if your gateway ignores auth</span>
-<span class="nb">export</span><span class="w"> </span><span class="nv">SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY</span><span class="o">=</span>image<span class="w">   </span><span class="c1"># metadata key your gateway routes images by</span>
-
-bash<span class="w"> </span>examples/coding_agent_rl/run_qwen36_35b_a3b_swe_8nodes.sh
+<section id="run-qwen3-8-27b-on-two-training-nodes-and-two-sandbox-nodes">
+<h2>Run Qwen3.8-27B on two training nodes and two sandbox nodes<a class="headerlink" href="#run-qwen3-8-27b-on-two-training-nodes-and-two-sandbox-nodes" title="Link to this heading">#</a></h2>
+<p>Supply host-side Node 22 and Claude Code npm tarballs; the harness uploads them
+into each sandbox at boot. Launch from a long-lived shell on the first training
+node, with the slime checkout and data available at the same paths on both
+training nodes:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">DATA_ROOT</span><span class="o">=</span>/shared/slime-mimo
+<span class="nb">export</span><span class="w"> </span><span class="nv">HF_CHECKPOINT</span><span class="o">=</span>/path/to/Qwen3.8-27B
+<span class="nb">export</span><span class="w"> </span><span class="nv">TRAIN_HEAD</span><span class="o">=</span>&lt;first-training-node-ip&gt;
+<span class="nb">export</span><span class="w"> </span><span class="nv">TRAIN_WORKER</span><span class="o">=</span>&lt;second-training-node-ip&gt;
+<span class="nb">export</span><span class="w"> </span><span class="nv">SSH_PORT</span><span class="o">=</span><span class="m">22</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">GLOO_SOCKET_IFNAME</span><span class="o">=</span>&lt;training-network-interface&gt;
+<span class="nb">export</span><span class="w"> </span><span class="nv">SUNABAKO_CLUSTER</span><span class="o">=</span><span class="s2">"</span><span class="nv">$DATA_ROOT</span><span class="s2">/cluster.json"</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">SUNABAKO_IMAGES</span><span class="o">=</span><span class="s2">"</span><span class="nv">$DATA_ROOT</span><span class="s2">/images.json"</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">SUNABAKO_ALLOW_TEST_MEMORY</span><span class="o">=</span><span class="m">0</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">SLIME_AGENT_NODE_TARBALL</span><span class="o">=</span>/path/to/node-v22.x-linux-x64.tar.xz
+<span class="nb">export</span><span class="w"> </span><span class="nv">SLIME_AGENT_CC_TARBALL</span><span class="o">=</span>/path/to/claude-code.tgz
+<span class="nb">export</span><span class="w"> </span><span class="nv">RUN_ROOT</span><span class="o">=</span><span class="s2">"</span><span class="nv">$DATA_ROOT</span><span class="s2">/run-001"</span>
+bash<span class="w"> </span>examples/coding_agent_rl/run_qwen38_27b_sunabako_2plus2.sh
 </pre></div>
 </div>
-<p>The launcher fans Ray out to every worker listed in <code class="docutils literal notranslate"><span class="pre">$HOSTFILE</span></code> (default
-<code class="docutils literal notranslate"><span class="pre">/root/mpi_rack_hostfile</span></code>, one worker IP per line, reachable over passwordless
-SSH as <code class="docutils literal notranslate"><span class="pre">root</span></code>) — create that file (or point <code class="docutils literal notranslate"><span class="pre">HOSTFILE</span></code> at your own) before
-launching. It then dumps every rollout to <code class="docutils literal notranslate"><span class="pre">runs/${EXP_TAG}_${STAMP}/rollout_dumps/</span></code>
-and tees stdout into <code class="docutils literal notranslate"><span class="pre">runs/${EXP_TAG}_${STAMP}/run.log</span></code>.</p>
+<p>The launcher defaults to one rollout containing two prompts with two samples
+each, followed by one GRPO update. For longer runs, set <code class="docutils literal notranslate"><span class="pre">NUM_ROLLOUT</span></code>. Set
+<code class="docutils literal notranslate"><span class="pre">PROMPT_DATA=&quot;$DATA_ROOT/train-full.jsonl&quot;</span></code> to use the full dataset after
+provisioning its images. <code class="docutils literal notranslate"><span class="pre">ROLLOUT_BATCH_SIZE</span></code> and <code class="docutils literal notranslate"><span class="pre">SAMPLES_PER_PROMPT</span></code> control
+sampling; <code class="docutils literal notranslate"><span class="pre">GLOBAL_BATCH_SIZE</span></code> defaults to their product.</p>
+<p>The model context is 64k (<code class="docutils literal notranslate"><span class="pre">MAX_CONTEXT_LEN</span></code>), with an 8192-token per-turn output
+limit (<code class="docutils literal notranslate"><span class="pre">MAX_RESPONSE_LEN</span></code>). Both limits are passed to the Claude CLI, with
+compaction at 70% of the context window. The six code tools are enabled
+explicitly: <code class="docutils literal notranslate"><span class="pre">Bash</span></code>, <code class="docutils literal notranslate"><span class="pre">Read</span></code>, <code class="docutils literal notranslate"><span class="pre">Edit</span></code>, <code class="docutils literal notranslate"><span class="pre">Write</span></code>, <code class="docutils literal notranslate"><span class="pre">Glob</span></code>, and <code class="docutils literal notranslate"><span class="pre">Grep</span></code>.
+The default agent budget is 1200 seconds. Sampling uses temperature 1.0,
+<code class="docutils literal notranslate"><span class="pre">top_p=0.95</span></code>, no top-k truncation (slime’s default <code class="docutils literal notranslate"><span class="pre">top_k=-1</span></code>), and
+<code class="docutils literal notranslate"><span class="pre">reasoning_effort=medium</span></code>; override template options
+with <code class="docutils literal notranslate"><span class="pre">CHAT_TEMPLATE_KWARGS</span></code>. Each model turn retains the exact nucleus IDs and
+offsets, which the trainer replays when normalizing token probabilities. Add
+<code class="docutils literal notranslate"><span class="pre">--use-score-centering</span></code> to the launcher to also retain every nucleus token’s
+original sampler probability and train with the SC REINFORCE objective. The GPU
+e2e enables this combination. The adapter forwards
+<code class="docutils literal notranslate"><span class="pre">--apply-chat-template-kwargs</span></code> and per-sample template options on every turn.
+Without an explicit effort, this checkpoint’s template selects <code class="docutils literal notranslate"><span class="pre">xhigh</span></code>.
+Decode CUDA graphs are enabled for up to four requests; set
+<code class="docutils literal notranslate"><span class="pre">SGLANG_DISABLE_CUDA_GRAPH=1</span></code> when diagnosing graph compatibility.</p>
+<p>Training uses TP=2, PP=8 and DP=1. The launcher uses the shared Qwen dense-model
+architecture arguments in <code class="docutils literal notranslate"><span class="pre">scripts/models/qwen3.5-27B.sh</span></code> with the Qwen3.8-27B
+checkpoint. It propagates configuration to Ray workers and calls
+<code class="docutils literal notranslate"><span class="pre">examples.coding_agent_rl.generate.generate</span></code> for every sample.</p>
+<p>The adapter also supports <code class="docutils literal notranslate"><span class="pre">--use-rollout-routing-replay</span></code> (R3) for MoE models.
+Replay snapshots stay in separate per-turn segments, preserving full prompt
+routes as well as response routes; the segments retain their original rollout
+and prompt-group IDs. Missing requested metadata fails the rollout. Qwen3.8-27B
+is dense, so this example does not exercise MoE routing on GPU.</p>
+<p>With top-p SC, <code class="docutils literal notranslate"><span class="pre">sc_correction</span></code> uses the same centered scalar convention as the
+non-top-p path: it subtracts a baseline whose score gradient is zero. Matching
+trainer and sampler distributions therefore give zero correction, up to rounding,
+while retaining the original SC gradient, including TIS/MIS. The scalar is not
+the mean absolute difference between sampled-token logprobs.</p>
+<p><code class="docutils literal notranslate"><span class="pre">ADAPTER_PUBLIC_HOST=auto</span></code> advertises the rollout actor’s node IP. Set an explicit
+address if that IP is not reachable from the sandbox nodes. Use a new <code class="docutils literal notranslate"><span class="pre">RUN_ROOT</span></code>
+for each experiment. <code class="docutils literal notranslate"><span class="pre">SUNABAKO_START_RAY=0</span></code> reuses the experiment’s Ray cluster;
+set a new <code class="docutils literal notranslate"><span class="pre">RUN_LOG</span></code> when retrying a run whose serving engines are retained.
+Existing logs are never overwritten. CLI trajectories, sandbox commands and
+grader output are saved under <code class="docutils literal notranslate"><span class="pre">$RUN_ROOT/sandboxes</span></code> before sandbox cleanup.</p>
 </section>
-<section id="new-arguments">
-<h2>New Arguments<a class="headerlink" href="#new-arguments" title="Link to this heading">#</a></h2>
-<p><code class="docutils literal notranslate"><span class="pre">generate.py</span></code> is wired in through slime’s standard custom-generate hook:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">ROLLOUT_ARGS</span><span class="o">=(</span>
-<span class="w">   </span>--custom-generate-function-path<span class="w"> </span>examples.coding_agent_rl.generate.generate
-<span class="w">   </span>--prompt-data<span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">PROMPT_DATA</span><span class="si">}</span><span class="s2">"</span>
-<span class="w">   </span>--input-key<span class="w"> </span>prompt
-<span class="w">   </span>--label-key<span class="w"> </span>label
-<span class="w">   </span>--metadata-key<span class="w"> </span>metadata
-<span class="w">   </span>--rollout-batch-size<span class="w"> </span><span class="m">8</span>
-<span class="w">   </span>--n-samples-per-prompt<span class="w"> </span><span class="m">8</span>
-<span class="w">   </span>--rollout-max-context-len<span class="w"> </span><span class="m">96000</span>
-<span class="w">   </span>--rollout-max-response-len<span class="w"> </span><span class="m">32768</span>
-<span class="w">   </span>--rollout-stop-token-ids<span class="w"> </span><span class="m">248046</span><span class="w"> </span><span class="m">248044</span>
-<span class="w">   </span>--save-debug-rollout-data<span class="w"> </span><span class="s2">"</span><span class="si">${</span><span class="nv">RUN_ROOT</span><span class="si">}</span><span class="s2">/rollout_dumps/rollout_{rollout_id}.pt"</span>
-<span class="o">)</span>
+<section id="check-real-rollouts-before-training">
+<h2>Check real rollouts before training<a class="headerlink" href="#check-real-rollouts-before-training" title="Link to this heading">#</a></h2>
+<p>Start an SGLang server with Qwen3.8-27B, the <code class="docutils literal notranslate"><span class="pre">qwen3_coder</span></code> tool parser and the
+<code class="docutils literal notranslate"><span class="pre">qwen3</span></code> reasoning parser. Set the same sandbox and CLI environment as above,
+then run:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">ADAPTER_PUBLIC_HOST</span><span class="o">=</span>&lt;host-ip-reachable-from-sandbox-nodes&gt;
+<span class="nb">export</span><span class="w"> </span><span class="nv">SUNABAKO_ARTIFACTS</span><span class="o">=</span><span class="s2">"</span><span class="nv">$DATA_ROOT</span><span class="s2">/rollout-check/sandboxes"</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">SWE_AGENT_TIME_BUDGET_SEC</span><span class="o">=</span><span class="m">1200</span><span class="w"> </span><span class="nv">SWE_EVAL_TIMEOUT_SEC</span><span class="o">=</span><span class="m">180</span><span class="w"> </span><span class="nv">SWE_BOOT_CONCURRENCY</span><span class="o">=</span><span class="m">2</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">SLIME_AGENT_CC_EXTRA_ARGS</span><span class="o">=</span><span class="s1">'--max-turns 40 --tools Bash,Read,Edit,Write,Glob,Grep --disable-slash-commands'</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">SLIME_AGENT_CC_EXTRA_ENVS</span><span class="o">=</span><span class="s1">'{"MAX_THINKING_TOKENS":"4096","CLAUDE_CODE_MAX_OUTPUT_TOKENS":"8192","CLAUDE_CODE_MAX_CONTEXT_TOKENS":"65536","CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":"70"}'</span>
+python<span class="w"> </span>-m<span class="w"> </span>examples.coding_agent_rl.check_rollout<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--data<span class="w"> </span><span class="s2">"</span><span class="nv">$DATA_ROOT</span><span class="s2">/train.jsonl"</span><span class="w"> </span>--output<span class="w"> </span><span class="s2">"</span><span class="nv">$DATA_ROOT</span><span class="s2">/rollout-check/samples"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--hf-checkpoint<span class="w"> </span><span class="s2">"</span><span class="nv">$HF_CHECKPOINT</span><span class="s2">"</span><span class="w"> </span>--sglang-url<span class="w"> </span>http://127.0.0.1:18100<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--apply-chat-template-kwargs<span class="w"> </span><span class="s1">'{"reasoning_effort":"medium"}'</span>
 </pre></div>
 </div>
-<p>The SGLang server must expose Qwen3.6’s tool-call and reasoning parsers so claude-code’s tool invocations are parsed correctly:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">SGLANG_ARGS</span><span class="o">=(</span>
-<span class="w">   </span>--sglang-tool-call-parser<span class="w"> </span>qwen3_coder
-<span class="w">   </span>--sglang-reasoning-parser<span class="w"> </span>qwen3
-<span class="w">   </span>...
-<span class="o">)</span>
+<p>This uses the training <code class="docutils literal notranslate"><span class="pre">generate()</span></code> entry point, including the coding CLI,
+patch capture and fresh-sandbox official grader. It saves tokens, loss masks,
+log-probabilities and per-task outcomes, and exits unsuccessfully if no sample
+earns reward 1. No trainers are started. Establish a failing baseline on the
+unmodified image when validating a task’s reward.</p>
+</section>
+<section id="modules-and-data-contract">
+<h2>Modules and data contract<a class="headerlink" href="#modules-and-data-contract" title="Link to this heading">#</a></h2>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">prepare_mimo.py</span></code> converts the official code parquet and image mapping to slime JSONL.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">prepare_sunabako_images.py</span></code> imports task images and writes the provider’s image mapping.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">sandbox.py</span></code> selects sunabako for both agent and evaluator sandboxes; <code class="docutils literal notranslate"><span class="pre">sunabako_sandbox.py</span></code> adapts the installed SDK to <code class="docutils literal notranslate"><span class="pre">slime.agent.sandbox.Sandbox</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">generate.py</span></code> opens an <code class="docutils literal notranslate"><span class="pre">AnthropicAdapter</span></code> session, runs the coding harness, captures the diff, obtains the reward, and exports training <code class="docutils literal notranslate"><span class="pre">Sample</span></code>s.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">swe.py</span></code> prepares the task workspace and runs the independent evaluator.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">slime.agent.harness</span></code> installs and drives the coding CLI; the shared adapter sends model requests to SGLang and records token provenance.</p></li>
+</ul>
+<p>Prepared rows use <code class="docutils literal notranslate"><span class="pre">--input-key</span> <span class="pre">prompt</span> <span class="pre">--label-key</span> <span class="pre">label</span> <span class="pre">--metadata-key</span> <span class="pre">metadata</span></code>:</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="nt">"prompt"</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">"role"</span><span class="p">:</span><span class="w"> </span><span class="s2">"user"</span><span class="p">,</span><span class="w"> </span><span class="nt">"content"</span><span class="p">:</span><span class="w"> </span><span class="s2">"&lt;public problem statement&gt;"</span><span class="p">}],</span>
+<span class="w">  </span><span class="nt">"label"</span><span class="p">:</span><span class="w"> </span><span class="s2">"format-code-task-002661"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"metadata"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"instance_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"format-code-task-002661"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"dataset"</span><span class="p">:</span><span class="w"> </span><span class="s2">"XiaomiMiMo/MiMo-V2.6-RL-oss"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"image"</span><span class="p">:</span><span class="w"> </span><span class="s2">"docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-002661"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"workdir"</span><span class="p">:</span><span class="w"> </span><span class="s2">"/testbed"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"problem_statement"</span><span class="p">:</span><span class="w"> </span><span class="s2">"&lt;public problem statement&gt;"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"eval_cmd"</span><span class="p">:</span><span class="w"> </span><span class="s2">"&lt;converter-generated official test command&gt;"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"eval_user"</span><span class="p">:</span><span class="w"> </span><span class="s2">"root"</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
 </pre></div>
 </div>
+<p>The generic grader also accepts existing SWE-bench Pro and <code class="docutils literal notranslate"><span class="pre">f2p_script</span></code> rows.
+E2B remains an optional provider: set <code class="docutils literal notranslate"><span class="pre">SWE_SANDBOX_PROVIDER=e2b</span></code>, configure
+<code class="docutils literal notranslate"><span class="pre">E2B_API_KEY</span></code> and <code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY</span></code> for that service,
+and use a launcher that propagates those variables. The supplied 2+2 launcher
+selects sunabako explicitly.</p>
 </section>
-<section id="swe-specific-environment-knobs">
-<h2>SWE-specific Environment Knobs<a class="headerlink" href="#swe-specific-environment-knobs" title="Link to this heading">#</a></h2>
-<p>All set in the launcher; tune per cluster.</p>
-<p>Env vars split by layer. <code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_*</span></code> are the reusable agent library’s
-contract (read inside <code class="docutils literal notranslate"><span class="pre">slime/agent/</span></code>); <code class="docutils literal notranslate"><span class="pre">SWE_*</span></code> are this SWE example’s task knobs;
-<code class="docutils literal notranslate"><span class="pre">ADAPTER_*</span></code> are host-side deployment/reply-path addresses read only by
-<code class="docutils literal notranslate"><span class="pre">generate.py</span></code>. Keep new vars on the prefix that matches the layer that reads them.</p>
+<section id="environment-settings">
+<h2>Environment settings<a class="headerlink" href="#environment-settings" title="Link to this heading">#</a></h2>
+<p>These are the 2+2 launcher’s defaults; direct calls to <code class="docutils literal notranslate"><span class="pre">generate()</span></code> use the
+module defaults unless the corresponding variables are exported.</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>Variable</p></th>
-<th class="head"><p>Default</p></th>
+<th class="head"><p>Launcher default</p></th>
 <th class="head"><p>Meaning</p></th>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">ADAPTER_PUBLIC_HOST</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">${MASTER_ADDR}</span></code></p></td>
-<td><p>Public IP the sandbox uses to reach the Anthropic adapter. <strong>Must be routable from inside the sandbox.</strong></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_SANDBOX_PROVIDER</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">sunabako</span></code></p></td>
+<td><p>Provider used for both agent and evaluator.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">ADAPTER_BIND_HOST</span></code> / <code class="docutils literal notranslate"><span class="pre">ADAPTER_PORT</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">0.0.0.0</span></code> / <code class="docutils literal notranslate"><span class="pre">18001</span></code></p></td>
-<td><p>Bind address of the Anthropic adapter on the host.</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SUNABAKO_CLUSTER</span></code> / <code class="docutils literal notranslate"><span class="pre">SUNABAKO_IMAGES</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">$DATA_ROOT/cluster.json</span></code> / <code class="docutils literal notranslate"><span class="pre">images.json</span></code></p></td>
+<td><p>Sandbox nodes and imported task images.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">E2B_API_KEY</span></code></p></td>
-<td><p>—</p></td>
-<td><p>E2B (or compatible) API key.</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SUNABAKO_MEMORY_MB</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">2048</span></code></p></td>
+<td><p>Requested memory per sandbox.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY</span></code></p></td>
-<td><p>—</p></td>
-<td><p><strong>Required.</strong> Which metadata key the E2B gateway routes images by (e.g. <code class="docutils literal notranslate"><span class="pre">image</span></code>); each sample’s <code class="docutils literal notranslate"><span class="pre">metadata.image</span></code> is passed under it. (Legacy <code class="docutils literal notranslate"><span class="pre">SWE_SANDBOX_IMAGE_METADATA_KEY</span></code> still accepted.)</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SUNABAKO_ALLOW_TEST_MEMORY</span></code></p></td>
+<td><p>Must be set explicitly</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0</span></code> for cgroups; <code class="docutils literal notranslate"><span class="pre">1</span></code> only for explicit RSS functional tests.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_NODE_TARBALL</span></code></p></td>
-<td><p>—</p></td>
-<td><p>Host path to Node 22 tarball uploaded into each sandbox.</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SUNABAKO_ARTIFACTS</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">$RUN_ROOT/sandboxes</span></code></p></td>
+<td><p>Saved commands, CLI trajectories and grading output.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_CC_TARBALL</span></code></p></td>
-<td><p>—</p></td>
-<td><p>Host path to the Claude Code CLI npm tarball.</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">ADAPTER_PUBLIC_HOST</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">auto</span></code></p></td>
+<td><p>Routable address advertised to sandbox nodes.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_CC_EXTRA_ARGS</span></code></p></td>
-<td><p>(see launcher)</p></td>
-<td><p>Extra flags appended to the <code class="docutils literal notranslate"><span class="pre">claude</span></code> CLI invocation — registers the read-only <code class="docutils literal notranslate"><span class="pre">investigator</span></code> sub-agent, disables <code class="docutils literal notranslate"><span class="pre">WebFetch</span></code>/<code class="docutils literal notranslate"><span class="pre">WebSearch</span></code>, disables slash commands.</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">ADAPTER_BIND_HOST</span></code> / <code class="docutils literal notranslate"><span class="pre">ADAPTER_PORT</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0.0.0.0</span></code> / <code class="docutils literal notranslate"><span class="pre">18091</span></code></p></td>
+<td><p>Adapter listening address.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_CC_EXTRA_ENVS</span></code></p></td>
-<td><p>unset</p></td>
-<td><p>JSON object of extra env vars exported into the <code class="docutils literal notranslate"><span class="pre">claude</span></code> process — escape hatch for env-only knobs (<code class="docutils literal notranslate"><span class="pre">MAX_THINKING_TOKENS</span></code>, <code class="docutils literal notranslate"><span class="pre">BASH_MAX_TIMEOUT_MS</span></code>, …). Merged last, so it can also override the built-in defaults.</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_NODE_TARBALL</span></code> / <code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_CC_TARBALL</span></code></p></td>
+<td><p>Files in <code class="docutils literal notranslate"><span class="pre">$DATA_ROOT/toolchain</span></code></p></td>
+<td><p>Host-side Node 22 and Claude Code tarballs.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_AGENT_TIME_BUDGET_SEC</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">1800</span></code></p></td>
-<td><p>Wallclock budget for the in-sandbox agent CLI itself (think/edit/run).</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_CC_NATIVE_TARBALL</span></code></p></td>
+<td><p>Unset</p></td>
+<td><p>Optional official Claude Code platform archive; takes precedence over the Node/npm installation.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_EVAL_TIMEOUT_SEC</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">600</span></code></p></td>
-<td><p>Wallclock cap on the evaluator sandbox.</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_CC_EXTRA_ARGS</span></code></p></td>
+<td><p>Six code tools, max 40 turns</p></td>
+<td><p>Claude CLI flags.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_ROLLOUT_GUARD_SEC</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">agent+eval+180</span></code></p></td>
-<td><p>Outer safety net wrapping the whole rollout (boot + workspace + agent + diff + eval). Auto-derived if unset.</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_CC_EXTRA_ENVS</span></code></p></td>
+<td><p>Context/output/thinking limits</p></td>
+<td><p>JSON overrides merged into the CLI environment.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_BOOT_CONCURRENCY</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">16</span></code></p></td>
-<td><p>Cap on simultaneous sandbox boots (eases h2/SSL long-tail).</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_AGENT_TIME_BUDGET_SEC</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">1200</span></code></p></td>
+<td><p>Agent CLI wall-clock budget.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_CC_PROMPT</span></code></p></td>
-<td><p>unset</p></td>
-<td><p>Optional override for the user-turn prompt. Setting this to require sub-agent dispatch is the most reliable way to maximize fan-out.</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_EVAL_TIMEOUT_SEC</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">180</span></code></p></td>
+<td><p>Official grader timeout.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_ROLLOUT_GUARD_SEC</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">agent+eval+300</span></code></p></td>
+<td><p>Whole-rollout deadline, including sandbox setup.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_BOOT_CONCURRENCY</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">2</span></code></p></td>
+<td><p>Concurrent sandbox boots.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SWE_CC_PROMPT</span></code></p></td>
+<td><p>Read the problem, edit source, test, summarize</p></td>
+<td><p>Agent instruction; official tests remain in the grader.</p></td>
 </tr>
 </tbody>
 </table>
 </div>
-<p><code class="docutils literal notranslate"><span class="pre">--rollout-max-response-len</span></code> is the per-turn generation cap passed to each
-SGLang <code class="docutils literal notranslate"><span class="pre">/generate</span></code> call as <code class="docutils literal notranslate"><span class="pre">max_new_tokens</span></code>. <code class="docutils literal notranslate"><span class="pre">--rollout-max-context-len</span></code> is the
-multi-turn prompt+response budget enforced only during generation: each turn
-clamps <code class="docutils literal notranslate"><span class="pre">max_new_tokens</span></code> to the remaining context. Trajectory merge/export keeps
-the emitted segments and does not drop them for length.
-The Anthropic adapter reuses <code class="docutils literal notranslate"><span class="pre">--sglang-tool-call-parser</span></code> and
-<code class="docutils literal notranslate"><span class="pre">--sglang-reasoning-parser</span></code> for output parsing, so those flags must match the
+<p><code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_*</span></code> belongs to the reusable agent library, <code class="docutils literal notranslate"><span class="pre">SWE_*</span></code> to this task
+example, <code class="docutils literal notranslate"><span class="pre">SUNABAKO_*</span></code> to its provider, and <code class="docutils literal notranslate"><span class="pre">ADAPTER_*</span></code> to the serving endpoint.
+<code class="docutils literal notranslate"><span class="pre">--rollout-max-response-len</span></code> limits each SGLang request; the adapter clamps it
+to the remaining multi-turn context budget. The parser flags must match the
 served model.</p>
 </section>
-<section id="string-in-token-out-trajectories">
-<h2>String-in, Token-out Trajectories<a class="headerlink" href="#string-in-token-out-trajectories" title="Link to this heading">#</a></h2>
+<section id="token-in-token-out-model-calls">
+<h2>Token-in, token-out model calls<a class="headerlink" href="#token-in-token-out-model-calls" title="Link to this heading">#</a></h2>
 <p>The coding-agent environment is string/message based: claude-code sends
-Anthropic Messages requests, receives streamed text/thinking/tool-use blocks,
-and later sends back rendered tool observations. Training, however, must stay
+Anthropic Messages requests and Codex sends Responses requests. They receive
+text, reasoning and tool calls, then send back rendered tool observations. Training must stay
 token based. A trajectory is only a valid RL target when the optimized tokens
 are the same tokens the rollout model actually sampled.</p>
-<p>The Anthropic adapter therefore follows a <strong>string in, token out</strong> contract:</p>
+<p>The shared adapter accepts messages from the agent and uses <strong>token in, token out</strong>
+at the model and training boundary:</p>
 <ul class="simple">
-<li><p>Each incoming message history is rendered with the served model’s chat
-template and sent to SGLang as <code class="docutils literal notranslate"><span class="pre">input_ids</span></code>.</p></li>
+<li><p>The first message history is rendered with the served model’s chat template
+and sent to SGLang as <code class="docutils literal notranslate"><span class="pre">input_ids</span></code>. When the client echoes an unchanged history
+and tool schema, the adapter reuses the original prompt and output tokens,
+including thinking omitted by the client, and renders only the new suffix.
+Changed or compacted histories, ambiguous matches and unverified message
+boundaries fall back to normal template rendering and may create branches.</p></li>
+<li><p>Parallel Anthropic tool results are matched by <code class="docutils literal notranslate"><span class="pre">tool_use_id</span></code> and restored to
+call order before rendering. Qwen’s template omits those IDs, so preserving
+asynchronous completion order would associate file contents with the wrong
+<code class="docutils literal notranslate"><span class="pre">Read</span></code> call.</p></li>
 <li><p>SGLang is called with <code class="docutils literal notranslate"><span class="pre">return_logprob=True</span></code>; the adapter records the exact
 <code class="docutils literal notranslate"><span class="pre">prompt_ids</span></code>, sampled <code class="docutils literal notranslate"><span class="pre">output_ids</span></code>, and per-token rollout logprobs for that
-turn.</p></li>
+turn. Missing logprobs, inconsistent token counts/IDs and non-finite logprobs
+fail the request instead of producing an incomplete training trajectory.</p></li>
 <li><p>At training export time, samples are assembled from those saved token ids.
 The decoded <code class="docutils literal notranslate"><span class="pre">response</span></code> field is only a readable sidecar; it is not
 re-tokenized to recover the training sequence.</p></li>
 </ul>
-<p>Multi-turn agents still force the adapter to tokenize later message
-histories, because tool observations and claude-code’s own compacted messages
-arrive as strings. <code class="docutils literal notranslate"><span class="pre">slime.agent.trajectory.TrajectoryManager</span></code> routes
-those later prompts against the saved token stream:</p>
+<p>For unchanged message histories, the adapter reuses the original model input
+and output token IDs, including reasoning omitted by the wire client. It
+matches the complete message prefix and tool schema, locates the template’s
+end-of-message boundary, and appends only the newly rendered context. This
+happens before the next SGLang request, so sampling and training use the same
+continuous history. Changed histories, compaction, or an unverified boundary
+fall back to the template’s full rendering.</p>
+<p><code class="docutils literal notranslate"><span class="pre">slime.agent.trajectory.TrajectoryManager</span></code> assembles the saved token stream:</p>
 <ul class="simple">
 <li><p>New prompt suffixes that are tool/user/environment context are appended with
 <code class="docutils literal notranslate"><span class="pre">loss_mask=0</span></code>.</p></li>
 <li><p>Fresh model outputs from SGLang are appended with <code class="docutils literal notranslate"><span class="pre">loss_mask=1</span></code>.</p></li>
+<li><p>Top-p and score-centering distributions are concatenated with their original
+generated tokens. Masked tool/context tokens get empty top-p spans or finite
+dummy top-k distributions. R3 prompt routing snapshots remain separate,
+because their routes can differ even for identical token prefixes.</p></li>
 <li><p>If a later prompt no longer token-matches an earlier sampled output, the
-unmatched suffix is dropped. If the drift cuts through the middle of a
-previous model output, the retained prefix of that whole output turn is also
-assigned <code class="docutils literal notranslate"><span class="pre">loss_mask=0</span></code>.</p></li>
+example starts a new training segment. The earlier output keeps its original
+prompt, token IDs and logprobs. Re-rendered history in the new segment is
+context with <code class="docutils literal notranslate"><span class="pre">loss_mask=0</span></code>.</p></li>
+<li><p>Generated prefixes shared by sibling branches contribute loss only once.</p></li>
 </ul>
-<p>That last case is the important correctness guard. A re-tokenization mismatch
-can make a string-level conversation look continuous while token-level
-provenance is broken. slime keeps the context needed to continue the agent, but
-does not backprop through tokens whose sampled origin can no longer be proven.
+<p>This example defaults to <code class="docutils literal notranslate"><span class="pre">SLIME_FORK_MERGE_MAX_RESPONSE_TOKENS=0</span></code>, including on
+remote Ray workers. It preserves every captured generated turn when history
+changes. Setting a positive threshold enables the manager’s optional short-turn
+rewrite merging, which can discard earlier training signal to reduce segment count.
+The agent’s message protocol itself is still text based; only the exact captured
+model tokens are used as optimization targets.
 The unit tests in <code class="docutils literal notranslate"><span class="pre">tests/test_agent/test_trajectory_manager_branching.py</span></code> cover matched
 prefixes, skipped turns, split-output drift, changed token counts, and
 prompt-base restarts.</p>
@@ -702,10 +890,26 @@ prompt-base restarts.</p>
 <section id="fan-out-semantics">
 <h2>Fan-out Semantics<a class="headerlink" href="#fan-out-semantics" title="Link to this heading">#</a></h2>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">generate()</span></code> returns <code class="docutils literal notranslate"><span class="pre">list[Sample]</span></code> — one Sample per root-to-leaf chain in the per-session message tree.</p></li>
-<li><p>Per-trajectory reward is split as <code class="docutils literal notranslate"><span class="pre">reward</span> <span class="pre">/</span> <span class="pre">K</span></code> across chains; <code class="docutils literal notranslate"><span class="pre">rollout_id</span></code> is shared so the per-rollout-mean loss reducer still counts the trajectory once.</p></li>
-<li><p>Sub-agent dispatch and auto-compaction increase <code class="docutils literal notranslate"><span class="pre">K</span></code> (each prompt-prefix divergence forks a new branch), so the effective batch after flatten can be much larger than <code class="docutils literal notranslate"><span class="pre">rollout_batch_size</span> <span class="pre">*</span> <span class="pre">n_samples_per_prompt</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">generate()</span></code> returns <code class="docutils literal notranslate"><span class="pre">list[Sample]</span></code>. A root-to-leaf chain can produce multiple
+segments if the token prefix changes.</p></li>
+<li><p>Segments retain the original <code class="docutils literal notranslate"><span class="pre">group_index</span></code> (prompt group), <code class="docutils literal notranslate"><span class="pre">index</span></code> (agent run)
+and <code class="docutils literal notranslate"><span class="pre">rollout_id</span></code> (the unit used for optimizer scheduling and loss averaging).</p></li>
+<li><p>Every segment receives the agent run’s full outcome reward. GRPO computes
+mean/std within each <code class="docutils literal notranslate"><span class="pre">group_index</span></code> over distinct <code class="docutils literal notranslate"><span class="pre">rollout_id</span></code> values, then
+broadcasts the resulting advantage to their segments. A run with 20 segments
+therefore contributes one outcome to these statistics, just like a run with one.</p></li>
+<li><p>Shared generated prefixes are loss-masked on subsequent branches. All segments
+of a rollout stay in one optimizer step, and their loss denominators use the
+total number of unmasked tokens in that rollout, including across microbatches.</p></li>
+<li><p>Sub-agent dispatch and auto-compaction increase the number of segments, so the
+flattened sample count can exceed <code class="docutils literal notranslate"><span class="pre">rollout_batch_size</span> <span class="pre">*</span> <span class="pre">n_samples_per_prompt</span></code>.</p></li>
 </ul>
+<p>The GPU CI retains, audits and trains every segment of every real agent trajectory.
+It checks exact token/logprob identity again in the trainer’s saved tensors and
+verifies each task’s group-normalized advantages, optimizer calls and parameter changes.
+Uniform outcome groups correctly have zero advantages. CPU tests
+cover unequal fork counts, shuffled prompt groups, shared prefixes and singleton
+groups. CI and normal training both consume all segments.</p>
 </section>
 <section id="porting-to-a-new-sandbox-backend">
 <h2>Porting to a New Sandbox Backend<a class="headerlink" href="#porting-to-a-new-sandbox-backend" title="Link to this heading">#</a></h2>
@@ -714,10 +918,11 @@ prompt-base restarts.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">await</span> <span class="n">sb</span><span class="o">.</span><span class="n">exec</span><span class="p">(</span><span class="n">cmd</span><span class="p">,</span> <span class="n">user</span><span class="o">=...</span><span class="p">,</span> <span class="n">check</span><span class="o">=...</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=...</span><span class="p">)</span>
 <span class="k">await</span> <span class="n">sb</span><span class="o">.</span><span class="n">write_file</span><span class="p">(</span><span class="n">sandbox_path</span><span class="p">,</span> <span class="n">content_or_host_path</span><span class="p">,</span> <span class="n">user</span><span class="o">=...</span><span class="p">)</span>
 <span class="k">await</span> <span class="n">sb</span><span class="o">.</span><span class="n">read_file</span><span class="p">(</span><span class="n">sandbox_path</span><span class="p">,</span> <span class="n">user</span><span class="o">=...</span><span class="p">)</span>
-<span class="k">async</span> <span class="k">with</span> <span class="n">E2BSandbox</span><span class="p">(</span><span class="o">...</span><span class="p">)</span> <span class="k">as</span> <span class="n">sb</span><span class="p">:</span> <span class="o">...</span>
+<span class="k">async</span> <span class="k">with</span> <span class="n">create_sandbox</span><span class="p">(</span><span class="n">image</span><span class="p">)</span> <span class="k">as</span> <span class="n">sb</span><span class="p">:</span> <span class="o">...</span>
 </pre></div>
 </div>
-<p>Reimplement those on Docker / Modal / a local VM and everything in <code class="docutils literal notranslate"><span class="pre">generate.py</span></code> keeps working unchanged.</p>
+<p>Implement this contract and register the provider in this example’s <code class="docutils literal notranslate"><span class="pre">sandbox.py</span></code>.
+Both <code class="docutils literal notranslate"><span class="pre">generate.py</span></code> and <code class="docutils literal notranslate"><span class="pre">swe.py</span></code> use that factory.</p>
 </section>
 </section>
 
@@ -768,12 +973,14 @@ prompt-base restarts.</p>
   </div>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#environment-setup">Environment Setup</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#dataset-format">Dataset Format</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#running-the-script">Running the Script</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#new-arguments">New Arguments</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#swe-specific-environment-knobs">SWE-specific Environment Knobs</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#string-in-token-out-trajectories">String-in, Token-out Trajectories</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#codex-compatibility">Codex compatibility</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#install-and-configure-the-sandbox-nodes">Install and configure the sandbox nodes</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#prepare-the-xiaomi-mimo-code-dataset">Prepare the Xiaomi MiMo code dataset</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#run-qwen3-8-27b-on-two-training-nodes-and-two-sandbox-nodes">Run Qwen3.8-27B on two training nodes and two sandbox nodes</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#check-real-rollouts-before-training">Check real rollouts before training</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#modules-and-data-contract">Modules and data contract</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#environment-settings">Environment settings</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#token-in-token-out-model-calls">Token-in, token-out model calls</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#fan-out-semantics">Fan-out Semantics</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#porting-to-a-new-sandbox-backend">Porting to a New Sandbox Backend</a></li>
 </ul>
@@ -809,7 +1016,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Oct 09, 2026.
+  Last updated on Oct 10, 2026.
   <br/>
 </p>
   </div>

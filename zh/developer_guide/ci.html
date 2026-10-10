@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="2026 年 10 月 09 日"/>
+    <meta name="docbuild:last-update" content="2026 年 10 月 10 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -459,6 +459,7 @@
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">数据传输与恢复测试</a><ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#agent">Agent 训练</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#straw">straw</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pipelinerl">PipelineRL</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron">Megatron 手动重启</a></li>
@@ -503,7 +504,7 @@
 <td><p>参数校验、批次调度、指标、奖励计算、样本处理、checkpoint 工具和扩展接口。</p></td>
 </tr>
 <tr class="row-odd"><td><p>自动运行</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">agent-adapter-test</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">agent-test</span></code></p></td>
 <td><p>CPU</p></td>
 <td><p>Agent 适配器，额外安装所需的模型服务 SDK。</p></td>
 </tr>
@@ -515,7 +516,7 @@
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-megatron</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-megatron</span></code></p></td>
 <td><p>GPU</p></td>
-<td><p>Megatron 训练，包括 Dense、MoE、PPO、MTP、OPD、全异步 rollout、PD/Mooncake 和调试数据重放。</p></td>
+<td><p>Megatron 训练，包括 Dense、MoE、PPO、MTP、OPD、全异步 rollout、PD/Mooncake、调试数据重放和 codex/sunabako agent 训练。</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-precision</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-precision</span></code></p></td>
@@ -557,7 +558,7 @@
 <li><p><code class="docutils literal notranslate"><span class="pre">Sample</span></code>、rollout 数据校验和 agent 轨迹合并；</p></li>
 <li><p>Hugging Face checkpoint 保存，以及自定义 rollout、生成函数和运行时 hook 的接口约定。</p></li>
 </ul>
-<p>Agent 适配器测试放在独立的 <code class="docutils literal notranslate"><span class="pre">agent-adapter-test</span></code> 任务中，因为它们还需要 <code class="docutils literal notranslate"><span class="pre">openai</span></code>、<code class="docutils literal notranslate"><span class="pre">openai-agents</span></code>、<code class="docutils literal notranslate"><span class="pre">anthropic</span></code> 等 SDK。</p>
+<p>Agent 适配器测试放在独立的 <code class="docutils literal notranslate"><span class="pre">agent-test</span></code> 任务中，因为它们还需要 <code class="docutils literal notranslate"><span class="pre">openai</span></code>、<code class="docutils literal notranslate"><span class="pre">openai-agents</span></code>、<code class="docutils literal notranslate"><span class="pre">anthropic</span></code> 等 SDK。</p>
 <p>CPU 测试列表中带有 <code class="docutils literal notranslate"><span class="pre">straw:</span> <span class="pre">true</span></code> 的条目，会从 PyPI 安装最新版 <code class="docutils literal notranslate"><span class="pre">straw-queue</span></code> wheel。测试不需要 Rust 工具链或 straw 源码仓库。<code class="docutils literal notranslate"><span class="pre">test_optional_straw.py</span></code> 则刻意不安装 straw，检查默认数据传输仍可运行，以及显式选择 straw 时是否给出清晰的安装提示。</p>
 <p>常用的本地运行方式：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>tests/test_agent/test_trajectory_manager_branching.py
@@ -588,6 +589,66 @@ python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> <
 </section>
 <section id="id4">
 <h2>数据传输与恢复测试<a class="headerlink" href="#id4" title="Link to this heading">#</a></h2>
+<section id="agent">
+<h3>Agent 训练<a class="headerlink" href="#agent" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">tests/test_agent_sunabako_codex_e2e.py</span></code> 使用 <strong>Codex 0.162.1</strong>、<strong>Claude Code 2.1.296</strong>、
+Qwen3.8-27B 和两个独立镜像中的小米任务：</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">format-code-task-000003</span></code>：给 smol-evm 补上缺失的 <code class="docutils literal notranslate"><span class="pre">SHL</span></code> 左移指令。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">format-code-task-000045</span></code>：让 BootBot 保留对象形式的 quick replies。</p></li>
+</ul>
+<p>每一步都使用这两道题，<strong>每题 4 条，共 8 个独立 agent 并行</strong>，分别在新沙箱中评分，
+然后执行一次 GRPO 优化器更新。<strong>第一步使用 Codex，第二步使用 Claude Code</strong>，
+第二步使用更新后的模型，对相同两道题重新采样。两个 CLI 共用 trace 拼接和训练路径。
+总共运行 16 条轨迹、训练 2 步，不按 reward 过滤或额外重采。
+两道题的原始代码都必须无法通过官方测试；失败轨迹保留 reward 0，与 reward 1 的轨迹
+一起参与训练。每道题的 4 条结果独立归一化，使用组内均值与样本标准差加 epsilon；
+整组同分时，advantage 正常为 0。</p>
+<p>测试会从实际训练张量中核对每个 token 的 advantage，并记录 8 个训练 rank 上的两次
+优化器调用。梯度与参数必须有限；非零梯度必须带来参数变化。采样使用 temperature=1、
+<code class="docutils literal notranslate"><span class="pre">top_p=0.95</span></code>，禁用 top-k，启用 SC，并校验原始 token、mask、sampler 概率及 nucleus
+replay 数据。Qwen3.8-27B 是 dense 模型，因此关闭 R3。
+推理通过 SGLang EAGLE 启用 checkpoint 中的 MTP head（3 个 draft step、4 个 draft token），
+并检查日志中确实出现已接受的 draft token。
+上下文额度为 64K，并给 draft token 预留空间。Claude Code 使用与 example 相同的
+六个代码工具：Bash、Read、Edit、Write、Glob 和 Grep。</p>
+<p>每个 agent 上限 600 秒，GitHub job 连同准备阶段上限 35 分钟。
+连续的模型调用会保留原始 token 和采样分布，合并成训练轨迹；历史实际改写时才分支。
+CI 与正式 example 一样，训练每条真实轨迹中的全部片段，保持 token、logprob 和
+reward 原样；<code class="docutils literal notranslate"><span class="pre">agents/&lt;sample-index&gt;/agent-full.pt</span></code> 保存完整轨迹。
+agent 只收到原始题目和仓库，隐藏测试保留在独立评分沙箱中。</p>
+<p>模型、选中的两个任务镜像、两个 CLI 安装包和 TileLang/Triton 编译结果均使用缓存。
+镜像下载支持断点续传与完整性校验，<code class="docutils literal notranslate"><span class="pre">--prepare-only</span></code> 在申请 GPU 锁之前准备资源。
+首次下载可能超过计时 CI 的上限。代理变量会传入容器，本机 Ray 和沙箱流量绕过代理。
+<code class="docutils literal notranslate"><span class="pre">run-ci-megatron</span></code> 包含这项 GPU e2e，<code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> 也能发现它，自动 <code class="docutils literal notranslate"><span class="pre">agent-test</span></code>
+任务覆盖 CPU 合约检查。</p>
+<p><code class="docutils literal notranslate"><span class="pre">tests/ci/setup_agent_e2e.sh</span></code> 按 <code class="docutils literal notranslate"><span class="pre">examples/coding_agent_rl/requirements-sunabako.txt</span></code>
+安装 PyPI 发布的 <code class="docutils literal notranslate"><span class="pre">sunabako==0.1.1</span></code> wheel，并在启动 Ray head 前准备认证 token；
+已有 token 会复用，其内容不会打印到 CI 日志。该版本通过 <code class="docutils literal notranslate"><span class="pre">uid_range_size</span></code> 支持 native 用户，
+本地节点为 8 个沙箱分别保留 65,536 个 UID/GID，
+state 挂载到 <code class="docutils literal notranslate"><span class="pre">/workspace</span></code>，保证映射后的用户能遍历父目录。测试在现有特权 Docker
+容器中运行，无需内层 Docker daemon 或 PRoot。RSS 模式只用于有界功能验证，
+<strong>不证明总内存硬限制</strong>；生产环境仍需可写、已委派的 cgroup，缺失时拒绝启动。</p>
+<p>已有沙箱集群时，安装相同 requirements 后运行：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="o">(</span><span class="nb">umask</span><span class="w"> </span><span class="m">077</span><span class="p">;</span><span class="w"> </span>ray<span class="w"> </span>get-auth-token<span class="w"> </span>--generate<span class="w"> </span>&gt;/dev/null<span class="o">)</span>
+<span class="nv">HF_CHECKPOINT</span><span class="o">=</span>/path/to/Qwen3.8-27B<span class="w"> </span><span class="se">\</span>
+<span class="nv">RAY_AUTH_MODE</span><span class="o">=</span>token<span class="w"> </span><span class="se">\</span>
+<span class="nv">SUNABAKO_CLUSTER</span><span class="o">=</span>/path/to/cluster.json<span class="w"> </span><span class="se">\</span>
+<span class="nv">SUNABAKO_IMAGES</span><span class="o">=</span>/path/to/images.json<span class="w"> </span><span class="se">\</span>
+<span class="nv">ADAPTER_PUBLIC_HOST</span><span class="o">=</span>&lt;training-node-ip&gt;<span class="w"> </span><span class="se">\</span>
+python<span class="w"> </span>tests/test_agent_sunabako_codex_e2e.py
+</pre></div>
+</div>
+<p>镜像映射必须在每台沙箱节点包含两个任务，并提供至少 8 个并发沙箱的容量。只在无硬 cgroup 的功能测试中，显式设置
+<code class="docutils literal notranslate"><span class="pre">SUNABAKO_ALLOW_TEST_MEMORY=1</span></code>。可用 <code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_TEST_DATA</span></code> 复用已下载的小米 parquet
+和镜像映射，用 <code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_CODEX_NATIVE_TARBALL</span></code> 和 <code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_CC_NATIVE_TARBALL</span></code>
+复用官方平台安装包，无需在沙箱中下载工具链。
+<code class="docutils literal notranslate"><span class="pre">SLIME_AGENT_TEST_RUN_DIR</span></code> 必须是新目录，会保留 CLI 日志、评分输出、rollout/train
+张量、参数更新证据与 <code class="docutils literal notranslate"><span class="pre">result.json</span></code>。测试与其他 E2E 一样调用 <code class="docutils literal notranslate"><span class="pre">U.execute_train()</span></code>，
+通过 <code class="docutils literal notranslate"><span class="pre">extra_env_vars</span></code> 传入 agent 环境。Ray CLI 直接向 GitHub Actions 控制台输出训练日志；
+训练结束后将该任务日志保存为 <code class="docutils literal notranslate"><span class="pre">train.log</span></code>，用于检查 MTP 和训练指标。
+GitHub Actions 在成功或失败后都会上传这些产物。</p>
+</section>
 <section id="straw">
 <h3>straw<a class="headerlink" href="#straw" title="Link to this heading">#</a></h3>
 <p>使用 straw 的端到端测试会显式设置 <code class="docutils literal notranslate"><span class="pre">--rollout-data-transport</span> <span class="pre">straw</span></code>，确保本地执行、<code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> 和固定测试列表使用同一种传输方式。覆盖范围包括：</p>
@@ -666,7 +727,7 @@ python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> <
     <span class="k">raise</span> <span class="ne">SystemExit</span><span class="p">(</span><span class="n">pytest</span><span class="o">.</span><span class="n">main</span><span class="p">([</span><span class="vm">__file__</span><span class="p">]))</span>
 </pre></div>
 </div>
-<p>需要自动运行的测试，还应注册到 <code class="docutils literal notranslate"><span class="pre">.github/workflows/pr-test.yml.j2</span></code> 的 <code class="docutils literal notranslate"><span class="pre">cpu-unittest</span></code> 或 <code class="docutils literal notranslate"><span class="pre">agent-adapter-test</span></code> 列表中，再重新生成工作流。</p>
+<p>需要自动运行的测试，还应注册到 <code class="docutils literal notranslate"><span class="pre">.github/workflows/pr-test.yml.j2</span></code> 的 <code class="docutils literal notranslate"><span class="pre">cpu-unittest</span></code> 或 <code class="docutils literal notranslate"><span class="pre">agent-test</span></code> 列表中，再重新生成工作流。</p>
 </section>
 <section id="id7">
 <h3>添加 GPU 端到端测试<a class="headerlink" href="#id7" title="Link to this heading">#</a></h3>
@@ -777,6 +838,7 @@ python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> <
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">数据传输与恢复测试</a><ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#agent">Agent 训练</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#straw">straw</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pipelinerl">PipelineRL</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron">Megatron 手动重启</a></li>
@@ -823,7 +885,7 @@ python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> <
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 10 月 09 日.
+  最后更新于 2026 年 10 月 10 日.
   <br/>
 </p>
   </div>

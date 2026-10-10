@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="Oct 09, 2026"/>
+    <meta name="docbuild:last-update" content="Oct 10, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -699,6 +699,7 @@ leases automatically and return unfinished work when closed.</p>
         <span class="n">s</span><span class="o">.</span><span class="n">response</span> <span class="o">=</span> <span class="n">segment</span><span class="o">.</span><span class="n">response</span>
         <span class="n">s</span><span class="o">.</span><span class="n">response_length</span> <span class="o">=</span> <span class="n">segment</span><span class="o">.</span><span class="n">response_length</span>
         <span class="n">s</span><span class="o">.</span><span class="n">loss_mask</span> <span class="o">=</span> <span class="n">segment</span><span class="o">.</span><span class="n">loss_mask</span>
+        <span class="n">s</span><span class="o">.</span><span class="n">rollout_log_probs</span> <span class="o">=</span> <span class="n">segment</span><span class="o">.</span><span class="n">rollout_log_probs</span>
         <span class="n">s</span><span class="o">.</span><span class="n">reward</span> <span class="o">=</span> <span class="n">segment</span><span class="o">.</span><span class="n">reward</span>
         <span class="n">s</span><span class="o">.</span><span class="n">status</span> <span class="o">=</span> <span class="n">Sample</span><span class="o">.</span><span class="n">Status</span><span class="o">.</span><span class="n">COMPLETED</span>
         <span class="n">s</span><span class="o">.</span><span class="n">rollout_id</span> <span class="o">=</span> <span class="n">rollout_id</span>
@@ -706,7 +707,7 @@ leases automatically and return unfinished work when closed.</p>
     <span class="k">return</span> <span class="n">samples</span>
 </pre></div>
 </div>
-<p>If one full trajectory has a single total reward but is split into <code class="docutils literal notranslate"><span class="pre">K</span></code> training segments, a common pattern is to distribute that reward across the segments, for example by assigning <code class="docutils literal notranslate"><span class="pre">reward</span> <span class="pre">/</span> <span class="pre">K</span></code> to each segment, so the same rollout reward is not amplified.</p>
+<p>If one full trajectory has a single outcome reward, assign that same reward to every segment and preserve the original <code class="docutils literal notranslate"><span class="pre">group_index</span></code>. GRPO computes prompt-group statistics over distinct <code class="docutils literal notranslate"><span class="pre">rollout_id</span></code> values and copies each rollout’s advantage to its segments. The loss reducer already averages over all unmasked tokens in the rollout, including across microbatches, so dividing the reward by the segment count would underweight trajectories with more segments. Shared generated prefixes must contribute loss only once.</p>
 <p><strong>Example</strong>: See <a class="reference download internal" download="" href="../_downloads/bee5a872ccae7eb6b44c1ed0e0f6eb4a/generate_with_search.py"><span class="xref download myst">examples/search-r1/generate_with_search.py</span></a> and <a class="reference download internal" download="" href="../_downloads/fcb74b88a8b414d1a6f967a6f94cdf7b/rollout_with_multi_agents.py"><span class="xref download myst">examples/multi_agent/rollout_with_multi_agents.py</span></a></p>
 </section>
 </section>
@@ -1193,7 +1194,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Oct 09, 2026.
+  Last updated on Oct 10, 2026.
   <br/>
 </p>
   </div>
