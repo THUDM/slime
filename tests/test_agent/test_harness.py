@@ -157,7 +157,9 @@ def test_codex_write_config_base64_roundtrips_inline_base_url():
         b64 = cmd.split("echo ")[1].split(" | base64")[0].strip("'")
         toml = base64.b64decode(b64).decode()
         assert 'base_url = "http://host:18001/v1"' in toml  # MUST be inline
-        assert 'wire_api = "chat"' in toml
+        assert 'wire_api = "responses"' in toml
+        assert "supports_websockets = false" in toml
+        assert "multi_agent = false" in toml
         assert 'model_provider = "slime"' in toml
 
     asyncio.run(run_case())

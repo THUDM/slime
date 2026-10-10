@@ -14,6 +14,9 @@ from .qwen3moe import convert_qwen3moe_to_hf
 
 # TODO optimize code details
 def convert_to_hf(args, model_name, name, param, quantization_config=None, transform_ue8m0=True):
+    # MCore 0.19 renamed the live MTP module; its checkpoint keys still use
+    # transformer_layer. Keep model-specific mapping and quantization consistent.
+    name = name.replace(".mtp_model_layer.", ".transformer_layer.")
     hf_name = name
     while hf_name.startswith("module."):
         hf_name = hf_name.removeprefix("module.")

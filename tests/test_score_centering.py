@@ -690,7 +690,7 @@ def store_top_p_batch(batch, directory):
             )
 
 
-def top_p_reference(logits, batch, a):
+def top_p_reference(logits, batch, a, *, centered=True):
     result = logits.sum() * 0
     position = 0
     for i, (total, response) in enumerate(zip(batch["total_lengths"], batch["response_lengths"], strict=True)):
@@ -705,6 +705,8 @@ def top_p_reference(logits, batch, a):
             keep = torch.zeros_like(values, dtype=torch.bool).scatter_(0, ids, True)
             logp = values.masked_fill(~keep, -torch.inf).log_softmax(0)
             coeff = (q * top_p_weight(logp[ids].exp() / q, a)).detach()
+            if centered:
+                coeff = coeff - top_p_weight(torch.ones_like(q), a) * logp[ids].exp().detach()
             target = batch["unconcat_tokens"][i][-response + row]
             w = top_p_weight((logp[target] - batch["rollout_log_probs"][i][row]).exp(), a).detach()
             loss = -batch["advantages"][i][row] * (w * logp[target] - (coeff * logp[ids]).sum())
@@ -723,6 +725,56 @@ def test_request_selects_complete_support():
     assert params["custom_params"] == {"other": 1, "return_top_p_token_ids": True, "return_top_p_log_probs": True}
     with pytest.raises(ValueError, match="configured"):
         score_centering_request(a, {"top_p": 0.8})
+
+
+@pytest.mark.parametrize("mode", ["none", "tis", "mis"])
+@pytest.mark.parametrize("delta", [-3.0, 0.0, 0.01])
+def test_top_p_matches_existing_centering_without_changing_gradient(mode, delta, monkeypatch):
+    from megatron.core import mpu
+    from slime.backends.megatron_utils.loss import get_score_centering_terms
+
+    monkeypatch.setattr(mpu, "get_tensor_model_parallel_group", lambda: None, raising=False)
+    monkeypatch.setattr(mpu, "get_tensor_model_parallel_rank", lambda: 0, raising=False)
+    q = torch.tensor([0.94, 0.06], requires_grad=True)
+    base = torch.tensor([0.893, 0.057, 0.05]).log()
+    logits = base.repeat(1, 2, 1)
+    logits[0, 0, 0] += delta
+    logits.requires_grad_()
+    batch = {
+        "total_lengths": [2],
+        "response_lengths": [1],
+        "unconcat_tokens": [torch.tensor([2, 0])],
+        "loss_masks": [torch.ones(1)],
+        "rollout_log_probs": [q[:1].log()],
+        "rollout_top_p_token_ids": [torch.tensor([0, 1], dtype=torch.int32)],
+        "rollout_top_p_token_offsets": [torch.tensor([0, 2], dtype=torch.int32)],
+        "rollout_top_p_log_probs": [q.log()],
+    }
+    a = args(mode=mode, rollout_top_p=0.95, rollout_temperature=1.0)
+    terms = get_score_centering_terms(a, batch, logits)
+    gradient, q_gradient = torch.autograd.grad(terms["sc_correction"].sum(), (logits, q), allow_unused=True)
+    assert q_gradient is None
+    assert set(terms) == {"sc_correction", "sc_sampler_head_mass", "sc_train_head_mass"}
+
+    # The unchanged non-top-p helper uses the whole support as its head:
+    # this isolates the scalar convention from its usual tail approximation.
+    logp = logits[0, 0, :2].log_softmax(0)
+    existing, _, _ = score_centering_correction(logp[None], q.log()[None], **get_score_centering_is_config(a))
+    torch.testing.assert_close(terms["sc_correction"], existing, rtol=1e-5, atol=1e-7)
+    torch.testing.assert_close(
+        gradient, torch.autograd.grad(existing.sum(), logits, retain_graph=True)[0], rtol=1e-5, atol=1e-7
+    )
+
+    # Independently compare with the previous, uncentered top-p objective.
+    raw = ((q * top_p_weight(logp.exp() / q, a)).detach() * logp).sum()
+    torch.testing.assert_close(gradient, torch.autograd.grad(raw, logits)[0], rtol=1e-5, atol=1e-7)
+    assert gradient[0, 0, 2] == 0 and not gradient[0, 1].any()
+    if delta == 0:
+        assert raw.item() == pytest.approx(-0.2269675, abs=1e-6)
+        assert terms["sc_correction"].abs().item() < 1e-7
+        assert gradient.abs().max().item() < 1e-7
+    elif mode == "none" and delta == 0.01:
+        assert 0 < gradient.abs().max().item() < 0.001
 
 
 @pytest.mark.parametrize("mode", ["none", "tis", "mis"])
@@ -761,9 +813,10 @@ def test_exact_loss_gradient(mode, dtype, disk, monkeypatch, tmp_path):
     expected = top_p_reference(logits, original, a)
     torch.testing.assert_close(loss, expected, atol=2e-6, rtol=2e-6)
     tol = 0.004 if dtype == torch.bfloat16 else 2e-6
-    torch.testing.assert_close(
-        torch.autograd.grad(loss, logits)[0], torch.autograd.grad(expected, logits)[0], atol=tol, rtol=tol
-    )
+    actual_grad = torch.autograd.grad(loss, logits)[0]
+    torch.testing.assert_close(actual_grad, torch.autograd.grad(expected, logits)[0], atol=tol, rtol=tol)
+    old_objective = top_p_reference(logits, original, a, centered=False)
+    torch.testing.assert_close(actual_grad, torch.autograd.grad(old_objective, logits)[0], atol=tol, rtol=tol)
     assert metrics["sc_sampler_head_mass"] == pytest.approx(2.0, abs=1e-5)
 
 

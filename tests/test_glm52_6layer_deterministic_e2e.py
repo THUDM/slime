@@ -24,9 +24,15 @@ Environment overrides (all optional):
 * ``HF_MODEL`` / ``PROMPT_DATA`` -- checkpoint / dataset paths. Missing
   container-default assets are downloaded into the standard ``/root`` mounts.
 * ``NVSHMEM_IBGDA_NIC_HANDLER`` -- pass through for Blackwell RoCE fabrics.
+* ``RAY_ADDRESS`` -- reuse a cluster; deterministic settings are propagated
+  through the training job's runtime environment. Model, dataset and ``TMPDIR``
+  paths must be shared with every worker node.
 """
 
+import json
+import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -133,8 +139,12 @@ def _skip_reason(sglang_root, megatron_root) -> str | None:
     if probe.returncode != 0:
         return f"deterministic stack unavailable: {probe.stdout.strip() or probe.stderr.strip()}"
 
-    if not Path(f"{megatron_root}/megatron/training/tokenizer/tokenizer.py").exists():
-        return f"incompatible Megatron root (no tokenizer.tokenizer): {megatron_root}"
+    tokenizer_paths = (
+        "megatron/core/tokenizers/utils/build_tokenizer.py",
+        "megatron/training/tokenizer/tokenizer.py",
+    )
+    if not any(Path(megatron_root, path).exists() for path in tokenizer_paths):
+        return f"incompatible Megatron root (no tokenizer builder): {megatron_root}"
     # The FP32 residual/RMSNorm boundary (docker/patch/latest/megatron-sglang-aligned.patch)
     # is required for train/rollout alignment; without it the gate diverges (~1e-2)
     # instead of failing to launch, so skip rather than misreport.
@@ -287,12 +297,12 @@ def run_gate(*, layerwise_zero: bool = False, rollout_max_response_len: int = 40
         master_addr = ip
     master_port = os.environ.get("MASTER_PORT", "29500")
 
-    # Deterministic env is sourced into the Ray head so every colocated actor
-    # (SGLang engine + Megatron train actor) inherits the exact numerical stack,
-    # matching how the standalone gate launches.
+    # Supply the same numerical settings to the Ray head and the training job.
+    # Job runtime envs also reach nested actors on an existing cluster.
+    gate_env = _deterministic_env(sglang_root, megatron_root, kv_cache_dtype)
     env = {
         **os.environ,
-        **_deterministic_env(sglang_root, megatron_root, kv_cache_dtype),
+        **gate_env,
     }
     # sglang-router's Rust worker discovery does not currently honor
     # NO_PROXY reliably.  A configured HTTP proxy makes POST /workers
@@ -303,8 +313,10 @@ def run_gate(*, layerwise_zero: bool = False, rollout_max_response_len: int = 40
     # file or imported by the layerwise gate.
     for proxy_var in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
         env.pop(proxy_var, None)
+        gate_env[proxy_var] = ""
     env["MASTER_ADDR"] = master_addr
-    env["RAY_ADDRESS"] = f"{master_addr}:{master_port}"
+    existing_ray_address = os.environ.get("RAY_ADDRESS")
+    env["RAY_ADDRESS"] = existing_ray_address or f"{master_addr}:{master_port}"
 
     gate_name = "layerwise-zero" if layerwise_zero else "train/rollout"
     print(
@@ -316,13 +328,15 @@ def run_gate(*, layerwise_zero: bool = False, rollout_max_response_len: int = 40
         megatron_layerwise_dump = os.path.join(tmp, "megatron_layerwise")
         sglang_layerwise_dump = os.path.join(tmp, "sglang_layerwise")
         if layerwise_zero:
-            env.update(
+            gate_env.update(
                 {
                     "SLIME_LAYERWISE_ALIGNMENT_DUMP_DIR": megatron_layerwise_dump,
                     "SGLANG_TENSOR_DUMP_LAYER_OUTPUTS_ONLY": "1",
                     "SGLANG_TENSOR_DUMP_CHUNK_SIZE": "64",
                 }
             )
+            env.update(gate_env)
+        env["SLIME_ALIGNMENT_ENV"] = json.dumps(gate_env)
         argv = _train_args(
             hf_model,
             prompt_data,
@@ -333,34 +347,44 @@ def run_gate(*, layerwise_zero: bool = False, rollout_max_response_len: int = 40
             sglang_layerwise_dump=(sglang_layerwise_dump if layerwise_zero else None),
         ).split()
 
-        _run(["pkill", "-9", "sglang"], check=False)
-        _run(["ray", "stop", "--force"], check=False, env=env)
         try:
-            _run(
-                [
-                    "ray",
-                    "start",
-                    "--head",
-                    "--node-ip-address",
-                    master_addr,
-                    "--num-gpus",
-                    str(NUM_GPUS),
-                    "--port",
-                    master_port,
-                    "--disable-usage-stats",
-                    "--include-dashboard=false",
-                ],
-                env=env,
-            )
+            if not existing_ray_address:
+                _run(["ray", "stop", "--force"], check=False, env=env)
+                _run(
+                    [
+                        "ray",
+                        "start",
+                        "--head",
+                        "--node-ip-address",
+                        master_addr,
+                        "--num-gpus",
+                        str(NUM_GPUS),
+                        "--port",
+                        master_port,
+                        "--disable-usage-stats",
+                        "--include-dashboard=false",
+                    ],
+                    env=env,
+                )
             # The aggregate bound is asserted inside the Megatron actor; a
             # breach raises there and fails the driver with a non-zero exit.
             code, _out = _run(
-                [sys.executable, "-u", "train.py", *argv],
+                [
+                    sys.executable,
+                    "-u",
+                    "-c",
+                    "import json, os, ray, runpy, sys; "
+                    "ray.init(address=os.environ['RAY_ADDRESS'], "
+                    "runtime_env={'env_vars': json.loads(os.environ['SLIME_ALIGNMENT_ENV'])}); "
+                    "sys.argv[0] = 'train.py'; runpy.run_path('train.py', run_name='__main__')",
+                    *argv,
+                ],
                 env=env,
                 cwd=str(REPO_ROOT),
                 stream=True,
             )
             assert code == 0, f"train.py exited {code} (train/rollout bound {float(threshold):g} likely breached)"
+            _assert_alignment_result(_out, rollout_dump.format(rollout_id=0), float(threshold))
             if layerwise_zero:
                 _run(
                     [
@@ -385,11 +409,32 @@ def run_gate(*, layerwise_zero: bool = False, rollout_max_response_len: int = 40
                     stream=True,
                 )
         finally:
-            _run(["ray", "stop", "--force"], check=False, env=env)
+            if not existing_ray_address:
+                _run(["ray", "stop", "--force"], check=False, env=env)
     print(
         f"6-layer GLM-5 deterministic {gate_name} gate PASSED " f"(logprob limit={float(threshold):g})",
         flush=True,
     )
+
+
+def _assert_alignment_result(output: str, rollout_path: str, threshold: float) -> None:
+    import torch
+
+    values = [float(value) for value in re.findall(r"'train/train_rollout_logprob_abs_diff':\s*([^,}\s]+)", output)]
+    assert values, "Training did not report the train/rollout alignment metric"
+    assert all(math.isfinite(value) and 0 <= value <= threshold for value in values), values
+    samples = torch.load(rollout_path, map_location="cpu", weights_only=False)["samples"]
+    assert len(samples) == 8, f"Expected 8 rollout samples, got {len(samples)}"
+    for sample in samples:
+        length = sample["response_length"]
+        assert length > 0, "Alignment requires generated response tokens"
+        log_probs = sample["rollout_log_probs"]
+        assert len(log_probs) == length and all(math.isfinite(value) for value in log_probs)
+        mask = sample.get("loss_mask")
+        assert mask is None or (len(mask) == length and sum(mask) > 0), "Response is entirely masked"
+        assert sample["weight_versions"] and set(map(str, sample["weight_versions"])) == {
+            "1"
+        }, f"Rollout did not use the initial synchronized weights: {sample['weight_versions']}"
 
 
 def _run(cmd, env=None, cwd=None, check=True, stream=False):
@@ -423,6 +468,7 @@ def test_glm52_alignment_gate_trains_all_main_model_parameters_without_r3():
     ).split()
 
     assert "--moe-enable-deepep" in argv
+    assert "--use-rollout-logprobs" not in argv
     assert "--use-rollout-routing-replay" not in argv
     assert "--only-train-params-name-list" not in argv
     assert "--freeze-params-name-list" not in argv

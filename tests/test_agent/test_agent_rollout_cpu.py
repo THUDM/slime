@@ -13,12 +13,13 @@ sandbox fake invokes it on launch, and it dials the adapter back over real HTTP
 loopback (``trust_env=False`` so the cluster proxy can't hijack 127.0.0.1),
 firing a couple of turns the way the real CLI would.
 
-Two protocol chains are covered:
+The production selector and protocol chains are covered:
 
-  * ``test_generate_*`` -- the production path: real ``generate.generate()``,
-    which is hardwired to ClaudeCodeHarness + AnthropicAdapter.
+  * ``test_generate_*`` -- the production Claude Code path.
+  * ``test_one_worker_switches_*`` -- real ``generate.generate()`` selects
+    Codex / Responses and Claude Code / Anthropic per sample in one worker.
   * ``test_codex_openai_rollout_closes_loop`` -- the same loop for the
-    CodexHarness + OpenAIAdapter pair, hand-wired (generate() does not select it).
+    CodexHarness + OpenAIAdapter pair, hand-wired to cover Chat Completions.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
+import importlib.util
 import sys
 import types
 from pathlib import Path
@@ -43,7 +45,7 @@ if str(REPO_ROOT) not in sys.path:
 # CPU-only CI env for this test. We never touch a real tokenizer (load_tokenizer
 # is patched with FakeTokenizer below), so stub transformers before the import
 # so the chain resolves without it.
-if "transformers" not in sys.modules:
+if "transformers" not in sys.modules and importlib.util.find_spec("transformers") is None:
     _tf_stub = types.ModuleType("transformers")
     for _name in ("AutoProcessor", "AutoTokenizer", "PreTrainedTokenizerBase", "ProcessorMixin"):
         setattr(_tf_stub, _name, type(_name, (), {}))
@@ -142,8 +144,8 @@ def _patch_generate(monkeypatch, tokenizer: FakeTokenizer, sandbox_factory) -> N
         ),
     )
     monkeypatch.setattr(gen, "load_tokenizer", lambda *a, **k: tokenizer)
-    monkeypatch.setattr(gen, "E2BSandbox", sandbox_factory)  # boot sandbox
-    monkeypatch.setattr(swe, "E2BSandbox", sandbox_factory)  # eval sandbox
+    monkeypatch.setattr(gen, "create_sandbox", sandbox_factory)  # boot sandbox
+    monkeypatch.setattr(swe, "create_sandbox", sandbox_factory)  # eval sandbox
     monkeypatch.setattr(ClaudeCodeHarness, "install_cli", _noop_install)
     monkeypatch.setattr(harness_common.asyncio, "sleep", _fast_sleep)
     monkeypatch.setattr(
@@ -290,6 +292,46 @@ def test_codex_openai_rollout_closes_loop(monkeypatch):
             assert sum(s.loss_mask) > 0
 
     asyncio.run(run_case())
+
+
+def test_one_worker_switches_from_codex_to_claude_without_mutating_global_config(monkeypatch):
+    async def responses_agent(env):
+        body = {"input": [{"role": "user", "content": "solve the issue"}], "store": False}
+        async with aiohttp.ClientSession(trust_env=False) as session:
+            for _ in range(2):
+                async with session.post(
+                    env["OPENAI_BASE_URL"] + "/responses",
+                    headers={"Authorization": "Bearer " + env["OPENAI_API_KEY"]},
+                    json=body,
+                ) as response:
+                    assert response.status == 200
+                    data = await response.json()
+                body["input"] += data["output"] + [{"role": "user", "content": "continue"}]
+        return 0
+
+    async def launch(env):
+        return await (responses_agent(env) if "OPENAI_API_KEY" in env else _anthropic_agent(env))
+
+    async def run():
+        tok = FakeTokenizer()
+        _patch_generate(monkeypatch, tok, FakeSandbox.factory(on_launch=launch))
+        monkeypatch.setattr(CodexHarness, "install_cli", _noop_install)
+        monkeypatch.setattr(
+            adapters_common, "call_sglang_generate", fake_call_sglang_generate(_two_turn_script() * 2, tok)
+        )
+        default = gen.AGENT_NAME
+        for index, name in enumerate(("codex", "claude_code")):
+            base = _base_sample(agent=name)
+            base.index = index
+            samples = await gen.generate(_args(), base, sampling_params={"max_new_tokens": 32})
+            assert samples and {s.metadata.get("agent") for s in samples} == {name}
+            assert all(s.metadata["agent_exit_code"] == 0 for s in samples)
+        state = gen._AdapterService(_args())
+        assert state.endpoint("codex")[0] is not state.endpoint("claude_code")[0]
+        assert state.endpoint("codex")[1] != state.endpoint("claude_code")[1]
+        assert gen.AGENT_NAME == default
+
+    asyncio.run(run())
 
 
 if __name__ == "__main__":

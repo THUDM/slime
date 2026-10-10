@@ -22,6 +22,26 @@ def reset_weights_update_groups(groups, *, timeout):
     group can wait for its peers, so sending resets to one server group and
     waiting before contacting the next group can deadlock healthy engines.
     """
+    # Retire unresponsive actors before asking healthy peers to destroy their
+    # shared NCCL group; otherwise the healthy reset can wait on the stuck peer.
+    probes = {
+        engine.get_url.remote(): (group_index, index // group.nodes_per_engine)
+        for group_index, group in enumerate(groups)
+        for index, engine in enumerate(group.all_engines)
+        if engine is not None
+    }
+    if probes:
+        ray.wait(list(probes), num_returns=len(probes), timeout=timeout)
+    unresponsive = set()
+    for ref, (group_index, engine_id) in probes.items():
+        try:
+            ray.get(ref, timeout=0)
+        except Exception as error:
+            logger.warning("Retiring unresponsive engine before trainer reset: %s", error)
+            unresponsive.add((group_index, engine_id))
+    for group_index, engine_id in sorted(unresponsive):
+        groups[group_index].retire_engine(engine_id, timeout=timeout)
+
     resets = {
         engine.reset_weights_update_groups.remote(): (group_index, index // group.nodes_per_engine)
         for group_index, group in enumerate(groups)

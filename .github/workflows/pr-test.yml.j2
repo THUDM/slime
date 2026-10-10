@@ -1,4 +1,5 @@
 <% set megatron_tests = [
+    {'test_file': 'test_agent_sunabako_codex_e2e.py', 'num_gpus': 8, 'timeout_minutes': 35},
     {'test_file': 'test_full_disk_weight_update.py', 'num_gpus': 4},
     {'test_file': 'test_release_train.py', 'num_gpus': 4, 'straw': True},
     {'test_file': 'test_quick_start_glm4_9B.py', 'num_gpus': 8, 'enable_eval': '0'},
@@ -85,9 +86,13 @@
       'extra_pip_deps': 'transformers wandb zstandard',
       'tests': [
         {'test_file': 'test_megatron_argument_validation.py', 'num_gpus': 0, 'straw': True},
+        {'test_file': 'test_megatron_tokenizer_init.py', 'num_gpus': 0},
+        {'test_file': 'test_megatron_checkpoint.py', 'num_gpus': 0},
+        {'test_file': 'test_reference_top_p_replay.py', 'num_gpus': 0},
         {'test_file': 'utils/test_megatron_role_config.py', 'num_gpus': 0},
         {'test_file': 'test_deep_ep_tms_patch.py', 'num_gpus': 0},
         {'test_file': 'test_stateless_adam.py', 'num_gpus': 0},
+        {'test_file': 'test_update_weight_factory.py', 'num_gpus': 0},
         {'test_file': 'utils/test_megatron_server_arguments.py', 'num_gpus': 0},
         {'test_file': 'test_dp_schedule.py', 'num_gpus': 0},
         {'test_file': 'test_cp_utils.py', 'num_gpus': 0},
@@ -125,6 +130,7 @@
         {'test_file': 'test_pipeline_rl.py', 'num_gpus': 0},
         {'test_file': 'test_training_recovery.py', 'num_gpus': 0, 'straw': True},
         {'test_file': 'test_disk_delta_recovery.py', 'num_gpus': 0},
+        {'test_file': 'test_disk_delta_checkpoint_index.py', 'num_gpus': 0},
         {'test_file': 'test_rollout_manager_recovery.py', 'num_gpus': 0, 'straw': True},
         {'test_file': 'test_distributed_rollout.py', 'num_gpus': 0, 'straw': True},
         {'test_file': 'test_straw_fully_async_recovery.py', 'num_gpus': 0, 'straw': True},
@@ -134,6 +140,8 @@
         {'test_file': 'test_straw_r3.py', 'num_gpus': 0, 'straw': True},
         {'test_file': 'test_routed_experts_disk_layout.py', 'num_gpus': 0, 'straw': True},
         {'test_file': 'test_rollout_straw_transport.py', 'num_gpus': 0, 'straw': True},
+        {'test_file': 'test_published_payload_retry.py', 'num_gpus': 0, 'straw': True},
+        {'test_file': 'test_rollout_metadata_index.py', 'num_gpus': 0, 'straw': True},
         {'test_file': 'test_optional_straw.py', 'num_gpus': 0},
         {'test_file': 'test_queue_sample_codec.py', 'num_gpus': 0, 'straw': True},
         {'test_file': 'test_rollout_sample_hooks.py', 'num_gpus': 0},
@@ -143,6 +151,7 @@
         {'test_file': 'test_accelerator.py', 'num_gpus': 0},
         {'test_file': 'test_reloadable_process_group_world.py', 'num_gpus': 0},
         {'test_file': 'test_reloadable_process_group_memory_check.py', 'num_gpus': 0},
+        {'test_file': 'test_reloadable_process_group_megatron_bindings.py', 'num_gpus': 0},
         {'test_file': 'test_placement_group.py', 'num_gpus': 0},
         {'test_file': 'test_external_sglang_engines.py', 'num_gpus': 0},
         {'test_file': 'test_streaming_rollout.py', 'num_gpus': 0},
@@ -163,15 +172,24 @@
     },
 
     'agent-test': {
-      'label': 'run-ci-agent',
       'always': True,
       'cpu': True,
+      'extra_pip_deps': 'transformers tokenizers',
       'tests': [
         {'test_file': 'test_agent/test_trajectory_manager_branching.py', 'num_gpus': 0},
+        {'test_file': 'test_agent/test_token_contract.py', 'num_gpus': 0},
+        {'test_file': 'test_agent/test_prompt_continuity.py', 'num_gpus': 0},
+        {'test_file': 'test_agent/test_sampler_replay.py', 'num_gpus': 0},
+        {'test_file': 'test_grouped_rewards.py', 'num_gpus': 0},
         {'test_file': 'test_agent/test_adapters.py', 'num_gpus': 0},
+        {'test_file': 'test_agent/test_responses.py', 'num_gpus': 0},
         {'test_file': 'test_agent/test_harness.py', 'num_gpus': 0},
         {'test_file': 'test_agent/test_sandbox_exec_and_wait.py', 'num_gpus': 0},
         {'test_file': 'test_agent/test_agent_rollout_cpu.py', 'num_gpus': 0},
+        {'test_file': 'test_agent/test_sunabako_provider.py', 'num_gpus': 0},
+        {'test_file': 'test_agent/test_e2e_asset_cache.py', 'num_gpus': 0},
+        {'test_file': 'test_agent/test_e2e_grpo_contract.py', 'num_gpus': 0},
+        {'test_file': 'test_agent/test_swe_workspace_diff.py', 'num_gpus': 0},
       ],
     },
 
@@ -207,6 +225,41 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  docs-lab:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [generator, browser]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Generator contracts and exported shell execution
+        if: matrix.suite == 'generator'
+        run: node --test docs/tests/experiment.test.cjs
+      - name: Install browser and documentation dependencies
+        if: matrix.suite == 'browser'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pandoc fonts-noto-cjk
+          pip install -r docs/requirements.txt -r docs/tests/requirements.txt
+          python -m playwright install --with-deps chromium
+      - name: Strict bilingual build and browser walkthrough
+        if: matrix.suite == 'browser'
+        env:
+          SLIME_DOC_LAYOUT: prefix
+        run: |
+          bash docs/build.sh en -W --keep-going
+          bash docs/build.sh zh -W --keep-going
+          python docs/tests/test_browser.py
+
 <% for job_name, config in jobs.items() %>
   << job_name >>:
 <% if config.get('always') %>
@@ -218,6 +271,11 @@ jobs:
     runs-on: ubuntu-latest
 <% else %>
     runs-on: self-hosted
+<% endif %>
+<% if config.get('timeout_minutes') %>
+    timeout-minutes: << config.timeout_minutes >>
+<% elif config.tests | selectattr('timeout_minutes', 'defined') | list %>
+    timeout-minutes: ${{ matrix.info.timeout_minutes || 360 }}
 <% endif %>
     strategy:
       fail-fast: false
@@ -259,7 +317,7 @@ jobs:
       - name: Install straw for queue tests
         if: matrix.info.straw == true
         shell: bash
-        run: python -m pip install --upgrade --only-binary=straw-queue straw-queue
+        run: python -m pip install --upgrade --no-deps --only-binary=straw-queue straw-queue
 <% endif %>
 
       - name: Install
@@ -288,7 +346,18 @@ jobs:
             python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
           fi
 <% else %>
-          docker run --pull=always --rm \
+          SLIME_CI_CONTAINER_DIR=$(mktemp -d)
+          cleanup_ci_container() {
+            if [ -s "$SLIME_CI_CONTAINER_DIR/container.cid" ]; then
+              docker rm -f "$(cat "$SLIME_CI_CONTAINER_DIR/container.cid")" >/dev/null 2>&1 || true
+            fi
+            rm -f "$SLIME_CI_CONTAINER_DIR/container.cid"
+            rmdir "$SLIME_CI_CONTAINER_DIR"
+          }
+          trap cleanup_ci_container EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          docker run --pull=always --rm --init --cidfile "$SLIME_CI_CONTAINER_DIR/container.cid" \
             --privileged \
             --cap-add SYS_NICE \
             --security-opt seccomp=unconfined \
@@ -304,6 +373,10 @@ jobs:
             -e https_proxy \
             -e HTTP_PROXY \
             -e HTTPS_PROXY \
+            -e all_proxy \
+            -e ALL_PROXY \
+            -e no_proxy \
+            -e NO_PROXY \
             -e GITHUB_COMMIT_NAME \
             -e WANDB_API_KEY \
             -e SLIME_TEST_ENABLE_INFINITE_RUN \
@@ -313,7 +386,9 @@ jobs:
             -e TEST_FILE="${{ matrix.info.test_file }}" \
             -e TEST_ARGS="${{ matrix.info.test_args || '' }}" \
             -e NUM_GPUS="${{ matrix.info.num_gpus }}" \
+            -e SLIME_AGENT_TEST_RUN_DIR=/workspace/.agent-e2e/run \
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -v "$GITHUB_WORKSPACE:/workspace" \
             -v /mnt/nvme0n1/slime_ci:/data/slime_ci \
             -v /mnt/nvme0n1/slime_ci/models:/root/models \
             -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets \
@@ -321,8 +396,11 @@ jobs:
             << config.image if config.image else 'slimerl/slime:latest' >> \
             bash -lc '
               set -euo pipefail
-              python -m pip install --upgrade --only-binary=straw-queue --break-system-packages straw-queue
+              python -m pip install --upgrade --no-deps --only-binary=straw-queue --break-system-packages straw-queue
               pip install -e . --no-deps --break-system-packages
+              if [[ "${TEST_FILE##*/}" == "test_agent_sunabako_codex_e2e.py" ]]; then
+                source tests/ci/setup_agent_e2e.sh
+              fi
               TEST_PATH="$TEST_FILE"
               if [[ "$TEST_PATH" != tests/* ]]; then
                 TEST_PATH="tests/$TEST_PATH"
@@ -339,6 +417,14 @@ jobs:
               fi
             '
 <% endif %>
+      - name: Upload agent E2E evidence
+        if: always() && matrix.info.test_file == 'test_agent_sunabako_codex_e2e.py'
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-e2e-<< job_name >>
+          path: ${{ github.workspace }}/.agent-e2e/
+          include-hidden-files: true
+          if-no-files-found: ignore
 <% endfor %>
 
   e2e-test-changed-detect:
@@ -405,7 +491,18 @@ jobs:
       - name: Execute
         shell: bash
         run: |
-          docker run --pull=always --rm \
+          SLIME_CI_CONTAINER_DIR=$(mktemp -d)
+          cleanup_ci_container() {
+            if [ -s "$SLIME_CI_CONTAINER_DIR/container.cid" ]; then
+              docker rm -f "$(cat "$SLIME_CI_CONTAINER_DIR/container.cid")" >/dev/null 2>&1 || true
+            fi
+            rm -f "$SLIME_CI_CONTAINER_DIR/container.cid"
+            rmdir "$SLIME_CI_CONTAINER_DIR"
+          }
+          trap cleanup_ci_container EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          docker run --pull=always --rm --init --cidfile "$SLIME_CI_CONTAINER_DIR/container.cid" \
             --privileged \
             --cap-add SYS_NICE \
             --security-opt seccomp=unconfined \
@@ -421,6 +518,10 @@ jobs:
             -e https_proxy \
             -e HTTP_PROXY \
             -e HTTPS_PROXY \
+            -e all_proxy \
+            -e ALL_PROXY \
+            -e no_proxy \
+            -e NO_PROXY \
             -e GITHUB_COMMIT_NAME \
             -e WANDB_API_KEY \
             -e SLIME_TEST_ENABLE_INFINITE_RUN \
@@ -430,7 +531,9 @@ jobs:
             -e TEST_FILE="${{ matrix.info.test_file }}" \
             -e TEST_ARGS="${{ matrix.info.test_args || '' }}" \
             -e NUM_GPUS="${{ matrix.info.num_gpus }}" \
+            -e SLIME_AGENT_TEST_RUN_DIR=/workspace/.agent-e2e/run \
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -v "$GITHUB_WORKSPACE:/workspace" \
             -v /mnt/nvme0n1/slime_ci:/data/slime_ci \
             -v /mnt/nvme0n1/slime_ci/models:/root/models \
             -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets \
@@ -438,8 +541,11 @@ jobs:
             slimerl/slime:latest \
             bash -lc '
               set -euo pipefail
-              python -m pip install --upgrade --only-binary=straw-queue --break-system-packages straw-queue
+              python -m pip install --upgrade --no-deps --only-binary=straw-queue --break-system-packages straw-queue
               pip install -e . --no-deps --break-system-packages
+              if [[ "${TEST_FILE##*/}" == "test_agent_sunabako_codex_e2e.py" ]]; then
+                source tests/ci/setup_agent_e2e.sh
+              fi
               TEST_PATH="$TEST_FILE"
               if [[ "$TEST_PATH" != tests/* ]]; then
                 TEST_PATH="tests/$TEST_PATH"
@@ -455,3 +561,11 @@ jobs:
                 python tests/ci/gpu_lock_exec.py --count "$NUM_GPUS" -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
               fi
             '
+      - name: Upload agent E2E evidence
+        if: always() && endsWith(matrix.info.test_file, 'test_agent_sunabako_codex_e2e.py')
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-e2e-changed
+          path: ${{ github.workspace }}/.agent-e2e/
+          include-hidden-files: true
+          if-no-files-found: ignore

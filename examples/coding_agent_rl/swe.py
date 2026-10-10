@@ -28,14 +28,17 @@ import asyncio
 import json
 import logging
 import os
+import shlex
 import tempfile
 from pathlib import Path
 from typing import Any, NamedTuple
 
 from slime.agent import sandbox as agent_sandbox
 from slime.agent.adapters.common import flatten_content
-from slime.agent.sandbox import E2BSandbox, Sandbox, exec_and_wait
+from slime.agent.sandbox import Sandbox, exec_and_wait
 from slime.utils.types import Sample
+
+from .sandbox import create_sandbox
 
 try:
     from swebench.harness.grading import get_eval_report  # type: ignore
@@ -53,9 +56,11 @@ PROTOCOL_SCALESWE = "scaleswe"
 PROTOCOL_SWEBENCH = "swebench"
 
 # Paths inside the sandbox (avoid clashes with image-shipped paths).
-_PATCH = "/workspace/__cagent_patch__.diff"
-_PRE = "/workspace/__cagent_pre__.sh"
-_F2P = "/workspace/__cagent_f2p__.py"
+# The evaluator writes these files as the unprivileged agent; /workspace may be
+# root-owned on a native sandbox. Each sandbox has its own private /tmp.
+_PATCH = "/tmp/__cagent_patch__.diff"
+_PRE = "/tmp/__cagent_pre__.sh"
+_F2P = "/tmp/__cagent_f2p__.py"
 _SWEPRO_DIR = "/workspace/swepro_eval"
 
 SWE_PROMPT = os.environ.get(
@@ -104,6 +109,7 @@ def _metadata_scaleswe(sample: Sample) -> dict[str, Any]:
         "grading": {
             "swepro": swepro,
             "eval_cmd": eval_cmd,
+            "eval_user": m.get("eval_user", "agent"),
             "f2p_script": f2p_script,
             "pre_commands": m.get("pre_commands") or rem.get("pre_commands"),
         },
@@ -174,8 +180,8 @@ def _evaluability_check_swebench(md: dict) -> str | None:
 # ---------------------------------------------------------------------------
 # Workspace prep (agent sandbox, before harness.run)
 # ---------------------------------------------------------------------------
-async def prepare_workspace(sb: Sandbox, workdir: str, md: dict) -> None:
-    """Prep the agent sandbox, then drop PROBLEM_STATEMENT.md.
+async def prepare_workspace(sb: Sandbox, workdir: str, md: dict) -> str:
+    """Prep the sandbox and return its initial Git tree for patch extraction.
 
     Assumes the agent user already owns ``workdir`` (the harness's ``run()`` calls
     ``ensure_agent_user``; the orchestrator runs this before ``run()`` and the
@@ -196,6 +202,7 @@ async def prepare_workspace(sb: Sandbox, workdir: str, md: dict) -> None:
         md.get("problem_statement") or "",
         user="agent",
     )
+    return await _repository_tree(sb, workdir)
 
 
 async def apply_before_repo_set_cmd(sb: Sandbox, workdir: str, swepro: dict) -> None:
@@ -227,9 +234,33 @@ async def apply_pre_commands(sb: Sandbox, workdir: str, pre: list[str] | str) ->
 # ---------------------------------------------------------------------------
 # Diff capture (agent sandbox, after harness.run)
 # ---------------------------------------------------------------------------
-async def git_diff(sb: Sandbox, workdir: str) -> str:
-    cmd = f"cd {workdir} && git add -N . && git diff -- . ':(exclude)PROBLEM_STATEMENT.md' ':(exclude).harness/'"
-    _, out, _ = await sb.exec(cmd, user="agent", timeout=120)
+async def _repository_tree(sb: Sandbox, workdir: str) -> str:
+    # Images can contain modified tracked files and untracked build artifacts.
+    # Snapshot the actual workspace with a temporary index, preserving HEAD and
+    # the agent's real index. This also captures staged edits and new files.
+    cmd = (
+        f"set -e\ncd {shlex.quote(workdir)}\n"
+        'agent_index=$(mktemp)\nrm -f "$agent_index"\n'
+        'trap \'rm -f "$agent_index" "$agent_index.lock"\' EXIT\n'
+        'export GIT_INDEX_FILE="$agent_index"\n'
+        "git read-tree HEAD\n"
+        "git add -A -- . ':(exclude)PROBLEM_STATEMENT.md' ':(exclude).harness/'\n"
+        "git write-tree"
+    )
+    _, out, _ = await sb.exec(cmd, user="agent", timeout=120, check=True)
+    tree = out.strip()
+    if len(tree) not in (40, 64) or any(c not in "0123456789abcdef" for c in tree):
+        raise RuntimeError(f"Invalid repository snapshot: {tree!r}")
+    return tree
+
+
+async def git_diff(sb: Sandbox, workdir: str, baseline: str) -> str:
+    current = await _repository_tree(sb, workdir)
+    cmd = (
+        f"cd {shlex.quote(workdir)} && git diff --binary {shlex.quote(baseline)} {shlex.quote(current)}"
+        " -- . ':(exclude)PROBLEM_STATEMENT.md' ':(exclude).harness/'"
+    )
+    _, out, _ = await sb.exec(cmd, user="agent", timeout=120, check=True)
     return out
 
 
@@ -266,7 +297,7 @@ async def _grade_scaleswe(md: dict, diff_text: str, timeout_sec: int) -> EvalRes
         logger.warning("[swe.scaleswe] no swepro/eval_cmd/f2p_script; reward=0")
         return EvalResult(0.0, True)
 
-    async with E2BSandbox(image) as ev:
+    async with create_sandbox(image) as ev:
         await agent_sandbox.ensure_agent_user(ev, workdir)
         if swepro:
             await _setup_swepro_assets(ev, swepro)
@@ -281,7 +312,7 @@ async def _grade_scaleswe(md: dict, diff_text: str, timeout_sec: int) -> EvalRes
         if swepro:
             r = await _run_swepro(ev, workdir, swepro, timeout_sec)
         elif eval_cmd:
-            r = await _run_eval_cmd(ev, workdir, eval_cmd, timeout_sec)
+            r = await _run_eval_cmd(ev, workdir, eval_cmd, timeout_sec, user=grading.get("eval_user", "agent"))
         else:
             r = await _run_f2p_script(ev, workdir, f2p_script, timeout_sec)
         return EvalResult(r, True)
@@ -304,12 +335,12 @@ async def _apply_diff(ev: Sandbox, workdir: str, diff_text: str) -> bool:
     ladder = " || ".join(
         f"({cmd})"
         for cmd in (
-            f"git apply --3way --whitespace=nowarn {_PATCH}",
             f"git apply --whitespace=nowarn {_PATCH}",
+            f"git apply --3way --whitespace=nowarn {_PATCH}",
             f"patch -p1 --no-backup-if-mismatch < {_PATCH}",
         )
     )
-    ec, _, _ = await ev.exec(f"cd {workdir} && ({ladder})", user="agent", check=False, timeout=120)
+    ec, _, _ = await ev.exec(f"cd {shlex.quote(workdir)} && ({ladder})", user="agent", check=False, timeout=120)
     return ec == 0
 
 
@@ -338,8 +369,8 @@ async def _run_swepro(ev: Sandbox, workdir: str, swepro: dict, timeout: int) -> 
     return 1.0 if solved else 0.0
 
 
-async def _run_eval_cmd(ev: Sandbox, workdir: str, cmd: str, timeout: int) -> float:
-    ec, _, _ = await ev.exec(f"cd {workdir} && {cmd}", user="agent", check=False, timeout=timeout)
+async def _run_eval_cmd(ev: Sandbox, workdir: str, cmd: str, timeout: int, *, user: str = "agent") -> float:
+    ec, _, _ = await ev.exec(f"cd {workdir} && {cmd}", user=user, check=False, timeout=timeout)
     return 1.0 if ec == 0 else 0.0
 
 
@@ -462,7 +493,7 @@ async def _grade_swebench(md: dict, diff_text: str, timeout_sec: int) -> EvalRes
         logger.warning("[swe.swebench] %s: missing image; reward=0", instance_id)
         return EvalResult(0.0, True)
 
-    async with E2BSandbox(image) as ev:
+    async with create_sandbox(image) as ev:
         await asyncio.gather(
             ev.write_file("/tmp/patch.diff", diff_text or "", user="root"),
             ev.write_file("/tmp/eval.sh", eval_sh, user="root"),

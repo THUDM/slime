@@ -20,7 +20,7 @@ There are four main parameters for cluster resource allocation:
   - `--actor-num-gpus-per-node`: The number of GPUs per node for RL actor training.
   - `--rollout-num-gpus`: The total number of GPUs required for rollout (inference). Set it to `0` to still parse SGLang arguments and launch the router without launching local SGLang servers.
   - `--rollout-num-gpus-per-engine`: The number of GPUs per inference engine. This parameter is similar to SGLang's `tp_size`. When performing multi-node serving, this value should be the total number of GPUs. For example, if serving one model with 2 nodes and 16 GPUs, this value should be 16.
-    The reason for not using a parameter like `--sglang-tp-size` is that we might consider supporting SGLang's `dp_size` parameter in the future, which means an engine could contain multiple SGLang servers (currently, only `--sglang-dp-size` under the `--sglang-enable-dp-attention` condition is supported).
+    SGLang receives `--sglang-dp-size` separately. By default, its TP size is the engine GPU count divided by the PP size; an SGLang config can override the parallel settings for a server group.
 
 With the default configuration, we use these parameters to allocate `actor_num_nodes * actor_num_gpus_per_node` GPUs for training and `rollout_num_gpus` GPUs for inference via Ray, thus achieving a separation of training and inference resources.
 
@@ -74,7 +74,7 @@ MODEL_ARGS=(
 )
 ```
 
-We provide configurations for common models in [scripts/models](../../../scripts/models), which you can reuse directly. If you are also using Megatron for pre-training/SFT, you can directly reuse the model configurations from your pre-training/SFT setup.
+We provide configurations for common models in [scripts/models](https://github.com/THUDM/slime/tree/main/scripts/models), which you can reuse directly. If you are also using Megatron for pre-training/SFT, you can directly reuse the model configurations from your pre-training/SFT setup.
 
 Note:
 
@@ -106,7 +106,7 @@ Megatron supports several of its custom checkpoint formats. Here are two of the 
 
 The `torch` format is Megatron's older storage format. Its structure consists of directories like `mp_rank_xxx`, where each directory corresponds to the checkpoint stored by each rank under a specific parallel partitioning. Because of this, when loading a `torch` format checkpoint, you must ensure that the checkpoint's parallelism strategy matches that of the training task.
 
-We recommend using the `torch_dist` format because it supports automatic parallel sharding, meaning that training tasks with different parallelism settings can share the same checkpoint, which is much more convenient. `torch_dist` is also the default format in the open-source Megatron. A `torch_dist` format checkpoint typically contains a set of `.distcp` files. When using `torch_dist`, you can convert from Hugging Face to `torch_dist` and vice versa using the checkpoint conversion method described in the [README](../../../README.md).
+We recommend using the `torch_dist` format because it supports automatic parallel sharding, meaning that training tasks with different parallelism settings can share the same checkpoint, which is much more convenient. `torch_dist` is also the default format in the open-source Megatron. A `torch_dist` format checkpoint typically contains a set of `.distcp` files. When using `torch_dist`, you can convert from Hugging Face to `torch_dist` and vice versa using the checkpoint conversion method described in the [README](https://github.com/THUDM/slime/blob/main/README.md).
 
 In terms of storage structure, a Megatron checkpoint typically looks like this, assuming the storage path is `/ckpt/`:
 
@@ -282,7 +282,7 @@ Add the following options to an existing RL launch:
 
 **Sampling requirements:** Use a positive temperature, `0 < top_p <= 1`, `top_k=-1`, `min_p=0`, and no repetition/frequency/presence penalties or constrained decoding. Keep `SGLANG_RETURN_ORIGINAL_LOGPROB` unset or false on all sampler workers when temperature differs from one or top_p is below one. Per-request temperature or top_p changes and streaming SC are unsupported. Evaluation does not request SC data and may use its own sampling settings.
 
-**Combining with top-p replay:** Change `--rollout-top-p 1.0` above to, for example, `--rollout-top-p 0.9`. SC automatically sums over the complete replay support and ignores `--score-centering-top-k`. Rollout returns all support IDs and their post-truncation, normalized sampler logprobs. The trainer normalizes on the same support and computes the correction `sum(stop_gradient(q * weight) * log p)`. This uses no tail approximation and excludes tokens outside the support. Full trainer logits cannot reconstruct the sampler probabilities, so the original probabilities must still be stored. Payload size varies with the support and can greatly exceed fixed top-k heads when top-p approaches one. Exactness is relative to the recorded replay support, including replay's existing rule for retaining sampled boundary tokens.
+**Combining with top-p replay:** Change `--rollout-top-p 1.0` above to, for example, `--rollout-top-p 0.9`. SC automatically sums over the complete replay support and ignores `--score-centering-top-k`. Rollout returns all support IDs and their post-truncation, normalized sampler logprobs. The trainer normalizes on the same support and computes the correction `sum(stop_gradient(q * weight - weight(1) * p) * log p)`. This matches the existing non-top-p centering convention on a complete support. The subtracted baseline has zero score gradient, so the update is unchanged, and `sc_correction` is zero when trainer and sampler distributions match (up to rounding). This uses no tail approximation and excludes tokens outside the support. Full trainer logits cannot reconstruct the sampler probabilities, so the original probabilities must still be stored. Payload size varies with the support and can greatly exceed fixed top-k heads when top-p approaches one. Exactness is relative to the recorded replay support, including replay's existing rule for retaining sampled boundary tokens.
 
 **SGLang support:** Use an image built with `docker/patch/latest/sglang-top_p.patch`, which provides binary top-k and complete top-p probability outputs. Slime requests `top_logprobs_num=k` when `top_p=1`, or `custom_params.return_top_p_log_probs` when `top_p<1`, and stores the original sampler probabilities without recomputing them with a newer checkpoint. Custom generators should call `score_centering_request` from `slime.utils.score_centering` and pass the response metadata to `Sample.append_response_tokens`.
 
@@ -462,7 +462,7 @@ without introducing weight-version cache namespaces.
 
 slime implements a server-based engine using SGLang via the `HttpServerEngineAdapter` as an intermediary.
 
-### Parameter Configuration
+### SGLang Arguments
 
 slime incorporates almost all SGLang parameters by using SGLang's `ServerArgs.add_cli_args`. When setting an SGLang parameter, you need to add the `--sglang-` prefix. For example:
 
@@ -519,7 +519,7 @@ Each model gets its own router. The per-model router info is accessible via `arg
 
 slime supports different and lightly modified versions of Megatron by reusing common functions from the `megatron.training` directory, such as `parse_args`, `save_checkpoint`, and `load_checkpoint`. Therefore, when using it, you must ensure that Megatron is accessible in the `PYTHONPATH`, for example, by adding `export PYTHONPATH=/root/Megatron-LM` at runtime.
 
-### Parameter Configuration
+### Megatron Arguments
 
 slime directly imports all parameters of the Megatron in the current environment by using `from megatron.training.arguments import parse_args`. If the version of Megatron you are using has parameters defined outside of `parse_args`, you can configure them by passing them in, similar to how it's done in [train.py](https://github.com/THUDM/slime/blob/main/train.py), for example:
 

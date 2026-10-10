@@ -69,7 +69,13 @@ def checkpoint_module(tmp_path, monkeypatch):
     # Only Megatron's model/collective boundary is replaced. The Slime adapter
     # writes real checkpoint files, and the optimizer/scheduler below are real.
     args = SimpleNamespace(
-        save=str(tmp_path), load=str(tmp_path), use_stateless_adam=True, finetune=False, ckpt_step=0
+        save=str(tmp_path),
+        load=str(tmp_path),
+        use_stateless_adam=True,
+        finetune=False,
+        ckpt_step=0,
+        async_save=False,
+        offload_train=False,
     )
 
     def save_model(iteration, *a, **kw):

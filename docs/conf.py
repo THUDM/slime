@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-__version__ = "0.3.2"
+__version__ = "0.4.0"
 
 project = "slime"
 copyright = f"2025-{datetime.now().year}, slime"
@@ -47,7 +47,7 @@ myst_enable_extensions = [
     "substitution",
 ]
 
-myst_heading_anchors = 3
+myst_heading_anchors = 5
 
 nbsphinx_kernel_name = "python3"
 nbsphinx_execute_arguments = [
@@ -70,17 +70,6 @@ nb_render_priority = {
     )
 }
 
-myst_enable_extensions = [
-    "dollarmath",
-    "amsmath",
-    "deflist",
-    "colon_fence",
-    "html_image",
-    "linkify",
-    "substitution",
-]
-
-myst_heading_anchors = 3
 myst_ref_domains = ["std", "py"]
 
 templates_path = ["_templates"]
@@ -108,7 +97,8 @@ html_last_updated_fmt = ""
 html_theme_options = {
     "repository_url": "https://github.com/THUDM/slime",
     "repository_branch": "main",
-    "show_navbar_depth": 3,
+    "path_to_docs": f"docs/{language}",
+    "show_navbar_depth": 1,
     "max_navbar_depth": 4,
     "collapse_navbar": True,
     "use_edit_page_button": True,
@@ -122,85 +112,79 @@ html_theme_options = {
 
 html_context = {
     "display_github": True,
-    "github_user": "sgl-project",
-    "github_repo": "sgl-project.github.io",
+    "github_user": "THUDM",
+    "github_repo": "slime",
     "github_version": "main",
-    "conf_py_path": "/docs/",
+    "conf_py_path": f"/docs/{language}/",
 }
 
 html_static_path = ["_static"]
 html_css_files = ["css/custom_log.css"]
 # Add custom javascript for language toggle (en <-> zh)
 html_js_files = [
-    "js/lang-toggle.js",
+    ("js/lang-toggle.js", {"data-layout": os.environ.get("SLIME_DOC_LAYOUT", "root")}),
 ]
 
 
 def _sync_examples(app):
-    """Sync top-level examples into language-specific doc trees.
+    """Copy example docs and assets into the current language's source tree.
 
-    Policy:
-      - README.md -> English docs/en/_examples_synced/<example>/README.md
-      - README_zh.md -> Chinese docs/zh/_examples_synced/<example>/README_zh.md
-      - If a language-specific README missing, that example is simply skipped for that language.
+    Chinese builds prefer README_zh.md and fall back to README.md.
+    The generated copy is always named README.md to keep navigation consistent.
     """
-    docs_root = Path(__file__).resolve().parent
-    src_dir = docs_root.parent / "examples"
-    if not src_dir.exists():
-        return
+    src_dir = Path(__file__).resolve().parent.parent / "examples"
+    out_dir = Path(app.srcdir) / "_examples_synced"
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    lang_cfgs = {
-        "en": {
-            "dir": docs_root / "en",
-            "readme_name": "README.md",
-        },
-        "zh": {
-            "dir": docs_root / "zh",
-            # primary preferred name; will fallback to README.md
-            "readme_name": "README_zh.md",
-        },
-    }
-
-    for lang, cfg in lang_cfgs.items():
-        lang_dir = cfg["dir"]
-        if not lang_dir.exists():
+    for example_dir in sorted(src_dir.iterdir()):
+        if not example_dir.is_dir():
             continue
-        out_dir = lang_dir / "_examples_synced"
-        if out_dir.exists():
-            shutil.rmtree(out_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-
-        entries = []  # (example_name, readme_rel_path)
-        for d in sorted(src_dir.iterdir()):
-            if not d.is_dir():
-                continue
-            # language-specific selection with fallback for zh
-            if lang == "zh":
-                primary = d / cfg["readme_name"]  # README_zh.md
-                fallback = d / "README.md"
-                candidate = primary if primary.exists() else fallback
-            else:
-                candidate = d / cfg["readme_name"]
-            if not candidate.exists():
-                continue  # skip entirely if nothing suitable
-            target_dir = out_dir / d.name
-            shutil.copytree(d, target_dir, ignore=shutil.ignore_patterns("README.md", "README_zh.md"))
-            shutil.copy2(candidate, target_dir / "README.md")
-            entries.append((d.name, f"_examples_synced/{d.name}/README.md"))
+        readme = example_dir / "README.md"
+        if app.config.language == "zh" and (example_dir / "README_zh.md").exists():
+            readme = example_dir / "README_zh.md"
+        if not readme.exists():
+            continue
+        target_dir = out_dir / example_dir.name
+        shutil.copytree(
+            example_dir,
+            target_dir,
+            ignore=shutil.ignore_patterns("README.md", "README_zh.md", "__pycache__", ".git"),
+        )
+        content = readme.read_text().replace("](#", "](README.md#")
+        (target_dir / "README.md").write_text(content)
 
 
 def setup(app):
     # ensure examples are synced before reading source files
     app.connect("builder-inited", _sync_examples)
+    app.connect("html-page-context", _example_source_context, priority=499)
+    app.connect("html-page-context", _experiment_home)
 
 
-myst_enable_extensions = [
-    "dollarmath",
-    "amsmath",
-    "deflist",
-    "colon_fence",
-]
-myst_heading_anchors = 5
+def _experiment_home(app, pagename, templatename, context, doctree):
+    if pagename == "index" and app.builder.format == "html":
+        context["doc_layout"] = os.environ.get("SLIME_DOC_LAYOUT", "root")
+        return "experiment.html"
+
+
+def _example_source_context(app, pagename, templatename, context, doctree):
+    """Point copied example pages back to their original repository source."""
+    if not pagename.startswith("_examples_synced/"):
+        return
+    example_name = pagename.split("/")[1]
+    source_dir = Path(__file__).resolve().parent.parent / "examples" / example_name
+    readme_name = "README.md"
+    if app.config.language == "zh" and (source_dir / "README_zh.md").exists():
+        readme_name = "README_zh.md"
+    context["original_readme"] = readme_name
+    context["edit_page_provider_name"] = "GitHub"
+    context["edit_page_url_template"] = (
+        "{{ github_url }}/{{ github_user }}/{{ github_repo }}/edit/{{ github_version }}/"
+        "examples/{{ file_name.split('/')[1] }}/{{ original_readme }}"
+    )
+
 
 htmlhelp_basename = "slimedoc"
 
@@ -219,7 +203,7 @@ texinfo_documents = [
         "slime Documentation",
         author,
         "slime",
-        "One line description of project.",
+        "An LLM post-training framework for RL scaling.",
         "Miscellaneous",
     ),
 ]
@@ -245,11 +229,8 @@ intersphinx_mapping = {
     "typing_extensions": ("https://typing-extensions.readthedocs.io/en/latest", None),
     "pillow": ("https://pillow.readthedocs.io/en/stable", None),
     "numpy": ("https://numpy.org/doc/stable", None),
-    "torch": ("https://pytorch.org/docs/stable", None),
+    "torch": ("https://docs.pytorch.org/docs/stable", None),
 }
-
-html_theme = "sphinx_book_theme"
-
 
 nbsphinx_prolog = """
 .. raw:: html

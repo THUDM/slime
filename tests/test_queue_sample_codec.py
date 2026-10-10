@@ -254,8 +254,11 @@ def test_batch_builder_preserves_group_rewards_masks_and_r3_sc_after_replay(code
         num_layers=4,
         moe_router_topk=2,
     )
+    # Two rollouts in one prompt group; rollout 7 has nonadjacent segments
+    # sharing one outcome, which must count only once in reward statistics.
+    segments = [(7, 1.0, [1, 0]), (8, 3.0, [1, 1]), (7, 1.0, [1, 1])]
     samples = []
-    for index, reward in enumerate([1.0, 3.0]):
+    for index, (rollout_id, reward, loss_mask) in enumerate(segments):
         values = {
             "rollout_routed_experts": torch.arange(16, dtype=torch.uint8).reshape(2, 4, 2),
             "rollout_topk_token_ids": torch.tensor([[1, 3], [2, 4]], dtype=torch.int32),
@@ -266,10 +269,10 @@ def test_batch_builder_preserves_group_rewards_masks_and_r3_sc_after_replay(code
             Sample(
                 index=index,
                 group_index=0,
-                rollout_id=7,
+                rollout_id=rollout_id,
                 tokens=[0, 1, 2],
                 response_length=2,
-                loss_mask=[1, index],
+                loss_mask=loss_mask,
                 reward=reward,
                 rollout_log_probs=[-0.5, -0.7],
                 teacher_log_probs=[-2.0, -3.0],
@@ -294,9 +297,11 @@ def test_batch_builder_preserves_group_rewards_masks_and_r3_sc_after_replay(code
         return value
 
     assert materialize(expected) == materialize(replayed)
-    assert replayed["rewards"] == [-1.0, 1.0]
-    assert replayed["rollout_mask_sums"] == [3, 3]
-    assert replayed["rollout_ids"] == [7, 7]
+    assert replayed["raw_reward"] == [1.0, 3.0, 1.0]
+    assert replayed["rewards"] == [-1.0, 1.0, -1.0]
+    assert replayed["loss_masks"] == [[1, 0], [1, 1], [1, 1]]
+    assert replayed["rollout_mask_sums"] == [3, 2, 3]
+    assert replayed["rollout_ids"] == [7, 8, 7]
     assert all(isinstance(ref, QueueTensorRef) for ref in replayed["rollout_routed_experts"])
 
 

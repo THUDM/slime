@@ -19,6 +19,7 @@ ray[default]
 safetensors
 sglang-router>=0.3.0
 straw-queue>=0.1.2
+sunabako==0.1.1
 tensorboard
 transformers
 wandb

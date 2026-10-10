@@ -24,12 +24,15 @@ class CodexHarness(BaseHarness):
     # host paths + CLI knobs, all under the agent-layer SLIME_AGENT_* prefix
     node_tarball_env = "SLIME_AGENT_NODE_TARBALL"
     cli_tarball_env = "SLIME_AGENT_CODEX_TARBALL"
+    native_tarball_env = "SLIME_AGENT_CODEX_NATIVE_TARBALL"
     extra_args_env = "SLIME_AGENT_CODEX_EXTRA_ARGS"
     extra_envs_env = "SLIME_AGENT_CODEX_EXTRA_ENVS"
 
     # static flags after ``codex exec``; --skip-git-repo-check lets it run in
     # workdirs whose git check is brittle (e.g. shallow clones)
-    exec_flags = "--skip-git-repo-check"
+    # The outer Sandbox owns isolation. Codex's nested bwrap cannot run inside
+    # an unprivileged PRoot sandbox. Never use this harness directly on the host.
+    exec_flags = "--skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --json"
 
     # config.toml written into the sandbox. base_url MUST be inline here (Codex
     # only honours env vars for the default OpenAI provider). {model} / {base_url}
@@ -37,15 +40,36 @@ class CodexHarness(BaseHarness):
     config_toml = (
         'model = "{model}"\n'
         'model_provider = "slime"\n'
+        'web_search = "disabled"\n'
+        'model_reasoning_effort = "medium"\n'
         "\n"
         "[model_providers.slime]\n"
         'name = "slime"\n'
         'base_url = "{base_url}"\n'
         'env_key = "OPENAI_API_KEY"\n'
-        'wire_api = "chat"\n'
+        'wire_api = "responses"\n'
+        "requires_openai_auth = false\n"
+        "supports_websockets = false\n"
+        "\n[features]\n"
+        "multi_agent = false\n"
     )
 
     async def install_cli(self, sb: Sandbox) -> None:
+        if archive := os.environ.get(self.native_tarball_env):
+            # Official @openai/codex platform npm archive: keep the sibling
+            # resources/tools beside bin/codex. This is an offline install and
+            # needs neither Node nor an npm optional-dependency download.
+            await sb.write_file("/tmp/codex-native.tgz", Path(archive))
+            await sb.exec(
+                "mkdir -p /opt/codex /usr/local/bin && "
+                "tar xzf /tmp/codex-native.tgz -C /opt/codex --strip-components=3 && "
+                "ln -sf /opt/codex/bin/codex /usr/local/bin/codex && "
+                "ln -sf /opt/codex/codex-path/rg /usr/local/bin/rg && codex --version",
+                user="root",
+                timeout=180,
+                check=True,
+            )
+            return
         await install_npm_cli(
             sb,
             node_runtime=Path(os.environ[self.node_tarball_env]),

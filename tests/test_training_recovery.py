@@ -90,6 +90,10 @@ def test_configuration_allows_trainer_parallelism_and_memory_changes(args):
     serving.driver_job_id = None
     updated = copy.copy(args)
     updated.tensor_model_parallel_size = 4
+    updated.tensor_parallel_num_weight_shards = 4
+    updated.gtp_weight_remat_size = 1
+    updated.expert_tensor_parallel_num_weight_shards = 2
+    updated.expert_gtp_weight_remat_size = 2
     updated.context_parallel_size = 2
     updated.micro_batch_size = 2
     updated.max_tokens_per_gpu = 1024

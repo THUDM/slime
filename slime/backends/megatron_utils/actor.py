@@ -695,24 +695,27 @@ class MegatronTrainRayActor(TrainRayActor):
         self.args.no_load_rng = True
         self.args.finetune = True
 
-        if model_tag == "ref" and self.args.ref_ckpt_step is not None:
+        # The actor's resume step belongs to a different checkpoint. A None
+        # reference/teacher step must let its own tracker select the release.
+        if model_tag == "ref":
             self.args.ckpt_step = self.args.ref_ckpt_step
-        elif model_tag == "teacher" and self.args.opd_teacher_ckpt_step is not None:
+        elif model_tag == "teacher":
             self.args.ckpt_step = self.args.opd_teacher_ckpt_step
-
-        _, _ = load_checkpoint(
-            self.model,
-            None,
-            None,
-            checkpointing_context={},
-        )
-        (
-            self.args.load,
-            self.args.no_load_optim,
-            self.args.no_load_rng,
-            self.args.finetune,
-            self.args.ckpt_step,
-        ) = old_args
+        try:
+            _, _ = load_checkpoint(
+                self.model,
+                None,
+                None,
+                checkpointing_context={},
+            )
+        finally:
+            (
+                self.args.load,
+                self.args.no_load_optim,
+                self.args.no_load_rng,
+                self.args.finetune,
+                self.args.ckpt_step,
+            ) = old_args
 
         self.weights_backuper.backup(model_tag)
         self._active_model_tag = model_tag

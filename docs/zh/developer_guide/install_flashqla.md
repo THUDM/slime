@@ -27,12 +27,11 @@ bash build_conda.sh
 
 ## Docker 镜像
 
-标准 CUDA 12 Docker 镜像会默认安装 FlashQLA：
+标准 CUDA 12 Docker 镜像会默认安装 FlashQLA 和 TileLang 0.1.9：
 
 ```bash
 docker build \
   -f docker/Dockerfile \
-  --build-arg SGLANG_IMAGE_REPOSITORY=slimerl/sglang \
   --build-arg SGLANG_IMAGE_TAG=v0.5.15.post1-cu129 \
   -t slime:flashqla .
 ```

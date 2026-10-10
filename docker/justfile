@@ -1,8 +1,9 @@
-# Primary release stays on CUDA 12 (the cu129 SGLang base). Publishes the
-# unqualified `latest`, plus the rolling `latest-cu129` and the versioned
-# `<version>-cu129` tags. The tag suffix matches the SGLang base image.
-release-primary:
+# Publish CUDA 12 first, then CUDA 13. CUDA 12 owns the unqualified `latest`,
+# plus `latest-cu129` and `<version>-cu129`. CUDA 13 publishes `latest-cu130`
+# and `<version>-cu130`.
+release:
     ARG_TAG_POSTFIX="-cu129" ARG_TAG_LATEST=1 ARG_BUILD_EXTRA_ARGS='--build-arg SGLANG_IMAGE_TAG=v0.5.15.post1-cu129' just _release-raw
+    just release-cu13
 
 # B200/B300 (Blackwell, x86) CUDA 13 build on the cu130 SGLang base. Publishes
 # `latest-cu130` and `<version>-cu130` (tag suffix matches the SGLang base
@@ -21,7 +22,7 @@ _release-raw:
     VERSION="$(cat docker/version.txt | tr -d '\n')"
     IMAGE_TAG=${VERSION}${ARG_TAG_POSTFIX}
 
-    docker build -f docker/Dockerfile . --build-arg HTTP_PROXY="$http_proxy" --build-arg HTTPS_PROXY="$https_proxy" --build-arg NO_PROXY="localhost,127.0.0.1" $ARG_BUILD_EXTRA_ARGS -t slimerl/slime:$IMAGE_TAG
+    docker build -f docker/Dockerfile . --build-arg HTTP_PROXY="${http_proxy:-}" --build-arg HTTPS_PROXY="${https_proxy:-}" --build-arg NO_PROXY="localhost,127.0.0.1" $ARG_BUILD_EXTRA_ARGS -t slimerl/slime:$IMAGE_TAG
     docker push slimerl/slime:$IMAGE_TAG
 
     # Rolling per-variant latest tag (e.g. latest-cu129, latest-cu130).
@@ -30,7 +31,7 @@ _release-raw:
         docker push slimerl/slime:latest${ARG_TAG_POSTFIX}
     fi
 
-    # The primary build also owns the unqualified `latest`.
+    # The CUDA 12 build also owns the unqualified `latest`.
     if [ "${ARG_TAG_LATEST:-}" = "1" ]; then
         docker tag slimerl/slime:$IMAGE_TAG slimerl/slime:latest
         docker push slimerl/slime:latest
@@ -44,7 +45,7 @@ debug:
     VERSION="$(cat docker/version.txt | tr -d '\n')"
     IMAGE_TAG=${VERSION}
 
-    docker build -f docker/Dockerfile . --build-arg HTTP_PROXY="$http_proxy" --build-arg HTTPS_PROXY="$https_proxy" --build-arg NO_PROXY="localhost,127.0.0.1" -t slimerl/slime-test:$IMAGE_TAG
+    docker build -f docker/Dockerfile . --build-arg HTTP_PROXY="${http_proxy:-}" --build-arg HTTPS_PROXY="${https_proxy:-}" --build-arg NO_PROXY="localhost,127.0.0.1" -t slimerl/slime-test:$IMAGE_TAG
     docker push slimerl/slime-test:$IMAGE_TAG
 
     docker tag slimerl/slime-test:$IMAGE_TAG slimerl/slime-test:latest

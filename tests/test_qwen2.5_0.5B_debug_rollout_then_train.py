@@ -3,7 +3,7 @@ Debug rollout and replay test:
   Phase 1 – debug_rollout_only: launch sglang, generate rollout data for 2 steps,
             and save them to a temp directory.
   Phase 2 – load_debug_rollout_data (train only): skip sglang entirely, load the
-            saved Straw archives, and run 2 training steps without copying Samples.
+            saved straw archives, and run 2 training steps without copying Samples.
   Phase 3 – replay exported .pt files to retain coverage of the legacy format.
 
 Uses Qwen2.5-0.5B-Instruct (smallest supported model) with 8 GPUs.

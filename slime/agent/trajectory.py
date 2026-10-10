@@ -12,12 +12,24 @@ from __future__ import annotations
 import dataclasses
 import enum
 import logging
+import math
 from collections.abc import Iterator
 from typing import Any
+
+import torch
 
 from slime.utils.types import Sample
 
 logger = logging.getLogger(__name__)
+
+REPLAY_FIELDS = (
+    "rollout_top_p_token_ids",
+    "rollout_top_p_token_offsets",
+    "rollout_top_p_log_probs",
+    "rollout_topk_token_ids",
+    "rollout_topk_log_probs",
+    "rollout_routed_experts",
+)
 
 
 # ===========================================================================
@@ -36,6 +48,7 @@ class TurnRecord:
     finish_reason: str
     output_log_probs: list[float] = dataclasses.field(default_factory=list)
     ill_formed: bool = False
+    replay: dict[str, Any] | None = None
 
 
 # ===========================================================================
@@ -165,6 +178,7 @@ class _SampleBuilder:
         self.logprobs: list[float] = []
         self.last_response_start_idx: int | None = None
         self.leading_prompt_len: int = 0
+        self.replay: dict[str, Any] | None = None
 
     def classify_token_drift(self, turn: TurnRecord) -> DriftKind:
         """Decide how this builder should absorb ``turn``'s prompt.
@@ -177,11 +191,28 @@ class _SampleBuilder:
         early to absorb). With no drift the turn is handled the CLEAN way -- a
         plain prefix extension.
         """
+        # R3 includes prompt routes, which can differ even for identical token
+        # prefixes. Token-local top-p / SC distributions can be concatenated,
+        # but routing snapshots must remain separate model invocations.
+        held_replay, new_replay = self.replay or {}, turn.replay or {}
+        if (
+            "rollout_routed_experts" in held_replay
+            or "rollout_routed_experts" in new_replay
+            or held_replay.keys() != new_replay.keys()
+        ):
+            return DriftKind.FORK
+        if "rollout_topk_token_ids" in held_replay and (
+            torch.as_tensor(held_replay["rollout_topk_token_ids"]).shape[1:]
+            != torch.as_tensor(new_replay["rollout_topk_token_ids"]).shape[1:]
+        ):
+            return DriftKind.FORK
         realign_at = _common_prefix_len(self.tokens, turn.prompt_ids)
         drift = len(self.tokens) - realign_at
 
         if drift == 0:
             return DriftKind.CLEAN
+        if held_replay:
+            return DriftKind.FORK
 
         # REALIGN only heals drift that falls inside the most-recent response span
         # (and is short); divergence anywhere earlier, or an empty builder, forks.
@@ -197,6 +228,8 @@ class _SampleBuilder:
         assert kind is not DriftKind.FORK, "append_turn called on a builder that would fork"
 
         is_first_turn = self.last_response_start_idx is None
+        if turn.replay is not None:
+            self._append_replay(turn.replay, gap=0 if is_first_turn else len(turn.prompt_ids) - len(self.tokens))
 
         # --- append this turn's prompt tail (loss_mask=0) ---
         if kind is DriftKind.REALIGN:
@@ -206,12 +239,40 @@ class _SampleBuilder:
 
         # --- append this turn's generated response (loss_mask=1 unless re-emitted as context) ---
         self.last_response_start_idx = len(self.tokens)
-        self._append_tokens(
-            turn.output_ids, loss_mask=int(trained), logprobs=turn.output_log_probs if trained else None
-        )
+        # Shared sampled prefixes keep their original probabilities alongside
+        # replay metadata. Only the loss mask changes on subsequent branches.
+        self._append_tokens(turn.output_ids, loss_mask=int(trained), logprobs=turn.output_log_probs)
 
         if is_first_turn:
             self.leading_prompt_len = len(turn.prompt_ids)
+
+    def _append_replay(self, replay: dict[str, Any], *, gap: int) -> None:
+        """Keep sampler distributions aligned across masked tool/context tokens."""
+        incoming = {key: torch.as_tensor(value) for key, value in replay.items()}
+        if self.replay is None:
+            self.replay = incoming
+            return
+        assert gap >= 0 and self.replay.keys() == incoming.keys()
+        assert "rollout_routed_experts" not in incoming
+        if "rollout_top_p_token_offsets" in incoming:
+            offsets = self.replay["rollout_top_p_token_offsets"]
+            end = int(offsets[-1])
+            self.replay["rollout_top_p_token_offsets"] = torch.cat(
+                (offsets, offsets.new_full((gap,), end), incoming["rollout_top_p_token_offsets"][1:] + end)
+            )
+            for key in ("rollout_top_p_token_ids", "rollout_top_p_log_probs"):
+                if key in incoming:
+                    self.replay[key] = torch.cat((self.replay[key], incoming[key]))
+        if "rollout_topk_token_ids" in incoming:
+            k = incoming["rollout_topk_token_ids"].shape[-1]
+            for key in ("rollout_topk_token_ids", "rollout_topk_log_probs"):
+                value = self.replay[key]
+                padding = (
+                    torch.arange(k, device=value.device, dtype=value.dtype).expand(gap, k)
+                    if key.endswith("token_ids")
+                    else value.new_full((gap, k), -math.log(k))
+                )
+                self.replay[key] = torch.cat((value, padding, incoming[key]))
 
     def _align_to_prompt(self, prompt_ids: list[int]) -> None:
         """Heal REALIGN drift by overwriting the most-recent response span with
@@ -245,7 +306,7 @@ class _SampleBuilder:
             loss_mask = loss_mask[:max_sample_tokens]
             logprobs = logprobs[:max_sample_tokens]
         md = dict(extra_metadata or {})
-        return Sample(
+        sample = Sample(
             index=base_sample.index,
             group_index=base_sample.group_index,
             rollout_id=base_sample.rollout_id if base_sample.rollout_id is not None else base_sample.index,
@@ -259,6 +320,21 @@ class _SampleBuilder:
             status=Sample.Status.COMPLETED,
             metadata=md,
         )
+        if self.replay is not None:
+            count = sample.response_length
+            for key in ("rollout_topk_token_ids", "rollout_topk_log_probs"):
+                if key in self.replay:
+                    setattr(sample, key, self.replay[key][:count])
+            if "rollout_top_p_token_offsets" in self.replay:
+                offsets = self.replay["rollout_top_p_token_offsets"][: count + 1]
+                end = int(offsets[-1])
+                sample.rollout_top_p_token_offsets = offsets
+                sample.rollout_top_p_token_ids = self.replay["rollout_top_p_token_ids"][:end]
+                if "rollout_top_p_log_probs" in self.replay:
+                    sample.rollout_top_p_log_probs = self.replay["rollout_top_p_log_probs"][:end]
+            if "rollout_routed_experts" in self.replay:
+                sample.rollout_routed_experts = self.replay["rollout_routed_experts"][: max(0, len(tokens) - 1)]
+        return sample
 
 
 # ===========================================================================

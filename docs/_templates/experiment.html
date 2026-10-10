@@ -1,0 +1,121 @@
+{% set zh = language.startswith('zh') %}
+{% macro t(en, cn) %}{{ cn if zh else en }}{% endmacro %}
+<!DOCTYPE html>
+<html lang="{{ 'zh-CN' if zh else 'en' }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="{{ t('Build a GLM reinforcement learning experiment. Explore the tradeoffs, understand the math, and export a slime launch script.', '像搭积木一样配置 GLM 强化学习实验：了解取舍、阅读推导、导出 slime 启动脚本。') }}">
+  <title>{{ t('slime · Build your next experiment', 'slime · 搭建你的下一个实验') }}</title>
+  <link rel="icon" href="{{ pathto('_static/image/logo.ico', 1) }}">
+  <link rel="stylesheet" href="{{ pathto('_static/css/experiment.css', 1) }}">
+  <script defer src="{{ pathto('_static/js/experiment-engine.js', 1) }}"></script>
+  <script defer src="{{ pathto('_static/js/experiment-diagrams.js', 1) }}"></script>
+  <script defer src="{{ pathto('_static/js/experiment-reader.js', 1) }}"></script>
+  <script defer src="{{ pathto('_static/js/experiment-ui.js', 1) }}"></script>
+  <script defer src="{{ pathto('_static/js/lang-toggle.js', 1) }}" data-layout="{{ doc_layout }}"></script>
+</head>
+<body>
+<a class="skip-link" href="#lab">{{ t('Skip to experiment builder', '跳到实验配置') }}</a>
+<header class="site-header">
+  <a class="brand" href="{{ pathto('index') }}"><img src="{{ pathto('_static/image/logo.jpg', 1) }}" alt="" width="42" height="42">slime</a>
+  <nav aria-label="{{ t('Main navigation', '主导航') }}">
+    <a href="#lab">{{ t('Build', '搭建实验') }}</a>
+    <a href="{{ pathto('library') }}">{{ t('Docs', '文档') }}</a>
+    <a href="https://github.com/THUDM/slime">GitHub ↗</a>
+    <span class="article-header-buttons"></span>
+  </nav>
+</header>
+<main>
+  <section class="hero">
+    <div class="hero-copy">
+      <p class="eyebrow"><span class="live-dot"></span> A LITTLE SLIME. A LOT OF POSSIBILITY.</p>
+      <h1>{{ t('Built for', '为规模化') }}<br><span>{{ t('scaling RL.', 'RL 而生。') }}</span></h1>
+      <p class="hero-description">{{ t('slime is an LLM post-training framework for RL scaling, providing two core capabilities:', 'slime 是为 RL scaling 设计的 LLM 后训练框架，提供两大核心能力：') }}</p>
+      <ol class="hero-capabilities"><li><a href="#capability-training">{{ t('High-Performance Training', '高性能训练') }} ↘</a></li><li><a href="#capability-generation">{{ t('Flexible Data Generation', '灵活的数据生成') }} ↘</a></li></ol>
+      <a class="button primary" href="#lab">{{ t('Build your first experiment', '搭建第一个实验') }} <span>↗</span></a>
+      <span class="hero-note">{{ t('Explore. Undo. Try again.', '随时切换，随时回退。') }}</span>
+    </div>
+    <div class="hero-art" aria-hidden="true">
+      <span class="orbit-label label-top">rollout → reward → train</span>
+      <div class="mascot-frame"><img src="{{ pathto('_static/image/logo.jpg', 1) }}" alt="" width="300" height="300"></div>
+      <span class="orbit-label label-bottom">a little slime. a lot of possibility.</span>
+      <span class="spark spark-one">✳</span><span class="spark spark-two">✦</span>
+    </div>
+  </section>
+  <section class="core-capabilities" aria-label="{{ t('Two core capabilities', '两大核心能力') }}">
+    <article id="capability-training"><span class="capability-icon">01 / ↔</span><h2>{{ t('High-Performance Training', '高性能训练') }}</h2><p>{{ t('Supports efficient training in various modes by connecting Megatron with SGLang.', '通过连接 Megatron 与 SGLang，支持各种模式的高效训练。') }}</p><div class="capability-flow"><span>Megatron</span><b>⇄</b><span>SGLang</span></div></article>
+    <article id="capability-generation"><span class="capability-icon">02 / ⌁</span><h2>{{ t('Flexible Data Generation', '灵活的数据生成') }}</h2><p>{{ t('Enables arbitrary training data generation workflows through custom data generation interfaces and server-based engines.', '通过自定义数据生成接口以及 server-based engines，实现任意训练数据生成流程。') }}</p><div class="capability-flow"><span>{{ t('Your data & environments', '你的数据与环境') }}</span><b>→</b><span>Data Buffer</span></div></article>
+    <p class="core-dataflow">{{ t('Training, rollout, custom generation, rewards, verifiers, and environment interaction flow through the same training / rollout / Data Buffer path.', '训练、rollout、自定义数据生成、奖励、验证器与环境交互，都流经同一条 training / rollout / Data Buffer 路径。') }}</p>
+  </section>
+  <section class="ecosystem" id="ecosystem" aria-labelledby="ecosystem-title">
+    <div class="ecosystem-intro"><p class="eyebrow">BUILT IN THE OPEN. USED AT SCALE.</p><h2 id="ecosystem-title">{{ t('From GLM-4.5 to GLM-5.3 & GLM-5.3-Flash.', '从 GLM-4.5，一直到 GLM-5.3 与 GLM-5.3-Flash。') }}</h2><p>{{ t('slime has powered RL post-training across Z.ai’s GLM generations. Explore the model releases, then use the same core capabilities in your own experiment.', 'slime 持续支撑 Z.ai 历代 GLM 的 RL 后训练。了解模型的发布历程，再用同样的核心能力搭建你的实验。') }}</p></div>
+    <div class="glm-lineage"><a class="zai-mark" href="https://z.ai">Z.ai <span>× slime</span></a><div>{% for version in ['4.5', '4.6', '4.7', '5', '5.1', '5.2', '5.3', '5.3-flash'] %}<a href="https://z.ai/blog/glm-{{ version }}">GLM-{{ '5.3-Flash' if version == '5.3-flash' else version }}</a>{% if not loop.last %}<span>→</span>{% endif %}{% endfor %}</div></div>
+    <a class="scroll-invitation" href="#lab">{{ t('Now, see how an RL experiment fits together', '现在，亲手搭起一个 RL 实验') }} <span>↓</span></a>
+  </section>
+  <section id="lab" class="lab" aria-labelledby="lab-title">
+    <div class="lab-heading">
+      <div><p class="eyebrow">01 / THE EXPERIMENT BUILDER</p><h2 id="lab-title">{{ t('Make it yours.', '来，搭一个你的实验。') }}</h2></div>
+      <div class="history-actions">
+        <button type="button" id="undo" disabled title="{{ t('Undo a choice', '撤销上一个选择') }}">↶ {{ t('Undo', '撤销') }}</button>
+        <button type="button" id="redo" disabled title="{{ t('Redo a choice', '重做选择') }}">↷ {{ t('Redo', '重做') }}</button>
+        <button type="button" id="reset">{{ t('Reset', '重置') }}</button>
+      </div>
+    </div>
+    <div class="presets" aria-label="{{ t('Starting points', '实验起点') }}">
+      <span>{{ t('A starting point?', '选一个起点？') }}</span>
+      <button type="button" data-preset="first">◉ {{ t('My first RL run', '第一次 RL') }}</button>
+      <button type="button" data-preset="scale">↗ {{ t('Scale a GLM', '大规模 GLM') }}</button>
+      <button type="button" data-preset="agent">⌁ {{ t('Long-running agents', '长程 Agent') }}</button>
+    </div>
+    <noscript><p class="notice">{{ t('Enable JavaScript to use the builder, or follow the complete written guide.', '启用 JavaScript 即可使用向导，也可使用完整的文字指南。') }} <a href="{{ pathto('get_started/experiment-guide') }}">{{ t('Experiment guide →', '实验配置指南 →') }}</a></p></noscript>
+    <div id="interactive-lab" hidden>
+      <nav id="steps" class="steps" aria-label="{{ t('Experiment steps', '配置步骤') }}"></nav>
+      <div class="workbench">
+        <div class="builder-panel">
+          <div class="step-heading"><span id="step-number" class="step-number"></span><div><h3 id="step-title" tabindex="-1"></h3><p id="step-description"></p></div></div>
+          <form id="choices" novalidate></form>
+          <div id="step-help" class="step-help"></div>
+          <div class="step-controls"><button type="button" id="previous">← {{ t('Back', '上一步') }}</button><span id="step-count"></span><button class="button dark" type="button" id="next">{{ t('Next', '下一步') }} →</button></div>
+        </div>
+        <aside class="preview" aria-label="{{ t('Live experiment preview', '实时实验预览') }}">
+          <div class="preview-heading"><span class="eyebrow">YOUR LITTLE RL WORLD</span><button id="play" type="button" aria-pressed="false">▶ {{ t('Play a round', '演示一轮') }}</button></div>
+          <div id="world" class="world"></div>
+          <p id="simulation-status" class="simulation-status" role="status"></p>
+          <div id="summary" class="summary"></div>
+          <div id="advice" class="advice" aria-live="polite"></div>
+          <a id="review-link" class="review-link" href="#recipe">{{ t('See my recipe', '查看我的配方') }} <span>↓</span></a>
+        </aside>
+      </div>
+    </div>
+  </section>
+  <section id="recipe" class="recipe" aria-labelledby="recipe-title" hidden>
+    <div class="recipe-heading"><div><p class="eyebrow">02 / FROM PLAY TO RUN</p><h2 id="recipe-title">{{ t('Your experiment, to go.', '把实验带走。') }}</h2><p>{{ t('A starting recipe grounded in this repository. Prepare the environment, review the assumptions, then run.', '根据仓库现有配方生成。准备环境、核对配置，然后启动你的实验。') }}</p></div><button type="button" id="share" class="button light">↗ {{ t('Share choices', '分享选择') }}</button></div>
+    <div id="issues" aria-live="polite"></div>
+    <div class="artifact-toolbar"><div id="artifact-tabs" class="artifact-tabs" role="tablist" aria-label="{{ t('Generated files', '生成文件') }}"></div><div class="artifact-actions"><button type="button" id="copy">{{ t('Copy', '复制') }}</button><button type="button" class="button primary" id="download">↓ {{ t('Download', '下载') }}</button></div></div>
+    <pre id="artifact-panel" role="tabpanel" tabindex="0"><code id="artifact-code"></code></pre>
+    <div class="run-guide"><h3>{{ t('Three steps to your first reward', '离第一个 reward，还有三步') }}</h3><ol id="run-steps"></ol></div>
+    <p class="recipe-footnote">{{ t('GPU counts describe placement, not a memory-fit guarantee. These generated combinations have not been benchmarked on your hardware. Start with a short run and compare reward, log-prob mismatch, clipping, and rollout time.', 'GPU 数量描述资源布局，不代表显存一定足够。组合配置尚未在你的硬件上测量；先做短实验，对比 reward、log-prob 差异、裁剪比例和 rollout 耗时。') }}</p>
+  </section>
+  <section class="library-teaser" aria-labelledby="library-title">
+    <div><p class="eyebrow">03 / FOLLOW YOUR CURIOSITY</p><h2 id="library-title">{{ t('Go a little deeper.', '好奇，就再往前一步。') }}</h2><p>{{ t('The ideas, equations, and engineering behind your choices.', '每个选择背后的论文、公式和工程细节。') }}</p></div>
+    <a href="{{ pathto('get_started/experiment-guide') }}"><span>01</span><strong>{{ t('The experiment field guide', '实验配置指南') }}</strong>{{ t('From checkpoint to first reward', '从 checkpoint 到第一个 reward') }} ↗</a>
+    <a href="{{ pathto('advanced/policy-mismatch') }}"><span>02</span><strong>{{ t('Inside the algorithms', '拆开算法看一看') }}</strong>GRPO · TIS · ICE-POP · R3 · SC ↗</a>
+    <a href="{{ pathto('advanced/rl-systems') }}"><span>03</span><strong>{{ t('Inside the system', '看懂系统的取舍') }}</strong>{{ t('Precision, async, PD & HiCache', '精度、异步、PD 与 HiCache') }} ↗</a>
+    <a href="{{ pathto('library') }}"><span>04</span><strong>{{ t('The documentation library', '完整文档资料库') }}</strong>{{ t('Organized guides, APIs & debugging', '分类指南、接口与调试') }} ↗</a>
+  </section>
+  <section class="advanced-section" aria-labelledby="advanced-title">
+    <div><p class="eyebrow">04 / WHEN YOU WANT TO GO FURTHER</p><h2 id="advanced-title">{{ t('A good experiment asks good questions.', '好的实验，也要会问问题。') }}</h2><p>{{ t('Open a question. Find the next measurement, then the right tool.', '展开一个问题，找到下一次测量和趁手的工具。') }}</p></div>
+    <details open><summary><span>01 / DEBUG</span>{{ t('The reward looks wrong. Where do I start?', 'Reward 不对，先从哪里查？') }}<b>＋</b></summary><div><p>{{ t('Inspect generated text, checkpoint loading, and the chat template first. Save a rollout, replay a fixed batch on the training side, then compare log-probs before changing the algorithm.', '先检查生成文本、checkpoint 加载和 chat template。保存一轮 rollout，用固定 batch 重放训练，再比较 log-prob，最后才调整算法。') }}</p><a href="{{ pathto('developer_guide/debug') }}">{{ t('Debug & replay →', 'Debug 与重放 →') }}</a><a href="{{ pathto('advanced/policy-mismatch') }}">{{ t('Understand mismatch →', '理解训推差异 →') }}</a></div></details>
+    <details><summary><span>02 / PROFILE</span>{{ t('Training is slow. What am I waiting for?', '训练太慢，时间究竟花在哪里？') }}<b>＋</b></summary><div><p>{{ t('Separate rollout, reward, weight transfer, and training time. Trace the critical path, then profile the busy engine. Use tools/profile_rollout.py to collect SGLang traces and inspect prefill/decode behavior.', '区分 rollout、reward、权重传输和训练耗时。先用 trace 找关键路径，再 profile 瓶颈引擎。使用 tools/profile_rollout.py 收集 SGLang trace，观察 prefill / decode。') }}</p><a href="{{ pathto('developer_guide/profiling') }}">{{ t('Profiling →', '性能剖析 →') }}</a><a href="{{ pathto('developer_guide/trace') }}">{{ t('Timeline & tracing →', '时间线与追踪 →') }}</a><a href="{{ pathto('advanced/observability') }}">{{ t('Metrics →', '指标与观测 →') }}</a></div></details>
+    <details><summary><span>03 / SCALE</span>{{ t('How do I grow beyond one cluster?', '如何从一台机器走向多个集群？') }}<b>＋</b></summary><div><p>{{ t('Split GPU ownership, then choose a weight transport that matches the network. Add PD when prefill and decode need different resources; use persistent rollout storage when jobs need recovery.', '先划分 GPU 的归属，再根据网络选择权重传输。Prefill / decode 资源需求不同时考虑 PD；需要恢复长任务时接入持久 rollout 存储。') }}</p><a href="{{ pathto('advanced/external-rollout-engines') }}">External engines →</a><a href="{{ pathto('advanced/delta-weight-sync') }}">Delta sync →</a><a href="{{ pathto('advanced/rollout-scheduling') }}">Partial / distributed async →</a><a href="{{ pathto('advanced/straw') }}">straw →</a><a href="{{ pathto('advanced/fault-tolerance') }}">{{ t('Recovery →', '故障恢复 →') }}</a></div></details>
+    <details><summary><span>04 / EXTEND</span>{{ t('My agent needs its own world.', '我的 Agent，需要自己的环境。') }}<b>＋</b></summary><div><p>{{ t('Start with a custom per-sample generation function and reward. Replace rollout orchestration only when your data scheduling or cross-step state needs it.', '从自定义逐样本生成函数和奖励开始。需要改变数据调度或跨 step 状态时，再替换完整 rollout 编排。') }}</p><a href="{{ pathto('get_started/agent') }}">Agent RL →</a><a href="{{ pathto('get_started/customization') }}">{{ t('Extension interfaces →', '扩展接口 →') }}</a><a href="{{ pathto('advanced/sglang-config') }}">SGLang topology →</a></div></details>
+  </section>
+</main>
+<footer><a class="brand" href="{{ pathto('index') }}">slime<span> / a little slime goes a long way.</span></a><span>Megatron × SGLang · Open source, open possibilities.</span></footer>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<dialog id="learn-dialog" aria-labelledby="learn-title"><button type="button" id="close-learn" class="close-dialog" aria-label="{{ t('Close explanation', '关闭解释') }}">×</button><p class="eyebrow">LEARN WITHOUT LOSING YOUR PLACE</p><h2 id="learn-title"></h2><div id="learn-content"></div></dialog>
+<button id="mobile-preview" type="button" hidden>◈ {{ t('See live diagram', '查看实时配图') }}</button>
+<dialog id="mobile-preview-dialog" aria-label="{{ t('Live experiment preview', '实时实验预览') }}"><button type="button" id="close-preview" class="close-dialog" aria-label="{{ t('Close preview', '关闭预览') }}">×</button><div id="mobile-preview-host"></div></dialog>
+</body>
+</html>

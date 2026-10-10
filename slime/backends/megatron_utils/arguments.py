@@ -149,8 +149,16 @@ def _hf_validate_args(args, hf_config):
 
 
 def _set_default_megatron_args(args):
+    # Megatron 0.19 validates MTP before resolving this legacy RoPE flag.
+    # Normalize it here for both training and checkpoint conversion.
+    if getattr(args, "use_rotary_position_embeddings", False):
+        args.position_embedding_type = "rope"
     # always use zero optimizer
     args.use_distributed_optimizer = True
+    if hasattr(args, "mtp_detach_heads"):
+        args.mtp_detach_heads = True
+    if hasattr(args, "trust_remote_code"):
+        args.trust_remote_code = True
     if not hasattr(args, "enable_gloo_process_groups"):
         args.enable_gloo_process_groups = True
     # TODO: maybe change this after megatron has good fp8 support

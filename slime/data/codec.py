@@ -107,7 +107,7 @@ class SampleCodec:
         return [refs[i] for i in roots]
 
     def _publish(self, publications, *, submission_id):
-        """Batch manifests; native Straw streams payloads with bounded scratch."""
+        """Batch manifests; native straw streams payloads with bounded scratch."""
         refs = []
         start = 0
         while start < len(publications):

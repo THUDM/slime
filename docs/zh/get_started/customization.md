@@ -128,6 +128,7 @@ async def custom_generate(args, sample: Sample, sampling_params: dict) -> list[S
         s.response = segment.response
         s.response_length = segment.response_length
         s.loss_mask = segment.loss_mask
+        s.rollout_log_probs = segment.rollout_log_probs
         s.reward = segment.reward
         s.status = Sample.Status.COMPLETED
         s.rollout_id = rollout_id
@@ -135,7 +136,7 @@ async def custom_generate(args, sample: Sample, sampling_params: dict) -> list[S
     return samples
 ```
 
-如果一个完整 trajectory 只有一个总奖励、但被拆成了 `K` 个训练片段，常见做法是在这些片段之间分配这个奖励（例如每个片段写入 `reward / K`），避免把同一次 rollout 的奖励重复放大。
+如果完整 trajectory 只有一个最终奖励，每个片段应保留同一个完整奖励及原始 `group_index`。GRPO 在每个题目组内按不同的 `rollout_id` 统计均值和标准差，再把同一 rollout 的 advantage 传给其所有片段。loss 已按整条 rollout 中未被屏蔽的 token 总数归一化，包括分布在不同 microbatch 中的片段，因此再把 reward 除以片段数会降低多片段轨迹的权重。多个分支共享的生成前缀也只能计算一次 loss。
 
 **示例**: 参见 [examples/search-r1/generate_with_search.py](../../../examples/search-r1/generate_with_search.py) 和 [examples/multi_agent/rollout_with_multi_agents.py](../../../examples/multi_agent/rollout_with_multi_agents.py)
 
@@ -469,7 +470,7 @@ def custom_hook(args, rollout_id, step_id, model, optimizer, opt_param_scheduler
 
 ---
 
-### 18. MoE 路由重放
+### MoE 路由重放
 
 通过记录和重放专家路由决策来稳定 MoE RL 训练。
 
@@ -480,7 +481,7 @@ def custom_hook(args, rollout_id, step_id, model, optimizer, opt_param_scheduler
 
 ---
 
-### 19. Disk 权重同步 Post-Write Hook（`--custom-update-weight-post-write-path`）
+### Disk 权重同步 Post-Write Hook（`--custom-update-weight-post-write-path`）
 
 **签名**：
 ```python

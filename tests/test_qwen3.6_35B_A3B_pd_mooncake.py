@@ -25,12 +25,8 @@ def prepare():
 
 def execute():
     debug_data_path = os.environ.get("DEBUG_ROLLOUT_DATA") or tempfile.mktemp(
-        prefix="qwen3_6_35b_a3b_pd_rollout_", suffix=".pt"
+        prefix="qwen3_6_35b_a3b_pd_rollout_", suffix="_{rollout_id}.pt"
     )
-    try:
-        os.remove(debug_data_path)
-    except FileNotFoundError:
-        pass
     print(f"Saving debug rollout data to {debug_data_path}")
 
     ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME} " f"--ref-load {TORCH_DIST_CKPT} "
@@ -114,7 +110,7 @@ def execute():
 
     misc_args = (
         "--ci-test "
-        f"--save-debug-rollout-data {debug_data_path} "
+        f"--save-debug-rollout-data {quote(debug_data_path)} "
         "--update-weight-buffer-size 2147483648 "
         "--attention-dropout 0.0 "
         "--hidden-dropout 0.0 "
