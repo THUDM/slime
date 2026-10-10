@@ -216,21 +216,54 @@ class BatchBuilder:
             self.args.advantage_estimator in ["grpo", "gspo", "cispo", "reinforce_plus_plus_baseline"]
             and self.args.rewards_normalization
         ):
-            # group norm
-            rewards = torch.tensor(raw_rewards, dtype=torch.float)
-            if rewards.shape[-1] == self.args.n_samples_per_prompt * self.args.rollout_batch_size:
-                rewards = rewards.reshape(-1, self.args.n_samples_per_prompt)
-            else:
-                # when samples count are not equal in each group
-                rewards = rewards.view(-1, rewards.shape[-1])
-            mean = rewards.mean(dim=-1, keepdim=True)
-            rewards = rewards - mean
+            if not samples:
+                return raw_rewards, []
 
-            if self.args.advantage_estimator in ["grpo", "gspo", "cispo"] and self.args.grpo_std_normalization:
-                std = rewards.std(dim=-1, keepdim=True)
-                rewards = rewards / (std + 1e-6)
+            group_indices = [sample.group_index for sample in samples]
+            if all(group is None for group in group_indices):
+                # Legacy generators may omit group_index for an ordered, fixed-size
+                # batch. Split episodes need explicit query IDs: row offsets no
+                # longer identify prompt boundaries after fan-out.
+                group_size = self.args.n_samples_per_prompt
+                rollout_ids = [sample.rollout_id for sample in samples if sample.rollout_id is not None]
+                if group_size <= 0 or len(samples) % group_size != 0 or len(set(rollout_ids)) != len(rollout_ids):
+                    raise ValueError("Reward normalization requires group_index for uneven groups or split rollouts")
+                group_indices = [i // group_size for i in range(len(samples))]
+            elif any(group is None for group in group_indices):
+                raise ValueError("Reward normalization requires group_index on every sample or on none of them")
 
-            return raw_rewards, rewards.flatten().tolist()
+            groups = {}
+            for i, (sample, group) in enumerate(zip(samples, group_indices, strict=True)):
+                # Missing rollout IDs denote independent rows, as in convert().
+                episode = ("rollout", sample.rollout_id) if sample.rollout_id is not None else ("row", i)
+                groups.setdefault(group, {}).setdefault(episode, []).append(i)
+
+            rewards = torch.empty(len(samples), dtype=torch.float)
+            for group, episodes in groups.items():
+                episode_rows = list(episodes.values())
+                for rows in episode_rows:
+                    if any(raw_rewards[i] != raw_rewards[rows[0]] for i in rows[1:]):
+                        raise ValueError(
+                            f"Inconsistent rewards for group_index={group}, "
+                            f"rollout_id={samples[rows[0]].rollout_id}; split rows must share one episode reward. "
+                            "Use custom_reward_post_process_path for segment-specific rewards."
+                        )
+
+                # Each sampled episode contributes once, regardless of how many
+                # training rows context rewrites produced. Broadcast back without
+                # reordering the rows consumed by the trainer.
+                group_rewards = torch.tensor([raw_rewards[rows[0]] for rows in episode_rows], dtype=torch.float)
+                group_rewards = group_rewards - group_rewards.mean()
+                if (
+                    self.args.advantage_estimator in ["grpo", "gspo", "cispo"]
+                    and self.args.grpo_std_normalization
+                    and len(episode_rows) > 1
+                ):
+                    group_rewards = group_rewards / (group_rewards.std() + 1e-6)
+                for rows, reward in zip(episode_rows, group_rewards, strict=True):
+                    rewards[rows] = reward
+
+            return raw_rewards, rewards.tolist()
 
         return raw_rewards, raw_rewards
 
