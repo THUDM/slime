@@ -82,7 +82,11 @@ def _with_rollout_top_p_token_keys(args: Namespace, keys: Sequence[str]) -> list
 
 def _iter_critic_output_layers(model: Sequence[DDP]):
     for chunk_id, module in enumerate(unwrap_model(model)):
-        output_layer = getattr(module, "output_layer", None)
+        # VLM wrappers keep the value head on their inner language_model.
+        head_owner = getattr(module, "language_model", None)
+        if head_owner is None:
+            head_owner = module
+        output_layer = getattr(head_owner, "output_layer", None)
         if output_layer is not None:
             yield chunk_id, output_layer
 

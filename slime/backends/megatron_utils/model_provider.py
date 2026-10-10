@@ -100,6 +100,18 @@ class LinearForLastLayer(torch.nn.Linear):
         return logits, None
 
 
+def _set_critic_output_layer(model: torch.nn.Module, config: TransformerConfig) -> None:
+    """Replace the LM head with a 1-output value head.
+
+    VLM wrappers (e.g. ``Qwen3_5VLModel``) delegate ``forward()`` to an inner
+    ``language_model`` that owns the LM head, so the value head has to go there.
+    """
+    head_owner = getattr(model, "language_model", None)
+    if head_owner is None:
+        head_owner = model
+    head_owner.output_layer = LinearForLastLayer(input_size=config.hidden_size, output_size=1, config=config)
+
+
 def _get_model_provider_func(
     args: argparse.Namespace,
     role: Literal["actor", "critic"] = "actor",
@@ -119,9 +131,7 @@ def _get_model_provider_func(
                 model = custom_model_provider(pre_process=pre_process, post_process=post_process)
             # Apply critic output layer if needed
             if post_process and role == "critic":
-                model.output_layer = LinearForLastLayer(
-                    input_size=model.config.hidden_size, output_size=1, config=model.config
-                )
+                _set_critic_output_layer(model, model.config)
             return model
 
         return wrapped_model_provider
@@ -158,9 +168,7 @@ def _get_model_provider_func(
                 if callable(result) and "pre_process" in inspect.signature(result).parameters:
                     model = result(pre_process=pre_process, post_process=post_process, vp_stage=vp_stage)
                     if post_process and role == "critic":
-                        model.output_layer = LinearForLastLayer(
-                            input_size=config.hidden_size, output_size=1, config=config
-                        )
+                        _set_critic_output_layer(model, config)
                     return model
                 transformer_layer_spec = result
         else:
