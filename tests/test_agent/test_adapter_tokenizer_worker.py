@@ -468,5 +468,47 @@ def test_cancelled_render_never_calls_sglang_or_writes_session(monkeypatch):
     assert metrics["counters"]["discarded_total"] == 1
 
 
+def test_render_reads_a_stable_session_prefix_snapshot(monkeypatch):
+    async def run():
+        release = threading.Event()
+        started = threading.Event()
+        adapter = anthropic.AnthropicAdapter(tokenizer=FakeTokenizer(), sglang_url="http://unused")
+        adapter.open_session("snapshot", apply_chat_template_kwargs={"reasoning_effort": "medium"})
+        session = adapter.store["snapshot"]
+        prefix = object()
+        session.prompt_prefixes.append(prefix)
+        snapshots = []
+
+        def render(messages, tokenizer, *, tools, session):
+            snapshots.append(session)
+            started.set()
+            assert release.wait(timeout=5)
+            assert session.prompt_prefixes == [prefix]
+            assert session.apply_chat_template_kwargs == {"reasoning_effort": "medium"}
+            return [1, 2]
+
+        async def stop_after_render(prompt_ids, actual_session, body, **kwargs):
+            assert actual_session is session
+            raise ValueError("render complete")
+
+        monkeypatch.setattr(adapters_common, "_session_prompt_ids", render)
+        monkeypatch.setattr(adapters_common, "call_sglang_generate", stop_after_render)
+        request = _Request("snapshot", {"messages": [{"role": "user", "content": "hello"}]})
+        task = asyncio.create_task(adapter._run_turn(request))
+        try:
+            await _wait_until(started.is_set)
+            session.prompt_prefixes.append(object())
+            session.apply_chat_template_kwargs["reasoning_effort"] = "low"
+            release.set()
+            with pytest.raises(ValueError, match="render complete"):
+                await task
+            assert snapshots[0] is not session
+        finally:
+            release.set()
+            await adapter._tokenizer_worker.close()
+
+    asyncio.run(run())
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
