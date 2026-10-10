@@ -1139,6 +1139,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_agent/test_trajectory_reasoning_echo.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_agent/test_adapters.py"
             },
             {

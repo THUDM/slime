@@ -12,12 +12,48 @@ from __future__ import annotations
 import dataclasses
 import enum
 import logging
+import os
 from collections.abc import Iterator
 from typing import Any
 
 from slime.utils.types import Sample
 
 logger = logging.getLogger(__name__)
+
+
+class ReasoningForkPolicy:
+    """Whether a replayed assistant message forks instead of rewrite-merging.
+    ``off`` (default) means no carve-out; ``reasoning_dropped`` forks whenever the
+    echo dropped the recorded ``reasoning_content`` (a rewrite is not a drop and
+    falls back to the threshold merge logic). Add a policy by adding a constant
+    and a branch in ``should_fork``."""
+
+    ENV = "SLIME_AGENT_REASONING_FORK_POLICY"
+    OFF = "off"
+    DROPPED = "reasoning_dropped"  # fork whenever the echo dropped the reasoning
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    @classmethod
+    def from_env(cls) -> ReasoningForkPolicy:
+        name = os.environ.get(cls.ENV, "").strip().lower() or cls.OFF
+        if name not in (cls.OFF, cls.DROPPED):
+            logger.warning(
+                "ReasoningForkPolicy: unknown %s=%r; treating as %r (no carve-out)",
+                cls.ENV,
+                name,
+                cls.OFF,
+            )
+            return cls(cls.OFF)
+        return cls(name)
+
+    def should_fork(self, node_message: Any, echoed_message: Any) -> bool:
+        if self.name == self.DROPPED:
+            # node_message is None for a generated leaf with an empty response_message
+            node_reasoning = (node_message or {}).get("reasoning_content")
+            return bool(node_reasoning) and not echoed_message.get("reasoning_content")
+        return False  # off / unknown
 
 
 # ===========================================================================
@@ -269,6 +305,7 @@ class _SampleBuilder:
 class TrajectoryManager:
     def __init__(self, *, fork_threshold_tokens: int | None = None) -> None:
         self._fork_threshold: int = 1024 if fork_threshold_tokens is None else fork_threshold_tokens
+        self._reasoning_fork_policy: ReasoningForkPolicy = ReasoningForkPolicy.from_env()  # snapshotted once
         self._trees: dict[str, MessageNode] = {}
         self._turn_count: dict[str, int] = {}
 
@@ -390,6 +427,12 @@ class TrajectoryManager:
         child that is a leaf, generated (``turn`` set), and short (response <
         ``fork_threshold``), and fork otherwise, since absorbing destroys a
         generated TurnRecord irreversibly.
+
+        Reasoning-fork carve-out: under the active policy (default ``off``), a
+        replay that dropped the recorded ``reasoning_content`` forks regardless of
+        response length, keeping the turn trainable. It is consulted only for a
+        generated leaf (the only mergeable case); anything else forks structurally,
+        without policy metadata.
         """
         if self._fork_threshold <= 0:
             return node, depth  # feature off
@@ -409,11 +452,16 @@ class TrajectoryManager:
             return node, depth
 
         rewritten_node = asst_children[0]
-        if (
-            rewritten_node.children
-            or rewritten_node.turn is None
-            or len(rewritten_node.turn.output_ids) >= self._fork_threshold
-        ):
+        if rewritten_node.children or rewritten_node.turn is None:
+            return node, depth
+        if self._reasoning_fork_policy.should_fork(rewritten_node.message, prompt_messages[depth]):
+            rewritten_node.metadata["fork"] = {"reason": "reasoning", "policy": self._reasoning_fork_policy.name}
+            return node, depth  # policy carve-out -> fork, keep the turn trainable
+        if len(rewritten_node.turn.output_ids) >= self._fork_threshold:
+            rewritten_node.metadata["fork"] = {
+                "reason": "threshold",
+                "response_tokens": len(rewritten_node.turn.output_ids),
+            }
             return node, depth
 
         rewritten_node.metadata["merged_rewrite"] = {
@@ -503,6 +551,7 @@ class TrajectoryManager:
 
 
 __all__ = [
+    "ReasoningForkPolicy",
     "TrajectoryManager",
     "TurnRecord",
 ]
