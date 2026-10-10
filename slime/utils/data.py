@@ -111,10 +111,12 @@ def filter_long_prompt(origin_samples: list[Sample], tokenizer, processor, max_l
                 if len(input_ids) <= max_length:
                     kept.append((position, sample))
         if multimodal:
-            from slime.utils.processing_utils import process_vision_info
-
             for position, sample in multimodal:
-                multimodal_inputs = process_vision_info(sample.prompt, processor)
+                # sample.prompt is already a chat-template string; reuse the
+                # multimodal_inputs computed in Dataset.__init__ instead of re-parsing it.
+                multimodal_inputs = {
+                    key: value for key, value in (sample.multimodal_inputs or {}).items() if value is not None
+                }
                 processor_output = processor(text=sample.prompt, **multimodal_inputs)
                 input_ids = processor_output["input_ids"][0]
                 if len(input_ids) <= max_length:
