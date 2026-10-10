@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import timedelta
@@ -149,6 +150,8 @@ def monkey_patch_torch_dist():
         return
 
     logger.info("Applying monkey patch to torch.distributed")
+    # Snapshot before patching so import-time copies of these functions can be redirected afterwards.
+    unpatched_dist_attributes = dict(vars(dist))
 
     old_new_group = dist.new_group
     old_new_group_dict[pid] = old_new_group
@@ -280,6 +283,30 @@ def monkey_patch_torch_dist():
 
     dist.P2POp.__new__ = get_new_p2pop_function(dist.P2POp.__new__)
     dist.P2POp.__init__ = get_new_p2pop_function(dist.P2POp.__init__)
+
+    replacements = {
+        id(original): getattr(dist, name)
+        for name, original in unpatched_dist_attributes.items()
+        if getattr(dist, name, original) is not original
+    }
+    _rebind_imported_collectives(replacements)
+
+
+def _rebind_imported_collectives(replacements: dict[int, Any]) -> None:
+    """Point Megatron's import-time copies of patched ``torch.distributed`` functions at the wrappers.
+
+    Megatron binds ``reduce_scatter_tensor``, ``all_gather_into_tensor`` and ``_coalescing_manager``
+    when its modules are imported, before this patch runs. Left alone, those copies hand
+    ``ReloadableProcessGroup`` objects to torch, which dispatches them through its Python process-group
+    trampoline; torch 2.13 segfaults there in ``PyWorkHolder::wait``.
+    """
+    for module_name, module in list(sys.modules.items()):
+        if module is None or not (module_name == "megatron" or module_name.startswith("megatron.")):
+            continue
+        for attribute, value in list(vars(module).items()):
+            replacement = replacements.get(id(value))
+            if replacement is not None:
+                setattr(module, attribute, replacement)
 
 
 class ReloadableProcessGroup(torch.distributed.ProcessGroup):
