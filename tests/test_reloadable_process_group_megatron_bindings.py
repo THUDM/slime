@@ -3,10 +3,14 @@ from __future__ import annotations
 import sys
 import types
 
+import pytest
 import torch.distributed as dist
 import torch.multiprocessing as mp
 
 from slime.utils import reloadable_process_group as rpg
+
+
+NUM_GPUS = 0
 
 
 def _run_rebinding_worker(result_queue) -> None:
@@ -55,3 +59,7 @@ def test_monkey_patch_rebinds_megatron_import_time_collectives():
         "unrelated_untouched": True,
         "other_module_untouched": True,
     }
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))
