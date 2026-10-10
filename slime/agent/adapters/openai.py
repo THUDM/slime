@@ -226,6 +226,12 @@ def _build_reply_parts(parsed: ParsedModelOutput, finish: str) -> tuple[dict[str
         args_dict = tu.get("input") or {}
         if not isinstance(args_dict, dict):
             args_dict = {"_raw_arguments": str(args_dict)}
+        raw_arguments = tu.get("raw_arguments")
+        wire_arguments = (
+            raw_arguments
+            if isinstance(raw_arguments, str)
+            else json.dumps(args_dict, ensure_ascii=False, sort_keys=True)
+        )
         call_id = f"call_{secrets.token_hex(12)}"
         wire_tool_calls.append(
             {
@@ -233,7 +239,7 @@ def _build_reply_parts(parsed: ParsedModelOutput, finish: str) -> tuple[dict[str
                 "type": "function",
                 "function": {
                     "name": name,
-                    "arguments": json.dumps(args_dict, ensure_ascii=False, sort_keys=True),
+                    "arguments": wire_arguments,
                 },
             }
         )
