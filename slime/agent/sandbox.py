@@ -9,6 +9,7 @@ one sandbox provider.
 from __future__ import annotations
 
 import asyncio
+import importlib
 import io
 import logging
 import os
@@ -385,6 +386,36 @@ class E2BSandbox:
             )
         except Exception:
             return ""
+
+
+SANDBOX_BACKEND_ENV = "SLIME_AGENT_SANDBOX_BACKEND"
+SANDBOX_BACKENDS: dict[str, type] = {"e2b": E2BSandbox}
+
+
+def sandbox_backend() -> type:
+    """Resolve ``SLIME_AGENT_SANDBOX_BACKEND`` to a sandbox class.
+
+    The value is a name in ``SANDBOX_BACKENDS`` (default ``e2b``) or the dotted
+    import path of a class implementing :class:`Sandbox`, e.g.
+    ``my_pkg.sandboxes.MySandbox``, in the style of the ``--custom-*-path``
+    arguments. The class is constructed as ``cls(image)``.
+    """
+    value = _getenv(SANDBOX_BACKEND_ENV, default="e2b").strip()
+    cls = SANDBOX_BACKENDS.get(value.lower())
+    if cls is not None:
+        return cls
+    module_path, _, attr = value.rpartition(".")
+    if not module_path:
+        raise ValueError(
+            f"{SANDBOX_BACKEND_ENV}={value!r} is neither a registered backend {sorted(SANDBOX_BACKENDS)} "
+            "nor a dotted import path"
+        )
+    return getattr(importlib.import_module(module_path), attr)
+
+
+def make_sandbox(image: str) -> Sandbox:
+    """Construct the configured sandbox backend (see :func:`sandbox_backend`) for ``image``."""
+    return sandbox_backend()(image)
 
 
 async def ensure_agent_user(sb: Sandbox, workdir: str) -> None:
