@@ -35,6 +35,8 @@ def test_patch_uses_actual_image_baseline_without_changing_git_index(tmp_path, m
     repo = tmp_path / "agent repo"
     repo.mkdir()
     git(repo, "init", "-q")
+    # Disable background auto-maintenance before copying the repository.
+    git(repo, "config", "maintenance.auto", "false")
     git(repo, "config", "user.name", "Test")
     git(repo, "config", "user.email", "test@example.invalid")
     (repo / "source.py").write_text("result = 0\n")
