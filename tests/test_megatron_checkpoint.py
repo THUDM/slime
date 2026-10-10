@@ -6,6 +6,7 @@ import math
 import pickle
 import sys
 import types
+from contextlib import nullcontext
 from multiprocessing.reduction import ForkingPickler
 from pathlib import Path
 
@@ -51,6 +52,8 @@ def test_optimizer_step_returns_scalar_norm_and_skips_invalid_gradients(norm_typ
         "torch": torch,
         "math": math,
         "get_forward_backward_func": lambda: lambda **kwargs: [],
+        "compact_actor_logits": lambda enabled: nullcontext(),
+        "can_compact_actor_logits": lambda args: False,
         "_wrap_forward_step_with_microbatch_pbar": lambda forward, progress: forward,
         "mpu": types.SimpleNamespace(
             is_pipeline_last_stage=lambda **kwargs: True,

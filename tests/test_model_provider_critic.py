@@ -19,16 +19,28 @@ def _load_model_provider(monkeypatch):
         "megatron.core.models.gpt": types.ModuleType("megatron.core.models.gpt"),
         "megatron.core.models.gpt.gpt_layer_specs": types.ModuleType("megatron.core.models.gpt.gpt_layer_specs"),
         "megatron.core.transformer": types.ModuleType("megatron.core.transformer"),
+        "megatron.core.transformer.multi_latent_attention": types.ModuleType(
+            "megatron.core.transformer.multi_latent_attention"
+        ),
         "megatron.core.transformer.spec_utils": types.ModuleType("megatron.core.transformer.spec_utils"),
         "megatron.core.transformer.transformer_config": types.ModuleType(
             "megatron.core.transformer.transformer_config"
         ),
         "megatron.training": types.ModuleType("megatron.training"),
         "megatron.training.arguments": types.ModuleType("megatron.training.arguments"),
+        "slime.backends.megatron_utils.compact_logits": types.ModuleType(
+            "slime.backends.megatron_utils.compact_logits"
+        ),
         "slime.utils.misc": types.ModuleType("slime.utils.misc"),
     }
     modules["megatron.core"].tensor_parallel = types.SimpleNamespace()
     modules["megatron.core.models.gpt"].GPTModel = torch.nn.Module
+    modules["megatron.core.transformer.multi_latent_attention"].MLASelfAttention = torch.nn.Module
+    compact_logits = modules["slime.backends.megatron_utils.compact_logits"]
+    compact_logits.CompactLogitsGPTModel = torch.nn.Module
+    compact_logits.can_compact_actor_logits = lambda _args: pytest.fail(
+        "Critic providers must bypass actor compaction"
+    )
     layer_specs = modules["megatron.core.models.gpt.gpt_layer_specs"]
     layer_specs.get_gpt_decoder_block_spec = lambda *args, **kwargs: None
     layer_specs.get_gpt_layer_local_spec = lambda *args, **kwargs: None
