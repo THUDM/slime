@@ -254,9 +254,10 @@ class BaseAdapter:
         """Drain a session's trajectory into fully-formed Sample objects.
 
         Waits out in-flight requests for the sid, linearises the per-sid tree,
-        then decodes each sample's trained tail into .response (the manager is
-        tokenizer-free, so the adapter that owns the tokenizer fills this in).
-        Idempotent: a second call for an already-popped sid returns [].
+        then assigns ``reward`` to every drained sample and decodes each sample's
+        trained tail into .response (the manager is reward- and tokenizer-free, so
+        the adapter fills both in). Idempotent: a second call for an already-popped
+        sid returns [].
         """
         await self.shutdown_session(sid, wait_timeout=wait_timeout)
         session = self.store.pop(sid, None)
@@ -264,11 +265,11 @@ class BaseAdapter:
         samples = self.manager.get_trajectory(
             sid,
             base_sample=base_sample,
-            reward=reward,
             extra_metadata=extra_metadata,
             max_sample_tokens=max_sample_tokens,
         )
         for s in samples:
+            s.reward = reward
             rlen = int(s.response_length or 0)
             s.response = (
                 self.tokenizer.decode(s.tokens[-rlen:], skip_special_tokens=False) if rlen and s.tokens else ""
