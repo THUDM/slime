@@ -1,7 +1,7 @@
 # Coding-agent RL with Qwen3.8-27B, MiMo SWE and sunabako
 
 The real Codex training smoke test is documented in the
-[CI guide](../../docs/en/developer_guide/ci.md#coding-agent-training).
+[CI guide](https://github.com/THUDM/slime/blob/main/docs/en/developer_guide/ci.md#coding-agent-training).
 It uses one small MiMo task, one sample and one optimizer update on eight GPUs.
 
 This example trains **Qwen3.8-27B** on the **code subset of
