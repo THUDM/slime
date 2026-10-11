@@ -1216,6 +1216,16 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="Number of upcoming disk-backed R3 microbatches to prefetch into CPU memory.",
             )
             parser.add_argument(
+                "--log-r3-route-mismatch",
+                action="store_true",
+                default=False,
+                help=(
+                    "Log, each train step, the fraction of real tokens in each MoE layer whose replayed expert set "
+                    "differs from the trainer router's own top-k (train/r3_route_mismatch, _max, _layer_<i>). "
+                    "Requires --use-rollout-routing-replay; adds one top-k per MoE layer to the training forward."
+                ),
+            )
+            parser.add_argument(
                 "--use-opsm",
                 action="store_true",
                 default=False,
@@ -1642,6 +1652,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help=(
                     "Upper bound asserted on train/train_rollout_logprob_abs_diff when --ci-test is set. "
                     "Defaults to 0.1; tighten it (e.g. 1e-6) for deterministic train/rollout alignment gates."
+                ),
+            )
+            parser.add_argument(
+                "--ci-r3-route-mismatch-threshold",
+                type=float,
+                default=None,
+                help=(
+                    "Upper bound asserted on every MoE layer's R3 route mismatch (train/r3_route_mismatch_max) "
+                    "when --ci-test is set. Requires --log-r3-route-mismatch."
                 ),
             )
             parser.add_argument(
@@ -2184,6 +2203,10 @@ def slime_validate_args(args):
         args.use_routing_replay = True
         if args.routing_replay_prefetch_microbatches < 0:
             raise ValueError("--routing-replay-prefetch-microbatches must be non-negative")
+    if args.log_r3_route_mismatch and not args.use_rollout_routing_replay:
+        raise ValueError("--log-r3-route-mismatch requires --use-rollout-routing-replay")
+    if args.ci_r3_route_mismatch_threshold is not None and not args.log_r3_route_mismatch:
+        raise ValueError("--ci-r3-route-mismatch-threshold requires --log-r3-route-mismatch")
 
     if args.custom_config_path:
         with open(args.custom_config_path) as f:

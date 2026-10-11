@@ -30,9 +30,10 @@ except ImportError:
     from megatron.core.utils import unwrap_model
 from slime.observability import logging_utils, train_metric_utils
 from slime.utils.memory_utils import clear_memory
+from slime.utils.routing_replay import RoutingReplay, route_mismatch_metrics, set_route_mismatch_rows
 
 from .checkpoint import load_checkpoint, save_checkpoint
-from .data import DataIterator, get_batch
+from .data import DataIterator, get_batch, get_routing_replay_real_rows
 from .loss import ROLLOUT_TOP_P_TOKEN_KEYS, get_rollout_top_p_logprob_kwargs, loss_function
 from .model_provider import get_model_provider_func
 from .stateless_adam import StatelessAdam
@@ -619,6 +620,16 @@ def train_one_step(
         if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
             old_stage = os.environ["ROUTING_REPLAY_STAGE"]
             os.environ["ROUTING_REPLAY_STAGE"] = "replay_forward"
+            if args.log_r3_route_mismatch:
+                # Only the training forward counts route mismatches, over rows with rollout routes.
+                set_route_mismatch_rows(
+                    get_routing_replay_real_rows(
+                        batch["unconcat_tokens"],
+                        args.data_pad_size_multiplier,
+                        args.allgather_cp,
+                        args.sequence_parallel,
+                    )
+                )
 
         if return_schedule_plan:
             assert not args.enable_mtp_training, "MTP training should not be enabled when using combined 1f1b"
@@ -651,6 +662,7 @@ def train_one_step(
 
         if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
             os.environ["ROUTING_REPLAY_STAGE"] = old_stage
+            set_route_mismatch_rows(None)
 
         return output_tensor, partial(loss_function, args, batch, num_microbatches, step_global_batch_size)
 
@@ -890,6 +902,11 @@ def train(
 
                     check_mtp_loss(mtp_losses.sum().item())
 
+        route_mismatch = None
+        if args.log_r3_route_mismatch and os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
+            # A collective over every actor rank, so it runs before the logging-rank branch below.
+            route_mismatch = RoutingReplay.reduce_route_mismatch(args.num_layers)
+
         # per train step log.
         if (
             mpu.get_data_parallel_rank(with_context_parallel=True) == 0
@@ -914,12 +931,24 @@ def train(
 
             # Per-step gbs — uneven step sizes are easy to miss without this.
             log_dict[f"train/{role_tag}global_batch_size"] = global_batch_sizes[step_id]
+            if route_mismatch is not None:
+                for key, val in route_mismatch_metrics(route_mismatch).items():
+                    log_dict[f"train/{role_tag}{key}"] = val
             log_dict["train/step"] = accumulated_step_id
             logging_utils.log(args, log_dict, step_key="train/step")
 
             if args.ci_test and "train/train_rollout_logprob_abs_diff" in log_dict:
                 threshold = args.ci_train_rollout_logprob_abs_diff_threshold
                 assert log_dict["train/train_rollout_logprob_abs_diff"] <= threshold, f"{threshold=} {log_dict=}"
+
+            if args.ci_test and route_mismatch is not None:
+                # Every MoE layer must have replayed real tokens. Zero mismatch is fine: deterministic
+                # rollouts reproduce the trainer's routing exactly.
+                assert log_dict.get(f"train/{role_tag}r3_route_mismatch_min_tokens", 0) > 0, f"{log_dict=}"
+                threshold = args.ci_r3_route_mismatch_threshold
+                if threshold is not None:
+                    # Bound the worst layer so one misaligned layer cannot hide in the mean.
+                    assert log_dict[f"train/{role_tag}r3_route_mismatch_max"] <= threshold, f"{threshold=} {log_dict=}"
 
             if args.ci_test and not args.ci_disable_kl_checker:
                 if step_id == 0 and "train/ppo_kl" in log_dict and "train/pg_clipfrac" in log_dict:
