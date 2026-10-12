@@ -4,6 +4,7 @@ from .glm4moe import convert_glm4moe_to_hf
 from .llama import convert_llama_to_hf
 from .mimo import convert_mimo_to_hf
 from .minimax_m2 import convert_minimax_m2_to_hf
+from .prism import convert_prism_to_hf, is_prism_model
 from .processors import quantize_params, remove_padding
 from .qwen2 import convert_qwen2_to_hf
 from .qwen3_5 import convert_qwen3_5_to_hf
@@ -14,6 +15,12 @@ from .qwen3moe import convert_qwen3moe_to_hf
 
 # TODO optimize code details
 def convert_to_hf(args, model_name, name, param, quantization_config=None, transform_ue8m0=True):
+    # Prism has a Qwen3 backbone but distinct roots, RVQ/stop heads and a padded
+    # artifact-owned vocabulary. Resolve its explicit family before LLM paths.
+    if is_prism_model(model_name):
+        if quantization_config is not None:
+            raise ValueError("Prism RL weight publication does not support quantization")
+        return convert_prism_to_hf(args, name, param)
     # MCore 0.19 renamed the live MTP module; its checkpoint keys still use
     # transformer_layer. Keep model-specific mapping and quantization consistent.
     name = name.replace(".mtp_model_layer.", ".transformer_layer.")
@@ -35,6 +42,8 @@ _cached_tensors = {}
 
 # TODO optimize code details
 def _convert_to_hf_core(args, model_name, name, param):
+    if is_prism_model(model_name):
+        return convert_prism_to_hf(args, name, param)
     model_name = model_name.lower().replace("_", "").replace("-", "")
     if "minimaxm2" in model_name:
         converted_named_tensors = convert_minimax_m2_to_hf(args, name, param)
