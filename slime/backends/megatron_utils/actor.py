@@ -136,6 +136,11 @@ class MegatronTrainRayActor(TrainRayActor):
         # Load teacher model for Megatron-based on-policy distillation
         if with_opd_teacher:
             self.load_other_checkpoint("teacher", args.opd_teacher_load)
+            # Restore actor weights so update_weights() pushes the student (not teacher) to sglang.
+            # Without offload_train the generic recovery below is skipped, leaving self.model
+            # in teacher state and causing step-0 rollouts/evals to run with the teacher model.
+            if not self.args.offload_train:
+                self._switch_model("actor")
 
         if self.args.vocab_size is None:
             # Prefer HF config vocab_size (which may include model-native padding)
