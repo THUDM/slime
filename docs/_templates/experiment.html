@@ -1,11 +1,32 @@
 {% set zh = language.startswith('zh') %}
 {% macro t(en, cn) %}{{ cn if zh else en }}{% endmacro %}
+{% set description = t('Explore LLM reinforcement learning with slime: understand the rollout–reward–train loop, compare system choices, and export a starting experiment recipe.', '用 slime 探索 LLM 强化学习：看懂生成、奖励与训练的循环，对比系统配置，导出起步实验配方。') %}
+{% set canonical = 'https://thudm.github.io/slime/' ~ ('zh/' if zh else '') %}
+{% set share_image = 'https://thudm.github.io/slime/_static/image/rl-world-' ~ ('zh' if zh else 'en') ~ '.png' %}
+{% set share_image_alt = t('slime: Megatron training connected to independently managed External SGLang clusters.', 'slime：Megatron 训练连接多个独立管理的 External SGLang 集群。') %}
 <!DOCTYPE html>
 <html lang="{{ 'zh-CN' if zh else 'en' }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="{{ t('Build a GLM reinforcement learning experiment. Explore the tradeoffs, understand the math, and export a slime launch script.', '像搭积木一样配置 GLM 强化学习实验：了解取舍、阅读推导、导出 slime 启动脚本。') }}">
+  <meta name="description" content="{{ description }}">
+  <link rel="canonical" href="{{ canonical }}">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="slime">
+  <meta property="og:title" content="{{ t('slime · Understand RL. Build your experiment.', 'slime · 看懂 RL，搭建实验。') }}">
+  <meta property="og:description" content="{{ description }}">
+  <meta property="og:url" content="{{ canonical }}">
+  <meta property="og:locale" content="{{ 'zh_CN' if zh else 'en_US' }}">
+  <meta property="og:image" content="{{ share_image }}">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="{{ share_image_alt }}">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{ t('slime · Understand RL. Build your experiment.', 'slime · 看懂 RL，搭建实验。') }}">
+  <meta name="twitter:description" content="{{ description }}">
+  <meta name="twitter:image" content="{{ share_image }}">
+  <meta name="twitter:image:alt" content="{{ share_image_alt }}">
+  <script type="application/json" id="experiment-build">{{ experiment_build | tojson }}</script>
   <title>{{ t('slime · Build your next experiment', 'slime · 搭建你的下一个实验') }}</title>
   <link rel="icon" href="{{ pathto('_static/image/logo.ico', 1) }}">
   <link rel="stylesheet" href="{{ pathto('_static/css/experiment.css', 1) }}">
@@ -20,6 +41,7 @@
 <header class="site-header">
   <a class="brand" href="{{ pathto('index') }}"><img src="{{ pathto('_static/image/logo.jpg', 1) }}" alt="" width="42" height="42">slime</a>
   <nav aria-label="{{ t('Main navigation', '主导航') }}">
+    <a href="#install" class="install-nav">{{ t('Install', '安装') }}</a>
     <a href="#lab">{{ t('Build', '搭建实验') }}</a>
     <a href="{{ pathto('library') }}">{{ t('Docs', '文档') }}</a>
     <a href="https://github.com/THUDM/slime">GitHub ↗</a>
@@ -33,14 +55,23 @@
       <h1>{{ t('Built for', '为规模化') }}<br><span>{{ t('scaling RL.', 'RL 而生。') }}</span></h1>
       <p class="hero-description">{{ t('slime is an LLM post-training framework for RL scaling, providing two core capabilities:', 'slime 是为 RL scaling 设计的 LLM 后训练框架，提供两大核心能力：') }}</p>
       <ol class="hero-capabilities"><li><a href="#capability-training">{{ t('High-Performance Training', '高性能训练') }} ↘</a></li><li><a href="#capability-generation">{{ t('Flexible Data Generation', '灵活的数据生成') }} ↘</a></li></ol>
-      <a class="button primary" href="#install">{{ t('Install & get started', '安装并开始') }} <span>↗</span></a>
-      <a class="hero-note" href="#lab">{{ t('Already set up? Build an experiment ↓', '环境已就绪？直接搭建实验 ↓') }}</a>
+      <div class="hero-actions"><a class="button primary" href="#learn">{{ t('Understand an RL run', '了解一轮 RL') }} <span>↗</span></a><a class="button light" href="#lab">{{ t('Build my experiment', '配置我的实验') }} ↓</a></div>
+      <p class="hero-note">{{ t('Explore in your browser.', '直接在浏览器中探索。') }} <a href="#install">{{ t('Ready to run? Install slime →', '准备运行？安装 slime →') }}</a></p>
     </div>
     <div class="hero-art" aria-hidden="true">
       <span class="orbit-label label-top">rollout → reward → train</span>
       <div class="mascot-frame"><img src="{{ pathto('_static/image/logo.jpg', 1) }}" alt="" width="300" height="300"></div>
       <span class="orbit-label label-bottom">a little slime. a lot of possibility.</span>
       <span class="spark spark-one">✳</span><span class="spark spark-two">✦</span>
+    </div>
+  </section>
+  <section id="learn" class="rl-walkthrough" aria-labelledby="walkthrough-title" hidden>
+    <div class="walkthrough-heading"><div><p class="eyebrow">SLIME / ONE RL RUN</p><h2 id="walkthrough-title" tabindex="-1">{{ t('Follow one prompt through RL.', '跟着一个 prompt，走完一轮 RL。') }}</h2></div><a href="#lab">{{ t('Skip to my experiment →', '跳到我的实验 →') }}</a></div>
+    <p>{{ t('A 75-second guided example. Your saved experiment stays as it is.', '75 秒机制导览。你保存的实验保持原样。') }}</p>
+    <div id="walkthrough-stages" class="walkthrough-stages" aria-label="{{ t('RL stages', 'RL 阶段') }}"></div>
+    <div class="walkthrough-body"><div class="walkthrough-copy"><h3 id="walkthrough-stage-title"></h3><p id="walkthrough-explanation" aria-live="polite"></p><p class="walkthrough-disclaimer">{{ t('Illustrative answers and rewards, not a measured run. An update need not improve the next reward.', '回答与奖励均为机制示例，不是实测结果；一次更新不保证下一轮 reward 提升。') }}</p></div><div id="walkthrough-world" class="world"></div>
+    <div class="walkthrough-controls"><button id="walkthrough-back" type="button">← {{ t('Back', '上一步') }}</button><button id="walkthrough-play" type="button" aria-pressed="false">▶ {{ t('Play', '播放') }}</button><button id="walkthrough-next" type="button">{{ t('Next', '下一步') }} →</button><button id="walkthrough-restart" type="button">↶ {{ t('Replay', '重看') }}</button></div>
+    <div class="walkthrough-finish"><a class="button dark" href="#lab">{{ t('Continue with my experiment', '继续配置我的实验') }}</a><button id="adopt-walkthrough" type="button">{{ t('Use this GRPO starting point', '采用这个 GRPO 起点') }}</button></div>
     </div>
   </section>
   <section class="core-capabilities" aria-label="{{ t('Two core capabilities', '两大核心能力') }}">
@@ -140,6 +171,12 @@ python -c "import slime, sglang, megatron.core; import torch; print('GPUs:', tor
       <button type="button" data-preset="scale">↗ {{ t('Scale a GLM', '大规模 GLM') }}</button>
       <button type="button" data-preset="agent">⌁ {{ t('Long-running agents', '长程 Agent') }}</button>
     </div>
+    <details id="comparison" class="comparison">
+      <summary>{{ t('Compare A / B', '对照 A / B') }} <span id="comparison-count"></span></summary>
+      <p>{{ t('Save a complete snapshot as A; your working experiment is B. Undo / Redo changes B. Replacing A is a separate action. Exports below always use B.', '将完整快照保存为 A，当前工作配置为 B。撤销 / 重做只改变 B；更新 A 是独立操作。下方始终导出 B。') }}</p>
+      <div class="comparison-actions"><button type="button" id="save-baseline">{{ t('Save B as baseline A', '将 B 保存为基线 A') }}</button><button type="button" id="restore-baseline" disabled>{{ t('Restore A into B', '将 A 恢复到 B') }}</button><button type="button" id="share-comparison" disabled>{{ t('Share A / B', '分享 A / B') }}</button><button type="button" id="clear-baseline" disabled>{{ t('Clear A', '清除 A') }}</button></div>
+      <div id="comparison-content"></div>
+    </details>
     <noscript><p class="notice">{{ t('Enable JavaScript to use the builder, or follow the complete written guide.', '启用 JavaScript 即可使用向导，也可使用完整的文字指南。') }} <a href="{{ pathto('get_started/experiment-guide') }}">{{ t('Experiment guide →', '实验配置指南 →') }}</a></p></noscript>
     <div id="interactive-lab" hidden>
       <nav id="steps" class="steps" aria-label="{{ t('Experiment steps', '配置步骤') }}"></nav>
@@ -162,10 +199,12 @@ python -c "import slime, sglang, megatron.core; import torch; print('GPUs:', tor
     </div>
   </section>
   <section id="recipe" class="recipe" aria-labelledby="recipe-title" hidden>
-    <div class="recipe-heading"><div><p class="eyebrow">02 / FROM PLAY TO RUN</p><h2 id="recipe-title">{{ t('Your experiment, to go.', '把实验带走。') }}</h2><p>{{ t('A starting recipe grounded in this repository. Prepare the environment, review the assumptions, then run.', '根据仓库现有配方生成。准备环境、核对配置，然后启动你的实验。') }}</p></div><button type="button" id="share" class="button light">↗ {{ t('Share choices', '分享选择') }}</button></div>
+    <div class="recipe-heading"><div><p class="eyebrow">02 / FROM PLAY TO RUN</p><h2 id="recipe-title">{{ t('Your experiment, to go.', '把实验带走。') }}</h2><p>{{ t('A starting recipe grounded in this repository. Prepare the environment, review the assumptions, then run.', '根据仓库现有配方生成。准备环境、核对配置，然后启动你的实验。') }}</p></div><button type="button" id="share" class="button light">↗ {{ t('Share choices', '分享选择') }}</button><button type="button" id="load-experiment">{{ t('Load JSON', '载入 JSON') }}</button><input type="file" id="import-experiment" accept=".json,application/json" hidden></div>
     <div id="issues" aria-live="polite"></div>
+    <div id="repair-options"></div>
+    <details id="recipe-source" class="recipe-source"><summary>{{ t('Source & validation scope', '来源与验证范围') }}</summary><div id="recipe-source-content"></div></details>
     <div class="artifact-toolbar"><div id="artifact-tabs" class="artifact-tabs" role="tablist" aria-label="{{ t('Generated files', '生成文件') }}"></div><div class="artifact-actions"><button type="button" id="copy">{{ t('Copy', '复制') }}</button><button type="button" class="button primary" id="download">↓ {{ t('Download', '下载') }}</button></div></div>
-    <pre id="artifact-panel" role="tabpanel" tabindex="0"><code id="artifact-code"></code></pre>
+    <details class="artifact-preview"><summary>{{ t('Inspect the selected file', '展开查看当前文件') }}</summary><pre id="artifact-panel" role="tabpanel" tabindex="0"><code id="artifact-code"></code></pre></details>
     <div class="run-guide"><h3>{{ t('Three steps to your first reward', '离第一个 reward，还有三步') }}</h3><ol id="run-steps"></ol></div>
     <p class="recipe-footnote">{{ t('GPU counts describe placement, not a memory-fit guarantee. These generated combinations have not been benchmarked on your hardware. Start with a short run and compare reward, log-prob mismatch, clipping, and rollout time.', 'GPU 数量描述资源布局，不代表显存一定足够。组合配置尚未在你的硬件上测量；先做短实验，对比 reward、log-prob 差异、裁剪比例和 rollout 耗时。') }}</p>
   </section>

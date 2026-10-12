@@ -128,6 +128,7 @@
     cpuAdam: true,
     recompute: true,
     model: 'flash',
+    hardware: 'unspecified',
     task: 'math',
     layout: 'colocate',
     schedule: 'sync',
@@ -166,6 +167,7 @@
     step: 0
   };
   const enums = {
+    hardware: ['unspecified', 'hopper', 'blackwell'],
     model: Object.keys(models),
     task: ['math', 'custom'],
     layout: ['colocate', 'separate', 'external'],
@@ -193,6 +195,7 @@
   ];
 
   function sanitize(input) {
+    if (input?.schema === 1 && input.choices) input = input.choices;
     const s = {
       ...defaults
     };
@@ -292,8 +295,13 @@
   function validate(s, lang = 'en') {
     const m = models[s.model],
       errors = [],
-      notes = [];
+      notes = [],
+      issues = [];
     const t = (en, zh) => lang === 'zh' ? zh : en;
+    const reject = (code, message, fields, actions = []) => {
+      errors.push(message);
+      issues.push({code, message, fields, actions});
+    };
     const total = s.nodes * 8,
       rollout = s.layout === 'colocate' ? total : s.rollout;
     if (total % (m.tp * m.pp * m.cp) !== 0 || total % (m.ep * m.pp) !== 0) errors.push(t(
@@ -302,9 +310,26 @@
     if (s.layout !== 'external' && rollout % m.engine !== 0) errors.push(t(
       `Rollout GPUs must be a multiple of ${m.engine} (GPUs per engine).`,
       `Rollout GPU 数必须是 ${m.engine}（每个引擎的 GPU 数）的倍数。`));
-    if (s.layout !== 'external' && s.pd && (s.prefill % m.engine !== 0 || s.prefill >= rollout)) errors.push(t(
-      `PD needs at least one prefill and one decode engine. Prefill GPUs must be a multiple of ${m.engine} and less than the rollout pool.`,
-      `PD 至少需要一个 prefill 和一个 decode 引擎；prefill GPU 数须为 ${m.engine} 的倍数，且小于 rollout 总 GPU 数。`));
+    if (s.layout !== 'external' && s.pd && (s.prefill % m.engine !== 0 || s.prefill >= rollout)) {
+      const prefill = Math.ceil(s.prefill / m.engine) * m.engine;
+      const needed = Math.max(rollout, prefill + m.engine);
+      const changes = {prefill};
+      if (s.layout === 'colocate') {
+        // Find an integer node count satisfying this model's training AND serving groups.
+        let nodes = Math.max(s.nodes, Math.ceil(needed / 8));
+        while (nodes <= numberLimits.nodes[1] &&
+          (nodes * 8 % (m.tp * m.pp * m.cp) || nodes * 8 % (m.ep * m.pp) || nodes * 8 % m.engine)) nodes++;
+        changes.nodes = nodes;
+      } else changes.rollout = Math.ceil(needed / m.engine) * m.engine;
+      const actions = [{id: 'pd-off', label: t('Keep resources; turn PD off', '保留资源分配，关闭 PD'), changes: {pd: false}}];
+      if (Object.entries(changes).every(([key, value]) => value <= numberLimits[key][1])) actions.push({
+        id: 'pd-resources', label: t('Allocate complete prefill / decode engines', '分配完整的 prefill / decode 引擎'), changes
+      });
+      reject('pd-capacity', t(
+        `PD needs complete prefill and decode engines, each using ${m.engine} GPUs in this recipe.`,
+        `此配方的 PD 需要完整的 prefill 和 decode 引擎，每个引擎使用 ${m.engine} 张 GPU。`),
+        ['prefill', s.layout === 'colocate' ? 'nodes' : 'rollout'], actions);
+    }
     if (s.layout === 'colocate' && s.schedule === 'async') errors.push(t(
       'Fully async requires separate training and rollout GPUs.', 'Fully async 需要独立的训练与 rollout GPU。'));
     if (s.layout === 'colocate' && s.transport !== 'nccl') errors.push(t(
@@ -321,7 +346,7 @@
         ['save', 'output directory', '输出目录'],
         ['megatron', 'Megatron directory', 'Megatron 目录']
       ])
-      if (!s[key]) errors.push(t(`Enter the ${en} path.`, `请填写${zh}路径。`));
+      if (!s[key]) reject('path-' + key, t(`Enter the ${en} path.`, `请填写${zh}路径。`), [key]);
     if (s.task === 'custom') {
       if (!/^\w+(?:\.\w+)+$/.test(s.generate)) errors.push(t(
         'Enter an importable generation hook, e.g. my_agent.generate.', '请填写可导入的生成 hook，例如 my_agent.generate。'));
@@ -330,9 +355,9 @@
     }
     if (s.layout === 'external') {
       if (!s.endpoints || !s.endpoints.split(/\s+/).every(v => /^(?:https?:\/\/)?[a-zA-Z0-9._-]+:\d{1,5}$/.test(v) &&
-          Number(v.split(':').at(-1)) > 0 && Number(v.split(':').at(-1)) < 65536)) errors.push(t(
+          Number(v.split(':').at(-1)) > 0 && Number(v.split(':').at(-1)) < 65536)) reject('endpoints', t(
         'Enter engine addresses as host:port separated by spaces (not a router URL).',
-        '填写以空格分隔的引擎 host:port（不是 router 地址）。'));
+        '填写以空格分隔的引擎 host:port（不是 router 地址）。'), ['endpoints']);
       notes.push(t(
         'External SGLang is configured by its owner. Use the generated serving reference on every engine; slime discovers existing regular/prefill/decode roles and cannot switch them from the training CLI.',
         '外部 SGLang 由部署方配置。请将生成的 serving 参考应用到各引擎；slime 发现已有 regular/prefill/decode 角色，无法通过训练 CLI 改变它们。'));
@@ -342,9 +367,9 @@
     if (s.transport === 'delta' && !s.local) errors.push(t(
       'Delta transport needs a local checkpoint directory on every serving host.',
       'Delta 传输需要每台推理主机上的本地 checkpoint 目录。'));
-    if (s.pd && !s.ib) errors.push(t(
+    if (s.pd && !s.ib) reject('rdma', t(
       'Enter the RDMA device(s) for this Mooncake PD recipe, e.g. mlx5_0. Check these names on every host.',
-      '此 Mooncake PD 配方需要 RDMA 网卡名，例如 mlx5_0；请核对每台主机。'));
+      '此 Mooncake PD 配方需要 RDMA 网卡名，例如 mlx5_0；请核对每台主机。'), ['ib']);
     if (s.speculative) {
       if (s.draftSource === 'builtin' && !m.mtp) errors.push(t(
         'This model has no built-in MTP recipe here. Select a separate EAGLE head and provide its checkpoint.',
@@ -414,8 +439,12 @@
     if (s.precision === 'int4') notes.push(t(
       'INT4 rollout is beta and has no maintained GLM end-to-end recipe here. Validate your model and installed kernels with a short run before scaling; training remains BF16.',
       'INT4 rollout 为 beta，仓库尚无维护中的 GLM 端到端配方。扩容前先用短实验验证模型和当前 kernel；训练仍为 BF16。'));
+    if (s.hardware === 'blackwell') notes.push(t(
+      'B200/B300 uses the CUDA 13 image, with different kernel builds. GPU CI primarily covers H100/H200; this hardware choice does not certify the selected model or memory fit.',
+      'B200/B300 使用 CUDA 13 镜像，kernel 构建不同。GPU CI 主要覆盖 H100/H200；选择硬件不会认证此模型配方或显存容量。'));
     return {
       errors,
+      issues,
       notes,
       total,
       rollout,
@@ -477,11 +506,94 @@
     return out;
   }
 
-  function generate(s, lang = 'en') {
+  function fieldLabel(key, lang = 'en') {
+    const labels = {
+      model: ['Model', '模型'], hardware: ['Hardware context', '硬件条件'], task: ['Learning signal', '训练信号'],
+      layout: ['GPU placement', 'GPU 布局'], schedule: ['Schedule', '调度'], nodes: ['Training nodes × 8 GPU', '训练节点 × 8 GPU'],
+      rollout: ['Rollout GPUs', 'Rollout GPU'], prefill: ['Prefill GPUs', 'Prefill GPU'],
+      precision: ['Weight precision', '权重精度'], kv: ['Attention KV dtype', 'Attention KV 精度'],
+      mambaDtype: ['SSM dtype', 'SSM 精度'], mambaRatio: ['State / KV memory ratio', '状态 / KV 内存比例'],
+      correction: ['Behavior correction', 'Behavior 修正'], r3: ['R3', 'R3'], sc: ['SC', 'SC'],
+      deterministic: ['Deterministic execution', '确定性执行'], cpuAdam: ['CPU Adam', 'CPU Adam'],
+      recompute: ['Activation recomputation', '激活重计算'], pd: ['PD', 'PD'], hicache: ['HiCache', 'HiCache'],
+      speculative: ['EAGLE', 'EAGLE'], draftSource: ['Draft head source', '投机头来源'], draft: ['Draft head path', '投机头路径'],
+      specSteps: ['Draft steps', '草拟步数'], partial: ['Partial rollout', 'Partial rollout'],
+      maskPartial: ['Mask old prefix', 'Mask 旧前缀'], straw: ['straw', 'straw'],
+      transport: ['Weight transport', '权重传输'], concurrency: ['Concurrency', '并发数'], response: ['Response tokens', '回复 token 数'],
+      rounds: ['Training rounds', '训练轮数'], hf: ['HF checkpoint', 'HF checkpoint'], train: ['Training checkpoint', '训练 checkpoint'],
+      data: ['Prompt data', 'Prompt 数据'], save: ['Output path', '输出路径'], megatron: ['Megatron path', 'Megatron 路径'],
+      endpoints: ['Engine addresses', '引擎地址'], shared: ['Shared weight path', '共享权重路径'], local: ['Serving checkpoint path', '推理 checkpoint 路径'],
+      ib: ['RDMA devices', 'RDMA 网卡'], generate: ['Generation hook', '生成 hook'], reward: ['Reward hook', '奖励 hook'],
+      queueDir: ['straw data path', 'straw 数据路径'], queueRun: ['straw run ID', 'straw run ID'], declaration: ['JuiceFS declaration', 'JuiceFS 声明']
+    };
+    return labels[key]?.[lang === 'zh' ? 1 : 0] || key;
+  }
+
+  function compare(a, b, lang = 'en') {
+    a = sanitize(a);
+    b = sanitize(b);
+    const t = (en, zh) => lang === 'zh' ? zh : en;
+    const differences = Object.keys(defaults).filter(key => key !== 'step' && a[key] !== b[key])
+      .map(key => ({key, label: fieldLabel(key, lang), before: a[key], after: b[key]}));
+    const changed = key => differences.some(item => item.key === key);
+    const insights = [];
+    if (changed('layout') || changed('transport')) insights.push(t(
+      'Colocation reuses one GPU pool in alternating phases. Separate pools reserve training and rollout GPUs independently; external engine GPUs are outside the Ray allocation. Separate pools may still run synchronously. Compare idle time, weight-transfer time and total reserved GPUs.',
+      '同卡布局在两个阶段复用 GPU；分离布局分别占用训练与 rollout GPU，外部引擎 GPU 不计入本地 Ray 分配。分离布局仍可同步执行。比较空闲时间、权重传输耗时和总占用 GPU。'));
+    if (changed('schedule') || changed('partial') || changed('straw')) insights.push(t(
+      'Fully async overlaps generation and training on separate GPUs, but mixes weight versions. Partial rollout saves unfinished prefixes; straw persists queue payloads and enables distributed producers with fully async. Measure staleness/mean, staleness/max, queue waits, rollout time and held-out reward.',
+      'Fully async 在独立 GPU 上重叠生成与训练，但会混合权重版本。Partial rollout 保留未完成前缀；straw 持久化队列数据，搭配 fully async 启用分布式 producer。观察 staleness/mean、staleness/max、队列等待、rollout 耗时和独立评估 reward。'));
+    if (['precision', 'kv', 'mambaDtype', 'mambaRatio'].some(changed)) insights.push(t(
+      'BF16 → FP8 changes rollout weight storage and arithmetic; FP8 training also changes the trainer. Attention KV and recurrent state have independent budgets. Measure train_rollout_logprob_abs_diff, reward, rollout time and peak memory; bit width alone does not predict total memory or speed.',
+      'BF16 → FP8 改变 rollout 权重存储与运算，FP8 training 还改变训练侧。Attention KV 与递归状态各有独立预算。观察 train_rollout_logprob_abs_diff、reward、rollout 耗时及显存峰值；位宽不能直接换算总显存或速度。'));
+    if (changed('correction')) insights.push(t(
+      'For the same illustrative ratio p/q = 0.4/0.1 = 4, TIS with upper bound 2 uses weight 2; ICE-POP outside [0.5, 2] uses 0. This is behavior correction, separate from PPO update clipping. Compare clipping/masking fractions, mismatch and held-out reward.',
+      '同一示例 p/q = 0.4/0.1 = 4：TIS 上界 2 时权重为 2；ICE-POP 在 [0.5, 2] 外权重为 0。这是 behavior 修正，与 PPO 更新裁剪独立。比较 clipping/masking 比例、训推差异与独立评估 reward。'));
+    if (['pd', 'prefill', 'hicache', 'speculative', 'draftSource', 'draft', 'specSteps'].some(changed)) insights.push(t(
+      'PD separates prefill and decode with cache transfer; HiCache trades host memory and I/O for prefix reuse; EAGLE adds draft work and batch verification. Measure prefill/decode time, cache hit rate, host RAM, spec_accept_rate and spec_accept_length for your workload.',
+      'PD 拆分 prefill/decode 并传输缓存；HiCache 用主机内存与 I/O 换取前缀复用；EAGLE 增加草拟与批量验证。按工作负载测量 prefill/decode 耗时、缓存命中率、主机内存、spec_accept_rate 和 spec_accept_length。'));
+    if (['cpuAdam', 'recompute', 'nodes', 'rollout', 'response', 'concurrency'].some(changed)) insights.push(t(
+      'More GPUs and lower concurrency can relieve different constraints. CPU Adam uses host RAM and transfers; recomputation saves activations by repeating work. Measure peak GPU/host memory and train/rollout time; allocation is not a memory-fit guarantee.',
+      '增加 GPU 和降低并发缓解不同约束。CPU Adam 需要主机内存与传输，重计算通过重复计算节省激活。测量 GPU/主机内存峰值及训推耗时；分配数量不保证显存足够。'));
+    if (differences.length && !insights.length) insights.push(t(
+      'Check the changed fields and each configuration’s assumptions. Run a short controlled experiment and compare held-out reward and stage timings.',
+      '核对变化字段及两套配置的条件，用短对照实验比较独立评估 reward 和各阶段耗时。'));
+    return {differences, insights, a: validate(a, lang), b: validate(b, lang)};
+  }
+
+  function shareChoices(state) {
+    const shared = {...sanitize(state)};
+    for (const key of ['hf', 'train', 'data', 'save', 'megatron', 'endpoints', 'shared', 'local', 'ib',
+      'generate', 'reward', 'queueDir', 'queueRun', 'declaration', 'draft']) delete shared[key];
+    return shared;
+  }
+
+  function sourceRecord(s, build = {}) {
+    const commit = /^[a-f0-9]{40}$/.test(build.commit || '') ? build.commit : null;
+    const recipe = 'scripts/run-' + models[s.model].recipe + '.sh';
+    const model = 'scripts/models/' + models[s.model].model + '.sh';
+    const source = path => ({path, sha256: build.sourceHashes?.[path] || null,
+      url: commit ? `https://github.com/THUDM/slime/blob/${commit}/${path}` : null});
+    return {
+      schema: 1,
+      page: {commit, dirty: typeof build.dirty === 'boolean' ? build.dirty : null,
+        generator: source('docs/_static/js/experiment-engine.js')},
+      recipe: source(recipe), modelConfig: source(model),
+      environment: {recipeVersions: build.environment || null,
+        suggestedImageTag: s.hardware === 'unspecified' ? null : 'slimerl/slime:latest-' + (s.hardware === 'blackwell' ? 'cu130' : 'cu129'),
+        imageDigest: null, installedCommit: null},
+      checkpoint: {id: models[s.model].repo, revision: null},
+      staticChecksPassed: validate(s).errors.length === 0,
+      runtimeEvidence: []
+    };
+  }
+
+  function generate(s, lang = 'en', build = {}) {
     s = sanitize(s);
     const m = models[s.model],
       v = validate(s, lang),
       t = (en, zh) => lang === 'zh' ? zh : en;
+    const provenance = sourceRecord(s, build);
     const arg = [`--actor-num-nodes ${s.nodes}`, '--actor-num-gpus-per-node 8'];
     if (s.layout === 'colocate') arg.push('--colocate');
     if (s.layout === 'external') arg.push('--rollout-external-engine-addrs ' + s.endpoints.split(/\s+/).filter(
@@ -578,12 +690,15 @@
       schema: 1,
       choices: s,
       model: m.name,
-      validation: v
+      validation: v,
+      provenance
     };
     return {
       validation: v,
+      provenance,
       files: {
-        'experiment.sh': header + prep + launch,
+        'experiment.sh': header.replace('# Recipe basis:',
+          `# Generator source commit: ${provenance.page.commit || 'not recorded'}; local changes: ${provenance.page.dirty ?? 'unknown'}\n# Source: ${provenance.recipe.url || 'commit not recorded'}\n# Runtime image digest and model revision: not recorded. Verify the installed checkout with git rev-parse HEAD.\n# Static checks do not establish GPU memory fit or a tested training run.\n# Recipe basis:`) + prep + launch,
         ...(config ? {
           'sglang.yaml': config
         } : {}),
@@ -604,6 +719,10 @@
     preset,
     validate,
     generate,
+    fieldLabel,
+    compare,
+    shareChoices,
+    sourceRecord,
     quote
   };
 })(typeof window === 'undefined' ? globalThis : window);

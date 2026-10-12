@@ -14,6 +14,85 @@ const E = globalThis.SlimeExperiment;
 const repo = path.resolve(__dirname, '../..');
 const shell = state => E.generate(state).files['experiment.sh'];
 
+test('A/B comparison includes dependency changes and validates both sides without mutating snapshots', () => {
+  const a = E.sanitize({...E.defaults, hf: '/private/baseline'});
+  const saved = JSON.stringify(a);
+  let b = E.change(a, 'schedule', 'async');
+  b = E.change(b, 'precision', 'fp8');
+  b = E.change(b, 'correction', 'icepop');
+  const result = E.compare(a, b);
+  assert.deepEqual(result.differences.map(d => d.key).sort(), ['correction', 'layout', 'precision', 'schedule']);
+  assert.equal(result.a.localGpus, 8);
+  assert.equal(result.b.localGpus, 16);
+  assert.equal(JSON.stringify(a), saved);
+  assert(result.insights.some(text => text.includes('staleness/mean')));
+  assert(result.insights.some(text => text.includes('p/q = 0.4/0.1 = 4')));
+  assert.deepEqual(E.compare(a, {...a, step: 4}).differences, []);
+  b = {...b, pd: true, ib: ''};
+  assert(E.compare(a, b).b.errors.length > 0);
+  assert.equal(E.compare(a, b).a.errors.length, 0);
+  for (const state of [a, b]) {
+    const shared = E.shareChoices({...state, endpoints: 'private:1234', draft: '/private/head', queueDir: '/private/queue'});
+    for (const key of ['hf', 'endpoints', 'draft', 'queueDir', 'reward', 'ib']) assert(!Object.hasOwn(shared, key));
+    assert.equal(E.sanitize(shared).model, state.model);
+  }
+});
+
+test('PD repairs derive whole engines and training groups from each current model', () => {
+  for (const model of Object.keys(E.models)) {
+    for (const layout of ['colocate', 'separate']) {
+      const m = E.models[model];
+      const s = E.sanitize({...E.change(E.defaults, 'model', model), layout, pd: true, prefill: m.nodes * 8 + 1, rollout: m.nodes * 8, ib: ''});
+      const before = JSON.stringify(s);
+      const issue = E.validate(s).issues.find(issue => issue.code === 'pd-capacity');
+      assert(issue, model);
+      const action = issue.actions.find(action => action.id === 'pd-resources');
+      assert(action, model);
+      const next = E.sanitize({...s, ...action.changes});
+      const result = E.validate(next);
+      assert(!result.issues.some(issue => issue.code === 'pd-capacity'), model);
+      assert.equal(next.prefill % m.engine, 0);
+      assert(result.rollout - next.prefill >= m.engine);
+      assert.equal(result.rollout % m.engine, 0);
+      assert.equal(result.total % (m.tp * m.pp * m.cp), 0);
+      assert.equal(result.total % (m.ep * m.pp), 0);
+      assert(result.issues.some(issue => issue.code === 'rdma'));
+      assert.equal(JSON.stringify(s), before);
+      const off = E.sanitize({...s, ...issue.actions.find(action => action.id === 'pd-off').changes});
+      assert.equal(E.validate(off).localGpus, E.validate(s).localGpus);
+      assert.equal(off.pd, false);
+    }
+  }
+  const flash = {...E.defaults, layout: 'separate', pd: true};
+  const fix = E.validate(flash).issues.find(i => i.code === 'pd-capacity').actions.find(a => a.id === 'pd-resources');
+  assert.equal(E.validate(flash).localGpus, 16);
+  assert.equal(E.validate({...flash, ...fix.changes}).localGpus, 24);
+  assert(!E.validate({...flash, layout: 'external'}).issues.some(i => i.code === 'pd-capacity'));
+});
+
+test('provenance describes generation, preserves unknown runtime facts and accepts old schema 1 exports', () => {
+  const build = {commit: 'a'.repeat(40), dirty: false, environment: {SGLANG_IMAGE_TAG: 'v0.5.15.post1-cu129'},
+    sourceHashes: {'scripts/run-glm4.7-30B-A3B.sh': 'b'.repeat(64)}};
+  const generated = E.generate({...E.defaults, hardware: 'blackwell'}, 'en', build);
+  const plan = JSON.parse(generated.files['experiment.json']);
+  assert.equal(plan.schema, 1);
+  assert.equal(plan.provenance.recipe.sha256, 'b'.repeat(64));
+  assert(plan.provenance.recipe.url.includes('/' + build.commit + '/'));
+  assert(generated.files['experiment.sh'].includes(plan.provenance.recipe.url));
+  assert.equal(plan.provenance.environment.suggestedImageTag, 'slimerl/slime:latest-cu130');
+  assert.equal(plan.provenance.environment.imageDigest, null);
+  assert.equal(plan.provenance.environment.installedCommit, null);
+  assert.equal(plan.provenance.checkpoint.revision, null);
+  assert.deepEqual(plan.provenance.runtimeEvidence, []);
+  const modified = E.generate({...plan.choices, schedule: 'async', layout: 'separate'}, 'en', build);
+  assert.deepEqual(modified.provenance.runtimeEvidence, []);
+  assert.equal(E.generate(E.defaults).provenance.page.commit, null);
+  assert.equal(E.generate(E.defaults, 'en', {...build, dirty: true}).provenance.page.dirty, true);
+  assert.deepEqual(E.sanitize({schema: 1, choices: {model: 'dense'}}), E.sanitize({model: 'dense'}));
+  assert.equal(E.sanitize({model: 'dense'}).hardware, 'unspecified');
+  assert.equal(E.generate(E.defaults, 'en', {commit: 'bad\ncommand'}).provenance.page.commit, null);
+});
+
 test('memory controls alter optimizer and activation settings independently', () => {
   const cpu = shell({
     ...E.defaults,
