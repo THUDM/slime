@@ -10,6 +10,7 @@ from scripts.prism_numerical_diagnostic import (
     canonical_rows,
     differences,
     oracle_inputs,
+    rms_rounding_references,
     score_differences,
     selected_scores,
 )
@@ -128,6 +129,18 @@ def test_activation_variant_restores_shared_and_independent_configs_on_error():
         raise RuntimeError("diagnostic failure")
     assert shared.bias_activation_fusion
     assert not independent.bias_activation_fusion
+
+
+def test_rms_references_keep_hidden_shape_dtype_and_use_actual_gamma():
+    raw = torch.tensor([[[0.1, -0.3, 1.2, -2.1], [0.8, 0.4, -0.6, 0.2]]], dtype=torch.bfloat16)
+    gamma = torch.tensor([3.25, -0.7, 1.125, 8.5], dtype=torch.bfloat16)
+    references = rms_rounding_references(raw, gamma, 1e-6)
+    normalized = raw.float() / torch.sqrt(raw.float().square().mean(-1, keepdim=True) + 1e-6)
+    torch.testing.assert_close(references["single"], (normalized * gamma.float()).to(raw.dtype))
+    torch.testing.assert_close(references["double"], normalized.to(raw.dtype) * gamma)
+    assert all(value.shape == raw.shape and value.dtype == raw.dtype for value in references.values())
+    with pytest.raises(ValueError, match="hidden width"):
+        rms_rounding_references(raw, torch.ones(3), 1e-6)
 
 
 def test_activation_capture_reads_actual_linear_boundaries_and_keeps_first_loop_call():

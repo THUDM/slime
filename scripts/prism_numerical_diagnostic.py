@@ -50,6 +50,51 @@ def differences(actual, expected, mask=None):
     }
 
 
+def rms_rounding_references(raw, gamma, eps):
+    """Pure tensor references for one versus two BF16 rounding boundaries."""
+    if raw.shape[-1] != gamma.numel() or gamma.ndim != 1:
+        raise ValueError("RMSNorm gamma must match the captured hidden width")
+    normalized = raw.float() * torch.rsqrt(raw.float().square().mean(-1, keepdim=True) + eps)
+    return {
+        "single": (normalized * gamma.float()).to(raw.dtype),
+        "double": normalized.to(raw.dtype) * gamma.to(raw.dtype),
+    }
+
+
+def _sglang_prediction_norms(model, captures, rows, eps):
+    """Call the real SGLang operator; missing runtime context is explicit."""
+    try:
+        from sglang.srt.layers.layernorm import RMSNorm
+    except (ImportError, RuntimeError) as error:
+        return {"status": "unavailable", "error": f"{type(error).__name__}: {error}"}, {}
+    report, tensors = {"status": "measured", "sites": {}}, {}
+    for index, native_norm in enumerate(model.prediction_norms):
+        key = str(index)
+        raw, actual = captures["norms"][key]["raw"], captures["norms"][key]["normalized"]
+        gamma = native_norm.weight.detach()
+        references = rms_rounding_references(raw, gamma, eps)
+        try:
+            norm = RMSNorm(raw.shape[-1], eps=eps).to(device=raw.device, dtype=raw.dtype).eval()
+            norm.weight.copy_(gamma)
+            result = norm(raw.squeeze(0).contiguous(), None)
+            if not isinstance(result, torch.Tensor) or result.shape != raw.shape[1:]:
+                raise TypeError("SGLang RMSNorm with residual=None did not return a [T,H] tensor")
+            result = result.unsqueeze(0)
+            tensors[key] = result.detach().clone()
+            report["sites"][key] = {
+                "status": "measured",
+                "input_dtype": str(raw.dtype),
+                "output_dtype": str(result.dtype),
+                "vs_native_same_raw": differences(result, actual, rows),
+                "vs_torch_single": differences(result, references["single"], rows),
+                "vs_torch_double": differences(result, references["double"], rows),
+            }
+        except Exception as error:
+            report["status"] = "partially_unavailable"
+            report["sites"][key] = {"status": "unavailable", "error": f"{type(error).__name__}: {error}"}
+    return report, tensors
+
+
 def score_differences(actual, expected, prepared):
     q = prepared["code_mask"].shape[-1]
     if actual.shape[-1] != q + 1:
@@ -224,6 +269,7 @@ def diagnose(context):
         for handle in native_handles:
             handle.remove()
         native_handles.clear()
+        sglang_norms, sglang_norm_tensors = _sglang_prediction_norms(model, native, rows, spec.norm_epsilon)
 
         # Same stored weights and same captured hidden input isolate the
         # projection kernel/rounding from all backbone and feedback effects.
@@ -322,6 +368,7 @@ def diagnose(context):
             "torch_bf16_logits_vs_native": differences(torch_bf16, native_logits, rows),
             "hf_bf16_vs_native": score_differences(hf_scores, native_scores, prepared),
             "hf_bf16_vs_omni": score_differences(hf_scores, omni_scores, prepared),
+            "sglang_prediction_norms_same_raw": sglang_norms,
             "activation_fusion_variants": variants,
             "activation_fusion_deltas": activation_deltas,
             "sites": {
@@ -343,6 +390,7 @@ def diagnose(context):
                     "torch_bf16_head_scores": bf16_scores,
                     "torch_fp32_head_scores": fp32_scores,
                     "prepared": prepared,
+                    "sglang_prediction_norm_tensors": sglang_norm_tensors,
                     "activation_variant_scores": variant_scores,
                     "activation_variant_tensors": variant_activations,
                 }
