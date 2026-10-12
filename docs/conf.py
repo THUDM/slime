@@ -1,5 +1,8 @@
+import hashlib
 import os
+import re
 import shutil
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -166,6 +169,30 @@ def setup(app):
 def _experiment_home(app, pagename, templatename, context, doctree):
     if pagename == "index" and app.builder.format == "html":
         context["doc_layout"] = os.environ.get("SLIME_DOC_LAYOUT", "root")
+        root = Path(__file__).resolve().parent.parent
+        commit, dirty = None, None
+        try:
+            commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+            dirty = bool(subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=no"], cwd=root))
+        except (OSError, subprocess.CalledProcessError):
+            pass  # Source archives may not contain Git metadata.
+        sources = [
+            *root.glob("scripts/run-*.sh"),
+            *root.glob("scripts/models/*.sh"),
+            root / "docs/_static/js/experiment-engine.js",
+        ]
+        docker_args = dict(re.findall(r"^ARG (\w+)=(\S+)", (root / "docker/Dockerfile").read_text(), re.MULTILINE))
+        context["experiment_build"] = {
+            "commit": commit,
+            "dirty": dirty,
+            "sourceHashes": {
+                str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest() for path in sources
+            },
+            "environment": {
+                key: docker_args.get(key)
+                for key in ("SGLANG_IMAGE_TAG", "MEGATRON_COMMIT", "TRANSFORMER_ENGINE_VERSION", "NCCL_VERSION")
+            },
+        }
         return "experiment.html"
 
 
