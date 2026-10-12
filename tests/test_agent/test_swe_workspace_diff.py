@@ -44,7 +44,9 @@ def test_patch_uses_actual_image_baseline_without_changing_git_index(tmp_path, m
     (repo / "source.py").write_text("# image setup\nresult = 0\n")
     (repo / "package-lock.json").write_text('{"image_dependency": true}\n')
     fresh = tmp_path / "grader repo"
-    shutil.copytree(repo, fresh)
+    # Git maintenance can create and delete objects/maintenance.lock while the
+    # tree is being copied. Those lock files are not part of the workspace.
+    shutil.copytree(repo, fresh, ignore=shutil.ignore_patterns("*.lock"))
     shell = LocalShell()
     monkeypatch.setattr(swe, "_PATCH", str(tmp_path / "agent.patch"))
 
