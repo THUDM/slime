@@ -23,7 +23,7 @@ from enum import IntEnum
 from numbers import Real
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, ClassVar, Literal, Optional, TypeAlias
+from typing import Any, ClassVar, Literal, TypeAlias
 
 import torch
 import torch.nn.functional as F
@@ -381,10 +381,10 @@ def _execution_units(
 def resolve_prism_topology(values: object) -> ResolvedPrismTopology:
     """Resolve exact Prism config/argument attributes without mutating ``values``."""
 
-    n_vq = _positive_integer(getattr(values, "n_vq"), "n_vq")
-    ranges = _canonical_ranges(getattr(values, "prism_loop_block_ranges"))
+    n_vq = _positive_integer(values.n_vq, "n_vq")
+    ranges = _canonical_ranges(values.prism_loop_block_ranges)
     repetitions = _canonical_integer_vector(
-        getattr(values, "prism_loop_block_repetitions"),
+        values.prism_loop_block_repetitions,
         name="prism_loop_block_repetitions",
         positive=True,
     )
@@ -394,7 +394,7 @@ def resolve_prism_topology(values: object) -> ResolvedPrismTopology:
         raise ValueError("the number of Prism loop blocks cannot exceed n_vq")
 
     counts = _canonical_integer_vector(
-        getattr(values, "prism_rvq_heads_per_execution_unit"),
+        values.prism_rvq_heads_per_execution_unit,
         name="prism_rvq_heads_per_execution_unit",
         positive=False,
     )
@@ -649,10 +649,10 @@ class MossTTSPrismConfig(TransformerConfig):
 def language_model_embedding_with_weight(
     embedding: LanguageModelEmbedding,
     input_ids: Tensor,
-    position_ids: Optional[Tensor],
+    position_ids: Tensor | None,
     weight: Tensor,
     *,
-    pad_token_id: Optional[int] = None,
+    pad_token_id: int | None = None,
 ) -> Tensor:
     """Run a MOSS-TTS embedding with an externally supplied TP-sharded weight."""
 
@@ -720,9 +720,9 @@ class LanguageModelEmbeddingWithPad(LanguageModelEmbedding):
         position_embedding_type: Literal["learned_absolute", "rope", "none"] = ("learned_absolute"),
         num_tokentypes: int = 0,
         scatter_to_sequence_parallel: bool = True,
-        tp_group: Optional[torch.distributed.ProcessGroup] = None,
+        tp_group: torch.distributed.ProcessGroup | None = None,
         *,
-        word_embedding_init_method: Optional[Callable[[Tensor], object]] = None,
+        word_embedding_init_method: Callable[[Tensor], object] | None = None,
     ) -> None:
         if word_embedding_init_method is None:
             super().__init__(
@@ -765,8 +765,8 @@ class LanguageModelEmbeddingWithPad(LanguageModelEmbedding):
     def forward(
         self,
         input_ids: Tensor,
-        position_ids: Optional[Tensor],
-        tokentype_ids: Optional[int] = None,
+        position_ids: Tensor | None,
+        tokentype_ids: int | None = None,
     ) -> Tensor:
         """
         Inputs:
@@ -918,6 +918,10 @@ def prism_block_spec(
     )
 
 
+_ApplyRange = Callable[[int, int, Tensor], Tensor]
+_ReadSite = Callable[[int, PrismExecutionUnit, tuple[int, ...], Tensor, bool], Tensor | None]
+
+
 def _normalize_loop_block_prefix_counts(
     value: Tensor | Sequence[int] | None, topology: ResolvedPrismTopology
 ) -> tuple[int, ...] | None:
@@ -933,23 +937,23 @@ def _normalize_loop_block_prefix_counts(
     return tuple(value)
 
 
-def _add_delta(base: Tensor, delta: Optional[Tensor]) -> Tensor:
+def _add_delta(base: Tensor, delta: Tensor | None) -> Tensor:
     return base if delta is None else base + delta
 
 
-def _accumulate_delta(accumulator: Optional[Tensor], delta: Optional[Tensor]) -> Optional[Tensor]:
+def _accumulate_delta(accumulator: Tensor | None, delta: Tensor | None) -> Tensor | None:
     if accumulator is None:
         return delta
     return accumulator if delta is None else accumulator + delta
 
 
-def _detach_optional(value: Optional[Tensor]) -> Optional[Tensor]:
+def _detach_optional(value: Tensor | None) -> Tensor | None:
     """Detach an optional conditioning path without changing its forward value."""
 
     return None if value is None else value.detach()
 
 
-def _validate_delta(raw: Tensor, delta: Optional[Tensor]) -> Optional[Tensor]:
+def _validate_delta(raw: Tensor, delta: Tensor | None) -> Tensor | None:
     if delta is not None and (not torch.is_tensor(delta) or tuple(delta.shape) != tuple(raw.shape)):
         raise RuntimeError("Prism conditioning delta must match the raw site state")
     return delta
@@ -981,8 +985,8 @@ def _execute_prism_schedule(
     if not units or len(groups) != len(units):
         raise RuntimeError("resolved Prism topology has inconsistent execution units")
 
-    previous_raw: Optional[Tensor] = None
-    incoming_delta: Optional[Tensor] = None
+    previous_raw: Tensor | None = None
+    incoming_delta: Tensor | None = None
     unit_index = 0
     while unit_index < len(units):
         unit = units[unit_index]
@@ -1082,7 +1086,7 @@ class MossTTSPrismModel(LanguageModule):
         rotary_base: int = 1000000,
         rope_scaling: bool = False,
         rope_scaling_factor: float = 8.0,
-        seq_len_interpolation_factor: Optional[float] = None,
+        seq_len_interpolation_factor: float | None = None,
     ) -> None:
         _require_megatron()
         super().__init__(config=config)
@@ -1345,7 +1349,7 @@ class MossTTSPrismModel(LanguageModule):
         successor_audio_codes: Tensor,
         successor_audio_mask: Tensor,
         group: tuple[int, ...],
-    ) -> Optional[Tensor]:
+    ) -> Tensor | None:
         delta = None
         for q in group:
             channel_index = q - 1
@@ -1370,20 +1374,20 @@ class MossTTSPrismModel(LanguageModule):
         stop: int,
         hidden_states: Tensor,
         *,
-        attention_mask: Optional[Tensor],
-        context: Optional[Tensor],
-        context_mask: Optional[Tensor],
-        rotary_pos_emb: Optional[Tensor],
+        attention_mask: Tensor | None,
+        context: Tensor | None,
+        context_mask: Tensor | None,
+        rotary_pos_emb: Tensor | None,
         packed_seq_params: PackedSeqParams,
-    ) -> tuple[Tensor, Optional[Tensor]]:
+    ) -> tuple[Tensor, Tensor | None]:
         def bind_layer(layer):
             def layer_forward(
                 value: Tensor,
-                layer_attention_mask: Optional[Tensor],
-                layer_context: Optional[Tensor],
-                layer_context_mask: Optional[Tensor],
-                layer_rotary_pos_emb: Optional[Tensor],
-            ) -> tuple[Tensor, Optional[Tensor]]:
+                layer_attention_mask: Tensor | None,
+                layer_context: Tensor | None,
+                layer_context_mask: Tensor | None,
+                layer_rotary_pos_emb: Tensor | None,
+            ) -> tuple[Tensor, Tensor | None]:
                 return layer(
                     hidden_states=value,
                     attention_mask=layer_attention_mask,
@@ -1690,7 +1694,7 @@ def prepare_policy_inputs(
             len(boundaries) < 2
             or boundaries[0] != 0
             or boundaries[-1] != shape[1]
-            or any(a >= b for a, b in zip(boundaries, boundaries[1:]))
+            or any(a >= b for a, b in zip(boundaries, boundaries[1:], strict=False))
         ):
             raise ValueError("packed boundaries must partition all chronological rows")
         ends = torch.tensor([position - 1 for position in boundaries[1:]], device=device)

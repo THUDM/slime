@@ -45,9 +45,7 @@ def cli_args():
     parser.add_argument("--omni-model-name", default="student")
     parser.add_argument("--max-frames", type=int, default=8)
     parser.add_argument("--request-timeout", type=float, default=600)
-    parser.add_argument(
-        "--alignment-atol", type=float, help="Required explicit numerical bound for Omni trajectories."
-    )
+    parser.add_argument("--alignment-atol", type=float, help="Required explicit numerical bound for Omni trajectories.")
     parser.add_argument("--alignment-rtol", type=float, default=0.0)
     parser.add_argument(
         "--expected-weight-version", help="Optional required admission version for the real trajectory."
@@ -301,6 +299,11 @@ def compare_omni_scores(args, samples, scores):
             "mean_abs_diff": delta.mean().item() if delta.numel() else None,
             "aligned": bool(torch.allclose(actual, expected, atol=args.alignment_atol, rtol=args.alignment_rtol)),
         }
+        if kind == "code" and delta.numel():
+            channels = samples[0].multimodal_train_inputs["policy_code_mask"].shape[-1]
+            channel_deltas = delta.reshape(-1, channels)
+            diagnostics[kind]["per_channel_max_abs_diff"] = channel_deltas.amax(0).tolist()
+            diagnostics[kind]["per_channel_mean_abs_diff"] = channel_deltas.mean(0).tolist()
     return diagnostics
 
 
@@ -392,8 +395,46 @@ def run(args, extra_flags):
             "stop": int(batch["multimodal_train_inputs"]["policy_stop_mask"].sum()),
         }
         model.eval()
-        with torch.no_grad():
-            before = extract_policy_log_probs(learner_args, batch, forward(model, batch))
+        projection_dtypes = {}
+
+        def record_projection(name):
+            def capture(module, inputs, result):
+                logits = result[0] if isinstance(result, tuple) else result
+                projection_dtypes[name] = {"input": str(inputs[0].dtype), "logits": str(logits.dtype)}
+
+            return capture
+
+        handles = [
+            head.register_forward_hook(record_projection(f"rvq_{i}")) for i, head in enumerate(student.audio_lm_heads)
+        ]
+        handles.append(student.stop_head.register_forward_hook(record_projection("stop")))
+        try:
+            with torch.no_grad():
+                before = extract_policy_log_probs(learner_args, batch, forward(model, batch))
+        finally:
+            for handle in handles:
+                handle.remove()
+        report["projection_dtypes"] = projection_dtypes
+        torch.save(
+            {key: [value.detach().cpu() for value in values] for key, values in before.items()},
+            output / "before_scores.pt",
+        )
+        # Keep the exact carrier and scores even if alignment fails before
+        # an optimizer step. The later replay dump also contains frozen old
+        # scores and the native GRPO scalar used by the objective.
+        (output / "replay_inputs.json").write_text(
+            json.dumps(
+                cpu_values(
+                    {
+                        "tokens": [s.tokens for s in samples],
+                        "response_lengths": rollout["response_lengths"],
+                        "total_lengths": rollout["total_lengths"],
+                        "multimodal_train_inputs": rollout["multimodal_train_inputs"],
+                    }
+                ),
+                indent=2,
+            )
+        )
         if report["trajectory_source"] == "omni":
             report["alignment"] = compare_omni_scores(args, samples, before)
             (output / "alignment.json").write_text(json.dumps(report["alignment"], indent=2))
