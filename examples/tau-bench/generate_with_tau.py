@@ -12,7 +12,7 @@ from typing import Any
 
 from tau_bench.envs import get_env
 from tau_bench.types import RunConfig
-from trainable_agents import InteractionResult, Status, agent_factory
+from trainable_agents import InteractionResult, agent_factory
 
 from slime.utils.types import Sample
 
@@ -36,64 +36,41 @@ os.environ["GEMINI_API_KEY"] = GEMINI_API_KEY
 tau_config = RunConfig(**TAU_CONFIGS)
 
 
-def res_to_sample(res: InteractionResult, task_index: int) -> Sample:
+def res_to_sample(res: InteractionResult, task_index: int, args) -> Sample:
     """
     Convert InteractionResult to Sample format for slime training.
 
-    This function transforms the tau-bench interaction result into the format
-    expected by slime's training pipeline, handling status mapping and response
-    length calculation.
-
-    Args:
-        res: InteractionResult from tau-bench agent
-        task_index: Index of the task being processed
-
-    Returns:
-        Sample object for slime training
+    Prompt ids are the initial chat template. Response segments are appended
+    in order so sampled assistant tokens keep their logprobs and loss mask,
+    and environment tokens stay masked.
     """
-    # Map tau-bench status to slime status
-    status_mapping = {
-        Status.COMPLETED: "completed",
-        Status.TRUNCATED: "truncated",
-        Status.ABORTED: "aborted",
-    }
-    status = status_mapping.get(res.status)
-
-    # Debug logging for response tracking
-    logger.debug(
-        f"res_to_sample: response_length="
-        f"{res.response_length if hasattr(res, 'response_length') else 'None'}, "
-        f"loss_mask_len={len(res.loss_mask) if res.loss_mask else 'None'}, "
-        f"tokens_len={len(res.tokens) if res.tokens else 'None'}"
-    )
-
-    # Create sample with basic information
     sample = Sample(
         index=task_index,
         prompt=res.prompt,
-        tokens=res.tokens,
-        response=res.response,
+        tokens=list(res.prompt_token_ids or []),
         reward=res.reward,
-        loss_mask=res.loss_mask,
-        status=status,
-        metadata=res.info,
+        status=Sample.Status(res.status.value),
+        metadata=res.info or {},
     )
+    for segment in res.segments:
+        if not segment.token_ids:
+            continue
+        sample.append_response_tokens(
+            args,
+            tokens=segment.token_ids,
+            log_probs=segment.log_probs if segment.trainable else None,
+            trainable=segment.trainable,
+            meta_info=segment.meta_info if segment.trainable else None,
+        )
+    if sample.loss_mask is None:
+        sample.loss_mask = []
+    sample.response = res.response
 
-    # Ensure response_length is set correctly
-    if hasattr(res, "response_length"):
-        sample.response_length = res.response_length
-    else:
-        # Fallback: calculate from loss_mask if available
-        if res.loss_mask:
-            # loss_mask only contains response part, so length equals response_length
-            sample.response_length = len(res.loss_mask)
-        elif res.tokens:
-            # If no loss_mask available, use total tokens as fallback
-            sample.response_length = len(res.tokens)
-        else:
-            sample.response_length = 0
-            logger.debug(f"res_to_sample: Set response_length={sample.response_length}")
-
+    logger.debug(
+        f"res_to_sample: response_length={sample.response_length}, "
+        f"loss_mask_len={len(sample.loss_mask)}, "
+        f"tokens_len={len(sample.tokens)}"
+    )
     return sample
 
 
@@ -147,7 +124,7 @@ async def generate(args: dict[str, Any], sample: Sample, sampling_params: dict) 
     interaction_result = await agent.asolve(env, agent.rollout_args, agent.sampling_params, task_index)
 
     # Convert to slime Sample format
-    result_sample = res_to_sample(interaction_result, task_index)
+    result_sample = res_to_sample(interaction_result, task_index, args)
 
     logger.info(f"Finished agent-environment interaction for task {task_index}")
     return result_sample
