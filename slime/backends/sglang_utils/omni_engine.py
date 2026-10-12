@@ -17,6 +17,7 @@ import requests
 import yaml
 
 from slime.backends.sglang_utils.server_control import unregister_worker
+from slime.observability.logging_utils import configure_logger
 from slime.ray.ray_actor import RayActor
 from slime.utils.http_utils import get_host_info
 
@@ -93,6 +94,7 @@ class OmniEngine(RayActor):
             raise ValueError("The Omni adapter owns pipeline processes; external rollout is unsupported")
         if worker_type != "regular":
             raise ValueError("Omni replicas must use regular server groups")
+        configure_logger()
         self.args = args
         self.rank = rank
         self.base_gpu_id = base_gpu_id
