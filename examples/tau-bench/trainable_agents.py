@@ -1,6 +1,6 @@
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
@@ -8,11 +8,17 @@ from openai_tool_adapter import create_openai_adapter
 from tau_bench.agents.base import Agent
 from tau_bench.agents.tool_calling_agent import RESPOND_ACTION_NAME, ToolCallingAgent
 from tau_bench.types import Action, RunConfig
-from token_delta import get_token_delta
-from transformers import AutoTokenizer
+from token_delta import (
+    assistant_message_text,
+    decode_token_ids,
+    encode_token_ids,
+    sampled_output_tokens,
+    tokens_after_assistant,
+)
 
 from slime.rollout.sglang_rollout import GenerateState
 from slime.utils.http_utils import post
+from slime.utils.score_centering import score_centering_request
 
 # Set up logger for this module
 logger = logging.getLogger(__name__)
@@ -25,6 +31,21 @@ class Status(Enum):
 
 
 @dataclass
+class ResponseSegment:
+    """One contiguous piece of the response.
+
+    Trainable segments are SGLang's sampled token ids. Non-trainable segments
+    are template tokens for the environment observation and the next generation
+    prompt. Those were not sampled, so they stay out of the loss.
+    """
+
+    token_ids: list[int]
+    trainable: bool
+    log_probs: list[float] | None = None
+    meta_info: dict[str, Any] | None = None
+
+
+@dataclass
 class InteractionResult:
     prompt: str
     reward: float
@@ -32,7 +53,10 @@ class InteractionResult:
     info: dict[str, Any]
     response: str = ""
     loss_mask: list[int] | None = None
-    tokens: int | None = None
+    tokens: list[int] | None = None
+    prompt_token_ids: list[int] | None = None
+    segments: list[ResponseSegment] = field(default_factory=list)
+    response_length: int = 0
     status: Status = Status.COMPLETED
 
 
@@ -169,9 +193,10 @@ class TrainableAgentMixin:
         prompt_text = state.tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True, tools=self.tools_info
         )
-        # Reformulate tool call instruction for tau-bench
+        # Reformulate tool call instruction for tau-bench. This string is
+        # tokenized once and reused as input_ids; later turns append to it.
         prompt_text = self._reformulate_tool_call(prompt_text)
-        prompt_token_ids = state.tokenizer(prompt_text, add_special_tokens=False)["input_ids"]
+        prompt_token_ids = encode_token_ids(state.tokenizer, prompt_text)
         return prompt_text, prompt_token_ids
 
     async def asolve(
@@ -186,8 +211,9 @@ class TrainableAgentMixin:
         Execute async agent-environment interaction for training.
 
         This method extends the original Agent to support async interaction with LLM
-        server for reinforcement learning training. It maintains conversation history,
-        tracks tokens, and records metadata for training purposes.
+        server for reinforcement learning training. Each turn sends the exact token
+        prefix accumulated so far and appends SGLang's sampled ids. Environment
+        text is the only thing tokenized after the initial prompt.
 
         Args:
             env: Tau-bench environment instance
@@ -210,159 +236,135 @@ class TrainableAgentMixin:
         messages = self._build_initial_messages(obs)
         prompt_text, prompt_token_ids = self._prepare_prompt_tokens(state, messages)
 
-        # Initialize tracking variables
-        loss_masks = []
-        response_token_ids = []
+        segments: list[ResponseSegment] = []
         total_reward = 0.0
+        res = InteractionResult(
+            prompt=prompt_text,
+            reward=0,
+            messages=[],
+            info={},
+            prompt_token_ids=list(prompt_token_ids),
+            segments=segments,
+        )
 
-        # Initialize result
-        res = InteractionResult(prompt=prompt_text, reward=0, messages=[], info={})
+        def response_token_ids() -> list[int]:
+            return [token for segment in segments for token in segment.token_ids]
 
-        # Multi-turn interaction loop
-        for _ in range(max_num_steps):
-            # Prepare payload for sglang
-            text_input = state.tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True, tools=self.tools_info
-            )
-            # Reformulate tool call instruction for tau-bench
-            text_input = self._reformulate_tool_call(text_input)
-            payload = {"text": text_input, "sampling_params": sampling_params}
-
-            # Send request to sglang server
-            output = await self._call_llm(url, payload)
-
-            # Check for abort
-            if output["meta_info"]["finish_reason"]["type"] == "abort":
-                res.status = Status.ABORTED
-                return self._build_final_result(
-                    res, total_reward, info, messages, loss_masks, prompt_token_ids, response_token_ids
+        def commit(
+            token_ids: list[int],
+            *,
+            trainable: bool,
+            log_probs: list[float] | None = None,
+            meta_info: dict[str, Any] | None = None,
+        ) -> None:
+            if not token_ids:
+                return
+            if trainable and (log_probs is None or len(log_probs) != len(token_ids)):
+                raise ValueError("trainable assistant tokens require one logprob per sampled token")
+            if not trainable and log_probs is not None:
+                raise ValueError("environment tokens must not carry rollout log probabilities")
+            segments.append(
+                ResponseSegment(
+                    token_ids=list(token_ids),
+                    trainable=trainable,
+                    log_probs=list(log_probs) if log_probs is not None else None,
+                    meta_info=meta_info,
                 )
+            )
 
-            response = output["text"]
-            # Remove end of conversation token if present
-            if response.endswith("<|im_end|>"):
-                response = response[:-10]
+        def finish(status: Status) -> InteractionResult:
+            res.status = status
+            return self._build_final_result(res, total_reward, info, messages, state.tokenizer)
 
-            # Parse tool calls using OpenAI adapter
+        for _ in range(max_num_steps):
+            # The next request is the exact training prefix. Do not render the
+            # conversation again: that retokenizes the sampled assistant turn.
+            turn_sampling = dict(sampling_params)
+            custom_params = turn_sampling.get("custom_params")
+            if isinstance(custom_params, dict):
+                turn_sampling["custom_params"] = dict(custom_params)
+            payload = {
+                "input_ids": [*prompt_token_ids, *response_token_ids()],
+                "sampling_params": turn_sampling,
+                "return_logprob": True,
+            }
+            payload.update(score_centering_request(rollout_args, turn_sampling))
+
+            output = await self._call_llm(url, payload)
+            meta = output.get("meta_info") or {}
+            finish_type = (meta.get("finish_reason") or {}).get("type")
+            if finish_type == "abort":
+                return finish(Status.ABORTED)
+
+            try:
+                output_ids, output_log_probs = sampled_output_tokens(output)
+            except ValueError as exc:
+                logger.warning(f"token-exact generation failed: {exc}")
+                return finish(Status.ABORTED)
+
+            if finish_type == "length":
+                commit(output_ids, trainable=True, log_probs=output_log_probs, meta_info=meta)
+                return finish(Status.TRUNCATED)
+            if finish_type != "stop":
+                logger.warning(f"unexpected finish reason {finish_type}; refusing to retokenize the response")
+                return finish(Status.ABORTED)
+
+            response = assistant_message_text(state.tokenizer, output_ids, tools=self.tools_info)
             logger.debug(f"Using OpenAI adapter to parse response: {response[:100]}...")
             try:
                 openai_result = self._parse_tool(response)
                 logger.debug(f"OpenAI adapter result: success={openai_result['success']}")
-
                 if not openai_result["success"]:
                     logger.warning(f"OpenAI adapter failed: {openai_result['error']}")
                     logger.warning(
-                        f"rollout response: {response} can not be parsed into " f"tool calls {openai_result['error']}"
+                        f"rollout response: {response} can not be parsed into tool calls {openai_result['error']}"
                     )
-                    res.status = Status.ABORTED
-                    return self._build_final_result(
-                        res, total_reward, info, messages, loss_masks, prompt_token_ids, response_token_ids
-                    )
-
-                # Extract parsed results
+                    return finish(Status.ABORTED)
                 parsed = openai_result["parsed_result"]
-                logger.debug(
-                    f"Successfully parsed - normal_text: '{parsed['normal_text']}', " f"calls: {parsed['calls']}"
-                )
+                logger.debug(f"Successfully parsed - normal_text: '{parsed['normal_text']}', calls: {parsed['calls']}")
+            except Exception as exc:
+                logger.warning(f"Exception in OpenAI adapter: {exc}")
+                logger.warning(f"rollout response: {response} can not be parsed into tool calls {exc}")
+                return finish(Status.ABORTED)
 
-            except Exception as e:
-                logger.warning(f"Exception in OpenAI adapter: {e}")
-                logger.warning(f"rollout response: {response} can not be parsed into " f"tool calls {e}")
-                res.status = Status.ABORTED
-                return self._build_final_result(
-                    res, total_reward, info, messages, loss_masks, prompt_token_ids, response_token_ids
-                )
-
-            # Add assistant response to conversation
+            commit(output_ids, trainable=True, log_probs=output_log_probs, meta_info=meta)
             messages.append({"role": "assistant", "content": response})
-            assistant_token_ids, assistant_loss_mask = self._get_token_delta(
-                state.tokenizer,
-                messages,
-                include_generation_prompt=bool(response_token_ids),
-            )
-            response_token_ids.extend(assistant_token_ids)
-            loss_masks.extend(assistant_loss_mask)
 
-            # Execute action in environment
             agent_content, calls = parsed["normal_text"], parsed["calls"]
-            logger.debug(f"Creating action from - content: '{agent_content}', " f"calls: {calls}")
+            logger.debug(f"Creating action from - content: '{agent_content}', calls: {calls}")
             action = call_to_action_sglang(calls, agent_content)
             logger.debug(f"Created action: {action}")
 
             try:
                 env_response = await self._execute_tool(env, action)
-            except Exception as e:
-                logger.warning("Environment step failed, this is usually related to " "the User simulation call.")
-                logger.warning(f"Error: {e}")
-                res.status = Status.ABORTED
-                return self._build_final_result(
-                    res, total_reward, info, messages, loss_masks, prompt_token_ids, response_token_ids
-                )
+            except Exception as exc:
+                logger.warning("Environment step failed, this is usually related to the User simulation call.")
+                logger.warning(f"Error: {exc}")
+                return finish(Status.ABORTED)
 
-            logger.debug(f"Environment response: reward={env_response.reward}, " f"done={env_response.done}")
-
-            # Update message history based on action type
+            logger.debug(f"Environment response: reward={env_response.reward}, done={env_response.done}")
             if action.name != RESPOND_ACTION_NAME:
-                messages.append(
-                    {
-                        "role": "tool",
-                        "name": action.name,
-                        "content": env_response.observation,
-                    }
-                )
+                observation = {"role": "tool", "name": action.name, "content": env_response.observation}
             else:
-                # Direct response from user
-                messages.append({"role": "user", "content": env_response.observation})
+                observation = {"role": "user", "content": env_response.observation}
+            messages.append(observation)
+            commit(
+                tokens_after_assistant(
+                    state.tokenizer,
+                    output_ids,
+                    observation,
+                    tools=self.tools_info,
+                    add_generation_prompt=not env_response.done,
+                ),
+                trainable=False,
+            )
 
-            # Update token tracking
-            env_token_ids, env_loss_mask = self._get_token_delta(state.tokenizer, messages)
-            response_token_ids.extend(env_token_ids)
-            loss_masks.extend(env_loss_mask)
-
-            # Update reward and info
             total_reward = env_response.reward
             info = {**info, **env_response.info.model_dump()}
-
-            # Check if done
             if env_response.done:
-                res.status = Status.COMPLETED
-                break
+                return finish(Status.COMPLETED)
 
-        # Handle truncation
-        if not env_response.done:
-            res.status = Status.TRUNCATED
-
-        return self._build_final_result(
-            res, total_reward, info, messages, loss_masks, prompt_token_ids, response_token_ids
-        )
-
-    def _get_token_delta(
-        self,
-        tokenizer: AutoTokenizer,
-        messages: list[dict],
-        *,
-        include_generation_prompt: bool = False,
-    ) -> tuple[list[int], list[int]]:
-        """
-        Calculate token delta for multi-turn conversations.
-
-        Tokenization logic adapted from:
-        https://verl.readthedocs.io/en/v0.4.1/sglang_multiturn/multiturn.html
-        to calculate the right token count in a multi-turn environment using
-        delta between messages.
-
-        Args:
-            tokenizer: Tokenizer instance
-            messages: Conversation messages
-
-        Returns:
-            Tuple of (token_ids, loss_mask)
-        """
-        return get_token_delta(
-            tokenizer,
-            messages,
-            include_generation_prompt=include_generation_prompt,
-        )
+        return finish(Status.TRUNCATED)
 
     def _build_final_result(
         self,
@@ -370,37 +372,27 @@ class TrainableAgentMixin:
         total_reward: float,
         info: dict[str, Any],
         messages: list[dict[str, Any]],
-        loss_masks: list[int],
-        prompt_token_ids: list[int],
-        response_token_ids: list[int],
+        tokenizer: Any,
     ) -> InteractionResult:
-        """
-        Build the final interaction result with all collected data.
+        """Populate the trajectory from sampled segments and masked observations."""
+        response_token_ids: list[int] = []
+        loss_mask: list[int] = []
+        for segment in res.segments:
+            response_token_ids.extend(segment.token_ids)
+            loss_mask.extend([1 if segment.trainable else 0] * len(segment.token_ids))
 
-        Args:
-            res: InteractionResult instance to populate
-            total_reward: Total reward accumulated during interaction
-            info: Environment info dictionary
-            messages: Complete conversation messages
-            loss_masks: Loss masks for training
-            prompt_token_ids: Prompt token IDs
-            response_token_ids: Response token IDs
-
-        Returns:
-            Populated InteractionResult
-        """
         res.reward = total_reward
         res.info = info
         res.messages = messages
-        res.loss_mask = loss_masks
-        res.tokens = prompt_token_ids + response_token_ids
-        res.response = "".join([msg.get("content", "") for msg in messages if msg["role"] == "assistant"])
-        res.response_length = len(loss_masks)
+        res.loss_mask = loss_mask
+        res.tokens = list(res.prompt_token_ids or []) + response_token_ids
+        res.response = decode_token_ids(tokenizer, response_token_ids)
+        res.response_length = len(loss_mask)
 
         logger.debug(
             f"_build_final_result: response_length={res.response_length}, "
-            f"response_loss_mask_len={len(loss_masks)}, "
-            f"prompt_token_len={len(prompt_token_ids)}, "
+            f"response_loss_mask_len={len(loss_mask)}, "
+            f"prompt_token_len={len(res.prompt_token_ids or [])}, "
             f"response_token_len={len(response_token_ids)}, "
             f"response='{res.response[:100]}...'"
         )
