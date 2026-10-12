@@ -3,7 +3,9 @@ import copy
 import importlib.util
 import json
 import logging
+import math
 import os
+import sys
 from typing import Any
 
 import yaml
@@ -37,6 +39,31 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
     def add_slime_arguments(parser):
         # Ray
         def add_cluster_arguments(parser):
+            parser.add_argument("--rollout-backend", choices=["sglang", "sglang-omni"], default="sglang")
+            parser.add_argument("--omni-config", help="SGLang-Omni pipeline YAML used by each rollout replica.")
+            parser.add_argument(
+                "--omni-python", help="Python interpreter containing SGLang-Omni; defaults to this interpreter."
+            )
+            parser.add_argument(
+                "--omni-router-policy", choices=["round_robin", "least_request", "random"], default="round_robin"
+            )
+            parser.add_argument(
+                "--omni-admin-key", help="Optional shared admin key for Omni workers and their router."
+            )
+            parser.add_argument(
+                "--omni-model-name",
+                default="student",
+                help="Named rollout deployment used by the Omni generation hook.",
+            )
+            parser.add_argument("--omni-audio-dir", help="Shared directory for generated reward audio.")
+            parser.add_argument(
+                "--omni-teacher-config", help="YAML/JSON domain-to-frozen-teacher bindings for the Omni sample hook."
+            )
+            parser.add_argument(
+                "--omni-reward-config", help="YAML/JSON WER, SIM and instruction reward service configuration."
+            )
+            parser.add_argument("--omni-request-timeout-s", type=float, default=600.0)
+            parser.add_argument("--omni-cancel-drain-timeout-s", type=float, default=600.0)
             parser.add_argument("--actor-num-nodes", type=int, default=1, help="Number of nodes for training actor")
             parser.add_argument(
                 "--actor-num-gpus-per-node", type=int, default=8, help="Number of gpus per node for training actor"
@@ -255,6 +282,25 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "`def custom_model_provider(pre_process: bool, post_process: bool, vp_stage: int | None = None) -> GPTModel`. "
                     "Example: 'my_module.my_model_provider'."
                 ),
+            )
+            parser.add_argument(
+                "--prism-pretrained-checkpoint",
+                help="Prism native DCP initializer; ignored when resuming a slime checkpoint.",
+            )
+            parser.add_argument(
+                "--prism-pretrained-step",
+                type=int,
+                help="Pin the native Prism initializer to a pretraining iteration.",
+            )
+            parser.add_argument(
+                "--custom-megatron-log-prob-function-path",
+                help="Model-specific selected-action extractor shared by forward-only scoring and the native policy loss.",
+            )
+            parser.add_argument(
+                "--policy-stop-loss-weight",
+                type=float,
+                default=1.0,
+                help="Relative sampled-stop loss weight for a multi-action policy.",
             )
             parser.add_argument(
                 "--recompute-loss-function",
@@ -1705,6 +1751,7 @@ def _pre_parse_mode():
     """
     temp_parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
     temp_parser.add_argument("--train-backend", type=str, choices=["megatron"], default="megatron")
+    temp_parser.add_argument("--rollout-backend", choices=["sglang", "sglang-omni"], default="sglang")
     temp_parser.add_argument("--debug-rollout-only", action="store_true", default=False)
     temp_parser.add_argument("--debug-train-only", action="store_true", default=False)
     temp_parser.add_argument("--load-debug-rollout-data", type=str, default=None)
@@ -1757,7 +1804,7 @@ def parse_args(add_custom_arguments=None, *, return_restore_plan=False):
     if not args.debug_rollout_only:
         megatron_validate_args(args)
 
-    if not args.debug_train_only:
+    if not args.debug_train_only and args.rollout_backend == "sglang":
         sglang_validate_args(args)
 
     return (args, restore_plan) if return_restore_plan else args
@@ -1882,6 +1929,32 @@ def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
         args.eval_prompt_data = None
 
     return eval_datasets
+
+
+def validate_omni_args(args):
+    """Check supported Omni deployment capabilities before creating any actors."""
+    if getattr(args, "rollout_backend", "sglang") != "sglang-omni":
+        return
+    args.omni_python = getattr(args, "omni_python", None) or sys.executable
+    for name in ("colocate", "offload_rollout", "rollout_external"):
+        if getattr(args, name, False):
+            raise ValueError(f"The disaggregated Omni backend does not support --{name.replace('_', '-')}.")
+    if (
+        getattr(args, "update_weight_mode", "full") != "full"
+        or getattr(args, "update_weight_transport", "nccl") != "nccl"
+    ):
+        raise ValueError("The Omni backend currently requires full NCCL weight updates.")
+    if getattr(args, "check_weight_update_equal", False):
+        raise ValueError("Omni weights_checker reset semantics differ; --check-weight-update-equal is not supported.")
+    if not getattr(args, "debug_train_only", False):
+        config = getattr(args, "omni_config", None)
+        if not config or not os.path.isfile(config):
+            raise ValueError("--rollout-backend=sglang-omni requires an existing --omni-config pipeline YAML.")
+        args.omni_config = os.path.abspath(config)
+    for name in ("omni_request_timeout_s", "omni_cancel_drain_timeout_s"):
+        value = getattr(args, name, 600.0)
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError(f"--{name.replace('_', '-')} must be positive and finite.")
 
 
 def slime_validate_args(args):
@@ -2270,4 +2343,5 @@ def slime_validate_args(args):
                 "Trainer fault tolerance requires a unique --save-debug-rollout-data path containing {rollout_id}"
             )
 
+    validate_omni_args(args)
     return args, restore_plan

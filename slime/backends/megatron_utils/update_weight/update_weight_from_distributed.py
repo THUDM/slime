@@ -4,6 +4,7 @@ import socket
 import time
 from argparse import Namespace
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from datetime import timedelta
 
 import ray
 import torch
@@ -20,6 +21,23 @@ from slime.utils.weight_sync import should_flush_cache
 
 from ..megatron_to_hf import convert_to_hf
 from .common import all_gather_param, named_params_and_buffers
+
+
+def _omni_distributed_timeout(args: Namespace) -> float | None:
+    if getattr(args, "rollout_backend", "sglang") == "sglang-omni":
+        return float(getattr(args, "distributed_timeout_minutes", 10)) * 60
+    return None
+
+
+def _engine_rpc_timeout(args: Namespace) -> float | None:
+    timeout = _omni_distributed_timeout(args)
+    # An Omni pause can drain requests and then issue a separate admin RPC.
+    return None if timeout is None else 2 * timeout
+
+
+def _get_engine_results(args: Namespace, refs):
+    timeout = _engine_rpc_timeout(args)
+    return ray.get(refs) if timeout is None else ray.get(refs, timeout=timeout)
 
 
 class UpdateWeightFromDistributed:
@@ -67,7 +85,7 @@ class UpdateWeightFromDistributed:
         """
         Create "slime-pp_{pp_rank}" if PP source (DP=TP=0). Lock prevents concurrent transfers.
         """
-        self.rollout_engines = rollout_engines
+        previous_engines = getattr(self, "rollout_engines", ())
         self.rollout_engine_lock = rollout_engine_lock
         self._engine_gpu_counts = engine_gpu_counts
 
@@ -83,8 +101,15 @@ class UpdateWeightFromDistributed:
 
         if self._is_pp_src_rank:
             if self._model_update_groups is not None:
+                previous_ids = {engine._actor_id for engine in previous_engines}
+                retained_engines = [engine for engine in rollout_engines if engine._actor_id in previous_ids]
+                previous_group = self._model_update_groups
+                self._model_update_groups = None
                 disconnect_rollout_engines_from_distributed(
-                    self._group_name, self._model_update_groups, self.rollout_engines
+                    self._group_name,
+                    previous_group,
+                    retained_engines,
+                    timeout=_engine_rpc_timeout(self.args),
                 )
             self._model_update_groups = connect_rollout_engines_from_distributed(
                 self.args,
@@ -92,32 +117,44 @@ class UpdateWeightFromDistributed:
                 rollout_engines,
                 engine_gpu_counts=engine_gpu_counts,
             )
+            self.rollout_engines = rollout_engines
+        else:
+            self.rollout_engines = rollout_engines
 
     def disconnect_rollout_engines(self) -> None:
         if not getattr(self, "_is_pp_src_rank", False) or self._model_update_groups is None:
             return
-        disconnect_rollout_engines_from_distributed(self._group_name, self._model_update_groups, self.rollout_engines)
+        previous_group = self._model_update_groups
         self._model_update_groups = None
+        disconnect_rollout_engines_from_distributed(
+            self._group_name,
+            previous_group,
+            self.rollout_engines,
+            timeout=_engine_rpc_timeout(self.args),
+        )
 
     @torch.no_grad()
     def update_weights(self) -> None:
         """
         Pause → optionally flush → _send_weights → continue. Progress on PP source.
         """
+        if self._is_pp_src_rank and self._model_update_groups is None:
+            raise RuntimeError("Cannot publish weights without a connected weight-update process group")
         self.weight_version += 1
         flush_cache = should_flush_cache(
             self.args.flush_cache_interval, self.weight_version, getattr(self.args, "update_weight_start_version", 0)
         )
 
         if dist.get_rank() == 0:
-            ray.get(
+            _get_engine_results(
+                self.args,
                 [
                     engine.pause_generation.remote(mode="abort" if flush_cache else "in_place")
                     for engine in self.rollout_engines
-                ]
+                ],
             )
-            if flush_cache:
-                ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
+            if flush_cache and getattr(self.args, "rollout_backend", "sglang") != "sglang-omni":
+                _get_engine_results(self.args, [engine.flush_cache.remote() for engine in self.rollout_engines])
 
             # int4/fp4 pre_process
             if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
@@ -139,7 +176,7 @@ class UpdateWeightFromDistributed:
                     post_process_quantization=True,
                     rollout_engines=self.rollout_engines,
                 )
-            ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
+            _get_engine_results(self.args, [engine.continue_generation.remote() for engine in self.rollout_engines])
         dist.barrier(group=get_gloo_group())
 
     def _send_weights(self, pbar: tqdm | None) -> None:
@@ -256,22 +293,28 @@ class UpdateWeightFromDistributed:
         Lock → transfer → clear → unlock → pbar++. Lock prevents communication deadlock.
         """
         # Lock the rollout engines to prevent communication deadlock.
-        while not ray.get(self.rollout_engine_lock.acquire.remote()):
+        timeout = _engine_rpc_timeout(self.args)
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while not _get_engine_results(self.args, self.rollout_engine_lock.acquire.remote()):
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError("Timed out acquiring the rollout weight-update lock")
             time.sleep(0.1)
 
-        refs = update_weights_from_distributed(
-            self._group_name,
-            self._model_update_groups,
-            self.weight_version,
-            self.rollout_engines,
-            converted_named_tensors,
-            load_format=load_format,
-        )
-
-        ray.get(refs)
+        try:
+            refs = update_weights_from_distributed(
+                self._group_name,
+                self._model_update_groups,
+                self.weight_version,
+                self.rollout_engines,
+                converted_named_tensors,
+                load_format=load_format,
+            )
+            _get_engine_results(self.args, refs)
+        finally:
+            _get_engine_results(self.args, self.rollout_engine_lock.release.remote())
         converted_named_tensors.clear()
-        ray.get(self.rollout_engine_lock.release.remote())
-        pbar.update(1)
+        if pbar is not None:
+            pbar.update(1)
 
 
 def connect_rollout_engines_from_distributed(
@@ -313,24 +356,36 @@ def connect_rollout_engines_from_distributed(
         )
         for i, engine in enumerate(rollout_engines)
     ]
+    timeout = _omni_distributed_timeout(args)
+    group_options = {} if timeout is None else {"timeout": timedelta(seconds=timeout)}
     model_update_groups = init_process_group(
         backend=backend,
         init_method=f"tcp://{_wrap_ipv6(master_address)}:{master_port}",
         world_size=world_size,
         rank=0,
         group_name=group_name,
+        **group_options,
     )
-    ray.get(refs)
+    try:
+        _get_engine_results(args, refs)
+    except Exception:
+        # The trainer joined, but one of the engine RPCs did not complete.
+        # Leave no usable local group behind and propagate the actual failure.
+        dist.destroy_process_group(model_update_groups)
+        raise
     return model_update_groups
 
 
-def disconnect_rollout_engines_from_distributed(group_name, model_update_groups, rollout_engines):
+def disconnect_rollout_engines_from_distributed(group_name, model_update_groups, rollout_engines, *, timeout=None):
     """
     Destroy the weight-update process group on training and engines.
     """
     refs = [engine.destroy_weights_update_group.remote(group_name) for engine in rollout_engines]
     dist.destroy_process_group(model_update_groups)
-    ray.get(refs)
+    if timeout is None:
+        ray.get(refs)
+    else:
+        ray.get(refs, timeout=timeout)
 
 
 def update_weights_from_distributed(

@@ -14,15 +14,25 @@ DEFAULT_ABORT_TIMEOUT_SECONDS = 180.0
 DEFAULT_CONTROL_REQUEST_TIMEOUT_SECONDS = 10.0
 
 
-def unregister_worker(router_url: str, worker_url: str, *, timeout: float) -> None:
+def unregister_worker(
+    router_url: str,
+    worker_url: str,
+    *,
+    timeout: float,
+    backend: str = "sglang",
+    admin_key: str | None = None,
+) -> None:
     """Remove a worker even when its engine actor can no longer answer RPCs."""
     with requests.Session() as client:
         client.trust_env = False
+        if admin_key:
+            client.headers["Authorization"] = f"Bearer {admin_key}"
         response = client.get(f"{router_url}/workers", timeout=timeout)
         response.raise_for_status()
         for worker in response.json()["workers"]:
             if worker["url"] == worker_url:
-                response = client.delete(f"{router_url}/workers/{worker['id']}", timeout=timeout)
+                worker_id = worker["worker_id"] if backend == "sglang-omni" else worker["id"]
+                response = client.delete(f"{router_url}/workers/{worker_id}", timeout=timeout)
                 # Another health check may already have removed this worker.
                 if response.status_code != 404:
                     response.raise_for_status()

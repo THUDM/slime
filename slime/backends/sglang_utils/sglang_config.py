@@ -98,6 +98,9 @@ class ModelConfig:
                 self.update_weights = False
             else:
                 self.update_weights = True
+        if getattr(args, "rollout_backend", "sglang") == "sglang-omni":
+            for group in self.server_groups:
+                group.overrides["update_weights"] = self.update_weights
 
     @property
     def has_pd_disaggregation(self) -> bool:
