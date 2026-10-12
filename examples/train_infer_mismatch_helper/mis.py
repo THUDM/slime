@@ -171,10 +171,6 @@ def compute_mis_weights(
 
     metrics: dict[str, list[torch.Tensor]] = {}
 
-    tis_lower_bound = args.tis_lower_bound if args.tis_lower_bound is not None else 1.0 / args.tis_upper_bound
-    rs_lower_bound = args.rs_lower_bound if args.rs_lower_bound is not None else tis_lower_bound
-    rs_upper_bound = args.rs_upper_bound if args.rs_upper_bound is not None else args.tis_upper_bound
-
     # Validate input lists have same length and each sequence has matching shapes
     assert (
         len(train_log_probs) == len(rollout_log_probs) == len(loss_masks)
@@ -207,6 +203,10 @@ def compute_mis_weights(
     # only calculate mismatch metrics if TIS is not used
     if not args.use_tis:
         return None, loss_masks, metrics
+
+    tis_lower_bound = args.tis_lower_bound if args.tis_lower_bound is not None else 1.0 / args.tis_upper_bound
+    rs_lower_bound = args.rs_lower_bound if args.rs_lower_bound is not None else tis_lower_bound
+    rs_upper_bound = args.rs_upper_bound if args.rs_upper_bound is not None else args.tis_upper_bound
 
     # handle each sequence independently
     for train_log_prob, rollout_log_prob, loss_mask in zip(
