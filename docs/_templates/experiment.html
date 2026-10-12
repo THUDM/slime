@@ -33,8 +33,8 @@
       <h1>{{ t('Built for', '为规模化') }}<br><span>{{ t('scaling RL.', 'RL 而生。') }}</span></h1>
       <p class="hero-description">{{ t('slime is an LLM post-training framework for RL scaling, providing two core capabilities:', 'slime 是为 RL scaling 设计的 LLM 后训练框架，提供两大核心能力：') }}</p>
       <ol class="hero-capabilities"><li><a href="#capability-training">{{ t('High-Performance Training', '高性能训练') }} ↘</a></li><li><a href="#capability-generation">{{ t('Flexible Data Generation', '灵活的数据生成') }} ↘</a></li></ol>
-      <a class="button primary" href="#lab">{{ t('Build your first experiment', '搭建第一个实验') }} <span>↗</span></a>
-      <span class="hero-note">{{ t('Explore. Undo. Try again.', '随时切换，随时回退。') }}</span>
+      <a class="button primary" href="#install">{{ t('Install & get started', '安装并开始') }} <span>↗</span></a>
+      <a class="hero-note" href="#lab">{{ t('Already set up? Build an experiment ↓', '环境已就绪？直接搭建实验 ↓') }}</a>
     </div>
     <div class="hero-art" aria-hidden="true">
       <span class="orbit-label label-top">rollout → reward → train</span>
@@ -51,7 +51,79 @@
   <section class="ecosystem" id="ecosystem" aria-labelledby="ecosystem-title">
     <div class="ecosystem-intro"><p class="eyebrow">BUILT IN THE OPEN. USED AT SCALE.</p><h2 id="ecosystem-title">{{ t('From GLM-4.5 to GLM-5.3 & GLM-5.3-Flash.', '从 GLM-4.5，一直到 GLM-5.3 与 GLM-5.3-Flash。') }}</h2><p>{{ t('slime has powered RL post-training across Z.ai’s GLM generations. Explore the model releases, then use the same core capabilities in your own experiment.', 'slime 持续支撑 Z.ai 历代 GLM 的 RL 后训练。了解模型的发布历程，再用同样的核心能力搭建你的实验。') }}</p></div>
     <div class="glm-lineage"><a class="zai-mark" href="https://z.ai">Z.ai <span>× slime</span></a><div>{% for version in ['4.5', '4.6', '4.7', '5', '5.1', '5.2', '5.3', '5.3-flash'] %}<a href="https://z.ai/blog/glm-{{ version }}">GLM-{{ '5.3-Flash' if version == '5.3-flash' else version }}</a>{% if not loop.last %}<span>→</span>{% endif %}{% endfor %}</div></div>
-    <a class="scroll-invitation" href="#lab">{{ t('Now, see how an RL experiment fits together', '现在，亲手搭起一个 RL 实验') }} <span>↓</span></a>
+    <div class="companion-projects" aria-labelledby="companion-title">
+      <h3 id="companion-title">{{ t('Companion projects', '配套项目') }}</h3>
+      {% set companion_projects = [
+        {'name': 'straw', 'url': 'https://github.com/zhuzilin/straw', 'description': t('Durable queues and shared tensor storage for rollout and training data.', '为 rollout 和训练数据提供持久队列与共享张量存储。')},
+        {'name': 'sunabako', 'url': 'https://github.com/zhuzilin/sunabako', 'description': t('Linux sandboxes for agents to run code and tests, with support for multiple machines.', '为 Agent 运行代码与测试提供 Linux 沙盒，支持多机部署。')}
+      ] %}
+      <div class="companion-grid">
+        {% for project in companion_projects %}
+        <a class="companion-card" href="{{ project.url }}"><span class="companion-name">{{ project.name }} <span aria-hidden="true">↗</span></span><p>{{ project.description }}</p></a>
+        {% endfor %}
+      </div>
+    </div>
+    <a class="scroll-invitation" href="#install">{{ t('Your environment first. Your experiment next.', '准备好环境，再亲手搭起一个 RL 实验。') }} <span>↓</span></a>
+  </section>
+  <section id="install" class="installation" aria-labelledby="install-title">
+    <div class="install-intro">
+      <p class="eyebrow">00 / SET UP ONCE</p>
+      <h2 id="install-title">{{ t('Ready, set, slime.', '先装好环境，再开始探索。') }}</h2>
+      <p>{{ t('Start with the prepared image, or build a conda environment. Then choose a model below and take your launch script with you.', '用预置镜像起步，或构建 conda 环境。然后在下方选择模型、配置实验，带走启动脚本。') }}</p>
+      <ol class="install-journey"><li><span>01</span>{{ t('Install the environment', '准备运行环境') }}</li><li><span>02</span>{{ t('Build your experiment', '搭建你的实验') }}</li><li><span>03</span>{{ t('Download, prepare, run', '下载脚本，准备数据，启动') }}</li></ol>
+      <a href="{{ pathto('get_started/quick_start') }}">{{ t('Environment details & other platforms →', '环境说明与其他平台 →') }}</a>
+    </div>
+    <div class="install-workspace">
+      <fieldset id="install-methods" class="install-methods" hidden>
+        <legend>{{ t('Installation method', '安装方式') }}</legend>
+        <label><input type="radio" name="install-method" value="docker" aria-controls="install-docker" checked><span>Docker <small>{{ t('Recommended', '推荐') }}</small></span></label>
+        <label><input type="radio" name="install-method" value="conda" aria-controls="install-conda"><span>Conda <small>{{ t('Source build', '源码构建') }}</small></span></label>
+      </fieldset>
+      <div id="install-docker">
+        <h3>Docker · {{ t('A prepared stack', '预置完整环境') }}</h3>
+        <p class="install-description">{{ t('The image includes Megatron, SGLang and slime’s patches. On your Linux x86_64 GPU host, have Git, Docker and the NVIDIA driver ready, with', '镜像已包含 Megatron、SGLang 和 slime 所需补丁。Linux x86_64 GPU 主机需准备 Git、Docker、NVIDIA 驱动，并配置好') }} <a href="https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html">NVIDIA Container Toolkit ↗</a>.</p>
+        <label id="install-image-control" class="install-image-control" hidden><span>{{ t('Your GPU', '你的 GPU') }}</span><select id="install-image"><option value="slimerl/slime:latest-cu129">H100 / H200 · CUDA 12.9</option><option value="slimerl/slime:latest-cu130">B200 / B300 · CUDA 13.0</option></select></label>
+        <noscript><p>{{ t('For B200/B300, replace latest-cu129 with latest-cu130 below.', 'B200/B300 请将下方 latest-cu129 替换为 latest-cu130。') }}</p></noscript>
+        <div class="install-terminal">
+          <div class="install-terminal-bar"><strong>1 / {{ t('On the host', '在宿主机上') }}</strong><button type="button" data-install-copy="install-docker-host" hidden>{{ t('Copy', '复制') }}</button></div>
+          <pre tabindex="0"><code id="install-docker-host">SLIME_IMAGE=<span id="install-image-value">slimerl/slime:latest-cu129</span>
+docker pull "$SLIME_IMAGE"
+git clone https://github.com/THUDM/slime.git
+cd slime
+mkdir -p ../slime-data
+docker run --rm -it --gpus all --ipc=host \
+  --shm-size=16g --ulimit memlock=-1 --ulimit stack=67108864 \
+  -v "$PWD:/root/slime" -v "$PWD/../slime-data:/data" \
+  -w /root/slime "$SLIME_IMAGE" /bin/bash</code></pre>
+        </div>
+        <div class="install-terminal">
+          <div class="install-terminal-bar"><strong>2 / {{ t('Inside the container', '进入容器后') }}</strong><button type="button" data-install-copy="install-docker-container" hidden>{{ t('Copy', '复制') }}</button></div>
+          <pre tabindex="0"><code id="install-docker-container">pip install -e . --no-deps
+python -c "import slime, sglang, megatron.core; import torch; print('GPUs:', torch.cuda.device_count())"</code></pre>
+        </div>
+        <p class="install-note">{{ t('Your checkout stays on the host. Models, data and checkpoints under /data persist in the sibling slime-data directory after the container exits. The builder uses /data by default.', '代码保留在宿主机。容器内 /data 下的模型、数据和 checkpoint 存在旁边的 slime-data 目录，退出容器后仍保留；下方配置器默认使用 /data。') }}</p>
+      </div>
+      <div id="install-conda">
+        <h3>Conda · {{ t('Build with micromamba', '使用 micromamba 构建') }}</h3>
+        <p class="install-description">{{ t('The repository’s build_conda.sh creates a slime environment with Python 3.12, CUDA 12.9, Megatron, SGLang and the matching patches. It installs micromamba and compiles native dependencies.', '仓库的 build_conda.sh 会创建 slime 环境，安装 Python 3.12、CUDA 12.9、Megatron、SGLang 及配套补丁。脚本会安装 micromamba，并编译原生依赖。') }}</p>
+        <p class="install-note">{{ t('Use a Linux x86_64 NVIDIA machine with Bash, Git, curl, patch, a C/C++ toolchain and a compatible GPU driver. The current script expects write access to /root. For B200/B300, use the CUDA 13 Docker image above.', '适用于 Linux x86_64 NVIDIA 环境，需要 Bash、Git、curl、patch、C/C++ 编译工具及兼容驱动。当前脚本需要 /root 写权限；B200/B300 请使用上面的 CUDA 13 Docker 镜像。') }}</p>
+        <div class="install-terminal">
+          <div class="install-terminal-bar"><strong>1 / {{ t('Clone & build', '克隆并构建') }}</strong><button type="button" data-install-copy="install-conda-build" hidden>{{ t('Copy', '复制') }}</button></div>
+          <pre tabindex="0"><code id="install-conda-build">git clone https://github.com/THUDM/slime.git
+cd slime
+BASE_DIR=/root SHELL=/bin/bash bash build_conda.sh</code></pre>
+        </div>
+        <div class="install-terminal">
+          <div class="install-terminal-bar"><strong>2 / {{ t('Activate in your Bash shell', '在当前 Bash 中激活') }}</strong><button type="button" data-install-copy="install-conda-activate" hidden>{{ t('Copy', '复制') }}</button></div>
+          <pre tabindex="0"><code id="install-conda-activate">source ~/.bashrc
+micromamba activate slime
+export CUDA_HOME="$CONDA_PREFIX"
+python -c "import slime, sglang, megatron.core; import torch; print('GPUs:', torch.cuda.device_count())"</code></pre>
+        </div>
+        <p class="install-note">{{ t('After the build finishes, activate the environment in each new shell. In the builder’s Files step, choose writable model, data and output paths; Megatron is at /root/Megatron-LM.', '构建完成后，在每个新终端中激活环境。在配置器「文件」步骤填写可写的模型、数据及输出路径；Megatron 位于 /root/Megatron-LM。') }} <a href="https://github.com/THUDM/slime/blob/main/build_conda.sh">{{ t('Build script ↗', '查看构建脚本 ↗') }}</a></p>
+      </div>
+      <div class="install-next"><span>{{ t('Environment ready?', '环境就绪？') }}</span><a class="button primary" href="#lab">{{ t('Build my first experiment', '搭建第一个实验') }} ↓</a></div>
+    </div>
   </section>
   <section id="lab" class="lab" aria-labelledby="lab-title">
     <div class="lab-heading">
