@@ -75,6 +75,8 @@ class MegatronTrainRayActor(TrainRayActor):
             return 0
 
         if args.offload_train:
+            # Match Ray's LD_PRELOAD allocator after Megatron's import-time configuration.
+            torch_memory_saver.hook_mode = "preload"
             monkey_patch_torch_dist()
         super().init(args, role, with_ref, with_opd_teacher)
         if args.offload_train:
