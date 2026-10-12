@@ -10,7 +10,7 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from slime.ray.training_recovery import configure_recovery_checkpoint, training_recovery_enabled
 from slime.ray.utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, add_default_ray_env_vars
-from slime.utils.weight_sync import should_flush_cache
+from slime.utils.weight_sync import initial_weight_version, should_flush_cache
 
 
 class RayTrainGroup:
@@ -224,6 +224,9 @@ class RayTrainGroup:
                 for actor in self._actor_handlers
             ]
         )
+        assert len(set(start_rollout_ids)) == 1, "Training ranks loaded different checkpoint iterations"
+        self._disk_weight_version = initial_weight_version(self.args, start_rollout_ids[0])
+        self.args.update_weight_start_version = self._disk_weight_version
         if self._rollout_manager is not None:
             self.set_rollout_manager(self._rollout_manager)
         return start_rollout_ids

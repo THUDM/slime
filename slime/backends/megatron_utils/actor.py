@@ -36,6 +36,7 @@ from slime.utils.routed_experts import (
 )
 from slime.utils.routing_replay import RoutingReplay
 from slime.utils.types import RolloutBatch
+from slime.utils.weight_sync import initial_weight_version
 
 from ...utils.tensor_backper import TensorBackuper
 from .checkpoint import load_checkpoint
@@ -144,12 +145,10 @@ class MegatronTrainRayActor(TrainRayActor):
             hf_vocab = getattr(self.hf_config, "vocab_size", None)
             self.args.vocab_size = hf_vocab if hf_vocab is not None else self.tokenizer.vocab_size
 
-        # Model-only resumes keep the serving version aligned with the next
-        # rollout. Actor recreation can supply the latest version explicitly.
-        if not hasattr(args, "update_weight_start_version"):
-            args.update_weight_start_version = (
-                args.start_rollout_id if args.start_rollout_id is not None else start_rollout_id
-            )
+        # Allocation can supply a placeholder version before the checkpoint is
+        # loaded. Preserve a newer live version while advancing that placeholder
+        # to the model's next rollout; fresh model initialization still starts at 0.
+        args.update_weight_start_version = initial_weight_version(args, start_rollout_id)
         self.weight_updater = create_weight_updater(
             self.args,
             self.model,
@@ -399,8 +398,7 @@ class MegatronTrainRayActor(TrainRayActor):
             )
             if uses_custom_policy_scores(self.args) and mpu.is_pipeline_last_stage():
                 extracted = {
-                    key: scores.pop(f"{store_prefix}{key}")
-                    for key in ("policy_code_logprobs", "policy_stop_logprobs")
+                    key: scores.pop(f"{store_prefix}{key}") for key in ("policy_code_logprobs", "policy_stop_logprobs")
                 }
                 store_old_action_scores(data_iterator[0].rollout_data, extracted, store_prefix.rstrip("_") or "old")
                 # Per-action entropy is consumed by the training objective;
