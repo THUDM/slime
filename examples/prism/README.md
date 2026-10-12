@@ -98,7 +98,8 @@ bash examples/prism/run-grpo.sh
 
 Omni adapter 自动启用 pipeline 的 `enable_memory_saver`，释放 AR 权重、KV/graph 内存，
 并将参考编码器和 vocoder 的持久状态备份到 CPU。先恢复 weights、完成全部权重桶发布，
-再恢复 KV/graph，之后才开放下一轮生成。Prism vocoder 使用 eager 模式；AR 保留原图配置。
+再恢复 KV/graph，之后才开放下一轮生成。当前 SGLang 的 breakable prefill graph 不支持
+memory saver，因此共卡使用 eager prefill 和 eager vocoder，AR decode graph 保留。
 外部冻结教师仍需要自己的资源。完整 RL checkpoint 的保存与恢复方式相同。
 
 以下单机例子保留 GPU 0 给 learner、GPU 1 给一个完整学生 pipeline。教师和奖励服务使用其他 GPU 或其他机器，并在 Ray 管理的学生资源之外运行。

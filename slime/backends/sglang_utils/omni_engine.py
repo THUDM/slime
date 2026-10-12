@@ -214,6 +214,7 @@ class OmniEngine(RayActor):
         ]
         if self.args.offload_rollout:
             command.extend(["--enable-memory-saver", "true"])
+            command.extend(["--tts_engine.engine.cuda_graph_backend_prefill", "disabled"])
             if "vocoder" in self.memory_stages:
                 command.extend(["--vocoder-cuda-graph", "false"])
         self.process = multiprocessing.get_context("spawn").Process(
