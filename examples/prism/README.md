@@ -192,3 +192,26 @@ SLIME_TEST_PRISM_HF_CHECKPOINT="$HF_CHECKPOINT" "$TRAIN_PYTHON" -m pytest \
   tests/test_prism_rollout_integration.py tests/test_policy_actions.py \
   tests/test_prism_model.py -q
 ```
+
+仓库提供独立 GPU 工程验收入口。它先加载 native 学生并发布版本 1，再通过 Omni router 生成真实轨迹，核对更新前 logprob，执行一次 native policy objective/Megatron Adam 更新，发布版本 2，并核对更新后生成动作的 logprob。下面使用 learner GPU 0 和 Omni GPU 1；把 `--gpus` 改为 `1,2` 可在三张以上 GPU 上验证两个完整副本：
+
+```bash
+cat > /runs/prism-smoke-options.json <<'JSON'
+{"alignment_atol": 0.05, "alignment_rtol": 0, "learner_max_frames": 8, "learning_rate": 0.001}
+JSON
+
+"$TRAIN_PYTHON" -m scripts.test_prism_omni \
+  --hf-checkpoint "$HF_CHECKPOINT" --config "$OMNI_CONFIG" \
+  --python "$OMNI_PYTHON" --gpus 1 \
+  --artifact-dir /runs/prism-publication-smoke \
+  --native-checkpoint "$PRISM_PRETRAINED_CHECKPOINT" \
+  --mode publication \
+  --publication-hook scripts.prism_publication_smoke:publication \
+  --post-generation-hook scripts.prism_publication_smoke:verify_generated \
+  --publication-args-json /runs/prism-smoke-options.json \
+  --expected-version 2 --max-frames 8
+```
+
+`0.05` 是这里显式选定的 BF16 数值容差示例；结果会分别报告 RVQ 与 stop 的最大和平均误差。该工程检查使用一个明确的非零 advantage 来验证反向和权重更新，不调用实际 reward model，也不替代完整 prompt group 的 GRPO 或 domain 教师训练验收。独立脚本直接使用 engine 控制方法，没有执行 Ray placement；实际训练的资源生命周期仍由 `train.py` 管理。
+
+`--mode static` 可单独检查 HF artifact、pipeline、router 和真实 rollout 协议，省去两个 hook 及 native checkpoint。这个模式不发布 learner 权重，结果会明确记录这一点。原始 `/generate` JSON、typed replay、更新前后分数和清理状态均写入结果目录。
