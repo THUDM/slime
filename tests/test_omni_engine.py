@@ -600,11 +600,14 @@ def test_named_model_resolves_and_injects_omni_weight_update_role(
 
 
 @pytest.mark.parametrize("update_weights", [True, False], ids=["student", "frozen-score-teacher"])
+@pytest.mark.parametrize("offload", [False, True])
 def test_initialized_model_role_controls_admission_and_initial_version(
-    omni_args, admin_server, monkeypatch, update_weights
+    omni_args, admin_server, monkeypatch, update_weights, offload
 ):
     from slime.backends.sglang_utils import omni_engine
 
+    omni_args.offload_rollout = offload
+    commands = []
     if not update_weights:
         with open(omni_args.omni_config) as stream:
             config = yaml.safe_load(stream)
@@ -616,7 +619,7 @@ def test_initialized_model_role_controls_admission_and_initial_version(
 
     class Process:
         def __init__(self, *, target, args):
-            pass
+            commands.append(args[0])
 
         def start(self):
             assert admin_server.disabled is update_weights
@@ -645,6 +648,9 @@ def test_initialized_model_role_controls_admission_and_initial_version(
     assert bool(pause_requests) is update_weights
     assert admin_server.disabled is update_weights
     assert engine.get_weight_version() == (None if update_weights else "checkpoint-version-7")
+    assert ("--enable-memory-saver" in commands[0]) is offload
+    assert ("--tts_engine.engine.cuda_graph_backend_prefill" in commands[0]) is offload
+    assert ("--tts_engine.engine.enable_weights_cpu_backup" in commands[0]) is (offload and not update_weights)
 
 
 @pytest.mark.parametrize(("backend", "receiver_gpus"), [("sglang-omni", 1), ("sglang", 2)])
