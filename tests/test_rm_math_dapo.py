@@ -153,12 +153,35 @@ def test_is_correct_strict_box_no_box_returns_minus_one():
 
 @pytest.mark.unit
 def test_is_correct_minerva_matches_int_answer():
-    """Minerva path expects gt to coerce via ``int(float(gt))`` (line 210),
-    so floats / int-strings collapse to canonical int strings before
-    comparison."""
     correct, pred = is_correct_minerva("Long solution. Answer: 42", "42")
     assert correct is True
     assert pred == "42"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("ground_truth", ["42.0", "4.2e1"])
+def test_is_correct_minerva_accepts_integral_numeric_labels(ground_truth):
+    correct, pred = is_correct_minerva("Answer: 42", ground_truth)
+    assert correct is True
+    assert pred == "42"
+
+
+@pytest.mark.unit
+def test_is_correct_minerva_preserves_large_integer_precision():
+    ground_truth = "9007199254740993"
+    correct, pred = is_correct_minerva(f"Answer: {ground_truth}", ground_truth)
+    assert correct is True
+    assert pred == ground_truth
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("ground_truth", ["0.5", "1/2", "1+2", "NaN", "Infinity"])
+def test_is_correct_minerva_rejects_non_integer_labels(ground_truth):
+    with pytest.raises(
+        ValueError,
+        match="DAPO ground-truth label must be an integer",
+    ):
+        is_correct_minerva("Answer: 0", ground_truth)
 
 
 @pytest.mark.unit
