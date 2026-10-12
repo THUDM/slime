@@ -542,7 +542,7 @@
       '');
     showArtifact();
     $('run-steps').innerHTML =
-      `<li><strong>${t('Prepare weights & data.','准备模型与数据。')}</strong> ${t('Use the','先准备')} <a href="get_started/quick_start.html">${t('documented environment','文档中的运行环境')}</a>${t(', then run ', '，然后运行 ')}<code>bash experiment.sh prepare</code> → <code>bash experiment.sh convert</code>${t('. Existing BF16 / torch_dist paths can be used directly.', '。也可直接填写已有 BF16 / torch_dist 路径。')}</li><li><strong>${t('Connect the cluster.','连接集群。')}</strong> ${t(`Make ${v.localGpus} Ray GPUs available. Start the head with ray start --head; join workers with ray start --address=HEAD:6379. Use the same repo and paths on all nodes.`, `准备 ${v.localGpus} 张 Ray GPU。主节点执行 ray start --head；worker 使用 ray start --address=HEAD:6379 加入。各节点保持相同仓库和路径。`)} ${state.layout==='external'?t('Deploy engines using serving-reference.sh first.','先参照 serving-reference.sh 部署引擎。'):''}</li><li><strong>${t('Run & inspect.','启动并观察。')}</strong> <code>bash experiment.sh check</code> → <code>bash experiment.sh train</code>. ${t('Then check reward and train_rollout_logprob_abs_diff. Add a held-out evaluation before a long run.','观察 reward 与 train_rollout_logprob_abs_diff；长时间训练前添加独立验证集。')} <a href="https://github.com/THUDM/slime/blob/main/scripts/run-${E.models[state.model].recipe}.sh">${t('Recipe source ↗','配方源码 ↗')}</a></li>`;
+      `<li><strong>${t('Prepare weights & data.','准备模型与数据。')}</strong> ${t('Use the','先准备')} <a href="#install">${t('environment above','上方的运行环境')}</a>${t(', save experiment.sh in the slime checkout, then run ', '，将 experiment.sh 保存到 slime 仓库根目录，然后运行 ')}<code>bash experiment.sh prepare</code> → <code>bash experiment.sh convert</code>${t('. Existing BF16 / torch_dist paths can be used directly.', '。也可直接填写已有 BF16 / torch_dist 路径。')}</li><li><strong>${t('Connect the cluster.','连接集群。')}</strong> ${t(`Make ${v.localGpus} Ray GPUs available. Start the head with ray start --head; join workers with ray start --address=HEAD:6379. Use the same repo and paths on all nodes.`, `准备 ${v.localGpus} 张 Ray GPU。主节点执行 ray start --head；worker 使用 ray start --address=HEAD:6379 加入。各节点保持相同仓库和路径。`)} ${state.layout==='external'?t('Deploy engines using serving-reference.sh first.','先参照 serving-reference.sh 部署引擎。'):''}</li><li><strong>${t('Run & inspect.','启动并观察。')}</strong> <code>bash experiment.sh check</code> → <code>bash experiment.sh train</code>. ${t('Then check reward and train_rollout_logprob_abs_diff. Add a held-out evaluation before a long run.','观察 reward 与 train_rollout_logprob_abs_diff；长时间训练前添加独立验证集。')} <a href="https://github.com/THUDM/slime/blob/main/scripts/run-${E.models[state.model].recipe}.sh">${t('Recipe source ↗','配方源码 ↗')}</a></li>`;
   }
 
   function navigate(step) {
@@ -749,6 +749,22 @@
         '剪贴板不可用，请选中文字手动复制。'));
     }
   }
+  $('install-methods').addEventListener('change', e => {
+    $('install-docker').hidden = e.target.value !== 'docker';
+    $('install-conda').hidden = e.target.value !== 'conda';
+  });
+  $('install-image').addEventListener('change', e => {
+    $('install-image-value').textContent = e.target.value;
+  });
+  document.querySelectorAll('[data-install-copy]').forEach(button => {
+    button.hidden = false;
+    button.addEventListener('click', () => copy($(button.dataset.installCopy).textContent));
+  });
+  $('install-docker').hidden = !document.querySelector('[name="install-method"][value="docker"]').checked;
+  $('install-conda').hidden = !document.querySelector('[name="install-method"][value="conda"]').checked;
+  $('install-image-value').textContent = $('install-image').value;
+  $('install-methods').hidden = false;
+  $('install-image-control').hidden = false;
   $('copy').addEventListener('click', () => copy(generated.files[artifact]));
   $('download').addEventListener('click', () => {
     const url = URL.createObjectURL(new Blob([generated.files[artifact]], {

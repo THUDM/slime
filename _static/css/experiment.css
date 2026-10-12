@@ -341,6 +341,180 @@ html[lang=zh-CN] h1 {
   font-size: 29px
 }
 
+.installation {
+  display: grid;
+  grid-template-columns: minmax(0, .8fr) minmax(0, 1.6fr);
+  gap: 48px;
+  padding: 48px 0 60px;
+  border-top: 1px solid var(--line);
+  scroll-margin-top: 20px;
+}
+
+.install-intro>p:not(.eyebrow),
+.install-description,
+.install-note {
+  color: var(--muted);
+}
+
+.installation a:not(.button) {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.install-journey {
+  list-style: none;
+  padding: 12px 0;
+}
+
+.install-journey li {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 16px 0;
+}
+
+.install-journey span {
+  display: grid;
+  place-items: center;
+  flex: 0 0 36px;
+  height: 36px;
+  background: var(--mint);
+  border: 1px solid #b5d3bd;
+  border-radius: 50%;
+  font: 700 14px "Courier New", monospace;
+}
+
+.install-workspace {
+  min-width: 0;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+}
+
+.install-methods {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.install-methods legend {
+  margin-bottom: 10px;
+  font-size: 16px;
+  color: var(--muted);
+}
+
+.install-methods label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.install-methods label:has(input:checked) {
+  background: var(--mint);
+  border-color: #4f7b5b;
+}
+
+.install-methods input {
+  accent-color: #41744c;
+  margin: 0;
+}
+
+.install-methods span {
+  font-weight: 700;
+}
+
+.install-methods small {
+  display: block;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.install-description,
+.install-note {
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+
+.install-image-control {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin: 20px 0;
+  font-size: 16px;
+}
+
+.install-image-control select {
+  max-width: 100%;
+  padding: 9px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.install-terminal {
+  margin: 16px 0;
+  border: 1px solid #3d4d41;
+  border-radius: 10px;
+  background: #141e19;
+  color: #d3ecd7;
+  overflow: hidden;
+}
+
+.install-terminal-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid #3d4d41;
+  font-size: 15px;
+}
+
+.install-terminal button {
+  flex-shrink: 0;
+  padding: 5px 10px;
+  border-color: #67786b;
+}
+
+.install-terminal button:hover {
+  background: #324538;
+}
+
+.install-terminal pre {
+  margin: 0;
+  padding: 18px 16px;
+  font-size: 15px;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+#install-image-value {
+  color: #ffdf6a;
+}
+
+.install-next {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+  font-size: 16px;
+}
+
 .lab {
   border-top: 1px solid var(--line);
   padding: 38px 0 60px;
@@ -1271,6 +1445,16 @@ dialog .learn-links {
 }
 
 @media(max-width:1000px) {
+  .installation {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
+  }
+
+  .install-journey {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 24px;
+  }
   main {
     padding: 0 24px
   }
@@ -1339,6 +1523,19 @@ dialog .learn-links {
 }
 
 @media(max-width:720px) {
+  .install-workspace {
+    padding: 16px;
+  }
+
+  .install-methods label {
+    padding: 10px;
+  }
+
+  .install-terminal-bar,
+  .install-terminal pre {
+    padding: 12px;
+  }
+
   main {
     padding: 0 18px
   }
@@ -1598,6 +1795,50 @@ dialog .learn-links {
 
 .glm-lineage>div>span {
   color: #9daaa1
+}
+
+.companion-projects h3 {
+  margin: 0 0 16px;
+  font-size: 20px;
+}
+
+.companion-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  gap: 16px;
+}
+
+.companion-card {
+  padding: 20px 24px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.companion-card:hover {
+  background: var(--mint);
+  border-color: #93b39a;
+  text-decoration: none;
+}
+
+.companion-name {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.companion-name>span {
+  color: #417b88;
+}
+
+.companion-card p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1.8;
 }
 
 .capabilities {
