@@ -50,8 +50,11 @@ def post_process_rewards(args, samples: list[Sample], **kwargs):
         torch.tensor([item[0] for item in reward["meta_info"]["input_token_logprobs"][1:]], dtype=torch.float32)
         for reward in raw_rewards
     ]
+    # NB: t_log_prob[-0:] is the whole tensor, not an empty one, so a zero-length
+    # response (e.g. an immediate EOS) must be handled explicitly to keep
+    # teacher_log_probs aligned with response_length.
     teacher_log_probs = [
-        t_log_prob[-response_length:]
+        t_log_prob[-response_length:] if response_length > 0 else t_log_prob[:0]
         for t_log_prob, response_length in zip(teacher_log_probs, response_lengths, strict=False)
     ]
 
