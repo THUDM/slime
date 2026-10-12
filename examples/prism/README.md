@@ -6,6 +6,8 @@
 
 第一版保留原 Megatron 计算核，旧学生分数以 Megatron 重算为默认。训练持续报告逐动作平均绝对误差，以及 `mean_sample_train_rollout_logprob_max_abs_diff`：每条轨迹先取真实动作的最大误差，再由原 microbatch/DP 报表平均，因而该值不是全 DP 的 global max。两个来源的 RVQ/stop 分数均保留在训练 payload 和可选 debug dump 中。严格的跨引擎精度对齐作为独立工作处理；GPU 工程闭环通过不代表满足任意更紧的 logprob 容差。
 
+实际原 `train.py` 的 GPU 训练、保存、恢复与多副本验收范围及报告位置见 [VALIDATION.md](VALIDATION.md)。其中工程奖励与真实质量奖励的验收范围分别写明。
+
 | 训练方式 | 原生训练路径 | 额外输入 |
 | --- | --- | --- |
 | GRPO | prompt 组奖励优势 → native PPO clipping | WER、SIM、全局指令奖励服务 |
@@ -184,6 +186,8 @@ export RL_LOAD="$OUTPUT_DIR"
 bash examples/prism/run-grpo.sh
 # 或相应的 run-mopd.sh
 ```
+
+`NUM_ROLLOUT` 沿用原框架的总 rollout 上限，续训时需要大于 checkpoint 中已经完成的 rollout。恢复 `iter_0000000` 时，下一次训练为 rollout 1，恢复后的首次完整学生发布为版本 2；下一次更新后发布版本 3。已有更高 serving/recovery 版本会保留。新模型初始化仍从 rollout 0 与首次发布版本 1 开始。
 
 `PRISM_DRY_RUN=1 bash examples/prism/run-grpo.sh` 会检查必需输入并打印实际命令，不创建 GPU 作业。可在脚本末尾附加原 slime 参数，例如 `--save-debug-train-data '/runs/debug/train-{rollout_id}.pt'`。示例使用同步 `train.py` 和 `flush_cache_interval=1`；未启用 colocate、rollout offload、TIS、reference KL、GSPO 或完整 stop KL。
 
