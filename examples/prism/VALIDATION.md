@@ -4,7 +4,7 @@
 
 验证目标是原 `train.py` 的训练、保存、恢复与权重发布闭环。严格跨引擎概率一致性、语音质量提升和真实奖励模型联合验收独立处理。
 
-当前 Prism attention 直接使用 Megatron 原生 TE layer spec 与默认 `auto` 后端选择。下表前三场验收来自各自固定的历史源码，使用先前的自定义 FA4 wrapper；原生 TE 的实际验收单独列在第四行，旧报告继续保留为历史证据。
+当前 Prism attention 直接使用 Megatron 原生 TE layer spec 与默认 `auto` 后端选择。下表前三场验收来自各自固定的历史源码，使用先前的自定义 FA4 wrapper；其余验收使用原生 TE。旧报告继续保留为历史证据，各次实现和接口以固定 source SHA 为准。
 
 ## 已完成的原生训练
 
@@ -14,6 +14,8 @@
 | 两 domain MOPD 工程闭环 | 按 `ch` / `en` 分别直连两独立冻结教师的 `/score_actions`；每条轨迹 192 个 RVQ 动作、8 个 sampled continue；task reward 0；原生 OPD reverse KL 0.00248493，梯度范数 0.7008069；完整 checkpoint `iter_0000000`；学生发布版本 1、2；训练后教师实际 tensor checksum 与启动 pin 一致 | `mopd-smoke/audit-v2-attempt-20261012T113833Z/verification.json` |
 | 完整断点恢复与两个学生副本 | 原标准 loader 恢复单副本 checkpoint；训练前 optimizer steps `[1,1]`、scheduler 4；rollout 1 的 4 条轨迹各 8 帧，数据游标继续到样本 4–7；梯度范数 11.5324316；完整保存 `iter_0000001` 后 optimizer steps `[2,2]`、scheduler 8；两个独立 AR 接收 rank 均完成版本 2、3 安装 | `ray-resume-dual-007/verification.json` |
 | 原生 TE attention 与完整断点续训 | 实际 28 个 core 均为 `TEDotProductAttention`；默认 `auto`，运行时 TE 选择 cuDNN `FusedAttention` sub-backend 1；标准 loader 恢复旧 FA4 路径保存的完整 RL checkpoint；optimizer steps `[1,1]` → `[2,2]`，scheduler 4 → 8；梯度范数 11.6026993；完整保存 `iter_0000001`；单 Omni 副本完成版本 2、3 安装 | `native-te-resume-008/verification.json` |
+| 通用 initializer 首次模型初始化 | 插件从 native iteration 100000 只导入模型，RL 从 rollout 0 开始；通用 hook、`pretrained_checkpoint`，无显式 `load`；更新前 optimizer `[0,0]`、scheduler 0，保存后 `[1,1]`、scheduler 4；梯度范数 12.0528440；完整保存 `iter_0000000`；学生版本 1、2 | `initializer-refactor-010/fresh/verification.json` |
+| 通用加载边界的完整恢复 | 只通过标准 `--load` 恢复上一行的新 checkpoint，initializer、预训练来源和 step 都为空；optimizer `[1,1]` → `[2,2]`，scheduler 4 → 8；数据游标继续到样本 4–7；梯度范数 11.1523933；完整保存 `iter_0000001`；学生版本 2、3 | `initializer-refactor-010/resume/verification.json` |
 
 报告目录根为：
 
@@ -24,6 +26,12 @@
 单副本 source 为 `f06e7e0c81641baa2cdfdc2ca966509efb2c58b6`；MOPD source 为 `dcd77d4e91382d1ae0e5cdc2117d27be66f299f6`；双副本恢复 source 为 `a31d82f299cfcb2bc32a1af4267f549a8255df51`。每次作业从已提交的 Git SHA 导出独立源码 snapshot，运行时不修改。各自的 source manifest 和完整日志保留在结果目录。
 
 原生 TE 验收 source 为 `676d90ebf781f85d430aa2e2372d4e836bfab8d6`，使用一张 learner GPU 与一张完整 Omni pipeline GPU。源码已删除自定义 FA4 wrapper 和 core attention 替换函数，recipe 与 publication smoke 也沿用 Megatron 默认后端选择。运行时先检查真实 module 类，再记录 TE 的实际 forward backend 日志；底层 cuDNN 后端由 TE 自动选择。旧 checkpoint 的空 attention 辅助状态通过原标准加载路径兼容处理，未重置 optimizer 或进行 finetune。
+
+通用 initializer 两阶段验收 source 为 `e231fa349cdc754822cd915022f0bd409cec2167`，联合报告为 `initializer-refactor-010/verification.json`。两阶段都调用原 `train.py`，使用一张 learner GPU、一张 Omni GPU，各自创建和清理独立 Ray head。真实 28 个 attention core 都是 `TEDotProductAttention`，TE 自动选择 `FusedAttention` sub-backend 1；两份 checkpoint 的 optimizer `param`、`exp_avg`、`exp_avg_sq` 各 302 项。来源的预训练 iteration 100000 与 RL rollout 0/1 分开记录，source pin 没有污染恢复进度。
+
+初始化主包不再识别 Prism 模型类型、mossLite 目录或 native manifest，旧的 Prism checkpoint flags 已移除。源格式处理留在模型插件，主包仅在无显式 `--load` 且配置通用 initializer 时调用它，统一同步低精度 optimizer master 参数。示例先生成普通 Megatron 架构 CLI，再进入原 HF 校验；错误的显式恢复路径报错，不回退成重新初始化。
+
+旧 `initializer-refactor-009` 在首次发布版本 1 后，由复制自恢复用例的 prompt 中静态期望版本 2 误拒绝，尚未执行更新。其失败源码与日志保留；010 使用新独立目录和分阶段的版本 1/2 prompt，并在预检中核验阶段对应关系，生产版本校验未放宽。
 
 双副本恢复使用一张 learner GPU 与两张完整 Omni pipeline GPU，申请四 GPU 配额，其中一张空闲。生成共用一个 Python router，NCCL world size 为 3，两个 AR worker 分别使用独立接收 rank。标准 resume 未设置 native 预训练初始化、finetune 或跳过 optimizer 加载；Megatron 的 `no_load_optim` 默认值为 `None`，检查器按其 falsey 语义判断，同时保留原值。首次恢复测试发现 group 提前传入的版本 0 阻止了 actor 根据实际加载进度推导版本；修复 actor/group 的共同起点后，第二次运行实际验证了首发版本 2 和更新后版本 3。原失败收据保留。
 
@@ -46,5 +54,7 @@ native 302 个 tensor 到 HF 390 个 tensor 的完整映射使用真实 DCP 与�
 模型结构/replay、Omni 生成与教师协议、三个奖励客户端、多动作 GRPO/OPD 归约、native checkpoint dispatch、完整权重映射、Ray/Omni 生命周期和发布故障边界的聚焦测试均已通过。标准 checkpoint 恢复的版本修复另通过 45 项 factory、disk delta、NCCL lifecycle 与 native dispatch 回归，并覆盖所有 rank 恢复边界一致性。
 
 原生 TE 改动另通过 22 项模型回归及 29 项配置、checkpoint dispatch、数值诊断回归。构造边界测试覆盖 `auto`、`flash`、`fused` 都保留原生 TE spec，以及 MLP-only 层不会改变其他层的 attention。原生 attention 接线完成后，当前 TP/PP/CP 与 SP 的首版限制继续保留；Prism 输入和动作 loss 的 CP 切分仍需后续适配。
+
+通用 initializer 重构通过 118 项加载、CLI 和架构配置组合用例，27 项模型用例及 124 项原 checkpoint/recovery/version 回归。测试覆盖 initializer 的来源与返回契约、master 参数同步、标准恢复优先、reference/HF 加载、无效显式路径、step 0、普通模型行为，以及无 CUDA driver 时配置生成可用而实际训练明确失败。配置失败记录与修复前 source snapshot 也保留，实际 CPU fresh/resume 命令预检通过后才提交 GPU 运行。
 
 GPU GRPO 使用明确标注的工程 reward，未调用真实 ASR、speaker embedding 或 JudgeCLAP 三服务联合评分，不能据此判断 WER/SIM/指令遵循收益。首轮还没有验收多 learner DP、长语音、全部 GPU 故障注入、Local 模型、colocate/offload 或局部片段指令奖励。
