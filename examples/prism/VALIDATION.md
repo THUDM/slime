@@ -1,5 +1,34 @@
 # Prism 首轮工程验收
 
+## Checkpoint 驻留优化对照（2026-10-12）
+
+在同一作业、同一张 H200 上，从 `colocate-006/resume/checkpoint/iter_0000002`
+分别恢复旧流程与优化后的流程，各运行 rollout 3。两组均使用四条八帧轨迹、工程奖励和
+完整 checkpoint 保存，Omni source 固定为 `bb73d42c16f246ff493e676b0d9242b61f9d89f3`。
+旧 slime source 为 `8bcae7e898efeaaed9218ad02c458dfb2b5d66b0`，优化后的 source 为
+`afe9181768c99f931cd2ac1daff14be4c645c316`。
+
+| 训练完成至权重发布之间的操作 | 旧流程 | 优化后 |
+| --- | --- | --- |
+| 训练结束后的第一次 sleep | 7.7 s | 省去 |
+| 为保存执行 wake_up | 2.7 s | 省去 |
+| 保存完成后的 sleep | 7.7 s | 8.5 s |
+| 状态切换合计 | 18.1 s | 8.5 s |
+| Checkpoint 工作时间，扣除嵌套 sleep/wake 计时 | 53.9 s | 53.7 s |
+
+本次保存点的状态切换净减少 **9.6 秒**。优化让需要保存的轮次执行
+`train → save → sleep → publish`，保存前仍同步 CUDA 并清理临时分配。模型驻留状态由
+worker 记录；普通训练调用默认仍在结束时 offload。Actor/critic 顺序、异步保存的
+`force_sync` 和模型/rollout 联合提交边界有 CPU 回归覆盖。
+
+两组 checkpoint 的 optimizer step 均从 `[3,3]` 变为 `[4,4]`，scheduler 从 12 变为
+16；每份 checkpoint 的 `param`、`exp_avg`、`exp_avg_sq` 均为 302 项，学生版本均从
+4 发布至 5。两组各生成四个 WAV。此次对照保持模型、batch 形状与 GPU 相同，分别重新
+随机采样轨迹；性能结论采用独立的 sleep/wake 计时，不作逐数值训练等价声明。
+
+联合报告在本文 QB 根目录的 `checkpoint-residency-001/verification.json`，两组完整
+产物分别在 `baseline/` 和 `optimized/` 下。相关训练/保存/恢复 CPU 回归为 195 passed。
+
 ## 单卡共卡训练与 tensor IPC 验收（2026-10-12）
 
 Prism 1.7B v0.4.0 native iteration 100000 在一张 H200 上通过原 `train.py` 完成了

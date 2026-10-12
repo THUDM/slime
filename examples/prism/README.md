@@ -102,6 +102,10 @@ Omni adapter 自动启用 pipeline 的 `enable_memory_saver`，释放 AR 权重�
 memory saver，因此共卡使用 eager prefill 和 eager vocoder，AR decode graph 保留。
 外部冻结教师仍需要自己的资源。完整 RL checkpoint 的保存与恢复方式相同。
 
+主循环会在训练前确定本轮是否保存 checkpoint。保存轮次让 learner 在训练后保持 GPU
+驻留，完成保存后再 offload，省去一次保存前的换出、换入；由原 `SAVE_INTERVAL`
+控制，无需增加开关。有 critic 时只保留最后训练的角色，避免两个训练模型同时驻留。
+
 以下单机例子保留 GPU 0 给 learner、GPU 1 给一个完整学生 pipeline。教师和奖励服务使用其他 GPU 或其他机器，并在 Ray 管理的学生资源之外运行。
 
 ```bash
