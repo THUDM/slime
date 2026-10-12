@@ -35,8 +35,7 @@ def train(args, pgs, rollout_manager, num_rollout_per_epoch, restore_plan):
         ray.get(rollout_manager.eval.remote(rollout_id=0))
 
     def offload_train(actor_trains_this_step):
-        # Each model auto-offloads after train() when offload_train is set,
-        # so we only need clear_memory for the non-offload case.
+        # Training or its following checkpoint offloads the model when configured.
         if not args.offload_train:
             if not args.use_critic or actor_trains_this_step:
                 actor_model.clear_memory()
@@ -56,23 +55,33 @@ def train(args, pgs, rollout_manager, num_rollout_per_epoch, restore_plan):
         if release_train:
             actor_model.create()
 
+        save_this_rollout = release_train or should_run_periodic_action(
+            rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout
+        )
         actor_trains = (not args.use_critic) or rollout_id >= args.num_critic_only_steps
         if args.use_critic:
-            value_refs = critic_model.async_train(rollout_id, rollout_data_ref)
+            value_refs = critic_model.async_train(
+                rollout_id, rollout_data_ref, offload_after_train=actor_trains or not save_this_rollout
+            )
             if actor_trains:
-                ray.get(actor_model.async_train(rollout_id, rollout_data_ref, external_data=value_refs))
+                ray.get(
+                    actor_model.async_train(
+                        rollout_id,
+                        rollout_data_ref,
+                        external_data=value_refs,
+                        offload_after_train=not save_this_rollout,
+                    )
+                )
             else:
                 ray.get(value_refs)
         else:
-            ray.get(actor_model.async_train(rollout_id, rollout_data_ref))
+            ray.get(actor_model.async_train(rollout_id, rollout_data_ref, offload_after_train=not save_this_rollout))
 
         # Runtime completion releases queue capacity, without claiming that the
         # model/optimizer or this data progress have a durable joint checkpoint.
         ray.get(rollout_manager.training_completed.remote(rollout_id))
 
-        if release_train or should_run_periodic_action(
-            rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout
-        ):
+        if save_this_rollout:
             save_checkpoint(
                 args,
                 rollout_id,

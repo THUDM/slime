@@ -145,7 +145,7 @@ class RayTrainGroup:
                 setattr(self.args, name, value)
             self._disk_weight_version = configuration["update_weight_start_version"]
 
-    def async_train(self, rollout_id, rollout_data_ref, external_data=None):
+    def async_train(self, rollout_id, rollout_data_ref, external_data=None, *, offload_after_train=True):
         """Do one rollout training. Returns a list of Ray refs (one per worker).
 
         For critics, each ref resolves to ``{"values": [cpu tensors...]}`` (or ``{}``
@@ -153,15 +153,21 @@ class RayTrainGroup:
 
         ``external_data`` may be a list (one item per worker) or a single dict
         broadcast to all workers.
+        ``offload_after_train=False`` keeps the trained model resident for an
+        immediately following checkpoint save, which then offloads it.
         """
         if isinstance(external_data, list):
             assert len(external_data) == len(self._actor_handlers)
             return [
-                actor.train.remote(rollout_id, rollout_data_ref, external_data=ed)
+                actor.train.remote(
+                    rollout_id, rollout_data_ref, external_data=ed, offload_after_train=offload_after_train
+                )
                 for actor, ed in zip(self._actor_handlers, external_data, strict=False)
             ]
         return [
-            actor.train.remote(rollout_id, rollout_data_ref, external_data=external_data)
+            actor.train.remote(
+                rollout_id, rollout_data_ref, external_data=external_data, offload_after_train=offload_after_train
+            )
             for actor in self._actor_handlers
         ]
 

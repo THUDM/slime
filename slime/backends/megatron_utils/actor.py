@@ -70,6 +70,7 @@ class MegatronTrainRayActor(TrainRayActor):
         with_ref: bool = False,
         with_opd_teacher: bool = False,
     ) -> int | None:
+        self._is_offloaded = False
         if args.debug_rollout_only:
             self.args = args
             return 0
@@ -182,6 +183,8 @@ class MegatronTrainRayActor(TrainRayActor):
     @timer
     def sleep(self) -> None:
         assert self.args.offload_train
+        if self._is_offloaded:
+            return
 
         clear_memory(clear_host_memory=True)
         print_memory("before offload model")
@@ -196,12 +199,15 @@ class MegatronTrainRayActor(TrainRayActor):
 
         torch_memory_saver.pause()
         reset_cuda_stack_size()
+        self._is_offloaded = True
 
         print_memory("after offload model")
 
     @timer
     def wake_up(self) -> None:
         assert self.args.offload_train
+        if not self._is_offloaded:
+            return
         print_memory("before wake_up model")
 
         torch_memory_saver.resume()
@@ -219,6 +225,7 @@ class MegatronTrainRayActor(TrainRayActor):
             dist.barrier(device_ids=[accelerator.current_device()])
         if self.role == "actor":
             self._switch_model("actor")
+        self._is_offloaded = False
         print_memory("after wake_up model")
 
     def _get_rollout_data(self, rollout_data_ref: Box) -> RolloutBatch:
@@ -409,7 +416,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 scores.pop(f"{store_prefix}policy_stop_entropy", None)
             return scores
 
-    def train(self, rollout_id: int, rollout_data_ref: Box, external_data=None):
+    def train(self, rollout_id: int, rollout_data_ref: Box, external_data=None, *, offload_after_train: bool = True):
         if self.args.debug_rollout_only:
             return None
 
@@ -427,7 +434,8 @@ class MegatronTrainRayActor(TrainRayActor):
 
         if self.args.offload_train:
             del rollout_data
-            self.sleep()
+            if offload_after_train:
+                self.sleep()
 
         return result
 
@@ -618,7 +626,10 @@ class MegatronTrainRayActor(TrainRayActor):
 
         # torch dist may trigger nccl communication during saving.
         if self.args.offload_train:
-            self.wake_up()
+            if self._is_offloaded:
+                self.wake_up()
+            else:
+                clear_memory()
 
         if self.args.async_save:
             from megatron.training.async_utils import maybe_finalize_async_save
