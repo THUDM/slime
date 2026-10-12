@@ -12,10 +12,10 @@ orphan: true
 | --- | --- |
 | `base` | WER/CER |
 | `voiceclone` | WER/CER + SIM |
-| `instration` | WER/CER + JudgeCLAP |
+| `instruction` | WER/CER + JudgeCLAP |
 
-`instration` 保留本次约定的拼写。统一入口要求每条 prompt 显式填写类别，未知或缺失
-类别会报错。每个 GRPO prompt group 的候选继承同一类别；批量调用也检查这一约束。
+统一入口要求每条 prompt 显式填写类别，未知或缺失类别会报错。每个 GRPO prompt group
+的候选继承同一类别；批量调用也检查这一约束。
 类别不会根据 `domain` 或 `task_type` 自动推断。
 
 ## 配置与启动
@@ -51,7 +51,7 @@ bash examples/prism/run-grpo.sh \
 
 - `base`：需要 `transcript_target` 和 `language`，不需要 SIM 参考或 JudgeCLAP 属性。
 - `voiceclone`：还需要有效的音色参考。示例显式填写 Full VoiceClone 的完整参考属性映射。
-- `instration`：还需要可被 JudgeCLAP 评分的全局属性指令；该类别不会调用 SIM。
+- `instruction`：还需要可被 JudgeCLAP 评分的全局属性指令；该类别不会调用 SIM。
 
 这些输入会严格验证，技术故障继续抛错。合法零帧 stop 的所选奖励分量均记录为明确的
 `zero_frame` 结果，reward 为零。分类路由同时支持单样本和混合类别的样本列表；

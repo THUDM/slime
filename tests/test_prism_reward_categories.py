@@ -47,7 +47,7 @@ def categorized_sample(tmp_path, category, **metadata):
     [
         ("base", 0.8, {"wer"}),
         ("voiceclone", 1.4, {"wer", "sim"}),
-        ("instration", 1.4, {"wer", "judge_clap"}),
+        ("instruction", 1.4, {"wer", "judge_clap"}),
     ],
 )
 def test_category_selects_only_its_components(tmp_path, service, category, expected, components):
@@ -65,10 +65,15 @@ def test_category_selects_only_its_components(tmp_path, service, category, expec
 
 def test_mixed_batch_keeps_order_and_shares_frozen_service_identity(tmp_path, service):
     args = arguments()
-    items = [categorized_sample(tmp_path, category) for category in ("instration", "base", "voiceclone", "base")]
+    items = [categorized_sample(tmp_path, category) for category in ("instruction", "base", "voiceclone", "base")]
     result = asyncio.run(rewards.reward(args, items))
     assert result == pytest.approx([1.4, 0.8, 1.4, 0.8])
-    assert [item.metadata["omni_reward"]["category"] for item in items] == ["instration", "base", "voiceclone", "base"]
+    assert [item.metadata["omni_reward"]["category"] for item in items] == [
+        "instruction",
+        "base",
+        "voiceclone",
+        "base",
+    ]
     assert sum(call[0] == "get" and "/wer/" in call[1] for call in service.calls) == 1
 
 
@@ -77,7 +82,7 @@ def test_mixed_batch_keeps_order_and_shares_frozen_service_identity(tmp_path, se
     [
         (rewards.reward_base, "base", 0.8),
         (rewards.reward_voiceclone, "voiceclone", 1.4),
-        (rewards.reward_instration, "instration", 1.4),
+        (rewards.reward_instruction, "instruction", 1.4),
     ],
 )
 def test_category_functions_are_standalone_batch_hooks(tmp_path, service, function, category, expected):
@@ -104,7 +109,7 @@ def test_base_uses_wer_only_config_and_does_not_mutate_legacy_cache(tmp_path, se
     [
         ("base", ("references", "global_instruction")),
         ("voiceclone", ("global_instruction",)),
-        ("instration", ("references",)),
+        ("instruction", ("references",)),
     ],
 )
 def test_unused_reward_inputs_are_not_required(tmp_path, service, category, unused):
@@ -116,12 +121,12 @@ def test_unused_reward_inputs_are_not_required(tmp_path, service, category, unus
 
 def test_configured_coefficients_are_preserved_without_sum_normalization(tmp_path, service):
     args = arguments(wer=0.6, sim=0.4, judge_clap=0.2)
-    items = [categorized_sample(tmp_path, category) for category in ("base", "voiceclone", "instration")]
+    items = [categorized_sample(tmp_path, category) for category in ("base", "voiceclone", "instruction")]
     assert asyncio.run(rewards.reward(args, items)) == pytest.approx([0.48, 0.72, 0.6])
     assert items[1].metadata["omni_reward"]["weights"] == {"wer": 0.6, "sim": 0.4}
 
 
-@pytest.mark.parametrize("category", [None, "", "instruction", "unknown", False, ["base"]])
+@pytest.mark.parametrize("category", [None, "", "instration", "unknown", False, ["base"]])
 def test_missing_or_unknown_category_fails_before_http(tmp_path, service, category):
     item = categorized_sample(tmp_path, category)
     with pytest.raises(ValueError, match="metadata.reward_category"):
@@ -157,7 +162,7 @@ def test_same_category_in_one_grpo_group_is_valid(tmp_path, service):
     [
         ("base", "transcript_target", "transcript_target"),
         ("voiceclone", "references", "references"),
-        ("instration", "global_instruction", "JudgeCLAP"),
+        ("instruction", "global_instruction", "JudgeCLAP"),
     ],
 )
 def test_selected_reward_inputs_remain_strict(tmp_path, service, category, field, message):
@@ -191,7 +196,7 @@ def test_missing_component_weight_or_service_is_explicit(tmp_path, service):
     assert service.calls == []
 
 
-@pytest.mark.parametrize("category", ["base", "voiceclone", "instration"])
+@pytest.mark.parametrize("category", ["base", "voiceclone", "instruction"])
 def test_zero_frame_keeps_selected_category_outcomes_without_http(tmp_path, service, category):
     item = categorized_sample(tmp_path, category, omni_frames=0, omni_audio_path=None)
     assert asyncio.run(rewards.reward(arguments(), item)) == 0
@@ -220,7 +225,7 @@ def test_service_concurrency_limit_is_shared_across_categories(tmp_path, service
             active -= 1
 
     monkeypatch.setattr(tts_reward, "post", post)
-    items = [categorized_sample(tmp_path, category) for category in ("base", "voiceclone", "instration")]
+    items = [categorized_sample(tmp_path, category) for category in ("base", "voiceclone", "instruction")]
     asyncio.run(rewards.reward(args, items))
     assert maximum == 1
     assert sum(call[0] == "get" and "/wer/" in call[1] for call in service.calls) == 1
@@ -239,7 +244,7 @@ def test_batch_failure_waits_for_other_categories_and_keeps_error_details(tmp_pa
         return await original(url, payload, **kwargs)
 
     monkeypatch.setattr(tts_reward, "post", post)
-    items = [categorized_sample(tmp_path, category) for category in ("voiceclone", "instration", "base")]
+    items = [categorized_sample(tmp_path, category) for category in ("voiceclone", "instruction", "base")]
     with pytest.raises(RuntimeError, match="speaker service unavailable"):
         asyncio.run(rewards.reward(arguments(), items))
     assert finished == ["judge_clap"]
@@ -282,7 +287,7 @@ def test_original_rm_hooks_load_category_router_for_samples_and_batches(tmp_path
 
     args = arguments()
     args.custom_rm_path = "examples.prism.rewards.reward"
-    items = [categorized_sample(tmp_path, category) for category in ("base", "voiceclone", "instration")]
+    items = [categorized_sample(tmp_path, category) for category in ("base", "voiceclone", "instruction")]
     for item in items:
         item.custom_rm_path = None
 

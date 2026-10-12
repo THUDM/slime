@@ -94,15 +94,15 @@ async def reward_voiceclone(args, sample, **kwargs):
     return await _score_category(args, sample, "voiceclone", ("wer", "sim"))
 
 
-async def reward_instration(args, sample, **kwargs):
-    """Instration: WER/CER plus global JudgeCLAP instruction scoring."""
-    return await _score_category(args, sample, "instration", ("wer", "judge_clap"))
+async def reward_instruction(args, sample, **kwargs):
+    """Instruction: WER/CER plus global JudgeCLAP instruction scoring."""
+    return await _score_category(args, sample, "instruction", ("wer", "judge_clap"))
 
 
 CATEGORY_REWARDS = {
     "base": reward_base,
     "voiceclone": reward_voiceclone,
-    "instration": reward_instration,
+    "instruction": reward_instruction,
 }
 
 
