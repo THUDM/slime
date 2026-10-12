@@ -21,12 +21,43 @@ import safetensors.torch
 import torch
 from tqdm import tqdm
 
+from slime.backends.qwen3_5_expert_layout import (
+    is_qwen3_5_moe_config,
+    iter_fused_expert_projections,
+    match_hf_fused_expert,
+)
 from slime.utils import accelerator
 
 try:
     import fake_int4_quant_cuda
 except ImportError:
     fake_int4_quant_cuda = None
+
+
+DEFAULT_IGNORE_RULES = [
+    "re:.*lm_head.*",
+    "re:.*norm.*",
+    "re:.*embed.*",
+    "re:.*self_attn.*",
+    "re:.*shared_experts.*",
+    "re:.*mlp\\.(gate|up|gate_up|down)_proj.*",
+    "re:.*mlp\\.gate\\.*",
+]
+
+# Qwen3.5-35B-A3B only quantizes routed experts. These rules are persisted to
+# config.json and also control every later online weight update.
+QWEN35_IGNORE_RULES = [
+    "re:.*lm_head.*",
+    "re:.*norm.*",
+    "re:.*embed.*",
+    "re:.*self_attn.*",
+    "re:.*linear_attn.*",
+    "re:.*visual.*",
+    "re:.*mlp\\.gate\\..*",
+    "re:.*mlp\\.(gate|up|gate_up|down)_proj.*",
+    "re:.*shared_expert.*",
+    "re:.*mtp.*",
+]
 
 
 def pack_to_int32(
@@ -166,11 +197,62 @@ class ConversionResult:
                 self.param_count += len(v)
 
 
-def process_file(input_path, output_path, filename, group_size, is_symmetric, ignore_rules, result_collector):
+def convert_weights(weights, group_size, is_symmetric, ignore_rules, qwen35_moe):
+    q_weights = {}
+
+    def pack_and_store(name, weight):
+        print(f"Packing {name}, memory usage: {accelerator.memory_allocated()}")
+        qw, scale, zero_point = pack_layer(weight, group_size, is_symmetric)
+        if zero_point is not None:
+            q_weights[name.replace(".weight", ".weight_zero_point")] = zero_point
+        q_weights[name.replace(".weight", ".weight_packed")] = qw
+        q_weights[name.replace(".weight", ".weight_scale")] = scale
+        q_weights[name.replace(".weight", ".weight_shape")] = torch.tensor(
+            weight.shape,
+            dtype=torch.int32,
+            device=accelerator.device(),
+        )
+
+    for name, weight in weights.items():
+        if qwen35_moe:
+            match = match_hf_fused_expert(name)
+            if match is None:
+                print(f"Ignoring {name}, memory usage: {accelerator.memory_allocated()}")
+                q_weights[name] = weight
+                continue
+
+            prefix, projection = match
+            for expert_id, split_projection, split_weight in iter_fused_expert_projections(weight, projection):
+                pack_and_store(f"{prefix}.{expert_id}.{split_projection}.weight", split_weight)
+            continue
+
+        is_ignored = any(
+            (rule.startswith("re:") and re.match(rule[3:], name)) or rule == name or name.startswith(rule)
+            for rule in ignore_rules
+        )
+        if is_ignored or not name.endswith(".weight") or weight.dim() < 2:
+            print(f"Ignoring {name}, memory usage: {accelerator.memory_allocated()}")
+            q_weights[name] = weight
+            continue
+
+        pack_and_store(name, weight)
+
+    return q_weights
+
+
+def process_file(
+    input_path,
+    output_path,
+    filename,
+    group_size,
+    is_symmetric,
+    ignore_rules,
+    qwen35_moe,
+    result_collector,
+):
 
     print(f"Processing {filename}, memory usage: {accelerator.memory_allocated()}")
     weights = {}
-    q_weights = {}
 
     with safetensors.safe_open(
         os.path.join(input_path, filename), framework="pt", device=accelerator.device_name()
@@ -178,28 +260,7 @@ def process_file(input_path, output_path, filename, group_size, is_symmetric, ig
         for k in f.keys():
             weights[k] = f.get_tensor(k)
 
-    for name, weight in weights.items():
-        is_ignored = any(
-            (r.startswith("re:") and re.match(r[3:], name)) or r == name or name.startswith(r) for r in ignore_rules
-        )
-
-        if is_ignored or not name.endswith(".weight") or weight.dim() < 2:
-            print(f"Ignoring {name}, memory usage: {accelerator.memory_allocated()}")
-            q_weights[name] = weight
-            continue
-
-        print(f"Packing {name}, memory usage: {accelerator.memory_allocated()}")
-        qw, s, zp = pack_layer(weight, group_size, is_symmetric)
-        qweight_name = name.replace(".weight", ".weight_packed")
-        scale_name = name.replace(".weight", ".weight_scale")
-        weight_shape = torch.tensor(weight.shape, dtype=torch.int32, device=accelerator.device())
-        weight_shape_name = name.replace(".weight", ".weight_shape")
-        if zp is not None:
-            zp_name = name.replace(".weight", ".weight_zero_point")
-            q_weights[zp_name] = zp
-        q_weights[qweight_name] = qw
-        q_weights[scale_name] = s
-        q_weights[weight_shape_name] = weight_shape
+    q_weights = convert_weights(weights, group_size, is_symmetric, ignore_rules, qwen35_moe)
 
     safetensors.torch.save_file(q_weights, os.path.join(output_path, filename), metadata={"format": "pt"})
 
@@ -214,6 +275,13 @@ def convert_int4(input_path, output_path, group_size, is_symmetric, ignore_rules
             shutil.copyfile(os.path.join(input_path, filename), os.path.join(output_path, filename))
 
     safetensors_files = [f for f in os.listdir(input_path) if f.endswith(".safetensors")]
+    config_path = os.path.join(input_path, "config.json")
+    config = None
+    if os.path.isfile(config_path):
+        with open(config_path) as config_file:
+            config = json.load(config_file)
+    qwen35_moe = is_qwen3_5_moe_config(config)
+    effective_ignore_rules = QWEN35_IGNORE_RULES if qwen35_moe else ignore_rules
 
     result_collector = ConversionResult()
     # debug in single thread
@@ -231,7 +299,8 @@ def convert_int4(input_path, output_path, group_size, is_symmetric, ignore_rules
                 filename,
                 group_size,
                 is_symmetric,
-                ignore_rules,
+                effective_ignore_rules,
+                qwen35_moe,
                 result_collector,
             )
             futures.append(future)
@@ -261,17 +330,16 @@ def convert_int4(input_path, output_path, group_size, is_symmetric, ignore_rules
     quantization_config = {
         "config_groups": quant_group,
         "format": "pack-quantized",
-        "ignore": ignore_rules,
+        "ignore": effective_ignore_rules,
         "kv_cache_scheme": None,
         "quant_method": "compressed-tensors",
         "quantization_status": "compressed",
     }
 
-    config_path = os.path.join(input_path, "config.json")
-    if os.path.exists(config_path):
-        cfg = json.load(open(config_path))
-        cfg["quantization_config"] = quantization_config
-        json.dump(cfg, open(os.path.join(output_path, "config.json"), "w"), indent=2)
+    if config is not None:
+        config["quantization_config"] = quantization_config
+        with open(os.path.join(output_path, "config.json"), "w") as config_file:
+            json.dump(config, config_file, indent=2)
 
     index_dict = {"weight_map": result_collector.weight_map, "metadata": {"total_size": result_collector.param_count}}
     json.dump(index_dict, open(os.path.join(output_path, "model.safetensors.index.json"), "w"), indent=2)
@@ -291,15 +359,7 @@ def parse_args():
     parser.add_argument(
         "--ignore-rules",
         nargs="+",
-        default=[
-            "re:.*lm_head.*",
-            "re:.*norm.*",
-            "re:.*embed.*",
-            "re:.*self_attn.*",
-            "re:.*shared_experts.*",
-            "re:.*mlp\\.(gate|up|gate_up|down)_proj.*",
-            "re:.*mlp\\.gate\\.*",
-        ],
+        default=DEFAULT_IGNORE_RULES,
         help="Ignore Rules",
     )
     parser.add_argument("--max-workers", type=int, default=1, help="Number of worker threads for parallel processing")

@@ -2,6 +2,12 @@ import re
 
 import torch
 
+from slime.backends.qwen3_5_expert_layout import (
+    decode_expert_parallel_offset,
+    iter_fused_expert_projections,
+    megatron_fused_expert_projection,
+)
+
 
 def _convert_mtp_layer(args, name, param, layer_idx):
     """Convert MTP layer parameters from Megatron to HuggingFace format."""
@@ -72,11 +78,24 @@ def convert_qwen3_5_to_hf(args, name, param):
         layer_idx, rest = match.groups()
         prefix = f"model.language_model.layers.{layer_idx}"
 
-        # experts (grouped gemm - fused format)
-        if rest == "mlp.experts.linear_fc1":
-            return [(f"{prefix}.mlp.experts.gate_up_proj", param)]
-        elif rest == "mlp.experts.linear_fc2":
-            return [(f"{prefix}.mlp.experts.down_proj", param)]
+        # Grouped-GEMM routed experts are local 3D tensors. The native bridge's
+        # ParamInfo seam carries only name/tensor metadata, so common.py encodes
+        # this EP rank's first global expert id in an internal name suffix. Split
+        # only after TP gather, then expose the per-expert 2D HF layout required
+        # by compressed-tensors/SGLang.
+        rest, expert_offset = decode_expert_parallel_offset(rest)
+        fused_projection = megatron_fused_expert_projection(rest)
+        if fused_projection is not None:
+            if param.dim() != 3:
+                raise ValueError(f"Qwen3.5 fused expert parameter must be 3D, got {tuple(param.shape)} for {name}")
+            return [
+                (f"{prefix}.mlp.experts.{expert_id}.{projection}.weight", weight)
+                for expert_id, projection, weight in iter_fused_expert_projections(
+                    param,
+                    fused_projection,
+                    first_expert_id=expert_offset,
+                )
+            ]
 
         # experts (ungrouped - individual expert format)
         expert_pattern = r"mlp.experts\.(.+)\.weight(\d+)"
