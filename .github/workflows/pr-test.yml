@@ -294,6 +294,10 @@ jobs:
               "test_file": "test_ppo_logprob_entropy_gpu.py"
             },
             {
+              "num_gpus": 1,
+              "test_file": "test_stateless_adam_cuda.py"
+            },
+            {
               "enable_eval": "0",
               "num_gpus": 8,
               "test_file": "test_moonlight_16B_A3B.py"
@@ -1480,6 +1484,10 @@ jobs:
             {
               "num_gpus": 2,
               "test_file": "test_ppo_logprob_entropy_gpu.py"
+            },
+            {
+              "num_gpus": 1,
+              "test_file": "test_stateless_adam_cuda.py"
             },
             {
               "enable_eval": "0",

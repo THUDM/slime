@@ -97,6 +97,32 @@ class StatelessAdam(torch.optim.Optimizer):
                 if grad.is_sparse:
                     raise RuntimeError("StatelessAdam does not support sparse gradients.")
 
+                # Megatron's FP32 master parameters can be updated without
+                # allocating a parameter-sized denominator or modified gradient.
+                if (
+                    param.is_cuda
+                    and torch.version.cuda is not None
+                    and param.dtype == grad.dtype == torch.float32
+                    and param.device == grad.device
+                    and param.shape == grad.shape
+                    and param.is_contiguous()
+                    and grad.is_contiguous()
+                ):
+                    from .kernels.stateless_adam import stateless_adam_update
+
+                    stateless_adam_update(
+                        param,
+                        grad,
+                        lr=lr,
+                        numerator_scale=numerator_scale,
+                        denominator_scale=denominator_scale,
+                        eps=eps,
+                        weight_decay=weight_decay,
+                        adam_w_mode=adam_w_mode,
+                        maximize=maximize,
+                    )
+                    continue
+
                 grad_for_update = grad.neg() if maximize else grad
                 if weight_decay != 0 and adam_w_mode:
                     param.mul_(1.0 - lr * weight_decay)
