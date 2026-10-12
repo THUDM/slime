@@ -2344,4 +2344,8 @@ def slime_validate_args(args):
             )
 
     validate_omni_args(args)
+    if getattr(args, "custom_megatron_log_prob_function_path", None):
+        from slime.backends.megatron_utils.policy_actions import validate_action_policy_args
+
+        validate_action_policy_args(args)
     return args, restore_plan

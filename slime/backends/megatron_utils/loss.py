@@ -37,6 +37,8 @@ from .cp_utils import (
     slice_log_prob_with_cp,
 )
 
+from .policy_actions import build_policy_action_view, get_custom_policy_scores, uses_custom_policy_scores
+
 ROLLOUT_TOP_P_TOKEN_KEYS = (
     "rollout_top_p_token_ids",
     "rollout_top_p_token_offsets",
@@ -822,7 +824,7 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
         raise NotImplementedError(f"advantage_estimator {args.advantage_estimator} is not supported. ")
 
     # Apply on-policy distillation KL penalty to advantages (orthogonal to advantage estimator)
-    if args.use_opd:
+    if args.use_opd and not uses_custom_policy_scores(args):
         apply_opd_kl_to_advantages(
             args=args,
             rollout_data=rollout_data,
@@ -894,6 +896,15 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
 
     rollout_data["advantages"] = advantages
     rollout_data["returns"] = returns
+    if uses_custom_policy_scores(args):
+        # GRPO returns are the sample reward broadcast over frames. Persist
+        # its scalar as well so an immediate stop receives the same signal.
+        # OPD adjustment runs on the action axis in policy_loss_function,
+        # using the same frozen old/teacher scores throughout the rollout.
+        for mm, reward in zip(rollout_data["multimodal_train_inputs"], rewards, strict=True):
+            mm["policy_group_advantage"] = torch.as_tensor(
+                reward, device=mm["policy_stop_mask"].device, dtype=torch.float32
+            ).reshape(1)
 
 
 def vanilla_tis_function(
@@ -1147,27 +1158,45 @@ def policy_loss_function(
     """
     pg_loss_type = get_pg_loss_type(args)
     use_score_centering = getattr(args, "use_score_centering", False)
-    advantages = torch.cat(batch["advantages"], dim=0)
-    old_log_probs = batch["rollout_log_probs"] if args.use_rollout_logprobs else batch.get("log_probs")
-
     response_lengths = batch["response_lengths"]
     total_lengths = batch["total_lengths"]
 
-    _, log_probs_and_entropy = get_log_probs_and_entropy(
-        logits,
-        args=args,
-        unconcat_tokens=batch["unconcat_tokens"],
-        total_lengths=total_lengths,
-        response_lengths=response_lengths,
-        with_entropy=True,
-        **get_rollout_top_p_logprob_kwargs(args, batch),
-    )
+    metric_reducer = None
+    if uses_custom_policy_scores(args):
+        scored = get_custom_policy_scores(args, batch, logits)
+        _maybe_capture_log_probs(batch, scored["log_probs"])
+        action_view = build_policy_action_view(args, batch, scored)
+        action_batch = {**batch, "log_probs": action_view.old, "rollout_log_probs": action_view.rollout}
+        if args.use_opd:
+            action_batch["teacher_log_probs"] = action_view.teacher
+            apply_opd_kl_to_advantages(args, action_batch, action_view.advantages, action_view.old)
+        batch = action_batch
+        advantages = torch.cat(action_view.advantages)
+        old_log_probs = action_view.old
+        log_probs_and_entropy = {"log_probs": action_view.current}
+        if action_view.entropy is not None:
+            log_probs_and_entropy["entropy"] = action_view.entropy
+        sum_of_sample_mean = action_view.reduce
+        metric_reducer = action_view.reduce_metrics
+    else:
+        advantages = torch.cat(batch["advantages"], dim=0)
+        old_log_probs = batch["rollout_log_probs"] if args.use_rollout_logprobs else batch.get("log_probs")
+        _, log_probs_and_entropy = get_log_probs_and_entropy(
+            logits,
+            args=args,
+            unconcat_tokens=batch["unconcat_tokens"],
+            total_lengths=total_lengths,
+            response_lengths=response_lengths,
+            with_entropy=True,
+            **get_rollout_top_p_logprob_kwargs(args, batch),
+        )
 
     log_probs = log_probs_and_entropy["log_probs"]
     # Snapshot the per-sample policy log-probs for the train debug dump (no-op
     # unless capture is enabled). Must run before the torch.cat below rebinds
     # `log_probs` to a single concatenated tensor.
-    _maybe_capture_log_probs(batch, log_probs)
+    if not uses_custom_policy_scores(args):
+        _maybe_capture_log_probs(batch, log_probs)
     if not args.use_rollout_logprobs and not old_log_probs:
         old_log_probs = [log_prob.detach() for log_prob in log_probs]
     train_log_probs_for_tis = batch.get("log_probs")
@@ -1302,15 +1331,17 @@ def policy_loss_function(
         pg_loss_reducer = sum_of_sample_mean
 
     pg_loss = pg_loss_reducer(pg_loss)
-    pg_clipfrac = sum_of_sample_mean(pg_clipfrac)
-    ppo_kl = sum_of_sample_mean(ppo_kl)
+    # The text path may replace its reducer after rejection sampling. Keep
+    # that existing behavior; action diagnostics use their independent mean.
+    metric_reducer = metric_reducer or sum_of_sample_mean
+    pg_clipfrac = metric_reducer(pg_clipfrac)
+    ppo_kl = metric_reducer(ppo_kl)
 
     # entropy loss
-    entropy = log_probs_and_entropy["entropy"]
-    entropy = torch.cat(entropy, dim=0)
-    entropy_loss = sum_of_sample_mean(entropy)
-
-    loss = pg_loss - args.entropy_coef * entropy_loss
+    entropy_loss = None
+    if "entropy" in log_probs_and_entropy:
+        entropy_loss = sum_of_sample_mean(torch.cat(log_probs_and_entropy["entropy"], dim=0))
+    loss = pg_loss if entropy_loss is None else pg_loss - args.entropy_coef * entropy_loss
 
     if args.use_kl_loss:
         ref_log_probs = batch["ref_log_probs"]
@@ -1336,15 +1367,17 @@ def policy_loss_function(
     if "rollout_log_probs" in batch and batch["rollout_log_probs"]:
         rollout_log_probs = torch.cat(batch["rollout_log_probs"], dim=0)
         log_probs_to_compare = log_probs if args.use_rollout_logprobs or use_score_centering else old_log_probs
-        train_rollout_logprob_abs_diff = sum_of_sample_mean((log_probs_to_compare - rollout_log_probs).abs())
+        train_rollout_logprob_abs_diff = metric_reducer((log_probs_to_compare - rollout_log_probs).abs())
 
     reported_loss = {
         "loss": loss.clone().detach(),
         "pg_loss": pg_loss.clone().detach(),
-        "entropy_loss": entropy_loss.clone().detach(),
         "pg_clipfrac": pg_clipfrac.clone().detach(),
         "ppo_kl": ppo_kl.clone().detach(),
     }
+
+    if entropy_loss is not None:
+        reported_loss["entropy_loss"] = entropy_loss.clone().detach()
 
     for key, value in sc_terms.items():
         reported_loss[key] = sum_of_sample_mean(value.detach())
@@ -1370,7 +1403,7 @@ def policy_loss_function(
     # Add OPD metrics if available
     if batch.get("opd_reverse_kl"):
         opd_reverse_kl = torch.cat(batch["opd_reverse_kl"], dim=0)
-        reported_loss["opd_reverse_kl"] = sum_of_sample_mean(opd_reverse_kl).clone().detach()
+        reported_loss["opd_reverse_kl"] = metric_reducer(opd_reverse_kl).clone().detach()
 
     return loss, reported_loss
 

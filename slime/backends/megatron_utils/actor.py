@@ -51,6 +51,7 @@ from .loss import (
     get_values,
 )
 from .model import forward_only, initialize_model_and_optimizer, save, train
+from .policy_actions import store_old_action_scores, uses_custom_policy_scores
 from .update_weight import create_weight_updater
 from .update_weight.common import named_params_and_buffers
 
@@ -386,7 +387,7 @@ class MegatronTrainRayActor(TrainRayActor):
         use_rollout_top_p_replay: bool = True,
     ) -> dict[str, list[torch.Tensor]]:
         with timer(f"{store_prefix}log_probs"):
-            return forward_only(
+            scores = forward_only(
                 get_log_probs_and_entropy,
                 self.args,
                 self.model,
@@ -394,7 +395,19 @@ class MegatronTrainRayActor(TrainRayActor):
                 num_microbatches,
                 store_prefix=store_prefix,
                 use_rollout_top_p_replay=use_rollout_top_p_replay,
+                use_policy_score_extractor=uses_custom_policy_scores(self.args),
             )
+            if uses_custom_policy_scores(self.args) and mpu.is_pipeline_last_stage():
+                extracted = {
+                    key: scores.pop(f"{store_prefix}{key}")
+                    for key in ("policy_code_logprobs", "policy_stop_logprobs")
+                }
+                store_old_action_scores(data_iterator[0].rollout_data, extracted, store_prefix.rstrip("_") or "old")
+                # Per-action entropy is consumed by the training objective;
+                # selected scores alone are not a frame entropy measurement.
+                scores.pop(f"{store_prefix}policy_code_entropy", None)
+                scores.pop(f"{store_prefix}policy_stop_entropy", None)
+            return scores
 
     def train(self, rollout_id: int, rollout_data_ref: Box, external_data=None):
         if self.args.debug_rollout_only:
@@ -485,7 +498,8 @@ class MegatronTrainRayActor(TrainRayActor):
 
                 self._switch_model("actor")
                 can_reuse_log_probs_in_loss = (
-                    len(num_microbatches) == 1
+                    not uses_custom_policy_scores(self.args)
+                    and len(num_microbatches) == 1
                     and self.args.loss_type == "policy_loss"
                     and self.args.kl_coef == 0
                     and not self.args.use_rollout_logprobs

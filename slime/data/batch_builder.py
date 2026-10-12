@@ -435,6 +435,10 @@ class BatchBuilder:
             train_data["metadata"] = [sample.train_metadata for sample in samples]
 
         if any(sample.multimodal_train_inputs is not None for sample in samples):
+            for sample in samples:
+                inputs = sample.multimodal_train_inputs
+                if inputs is not None and "policy_code_mask" in inputs:
+                    inputs["policy_sample_mask"] = torch.tensor([not sample.remove_sample], dtype=torch.bool)
             train_data["multimodal_train_inputs"] = [sample.multimodal_train_inputs for sample in samples]
 
         if samples[0].teacher_log_probs is not None:
