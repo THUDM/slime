@@ -2,6 +2,7 @@ import logging
 import os
 import re
 from contextlib import contextmanager, nullcontext
+from copy import copy
 from pathlib import Path
 
 import torch
@@ -138,6 +139,35 @@ def load_checkpoint(ddp_model, optimizer, opt_param_scheduler, checkpointing_con
     args = get_args()
     load_path = args.load
 
+    native_load = _is_native_model_checkpoint(load_path)
+    native_initializer = getattr(args, "prism_pretrained_checkpoint", None)
+    # Native SFT components have their own model/manifest layout. They are
+    # model-only initializers, even when an explicit iter_* path is supplied.
+    # A normal slime --load always keeps precedence over the initializer flag;
+    # this also prevents reference/teacher HF loads from loading actor weights.
+    if native_load or (load_path is None and native_initializer):
+        from slime_plugins.models.prism import load_prism_pretrained
+
+        initializer_args = args
+        if native_load:
+            initializer_args = copy(args)
+            initializer_args.prism_pretrained_checkpoint = load_path
+            initializer_args.prism_pretrained_step = getattr(args, "ckpt_step", None)
+            if (Path(load_path) / "checkpoint.json").is_file():
+                selected_step = (
+                    0 if Path(load_path).name == "release" else int(Path(load_path).name.removeprefix("iter_"))
+                )
+                if initializer_args.prism_pretrained_step not in (None, selected_step):
+                    raise ValueError("--ckpt-step disagrees with the explicit native checkpoint directory")
+                initializer_args.prism_pretrained_step = None
+        result = load_prism_pretrained(ddp_model, initializer_args)
+        if optimizer is not None and (args.fp16 or args.bf16):
+            optimizer.reload_model_params()
+        return result
+
+    if load_path is None:
+        raise ValueError("model initialization requires --load or --prism-pretrained-checkpoint")
+
     assert Path(load_path).exists() and _is_dir_nonempty(
         load_path
     ), f"{args.load=} does not exist or is an empty directory. Did you specify the wrong folder?"
@@ -161,7 +191,7 @@ def load_checkpoint(ddp_model, optimizer, opt_param_scheduler, checkpointing_con
             )
         if getattr(args, "use_stateless_adam", False) and not args.finetune and opt_param_scheduler is not None:
             checkpoint = Path(load_path)
-            if not re.fullmatch(r"iter_\d{7}", checkpoint.name):
+            if not re.fullmatch(r"iter_\d{7,}", checkpoint.name):
                 checkpoint /= f"iter_{result[0]:07d}"
             # Loading only the model without this file would silently restart
             # the learning-rate schedule. A missing payload is an invalid resume.
@@ -178,9 +208,33 @@ def load_checkpoint(ddp_model, optimizer, opt_param_scheduler, checkpointing_con
         )
 
 
-def _is_megatron_checkpoint(path: str | Path) -> bool:
+def _is_native_model_checkpoint(path: str | Path | None) -> bool:
+    """Identify the split model DCP layout without loading tensors or SFT state."""
+    if path is None:
+        return False
+    candidate = Path(path)
+    if (candidate / "checkpoints").is_dir():
+        candidate /= "checkpoints"
+    if (candidate / "checkpoint.json").is_file() and (candidate / "model").is_dir():
+        return True
+    tracker = candidate / "latest_checkpointed_iteration.txt"
+    if tracker.is_file():
+        marker = tracker.read_text().strip()
+        if marker == "release":
+            selected = candidate / "release"
+        elif marker.isdecimal():
+            selected = candidate / f"iter_{int(marker):07d}"
+        else:
+            return False
+        return (selected / "checkpoint.json").is_file() and (selected / "model").is_dir()
+    return False
+
+
+def _is_megatron_checkpoint(path: str | Path | None) -> bool:
+    if path is None or _is_native_model_checkpoint(path):
+        return False
     return (Path(path) / "latest_checkpointed_iteration.txt").is_file() or bool(
-        re.fullmatch(r"iter_\d{7}", Path(path).name)
+        re.fullmatch(r"iter_\d{7,}", Path(path).name)
     )
 
 

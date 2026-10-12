@@ -2036,9 +2036,9 @@ def slime_validate_args(args):
         args.no_load_optim = True
         args.no_load_rng = True
         args.finetune = True
-        if not load_is_hf:
+        if not load_is_hf and not getattr(args, "prism_pretrained_checkpoint", None):
             args.load = args.ref_load
-        if args.ref_ckpt_step is not None:
+        if args.ref_ckpt_step is not None and not getattr(args, "prism_pretrained_checkpoint", None):
             args.ckpt_step = args.ref_ckpt_step
         if args.start_rollout_id is None:
             args.start_rollout_id = 0
