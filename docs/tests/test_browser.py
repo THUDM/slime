@@ -48,6 +48,48 @@ def run():
                 errors = []
                 page.on("pageerror", lambda error, target=errors: target.append(str(error)))
                 page.goto(f"{base}/{lang}/", wait_until="networkidle")
+                expect(page.locator(".hero-copy .primary")).to_have_attribute("href", "#install")
+                expect(page.locator("#install-docker")).to_be_visible()
+                expect(page.locator("#install-conda")).to_be_hidden()
+                recipe_before_install = page.locator("#artifact-code").inner_text()
+                for image in ("slimerl/slime:latest-cu130", "slimerl/slime:latest-cu129"):
+                    page.locator("#install-image").select_option(image)
+                    page.locator('[data-install-copy="install-docker-host"]').click()
+                    commands = page.evaluate("navigator.clipboard.readText()")
+                    assert commands.startswith(f"SLIME_IMAGE={image}\n")
+                    assert 'docker pull "$SLIME_IMAGE"' in commands
+                    assert '-v "$PWD:/root/slime" -v "$PWD/../slime-data:/data"' in commands
+                    subprocess.run(["bash", "-n"], input=commands, text=True, check=True)
+                for width in (1440, 390, 320):
+                    page.set_viewport_size({"width": width, "height": 1000})
+                    for method in ("conda", "docker"):
+                        page.locator(f'[name="install-method"][value="{method}"]').check()
+                        panel = page.locator(f"#install-{method}")
+                        expect(panel).to_be_visible()
+                        for button in panel.locator("[data-install-copy]").all():
+                            button.click()
+                            commands = page.evaluate("navigator.clipboard.readText()")
+                            target = button.get_attribute("data-install-copy")
+                            assert commands == page.locator(f"#{target}").text_content()
+                            subprocess.run(["bash", "-n"], input=commands, text=True, check=True)
+                        assert page.locator("#install").evaluate("el => el.scrollWidth <= el.clientWidth")
+                        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+                page.set_viewport_size({"width": 1440, "height": 1000})
+                page.locator('[name="install-method"][value="docker"]').focus()
+                page.keyboard.press("ArrowRight")
+                expect(page.locator("#install-conda")).to_be_visible()
+                page.keyboard.press("ArrowLeft")
+                expect(page.locator("#install-docker")).to_be_visible()
+                expect(page.locator("#artifact-code")).to_have_text(recipe_before_install)
+                page.locator(".install-next a").click()
+                expect(page).to_have_url(f"{base}/{lang}/#lab")
+                page.goto(f"{base}/{lang}/", wait_until="networkidle")
+                no_js = browser.new_page(java_script_enabled=False)
+                no_js.goto(f"{base}/{lang}/")
+                expect(no_js.locator("#install-docker")).to_be_visible()
+                expect(no_js.locator("#install-conda")).to_be_visible()
+                expect(no_js.locator("#install-methods")).to_be_hidden()
+                no_js.close()
                 expect(page.locator('[name="model"]')).to_have_count(6)
                 expect(page.locator(".hero-description")).to_contain_text("slime")
                 expect(page.locator(".core-capabilities article")).to_have_count(2)
@@ -302,6 +344,7 @@ def run():
                 # Check local page/anchor targets from the new landing page and guides.
                 for doc in (
                     "index",
+                    "get_started/quick_start",
                     "get_started/experiment-guide",
                     "advanced/policy-mismatch",
                     "advanced/rl-systems",
