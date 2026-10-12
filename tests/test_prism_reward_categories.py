@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import math
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -299,6 +300,65 @@ def test_original_rm_hooks_load_category_router_for_samples_and_batches(tmp_path
     first, batch = asyncio.run(run())
     assert first == pytest.approx(0.8)
     assert batch == pytest.approx([0.8, 1.4, 1.4])
+
+
+@pytest.mark.parametrize("batch_rm", [False, True])
+@pytest.mark.parametrize("std_normalization", [False, True])
+def test_category_rewards_preserve_shuffled_grpo_groups(tmp_path, service, batch_rm, std_normalization):
+    from test_grouped_rewards import builder, segment
+
+    from slime.rollout.rm_hub import async_rm, batched_async_rm
+
+    args = arguments(wer=1, sim=10, judge_clap=100)
+    args.custom_rm_path = "examples.prism.rewards.reward"
+    # Interleave prompt groups with deliberately different reward scales. The
+    # low candidate is a valid zero-frame stop, retaining its group/category.
+    specifications = [
+        (30, "instruction", 3),
+        (10, "base", 0),
+        (20, "voiceclone", 3),
+        (30, "instruction", 0),
+        (10, "base", 3),
+        (20, "voiceclone", 0),
+    ]
+    items = []
+    for index, (group, category, frames) in enumerate(specifications):
+        item = segment(group, index, None, mask=(1,) * frames)
+        item.metadata = categorized_sample(
+            tmp_path, category, omni_frames=frames, **({"omni_audio_path": None} if frames == 0 else {})
+        ).metadata
+        items.append(item)
+
+    async def score():
+        if batch_rm:
+            return await batched_async_rm(args, items)
+        return await asyncio.gather(*(async_rm(args, item) for item in items))
+
+    values = asyncio.run(score())
+    assert values == pytest.approx([60.8, 0, 6.8, 0, 0.8, 0])
+    for item, value in zip(items, values, strict=True):
+        item.reward = value
+
+    converted = builder(rollout_batch_size=3, grpo_std_normalization=std_normalization).convert(items)
+    assert converted["raw_reward"] == pytest.approx([60.8, 0, 6.8, 0, 0.8, 0])
+    assert converted["sample_indices"] == list(range(6))
+    expected = [30.4, -0.4, 3.4, -30.4, 0.4, -3.4]
+    if std_normalization:
+        instruction = 30.4 / (math.sqrt(1848.32) + 1e-6)
+        base = 0.4 / (math.sqrt(0.32) + 1e-6)
+        voiceclone = 3.4 / (math.sqrt(23.12) + 1e-6)
+        expected = [instruction, -base, voiceclone, -instruction, base, -voiceclone]
+    assert converted["rewards"] == pytest.approx(expected)
+    components = {"base": {"wer"}, "voiceclone": {"wer", "sim"}, "instruction": {"wer", "judge_clap"}}
+    for item, (_, category, _) in zip(items, specifications, strict=True):
+        outcome = item.metadata["omni_reward"]
+        assert outcome["category"] == category
+        assert set(outcome["components"]) == components[category]
+        assert outcome["total"] == item.reward
+    for first, second in ((0, 3), (1, 4), (2, 5)):
+        assert items[first].group_index == items[second].group_index
+        assert items[first].metadata["reward_category"] == items[second].metadata["reward_category"]
+        assert converted["rewards"][first] + converted["rewards"][second] == pytest.approx(0)
 
 
 if __name__ == "__main__":

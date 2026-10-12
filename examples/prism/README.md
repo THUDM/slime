@@ -125,6 +125,18 @@ NUM_ROLLOUT=1 bash examples/prism/run-grpo.sh
 
 GRPO 默认每个 prompt 生成四条、每批两个 prompt。可设置 `PROMPTS_PER_BATCH`、`SAMPLES_PER_PROMPT` 和 `GLOBAL_BATCH_SIZE`。组优势在完整 prompt group 上计算后再进入 DP 分片。
 
+同一批数据需要按样本选择不同奖励时，在每条 prompt 的 `metadata.reward_category` 中显式填写 `base`、`voiceclone` 或 `instruction`，并通过原自定义奖励入口启用分类路由：
+
+```bash
+export PROMPT_DATA=/data/prism-category-prompts.jsonl
+bash examples/prism/run-grpo.sh \
+  --custom-rm-path examples.prism.rewards.reward
+```
+
+`base` 只评分 WER/CER，`voiceclone` 评分 WER/CER 与 SIM，`instruction` 评分 WER/CER 与全局 JudgeCLAP。每个类别沿用 `REWARD_CONFIG` 中对应分量的系数直接求和，只调用自己需要的服务；同一 prompt group 的候选使用相同类别，组优势仍按原 GRPO 处理。类别独立于 `domain` 和 Prism `task_type`，缺失或未知类别会报错。默认奖励入口继续接受原有未填写类别的数据。
+
+完整配置、输入约束及记录方式见 [REWARD_CATEGORIES.md](REWARD_CATEGORIES.md)，数据模板见 [category-prompts.example.jsonl](category-prompts.example.jsonl)。
+
 ## 多 domain MOPD
 
 本示例把教师作为外部、冻结的 score-only Omni 服务管理。分别启动两个教师，例如在两个独立终端：
