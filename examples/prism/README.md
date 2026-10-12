@@ -1,4 +1,4 @@
-# Prism 分卡 GRPO 与多 domain MOPD
+# Prism GRPO 与多 domain MOPD
 
 这套示例使用原 `train.py`、Ray placement、rollout 分组、Megatron optimizer 和 checkpoint。学生生成仍走 Omni Python router；Megatron 在每批更新前重放轨迹并固定旧学生 logprob。Omni 返回的逐动作分数用于对齐检查，默认不作为 PPO 分母。
 
@@ -82,6 +82,25 @@ MOPD 使用 `metadata.domain` 选择教师。domain 的采样比例由数据记�
 
 ## Ray 资源
 
+设置 `COLOCATE=1` 可让 learner 与完整学生 Omni pipeline 共用 GPU。例如在只有一张
+GPU 的 Ray cluster 上运行：
+
+```bash
+export COLOCATE=1
+export ACTOR_GPUS_PER_NODE=1 ROLLOUT_GPUS=1 GPUS_PER_NODE=1
+bash examples/prism/run-grpo.sh
+```
+
+需要使用支持 tensor 更新和显存释放的 Omni 版本。脚本传入原生 `--colocate`，由 slime
+启用 learner/rollout 的 offload，并选择原 `UpdateWeightFromTensor`，通过 CUDA IPC
+传递 SGLang flattened buckets。`--update-weight-transport nccl` 仍沿用原参数默认值，
+共卡时 factory 根据 `--colocate` 选择 tensor 路径。
+
+Omni adapter 自动启用 pipeline 的 `enable_memory_saver`，释放 AR 权重、KV/graph 内存，
+并将参考编码器和 vocoder 的持久状态备份到 CPU。先恢复 weights、完成全部权重桶发布，
+再恢复 KV/graph，之后才开放下一轮生成。Prism vocoder 使用 eager 模式；AR 保留原图配置。
+外部冻结教师仍需要自己的资源。完整 RL checkpoint 的保存与恢复方式相同。
+
 以下单机例子保留 GPU 0 给 learner、GPU 1 给一个完整学生 pipeline。教师和奖励服务使用其他 GPU 或其他机器，并在 Ray 管理的学生资源之外运行。
 
 ```bash
@@ -96,7 +115,7 @@ export GPUS_PER_NODE=2
 
 Ray 默认 worker 的 Python 由启动 head/node 的解释器决定，因此使用上面的 `TRAIN_PYTHON` 模块入口启动；`PATH` 中的裸 `ray` 命令可能属于另一个环境。多节点时，各节点的 Ray 进程也须从兼容的训练环境启动。已有集群的 workers 必须具备同一训练环境所需的 Python 依赖；如果不匹配，应另建专用训练 cluster，脚本不会自动停止或替换现有集群。`OMNI_PYTHON` 仅用于独立启动 Omni pipeline 与 router，不能修复 learner worker 的环境。
 
-脚本连接已有 Ray cluster，不停止现有进程。一个 rollout GPU 对应一个完整 Prism pipeline；该 pipeline 内 preprocessing、AR 和 vocoder 共用这一张 rollout GPU。训练 GPU 与 rollout GPU 分离。
+脚本连接已有 Ray cluster，不停止现有进程。一个 rollout GPU 对应一个完整 Prism pipeline；该 pipeline 内 preprocessing、AR 和 vocoder 共用这一张 rollout GPU。默认训练 GPU 与 rollout GPU 分离；`COLOCATE=1` 时使用共卡切换。
 
 增加学生副本时设置 `ROLLOUT_GPUS=2`，并让 Ray 提供 learner 加上两个 rollout GPU。生成仍调用一个 router，权重通过 NCCL 安装到两个 AR 接收者，全部安装成功后才开放下一轮生成。`ACTOR_NODES × ACTOR_GPUS_PER_NODE` 是 learner DP 大小；`GLOBAL_BATCH_SIZE` 必须能被它整除。跨节点时显式填写每节点的 `GPUS_PER_NODE`。
 
@@ -213,7 +232,7 @@ bash examples/prism/run-grpo.sh
 
 `NUM_ROLLOUT` 沿用原框架的总 rollout 上限，续训时需要大于 checkpoint 中已经完成的 rollout。恢复 `iter_0000000` 时，下一次训练为 rollout 1，恢复后的首次完整学生发布为版本 2；下一次更新后发布版本 3。已有更高 serving/recovery 版本会保留。新模型初始化仍从 rollout 0 与首次发布版本 1 开始。
 
-`PRISM_DRY_RUN=1 bash examples/prism/run-grpo.sh` 会检查必需输入并打印实际命令，不创建 GPU 作业。可在脚本末尾附加原 slime 参数，例如 `--save-debug-train-data '/runs/debug/train-{rollout_id}.pt'`。示例使用同步 `train.py` 和 `flush_cache_interval=1`；未启用 colocate、rollout offload、TIS、reference KL、GSPO 或完整 stop KL。
+`PRISM_DRY_RUN=1 bash examples/prism/run-grpo.sh` 会检查必需输入并打印实际命令，不创建 GPU 作业。可在脚本末尾附加原 slime 参数，例如 `--save-debug-train-data '/runs/debug/train-{rollout_id}.pt'`。示例使用同步 `train.py` 和 `flush_cache_interval=1`；默认分卡，可设置 `COLOCATE=1` 启用共卡和 offload。未启用 TIS、reference KL、GSPO 或完整 stop KL。
 
 首个实际 GPU 验收应固定少量 prompt、短帧预算和 `NUM_ROLLOUT=1`，检查 native checkpoint 加载、所有 RVQ/stop 重放分数、梯度及完整权重发布，再增加 rollout 副本进行同样验证。CPU 接缝测试支持绑定 HF 配置而不加载权重：
 

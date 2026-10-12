@@ -47,7 +47,7 @@ def test_disaggregated_omni_defaults(tmp_path):
     assert args.omni_config == str(tmp_path / "pipeline.yaml")
 
 
-@pytest.mark.parametrize("flag", ["colocate", "offload_rollout", "rollout_external", "check_weight_update_equal"])
+@pytest.mark.parametrize("flag", ["rollout_external", "check_weight_update_equal"])
 def test_unsupported_capabilities_fail_before_launch(tmp_path, flag):
     with pytest.raises(ValueError):
         validate_omni_args(_args(tmp_path, **{flag: True}))
@@ -76,3 +76,8 @@ def test_original_backend_bypasses_omni_validation(tmp_path):
     args = _args(tmp_path, rollout_backend="sglang", colocate=True, omni_config=None)
     validate_omni_args(args)
     assert args.omni_python is None
+
+
+@pytest.mark.parametrize("flag", ["colocate", "offload_rollout"])
+def test_omni_supports_shared_gpu_memory_lifecycle(tmp_path, flag):
+    validate_omni_args(_args(tmp_path, **{flag: True}))

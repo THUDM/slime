@@ -190,8 +190,8 @@ def launch_omni_router(python: str, configuration: dict, disabled: bool, admin_k
 
 def start_omni_rollout_servers(args, pg) -> tuple[dict[str, Any], list[Any]]:
     """Start complete pipelines before seeding their single-process Python router."""
-    if args.rollout_external or args.colocate or args.offload_rollout:
-        raise ValueError("Omni rollout requires separately placed, internally owned pipeline replicas")
+    if args.rollout_external:
+        raise ValueError("Omni rollout requires internally owned pipeline replicas")
     from slime.backends.sglang_utils.omni_engine import OMNI_WORKER_CAPABILITIES
 
     configuration = resolve_sglang_config(args)

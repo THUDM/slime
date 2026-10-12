@@ -38,15 +38,23 @@ def launch_omni_process(command: list[str], environment: dict[str, str], parent_
     os.execvpe(command[0], command, environment)
 
 
-def validate_admin_result(payload: object, action: str, *, require_flush: bool = False) -> dict:
+def validate_admin_result(
+    payload: object,
+    action: str,
+    *,
+    require_flush: bool = False,
+    expected_stages: tuple[str, ...] = (OMNI_AR_STAGE,),
+) -> dict:
     """Reject HTTP-success responses containing failed stage or rank operations."""
     if not isinstance(payload, dict) or payload.get("success") is not True:
         raise RuntimeError(f"Omni {action} failed: {payload}")
     results = payload.get("results")
     if not isinstance(results, list) or not results:
         raise RuntimeError(f"Omni {action} returned no stage results")
-    if len(results) != 1 or not isinstance(results[0], dict) or results[0].get("stage") != OMNI_AR_STAGE:
-        raise RuntimeError(f"Omni {action} must target exactly one Prism AR stage")
+    if len(results) != len(expected_stages) or {
+        result.get("stage") for result in results if isinstance(result, dict)
+    } != set(expected_stages):
+        raise RuntimeError(f"Omni {action} must target exactly the requested stages: {expected_stages}")
     for result in results:
         if not isinstance(result, dict) or result.get("success") is not True:
             raise RuntimeError(f"Omni {action} failed stage result: {result}")
@@ -88,8 +96,6 @@ class OmniEngine(RayActor):
         num_gpus_per_engine: int | None = None,
         gpu_ids: list[int] | None = None,
     ) -> None:
-        if args.colocate or args.offload_rollout:
-            raise ValueError("Omni rollout requires separate GPUs and does not support colocate/offload")
         if args.rollout_external:
             raise ValueError("The Omni adapter owns pipeline processes; external rollout is unsupported")
         if worker_type != "regular":
@@ -119,6 +125,8 @@ class OmniEngine(RayActor):
         self.committed_version: str | None = None
         self.publication_failed = False
         self.weight_update_groups: set[str] = set()
+        self.offload_tags: set[str] = set()
+        self.memory_stages = ("preprocessing", OMNI_AR_STAGE, "vocoder")
         self.session = requests.Session()
         self.session.trust_env = False
         if args.omni_admin_key:
@@ -144,6 +152,8 @@ class OmniEngine(RayActor):
             raise ValueError("The Omni RL adapter currently supports Prism pipeline configurations only")
         if self.update_weights and pipeline.get("enable_rl") is not True:
             raise ValueError("Student Omni pipeline config must set enable_rl: true")
+        if pipeline.get("config_cls") == "MossTTSPrismScorePipelineConfig":
+            self.memory_stages = (OMNI_AR_STAGE,)
         for stage in pipeline.get("stages", []):
             if stage.get("tp_size", 1) != 1:
                 raise ValueError("Prism Omni RL currently supports AR TP=1 only")
@@ -202,6 +212,10 @@ class OmniEngine(RayActor):
             "--port",
             str(port),
         ]
+        if self.args.offload_rollout:
+            command.extend(["--enable-memory-saver", "true"])
+            if "vocoder" in self.memory_stages:
+                command.extend(["--vocoder-cuda-graph", "false"])
         self.process = multiprocessing.get_context("spawn").Process(
             target=launch_omni_process, args=(command, environment, os.getpid())
         )
@@ -239,13 +253,18 @@ class OmniEngine(RayActor):
 
     def request_admin(self, action: str, payload: dict | None = None, *, timeout: float | None = None) -> dict:
         timeout = self.operation_timeout if timeout is None else timeout
+        stages = (
+            self.memory_stages
+            if action in {"release_memory_occupation", "resume_memory_occupation"}
+            else (OMNI_AR_STAGE,)
+        )
         response = self.session.post(
             f"{self.get_url()}/{action}",
-            json={**(payload or {}), "stages": [OMNI_AR_STAGE], "timeout_s": timeout},
+            json={**(payload or {}), "stages": list(stages), "timeout_s": timeout},
             timeout=timeout,
         )
         response.raise_for_status()
-        return validate_admin_result(response.json(), action)
+        return validate_admin_result(response.json(), action, expected_stages=stages)
 
     def attach_router(self, router_ip: str, router_port: int, *, register: bool = False) -> None:
         self.router_ip, self.router_port = router_ip, router_port
@@ -329,7 +348,7 @@ class OmniEngine(RayActor):
         self.committed_version = self.pending_version
         self.pending_version = None
         self.paused = False
-        self.set_admission_disabled(False)
+        self.set_admission_disabled(bool(self.offload_tags))
         logger.info(
             "Omni replica rank=%s committed_version=%s url=%s", self.rank, self.committed_version, self.get_url()
         )
@@ -416,14 +435,57 @@ class OmniEngine(RayActor):
     def flush_cache(self) -> None:
         raise NotImplementedError("Omni flushes caches inside paused weight updates; no standalone endpoint exists")
 
-    def update_weights_from_tensor(self, *args, **kwargs) -> None:
-        raise NotImplementedError("Omni CUDA IPC weight updates are not supported")
+    def update_weights_from_tensor(
+        self,
+        serialized_named_tensors: list[str],
+        load_format: str | None = None,
+        flush_cache: bool = False,
+        weight_version: str | None = None,
+    ) -> dict:
+        if not self.paused or weight_version is None or not serialized_named_tensors:
+            raise RuntimeError("Omni tensor updates require a paused replica and an explicit version")
+        version = str(weight_version)
+        if self.pending_version is not None and self.pending_version != version:
+            self.publication_failed = True
+            raise RuntimeError("Omni cannot mix versions within one publication")
+        if self.publication_failed:
+            raise RuntimeError("A failed Omni publication requires a fresh pause and full synchronization")
+        self.publication_failed = True
+        result = self.request_admin(
+            "update_weights_from_tensor",
+            {
+                "serialized_named_tensors": serialized_named_tensors,
+                "load_format": load_format,
+                "weight_version": version,
+                "flush_cache": True,
+                "keep_pause": True,
+            },
+        )
+        validate_admin_result(result, "update_weights_from_tensor", require_flush=True)
+        self.pending_version = version
+        self.publication_failed = False
+        return result
 
-    def release_memory_occupation(self) -> None:
-        raise NotImplementedError("Omni rollout offload is not supported")
+    def release_memory_occupation(self) -> dict:
+        self.pause_generation()
+        result = self.request_admin("release_memory_occupation")
+        self.offload_tags = {tag for stage in result["results"] for tag in stage["data"]["offload_tags"]}
+        logger.info("Omni replica rank=%s released memory tags=%s", self.rank, sorted(self.offload_tags))
+        return result
 
-    def resume_memory_occupation(self, tags: list[str] | None = None) -> None:
-        raise NotImplementedError("Omni rollout offload is not supported")
+    def resume_memory_occupation(self, tags: list[str] | None = None) -> dict:
+        result = self.request_admin("resume_memory_occupation", {"tags": tags})
+        self.offload_tags = {tag for stage in result["results"] for tag in stage["data"]["offload_tags"]}
+        if not self.offload_tags:
+            if not self.update_weights:
+                self.request_admin("continue_generation")
+                self.paused = False
+            if not self.paused:
+                self.set_admission_disabled(False)
+        logger.info(
+            "Omni replica rank=%s resumed memory tags=%s remaining=%s", self.rank, tags, sorted(self.offload_tags)
+        )
+        return result
 
     def shutdown(self) -> None:
         try:

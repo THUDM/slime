@@ -20,6 +20,8 @@ TASK_OUTPUT_DIR=${OUTPUT_DIR:-${PWD}/runs/prism-${TASK_MODE}}
 TASK_ACTOR_NODES=${ACTOR_NODES:-1}
 TASK_ACTOR_GPUS=${ACTOR_GPUS_PER_NODE:-1}
 TASK_ROLLOUT_GPUS=${ROLLOUT_GPUS:-1}
+TASK_COLOCATE=${COLOCATE:-0}
+[[ ${TASK_COLOCATE} == 0 || ${TASK_COLOCATE} == 1 ]] || { echo "COLOCATE must be 0 or 1" >&2; exit 2; }
 TASK_PROMPTS_PER_BATCH=${PROMPTS_PER_BATCH:-2}
 if [[ ${TASK_MODE} == grpo ]]; then
   TASK_SAMPLES_PER_PROMPT=${SAMPLES_PER_PROMPT:-4}
@@ -34,6 +36,9 @@ for TASK_COUNT in "${TASK_ACTOR_NODES}" "${TASK_ACTOR_GPUS}" "${TASK_ROLLOUT_GPU
   [[ ${TASK_COUNT} =~ ^[1-9][0-9]*$ ]] || { echo "Resource and batch counts must be positive integers" >&2; exit 2; }
 done
 TASK_GPUS_PER_NODE=${GPUS_PER_NODE:-$((TASK_ACTOR_GPUS + TASK_ROLLOUT_GPUS))}
+if [[ ${TASK_COLOCATE} == 1 ]]; then
+  TASK_GPUS_PER_NODE=${GPUS_PER_NODE:-${TASK_ACTOR_GPUS}}
+fi
 TASK_GLOBAL_BATCH_SIZE=${GLOBAL_BATCH_SIZE:-$((TASK_PROMPTS_PER_BATCH * TASK_SAMPLES_PER_PROMPT))}
 for TASK_COUNT in "${TASK_GPUS_PER_NODE}" "${TASK_GLOBAL_BATCH_SIZE}"; do
   [[ ${TASK_COUNT} =~ ^[1-9][0-9]*$ ]] || { echo "Resource and batch counts must be positive integers" >&2; exit 2; }
@@ -140,6 +145,10 @@ TASK_ARGS=(
   --save "${TASK_OUTPUT_DIR}"
   --save-interval "${SAVE_INTERVAL:-10}"
 )
+
+if [[ ${TASK_COLOCATE} == 1 ]]; then
+  TASK_ARGS+=(--colocate)
+fi
 
 if [[ -n ${RL_LOAD:-} ]]; then
   [[ -d ${RL_LOAD} ]] || { echo "Missing RL checkpoint directory: ${RL_LOAD}" >&2; exit 2; }

@@ -80,7 +80,7 @@ class _AdminServer:
                         response = _stage_result({"engine_paused": True, "keep_pause": True})
                     elif operation == "continue_generation":
                         response = _stage_result({"engine_paused": False, "keep_pause": False})
-                    elif operation == "update_weights_from_distributed":
+                    elif operation in {"update_weights_from_distributed", "update_weights_from_tensor"}:
                         owner.weight_version = body["weight_version"]
                         response = _stage_result({"flush_success": True, "keep_pause": True, "engine_paused": True})
                     else:
@@ -474,7 +474,7 @@ def test_group_reset_cleans_attempted_init_after_failed_reply(omni_args, admin_s
     assert deletes == [{"group_name": "policy_update", "stages": ["tts_engine"], "timeout_s": 1}]
 
 
-@pytest.mark.parametrize("option", ["colocate", "offload_rollout", "rollout_external"])
+@pytest.mark.parametrize("option", ["rollout_external"])
 def test_constructor_rejects_unsupported_deployment_modes(omni_args, option):
     setattr(omni_args, option, True)
     with pytest.raises(ValueError):
@@ -490,9 +490,6 @@ def test_constructor_rejects_multinode_replica(omni_args):
     ("method", "args"),
     [
         ("flush_cache", ()),
-        ("update_weights_from_tensor", (["serialized-tensors"],)),
-        ("release_memory_occupation", ()),
-        ("resume_memory_occupation", (["weights"],)),
     ],
 )
 def test_unsupported_control_operations_are_explicit(omni_args, method, args):
@@ -698,3 +695,43 @@ def test_omni_unregister_uses_worker_id_and_admin_authorization(admin_server, de
         ("DELETE", "/workers/target-worker"),
     ]
     assert all(headers["Authorization"] == "Bearer router-admin-key" for _, _, _, headers in admin_server.requests)
+
+
+def test_tensor_publication_keeps_admission_closed_until_kv_resumes(omni_args, admin_server):
+    omni_args.colocate = omni_args.offload_rollout = True
+    engine = _engine(omni_args, admin_server)
+    engine.attach_router("127.0.0.1", admin_server.port)
+    engine.offload_tags = {"kv_cache", "cuda_graph"}
+    engine.pause_generation()
+    engine.update_weights_from_tensor(["ipc-bucket"], load_format="flattened_bucket", weight_version="4")
+    engine.continue_generation()
+    assert engine.get_weight_version() == "4"
+    assert admin_server.disabled is True
+    admin_server.responses["/resume_memory_occupation"] = {
+        "success": True,
+        "results": [{"stage": stage, "success": True, "data": {"offload_tags": []}} for stage in engine.memory_stages],
+    }
+    engine.resume_memory_occupation(["kv_cache", "cuda_graph"])
+    assert admin_server.disabled is False
+    updates = [body for _, path, body, _ in admin_server.requests if path == "/update_weights_from_tensor"]
+    assert updates[0]["keep_pause"] and updates[0]["flush_cache"]
+    assert updates[0]["stages"] == ["tts_engine"]
+    assert not any(path == "/flush_cache" for _, path, _, _ in admin_server.requests)
+
+
+def test_tensor_publication_failure_requires_full_retry(omni_args, admin_server):
+    engine = _engine(omni_args, admin_server)
+    engine.pause_generation()
+    engine.update_weights_from_tensor(["first"], weight_version="1")
+    admin_server.responses["/update_weights_from_tensor"] = _stage_result(success=False)
+    with pytest.raises(RuntimeError):
+        engine.update_weights_from_tensor(["second"], weight_version="1")
+    with pytest.raises(RuntimeError):
+        engine.continue_generation()
+    admin_server.responses.clear()
+    with pytest.raises(RuntimeError):
+        engine.update_weights_from_tensor(["retry"], weight_version="1")
+    engine.pause_generation()
+    engine.update_weights_from_tensor(["full-retry"], weight_version="1")
+    engine.continue_generation()
+    assert engine.get_weight_version() == "1"

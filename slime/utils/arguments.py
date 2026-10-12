@@ -1937,9 +1937,9 @@ def validate_omni_args(args):
     if getattr(args, "rollout_backend", "sglang") != "sglang-omni":
         return
     args.omni_python = getattr(args, "omni_python", None) or sys.executable
-    for name in ("colocate", "offload_rollout", "rollout_external"):
+    for name in ("rollout_external",):
         if getattr(args, name, False):
-            raise ValueError(f"The disaggregated Omni backend does not support --{name.replace('_', '-')}.")
+            raise ValueError(f"The Omni backend does not support --{name.replace('_', '-')}.")
     if (
         getattr(args, "update_weight_mode", "full") != "full"
         or getattr(args, "update_weight_transport", "nccl") != "nccl"
