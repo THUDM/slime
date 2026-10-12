@@ -9,11 +9,8 @@
     "'": '&#39;'
   } [c]));
 
-  function render(s, m, v, lang) {
+  function topology(s, m, v, lang) {
     const t = (en, zh) => lang === 'zh' ? zh : en;
-    const chip = (text, color = '') => `<span class="diagram-chip ${color}">${esc(text)}</span>`;
-    const arrow = '<b class="diagram-arrow" aria-hidden="true">→</b>';
-    const row = (...items) => `<div class="diagram-row">${items.join(arrow)}</div>`;
     const gpu = count =>
       `<div class="chips" aria-hidden="true">${'<i class="gpu"></i>'.repeat(Math.min(8, count))}</div>`;
     const trainer =
@@ -29,6 +26,16 @@
       topology =
         `<div data-topology="${s.layout}" class="${s.layout === 'colocate' ? 'world-colocate' : 'managed-pools'}"><div class="world-nodes">${trainer}<div class="flow-arrow">${s.schedule === 'async' ? '⇄' : '⇢'}</div>${serving('Rollout', v.rollout)}</div><span class="pool-label">${s.layout === 'colocate' ? t('one GPU pool · alternating phases', '同一 GPU 池 · 交替工作') : t('slime manages two dedicated GPU pools', 'slime 统一管理 · 两个独立 GPU 池')}</span></div>`;
     }
+    return topology;
+  }
+
+  function render(s, m, v, lang) {
+    const t = (en, zh) => lang === 'zh' ? zh : en;
+    const precision = s.precision === 'bf16' ? 'BF16' : s.precision === 'int4' ? 'INT4' : 'FP8';
+    const chip = (text, color = '') => `<span class="diagram-chip ${color}">${esc(text)}</span>`;
+    const arrow = '<b class="diagram-arrow" aria-hidden="true">→</b>';
+    const row = (...items) => `<div class="diagram-row">${items.join(arrow)}</div>`;
+    const placementMap = topology(s, m, v, lang);
     let lesson;
     let title;
     switch (s.step) {
@@ -70,17 +77,17 @@
       case 4: {
         title = t('Inside the serving fleet', '走进推理集群内部');
         const cache = `<div class="serving-cache" data-hicache="${s.hicache}"><div data-cache-tier="gpu">${chip('GPU', 'blue')}<span>${t('Prefix cache', '前缀缓存')}</span></div>${s.hicache ? `<b aria-hidden="true">⇄</b><div data-cache-tier="cpu">${chip('CPU', 'yellow')}<span>HiCache</span></div>` : ''}</div><small>${s.hicache ? (s.pd ? t('Enabled on prefill workers only.', '仅在 prefill worker 启用。') : t('Reuse prefixes through GPU ↔ host RAM.', '通过 GPU ↔ 主机内存复用前缀。')) : t('GPU prefix cache only; no host cache tier.', '只有 GPU 前缀缓存，无主机缓存层。')}</small>`;
-        const prefill = `<div class="serving-stage" data-serving-phase="prefill"><h5>Prefill</h5><p>${t('Read the prompt; reuse cached prefixes.', '读取 prompt，复用已缓存的前缀。')}</p>${cache}</div>`;
+        const prefill = `<div class="serving-stage prefill-stage" data-serving-phase="prefill"><h5>Prefill</h5><p>${t('Read the prompt; reuse cached prefixes.', '读取 prompt，复用已缓存的前缀。')}</p>${cache}</div>`;
         const shownDrafts = Math.min(s.specSteps, 3);
         const proposed = Array.from({length: shownDrafts}, (_, i) => chip('d' + (i + 1), 'yellow')).join(' ');
         const accepted = Array.from({length: Math.max(0, shownDrafts - 1)}, (_, i) => chip('✓ d' + (i + 1), 'green')).join(' ');
         const decoding = s.speculative ?
           `<div class="draft-stage" data-serving-phase="draft"><strong>${s.draftSource === 'external' ? t('Separate EAGLE head', '独立 EAGLE 头') : t('Checkpoint MTP head', 'Checkpoint MTP 头')}</strong><small>${t('Propose', '提出候选')} · ${s.specSteps} ${t('steps', '步')} · top-k 1</small><div class="serving-tokens">${proposed}${s.specSteps > shownDrafts ? chip('…') : ''}</div></div><div class="serving-connector" aria-hidden="true">↓</div><div class="verify-stage" data-serving-phase="verify"><strong>${t('Target model · batch verification', '目标模型 · 批量验证')}</strong><div class="serving-tokens">${accepted} ${chip('× d' + shownDrafts, 'rejected')}</div></div><div class="serving-connector" aria-hidden="true">↓</div><div class="commit-stage" data-serving-phase="commit"><strong>${t('Commit accepted prefix + corrected token', '提交接受的前缀 + 修正 token')}</strong><div class="serving-tokens">${accepted} ${chip('c', 'blue')}</div><small>${t('Illustrative rejection round; acceptance varies by request. All-accepted rounds can emit a bonus token.', '图示为一次拒绝示例，接受长度随请求变化；全部接受时可多输出一个 token。')}</small></div>` :
           `<div class="verify-stage" data-serving-phase="decode"><strong>${t('Target model · one token at a time', '目标模型 · 逐 token 解码')}</strong>${row(chip('t₁', 'green'), chip('t₂', 'green'), chip('t₃', 'green'))}<small>${t('One target decoding step for each new token.', '每产生一个新 token，执行一次目标模型解码。')}</small></div>`;
-        const decode = `<div class="serving-stage"><h5>Decode ${s.speculative ? '· EAGLE' : ''}</h5>${decoding}</div>`;
+        const decode = `<div class="serving-stage decode-stage"><h5>Decode ${s.speculative ? '· EAGLE' : ''}</h5>${decoding}</div>`;
         const pools = s.pd ?
-          `<div class="serving-pool prefill-pool"><div class="serving-pool-label">${t('Prefill engine pool', 'Prefill 引擎池')}</div>${prefill}</div><div class="serving-transfer" data-serving-phase="transfer"><span>↓</span><strong>${m.hybrid ? t('KV + recurrent state transfer', 'KV + 递归状态传输') : 'KV transfer'}</strong><small>Mooncake · RDMA</small></div><div class="serving-pool decode-pool"><div class="serving-pool-label">${t('Decode engine pool', 'Decode 引擎池')}</div>${decode}</div>` :
-          `<div class="serving-pool combined-pool"><div class="serving-pool-label">${t('One engine · prefill + decode', '同一引擎 · prefill + decode')}</div>${prefill}<div class="serving-connector">↓ ${t('Cache stays in the engine', '缓存在引擎内复用')}</div>${decode}</div>`;
+          `<div class="serving-pool prefill-pool"><div class="serving-pool-label">${t('Prefill engine pool', 'Prefill 引擎池')}</div>${prefill}</div><div class="serving-transfer" data-serving-phase="transfer"><span class="serving-direction" aria-hidden="true">↓</span><strong>${m.hybrid ? t('KV + recurrent state transfer', 'KV + 递归状态传输') : 'KV transfer'}</strong><small>Mooncake · RDMA</small></div><div class="serving-pool decode-pool"><div class="serving-pool-label">${t('Decode engine pool', 'Decode 引擎池')}</div>${decode}</div>` :
+          `<div class="serving-pool combined-pool"><div class="serving-pool-label">${t('One engine · prefill + decode', '同一引擎 · prefill + decode')}</div>${prefill}<div class="serving-connector"><span class="serving-direction" aria-hidden="true">↓</span> ${t('Cache stays in the engine', '缓存在引擎内复用')}</div>${decode}</div>`;
         lesson =
           `<div class="serving-scene" data-pd="${s.pd}" data-speculative="${s.speculative}"><div class="serving-prompt">${chip('Prompt', 'blue')} ↓</div>${pools}</div><p>${t('Concurrency', '并发上限')}: ${s.concurrency} · ${t('Response limit', '回复上限')}: ${s.response} tokens</p>`;
         break;
@@ -92,10 +99,24 @@
           `<p>${v.errors.length ? t('Complete the highlighted settings before exporting the shell.', '补齐标出的配置后即可导出 shell。') : t('Export experiment.sh, then run these stages in your prepared environment.', '导出 experiment.sh，在准备好的环境中依次运行这些步骤。')}</p><div class="diagram-files">${chip('experiment.sh')}${s.pd ? chip('sglang.yaml') : ''}${s.layout === 'external' ? chip('serving-reference.sh') : ''}${chip('experiment.json')}</div>`;
     }
     const explanation = `<section class="world-lesson" data-lesson="${s.step}"><h4>${title}</h4>${lesson}</section>`;
-    const placement = `${topology}${s.straw ? `<div class="queue-pool"><strong>straw</strong> · ${s.schedule === 'async' ? 'worker 0 / 1 / … → ' : ''}partial → ready → batch <small>JuiceFS · ${t('persistent payloads + queues', '持久数据 + 队列')}</small></div>` : ''}`;
-    return `<div class="world-top">${esc(m.name)} · ${esc(m.size)}</div>${s.step === 4 ? explanation + placement : placement + explanation}`;
+    const placement = `${placementMap}${s.straw ? `<div class="queue-pool"><strong>straw</strong> · ${s.schedule === 'async' ? 'worker 0 / 1 / … → ' : ''}partial → ready → batch <small>JuiceFS · ${t('persistent payloads + queues', '持久数据 + 队列')}</small></div>` : ''}`;
+    const placementView = s.step < 2 ? placement :
+      `<details class="world-placement" data-detail="placement"><summary>${t('GPU placement', 'GPU 布局')} · ${v.localGpus} ${t('local GPUs', '张本地 GPU')}</summary>${placement}</details>`;
+    return `<div class="world-top">${esc(m.name)} · ${esc(m.size)}</div>${s.step < 2 ? placementView + explanation : explanation + placementView}`;
+  }
+  function walkthrough(s, stage, lang) {
+    const t = (en, zh) => lang === 'zh' ? zh : en;
+    const answers = [42, 41, 42, 42, 43, 40, 42, 44];
+    return `<div class="world-top">slime · GRPO · ${t('illustration', '机制示意')}</div>
+      <div class="walkthrough-prompt"><strong>Prompt</strong> ${t('What is 6 × 7?', '6 × 7 等于多少？')}</div>
+      <div class="walkthrough-samples">${answers.map((answer, i) => `<div class="walkthrough-sample ${stage >= 2 ? answer === 42 ? 'correct' : 'incorrect' : ''}"><small>#${i + 1}</small><strong>${stage >= 1 ? answer : '…'}</strong><span>${stage >= 2 ? 'r = ' + (answer === 42 ? 1 : 0) : t('answer', '回答')}</span>${stage >= 3 ? `<b>A ≈ ${answer === 42 ? '+0.94' : '−0.94'}</b>` : ''}</div>`).join('')}</div>
+      <div class="walkthrough-update">${stage >= 3 ? 'A = (r − 0.5) / (√(2/7) + ε) → GRPO → θ₁' : t('Generate → verify → learn', '生成 → 验证 → 学习')}</div>
+      <div class="walkthrough-system" data-tour-phase="${stage}">${topology(s, root.SlimeExperiment.models[s.model], root.SlimeExperiment.validate(s), lang)}</div>
+      <p class="diagram-caption">${stage === 4 ? t('θ₁ → SGLang → next prompt. Weights change; future scores must be measured.', 'θ₁ → SGLang → 下一个 prompt。权重已经更新，之后的得分需要实测。') : t('One prompt, eight sampled answers. Colocated engines alternate on the same GPU pool.', '一个 prompt，八次采样。同卡引擎在同一 GPU 池上交替工作。')}</p>`;
   }
   const api = {
+    walkthrough,
+    topology,
     render
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
