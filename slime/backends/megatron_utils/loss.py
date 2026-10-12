@@ -1364,10 +1364,15 @@ def policy_loss_function(
         loss += 0 * logits.sum()
 
     train_rollout_logprob_abs_diff = None
+    mean_sample_train_rollout_logprob_max_abs_diff = None
     if "rollout_log_probs" in batch and batch["rollout_log_probs"]:
         rollout_log_probs = torch.cat(batch["rollout_log_probs"], dim=0)
         log_probs_to_compare = log_probs if args.use_rollout_logprobs or use_score_centering else old_log_probs
         train_rollout_logprob_abs_diff = metric_reducer((log_probs_to_compare - rollout_log_probs).abs())
+        if uses_custom_policy_scores(args):
+            mean_sample_train_rollout_logprob_max_abs_diff = action_view.reduce_sample_max(
+                (log_probs_to_compare - rollout_log_probs).abs()
+            )
 
     reported_loss = {
         "loss": loss.clone().detach(),
@@ -1384,6 +1389,10 @@ def policy_loss_function(
 
     if train_rollout_logprob_abs_diff is not None:
         reported_loss["train_rollout_logprob_abs_diff"] = train_rollout_logprob_abs_diff.clone().detach()
+    if mean_sample_train_rollout_logprob_max_abs_diff is not None:
+        reported_loss["mean_sample_train_rollout_logprob_max_abs_diff"] = (
+            mean_sample_train_rollout_logprob_max_abs_diff.clone().detach()
+        )
 
     if args.use_kl_loss:
         reported_loss["kl_loss"] = kl_loss.clone().detach()

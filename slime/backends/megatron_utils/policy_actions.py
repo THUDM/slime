@@ -94,6 +94,13 @@ class PolicyActionView:
         chunks = values.split([w.numel() for w in self.weights])
         return sum(chunk.mean() * enabled for chunk, enabled in zip(chunks, self.sample_masks, strict=True))
 
+    def reduce_sample_max(self, values: torch.Tensor) -> torch.Tensor:
+        """Sum trajectory maxima for the native sample/microbatch/DP average."""
+        if values.ndim != 1 or values.numel() != sum(w.numel() for w in self.weights):
+            raise ValueError("Action maximum metric received a tensor outside its selected-action view")
+        chunks = values.split([w.numel() for w in self.weights])
+        return sum(chunk.max() * enabled for chunk, enabled in zip(chunks, self.sample_masks, strict=True))
+
 
 def _select_frozen_scores(mm, prefix, section, code_mask, stop_mask):
     code_key, stop_key = f"policy_{prefix}_code_logprobs", f"policy_{prefix}_stop_logprobs"

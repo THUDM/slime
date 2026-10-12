@@ -313,3 +313,29 @@ def test_partial_frame_mask_is_rejected_until_action_semantics_are_defined():
     batch["loss_masks"][0][0] = 0
     with pytest.raises(ValueError, match="Partial frame loss masks"):
         loss_module.policy_loss_function(arguments(), batch, output, lambda x: x.sum())
+
+
+@pytest.mark.parametrize("stop_weight", [0.0, 3.0])
+def test_sample_max_logprob_error_averages_trajectory_maxima_with_stop_and_removal(stop_weight):
+    samples = [sample(), sample(rows=3, frames=0), sample(rows=4, frames=1)]
+    for s in samples:
+        s["mm"]["policy_sample_mask"] = torch.ones(1, dtype=torch.bool)
+        for kind in ("code", "stop"):
+            s["mm"][f"policy_rollout_{kind}_logprobs"] = s["mm"][f"policy_old_{kind}_logprobs"].clone()
+    samples[0]["mm"]["policy_rollout_code_logprobs"][2, 0] -= 0.8
+    samples[0]["mm"]["policy_rollout_stop_logprobs"][-1] -= 0.2
+    samples[1]["mm"]["policy_rollout_stop_logprobs"][-1] -= 0.3
+    samples[2]["mm"]["policy_rollout_code_logprobs"] -= 8.0
+    samples[2]["mm"]["policy_rollout_stop_logprobs"] -= 9.0
+    samples[2]["mm"]["policy_sample_mask"].zero_()
+    args = arguments(policy_stop_loss_weight=stop_weight)
+    _, packed = run_policy(args, samples)
+    metric = "mean_sample_train_rollout_logprob_max_abs_diff"
+    # The loss reports a numerator. The existing Megatron reporting path
+    # divides by the global sample count, after summing microbatches/DP.
+    torch.testing.assert_close(packed[metric], torch.tensor(0.8 + 0.3))
+    assert packed[metric] > packed["train_rollout_logprob_abs_diff"]
+    micro_sum = sum(run_policy(args, [s])[1][metric] for s in samples)
+    torch.testing.assert_close(packed[metric] / len(samples), micro_sum / len(samples))
+    torch.testing.assert_close(run_policy(args, [samples[1]])[1][metric], torch.tensor(0.3))
+    torch.testing.assert_close(run_policy(args, [samples[2]])[1][metric], torch.tensor(0.0))
