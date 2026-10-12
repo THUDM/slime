@@ -4,6 +4,8 @@
 
 首版固定 BF16、TP=PP=CP=1、关闭 sequence parallel，支持 learner DP 和多个完整 rollout 副本。Prism 的全部 RVQ 与 sampled stop 参与训练。模型输入按真实时间行 packing，策略目标按真实动作计算；自然结束的 terminal stop 与零帧 stop 不会丢失。
 
+第一版保留原 Megatron 计算核，旧学生分数以 Megatron 重算为默认。训练持续报告逐动作平均绝对误差，以及 `mean_sample_train_rollout_logprob_max_abs_diff`：每条轨迹先取真实动作的最大误差，再由原 microbatch/DP 报表平均，因而该值不是全 DP 的 global max。两个来源的 RVQ/stop 分数均保留在训练 payload 和可选 debug dump 中。严格的跨引擎精度对齐作为独立工作处理；GPU 工程闭环通过不代表满足任意更紧的 logprob 容差。
+
 | 训练方式 | 原生训练路径 | 额外输入 |
 | --- | --- | --- |
 | GRPO | prompt 组奖励优势 → native PPO clipping | WER、SIM、全局指令奖励服务 |
