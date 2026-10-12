@@ -1,0 +1,2 @@
+# Pure selected-action OPD does not synthesize waveform or call reward models.
+omni_return_audio: false

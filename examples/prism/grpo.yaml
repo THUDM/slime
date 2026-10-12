@@ -1,0 +1,2 @@
+# Sample-mean native GRPO; audio is required by WER/SIM/JudgeCLAP.
+omni_return_audio: true

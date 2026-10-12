@@ -1,0 +1,29 @@
+# Copy and fill paths. Total rollout GPUs = 1 student + 2 frozen teachers.
+# The learner GPU is separate and is configured by the run script.
+sglang:
+  - name: student
+    update_weights: true
+    num_gpus_per_engine: 1
+    server_groups:
+      - worker_type: regular
+        num_gpus: 1
+        overrides:
+          omni_config: /runs/prism-config/student.yaml
+  - name: teacher_zh
+    model_path: /assets/prism-teacher-zh
+    update_weights: false
+    num_gpus_per_engine: 1
+    server_groups:
+      - worker_type: regular
+        num_gpus: 1
+        overrides:
+          omni_config: /path/to/slime/examples/prism/teacher-score.yaml
+  - name: teacher_en
+    model_path: /assets/prism-teacher-en
+    update_weights: false
+    num_gpus_per_engine: 1
+    server_groups:
+      - worker_type: regular
+        num_gpus: 1
+        overrides:
+          omni_config: /path/to/slime/examples/prism/teacher-score.yaml

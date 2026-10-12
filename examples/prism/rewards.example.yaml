@@ -1,0 +1,19 @@
+# Replace endpoint/fingerprint values, or generate this using configure.py.
+services:
+  wer:
+    endpoint: http://asr-host:8101
+    expected_fingerprint: REPLACE_WITH_INFO_IDENTITY_FINGERPRINT
+    audio_transport: path
+    max_inflight: 4
+  sim:
+    endpoint: http://sim-host:8102
+    expected_fingerprint: REPLACE_WITH_INFO_IDENTITY_FINGERPRINT
+    audio_transport: path
+    max_inflight: 4
+  judge_clap:
+    endpoint: http://judge-host:8103
+    expected_fingerprint: REPLACE_WITH_INFO_IDENTITY_FINGERPRINT
+    audio_transport: path
+    max_inflight: 2
+# Illustrative weights. Set these explicitly for your reward experiment.
+weights: {wer: 0.6, sim: 0.2, judge_clap: 0.2}

@@ -1,0 +1,36 @@
+# configure.py fills the exact identities/checksums from local assets and
+# already-running frozen teacher /model_info responses.
+models:
+  zh_teacher:
+    endpoint: http://teacher-zh-host:8201
+    checkpoint: /assets/prism-teacher-zh
+    weight_sha256: REPLACE_WITH_TEACHER_WEIGHT_SHA256
+    model_identity:
+      policy_family: moss_tts_prism
+      architecture: MOSS-TTS-Prism
+      config_sha256: REPLACE_WITH_CONFIG_SHA256
+      modeling_sha256: REPLACE_WITH_MODELING_SHA256
+      processor_sha256: REPLACE_WITH_PROCESSOR_SHA256
+      prompt_protocol_sha256: REPLACE_WITH_PROMPT_PROTOCOL_SHA256
+      n_vq: 16
+      audio_vocab_size: 1024
+      sample_rate: 24000
+      stop_semantics: pre_frame_threshold_v1
+  en_teacher:
+    endpoint: http://teacher-en-host:8202
+    checkpoint: /assets/prism-teacher-en
+    weight_sha256: REPLACE_WITH_TEACHER_WEIGHT_SHA256
+    model_identity:
+      policy_family: moss_tts_prism
+      architecture: MOSS-TTS-Prism
+      config_sha256: REPLACE_WITH_CONFIG_SHA256
+      modeling_sha256: REPLACE_WITH_MODELING_SHA256
+      processor_sha256: REPLACE_WITH_PROCESSOR_SHA256
+      prompt_protocol_sha256: REPLACE_WITH_PROMPT_PROTOCOL_SHA256
+      n_vq: 16
+      audio_vocab_size: 1024
+      sample_rate: 24000
+      stop_semantics: pre_frame_threshold_v1
+by_domain:
+  chinese: zh_teacher
+  english: en_teacher

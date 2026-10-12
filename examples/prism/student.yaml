@@ -1,0 +1,5 @@
+config_cls: MossTTSPrismPipelineConfig
+# slime supplies --model-path from --hf-checkpoint when starting every replica.
+model_path: /assets/prism-student
+codec_model_path: /assets/moss-audio-tokenizer-v2
+enable_rl: true

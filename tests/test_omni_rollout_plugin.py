@@ -477,6 +477,172 @@ def test_teacher_domain_hook_reuses_score_endpoint_and_rejects_unmapped_domain(m
     assert len(calls) == 1
 
 
+def named_teacher_binding():
+    binding = teacher_binding()
+    binding.pop("endpoint")
+    binding["deployment"] = "teacher_a"
+    return binding
+
+
+def named_teacher_args(binding, configuration=None):
+    return types.SimpleNamespace(
+        omni_teacher_config={"models": {"a": binding}, "by_domain": {"chinese": "a"}},
+        omni_model_name="student",
+        sglang_model_routers={"teacher_a": ("127.0.0.1", 30001)},
+        sglang_config=configuration,
+        rollout_health_check_timeout=0.2,
+    )
+
+
+def worker(url="http://worker-a", *, health="healthy", routable=True, disabled=False):
+    return dict(url=url, health_state=health, routable=routable, disabled=disabled, model=None)
+
+
+def test_named_teacher_discovers_live_workers_then_scores_directly(monkeypatch):
+    from slime.backends.sglang_utils.sglang_config import ModelConfig, SglangConfig
+
+    binding = named_teacher_binding()
+    configuration = SglangConfig(models=[ModelConfig(name="teacher_a", update_weights=False)])
+    args = named_teacher_args(binding, configuration)
+    gets, posts = [], []
+
+    async def fake_get(url, **kwargs):
+        gets.append(url)
+        if url.endswith("/workers"):
+            return {
+                "workers": [
+                    worker(),
+                    worker("http://worker-b"),
+                    worker("http://disabled", disabled=True),
+                    worker("http://dead", health="dead"),
+                ]
+            }
+        assert url in ("http://worker-a/health", "http://worker-b/health")
+        return {"running": True}
+
+    async def fake_post(url, payload, **kwargs):
+        assert url in ("http://worker-a/score_actions", "http://worker-b/score_actions")
+        posts.append(url)
+        return {"version": 1, "results": [teacher_output(payload["samples"][0], binding)]}
+
+    monkeypatch.setattr(plugin, "get", fake_get)
+    monkeypatch.setattr(plugin, "post", fake_post)
+    for _ in range(2):
+        item = plugin.parse_rollout(output(), sample(), geometry())
+        asyncio.run(plugin.score_teacher(args, item))
+        assert item.metadata["omni_teacher_deployment"] == "teacher_a"
+        assert item.metadata["omni_teacher_endpoint"] + "/score_actions" == posts[-1]
+        assert "policy_teacher_stop_logprobs" in item.multimodal_train_inputs
+    assert posts[0] == posts[1]  # Stable group/sample dispatch, no global mutable round-robin state.
+    assert gets.count("http://127.0.0.1:30001/workers") == 2
+
+
+@pytest.mark.parametrize(
+    "binding",
+    [
+        {"endpoint": "http://teacher", "deployment": "teacher_a"},
+        {},
+        {"endpoint": ""},
+    ],
+)
+def test_teacher_binding_requires_one_valid_endpoint_or_deployment(monkeypatch, binding):
+    monkeypatch.setattr(plugin, "get", lambda *args, **kwargs: pytest.fail("Invalid binding made an HTTP request"))
+    with pytest.raises(ValueError):
+        asyncio.run(plugin._teacher_endpoint(named_teacher_args(binding), sample(), binding))
+
+
+@pytest.mark.parametrize("role", ["student-name", "update-true", "inferred-student", "unconfigured", "missing-router"])
+def test_named_teacher_rejects_student_or_unconfigured_models_before_http(monkeypatch, role):
+    from slime.backends.sglang_utils.sglang_config import ModelConfig, SglangConfig
+
+    binding = named_teacher_binding()
+    configuration = SglangConfig(models=[ModelConfig(name="teacher_a", update_weights=False)])
+    args = named_teacher_args(binding, configuration)
+    if role == "student-name":
+        args.omni_model_name = "teacher_a"
+    elif role == "update-true":
+        configuration.models[0].update_weights = True
+    elif role == "inferred-student":
+        configuration.models[0].update_weights = None
+        args.hf_checkpoint = "student-checkpoint"
+        args.rollout_num_gpus_per_engine = 1
+    elif role == "unconfigured":
+        configuration.models = []
+    else:
+        args.sglang_model_routers = {}
+    monkeypatch.setattr(plugin, "get", lambda *args, **kwargs: pytest.fail("Invalid role made an HTTP request"))
+    with pytest.raises(ValueError):
+        asyncio.run(plugin._teacher_endpoint(args, sample(), binding))
+
+
+def test_named_teacher_resolves_explicit_frozen_model_from_yaml(monkeypatch, tmp_path):
+    path = tmp_path / "deployments.yaml"
+    path.write_text("sglang:\n- name: teacher_a\n  model_path: frozen-checkpoint\n  update_weights: false\n")
+    binding = named_teacher_binding()
+    args = named_teacher_args(binding, str(path))
+
+    async def fake_get(url, **kwargs):
+        return {"workers": [worker()]} if url.endswith("/workers") else {"running": True}
+
+    monkeypatch.setattr(plugin, "get", fake_get)
+    assert asyncio.run(plugin._teacher_endpoint(args, sample(), binding)) == "http://worker-a"
+
+
+@pytest.mark.parametrize(
+    "workers",
+    [[], [worker(health="unhealthy")], [worker(routable=False)], [worker(disabled=True)], [worker(routable=1)]],
+)
+def test_named_teacher_rejects_router_workers_that_are_not_healthy_and_routable(monkeypatch, workers):
+    async def fake_get(url, **kwargs):
+        assert url.endswith("/workers")
+        return {"workers": workers}
+
+    monkeypatch.setattr(plugin, "get", fake_get)
+    binding = named_teacher_binding()
+    with pytest.raises(ValueError, match="no healthy routable"):
+        asyncio.run(plugin._teacher_endpoint(named_teacher_args(binding), sample(), binding))
+
+
+def test_named_teacher_probes_registration_health_and_uses_another_live_replica(monkeypatch):
+    probes = []
+
+    async def fake_get(url, **kwargs):
+        if url.endswith("/workers"):
+            return {"workers": [worker(), worker("http://worker-b")]}
+        probes.append(url)
+        # Make the first selected registered worker stale, then accept the other.
+        return {"running": len(probes) > 1}
+
+    monkeypatch.setattr(plugin, "get", fake_get)
+    binding = named_teacher_binding()
+    selected = asyncio.run(plugin._teacher_endpoint(named_teacher_args(binding), sample(), binding))
+    assert len(probes) == 2 and selected + "/health" == probes[-1]
+
+
+@pytest.mark.parametrize("mismatch", ["identity", "checksum"])
+def test_named_teacher_keeps_frozen_identity_and_weight_pins_strict(monkeypatch, mismatch):
+    binding = named_teacher_binding()
+    args = named_teacher_args(binding)
+
+    async def fake_get(url, **kwargs):
+        return {"workers": [worker()]} if url.endswith("/workers") else {"running": True}
+
+    async def fake_post(url, payload, **kwargs):
+        result = teacher_output(payload["samples"][0], binding)
+        if mismatch == "identity":
+            result["model_identity"] = {**result["model_identity"], "config_sha256": "wrong"}
+        else:
+            result["teacher_weight_sha256"] = "b" * 64
+        return {"version": 1, "results": [result]}
+
+    monkeypatch.setattr(plugin, "get", fake_get)
+    monkeypatch.setattr(plugin, "post", fake_post)
+    item = plugin.parse_rollout(output(), sample(), geometry())
+    with pytest.raises(ValueError, match="identity, input hash, checksum"):
+        asyncio.run(plugin.score_teacher(args, item))
+    assert "policy_teacher_stop_logprobs" not in item.multimodal_train_inputs
+
+
 def test_cancellation_drains_the_owned_request_before_returning(monkeypatch):
     state = []
 

@@ -23,7 +23,7 @@ from typing import Any
 
 import torch
 
-from slime.utils.http_utils import post
+from slime.utils.http_utils import _wrap_ipv6, get, post
 from slime.utils.types import Sample
 
 # mossLite.models.MossTTSPrism.run_policy: PrismItemKind / PrismAudioRole.
@@ -647,6 +647,89 @@ def attach_teacher_scores(sample, request, result, binding):
     return sample
 
 
+def _validate_frozen_deployment(args, deployment):
+    """Reject trainable named models before discovering any teacher worker."""
+    if not isinstance(deployment, str) or not deployment:
+        raise ValueError("Prism teacher deployment must be a nonempty model name")
+    if deployment == getattr(args, "omni_model_name", "student"):
+        raise ValueError("A Prism teacher deployment cannot be the student model")
+    configuration = getattr(args, "sglang_config", None)
+    if configuration is None:
+        # External/pre-resolved deployments may expose only their router map.
+        # Pinned response identity and checksum remain mandatory below.
+        return
+    if isinstance(configuration, (str, Path)):
+        from slime.backends.sglang_utils.sglang_config import SglangConfig
+
+        configuration = SglangConfig.from_yaml(str(configuration))
+    models = getattr(configuration, "models", None)
+    if models is None:
+        raise ValueError("Prism teacher requires a model-aware sglang_config")
+    matches = [model for model in models if model.name == deployment]
+    if len(matches) != 1:
+        raise ValueError(f"Prism teacher deployment {deployment!r} must name one configured model")
+    model = matches[0]
+    if model.update_weights is None:
+        model.resolve(args)
+    if model.update_weights is not False:
+        raise ValueError(f"Prism teacher deployment {deployment!r} must have update_weights=false")
+
+
+async def _teacher_endpoint(args, sample, binding):
+    """Discover a named teacher's live worker; the router has no score API."""
+    selected = [name for name in ("endpoint", "deployment") if binding.get(name) is not None]
+    if len(selected) != 1:
+        raise ValueError("Prism teacher binding must specify exactly one of endpoint or deployment")
+    if selected[0] == "endpoint":
+        endpoint = binding["endpoint"]
+        if not isinstance(endpoint, str) or not endpoint.startswith(("http://", "https://")):
+            raise ValueError("Prism teacher endpoint must be HTTP(S)")
+        return endpoint.rstrip("/")
+    deployment = binding["deployment"]
+    _validate_frozen_deployment(args, deployment)
+    routers = getattr(args, "sglang_model_routers", None) or {}
+    if deployment not in routers:
+        raise ValueError(f"Prism teacher deployment {deployment!r} has no registered router")
+    address = routers[deployment]
+    if not isinstance(address, (tuple, list)) or len(address) != 2:
+        raise ValueError("Named Omni model router must provide its (host, port)")
+    host, port = address
+    port = _integer(port, "teacher router port", minimum=1)
+    timeout = float(getattr(args, "rollout_health_check_timeout", 10.0))
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("Teacher health timeout must be finite and positive")
+    router = f"http://{_wrap_ipv6(str(host))}:{port}"
+    body = await asyncio.wait_for(get(router + "/workers", timeout=timeout), timeout=timeout)
+    if not isinstance(body, dict) or not isinstance(body.get("workers"), list):
+        raise ValueError("Omni teacher router /workers returned an invalid worker list")
+    workers = sorted(
+        {
+            worker["url"].rstrip("/")
+            for worker in body["workers"]
+            if isinstance(worker, dict)
+            and worker.get("health_state") == "healthy"
+            and worker.get("routable") is True
+            and worker.get("disabled") is False
+            and worker.get("model") in (None, deployment)
+            and isinstance(worker.get("url"), str)
+            and worker["url"].startswith(("http://", "https://"))
+        }
+    )
+    if not workers:
+        raise ValueError(f"Omni teacher deployment {deployment!r} has no healthy routable workers")
+    digest = hashlib.sha256(json.dumps([sample.group_index, sample.index]).encode()).digest()
+    start = int.from_bytes(digest[:8], "little") % len(workers)
+    for offset in range(len(workers)):
+        worker = workers[(start + offset) % len(workers)]
+        try:
+            health = await asyncio.wait_for(get(worker + "/health", timeout=timeout), timeout=timeout)
+        except Exception:
+            continue
+        if isinstance(health, dict) and health.get("running") is True:
+            return worker
+    raise ValueError(f"Omni teacher deployment {deployment!r} has no reachable running workers")
+
+
 async def score_teacher(args, sample, **kwargs):
     """Per-sample hook: route an explicit domain to one frozen Prism teacher."""
     if not getattr(args, "omni_teacher_config", None):
@@ -658,9 +741,9 @@ async def score_teacher(args, sample, **kwargs):
     if key not in models:
         raise ValueError(f"Unmapped Prism teacher domain {domain!r}")
     binding = models[key]
-    endpoint = binding.get("endpoint", "").rstrip("/")
-    if not endpoint.startswith(("http://", "https://")):
-        raise ValueError("Prism teacher endpoint must be HTTP(S)")
+    if not isinstance(binding, dict):
+        raise ValueError("Prism teacher binding must be an object")
+    endpoint = await _teacher_endpoint(args, sample, binding)
     token_name = binding.get("auth_token_env")
     token = os.environ.get(token_name) if token_name else None
     if token_name and not token:
@@ -683,4 +766,7 @@ async def score_teacher(args, sample, **kwargs):
         raise ValueError("Prism teacher response version or result count differs")
     attach_teacher_scores(sample, request, response["results"][0], binding)
     sample.metadata["omni_teacher_key"] = key
+    sample.metadata["omni_teacher_endpoint"] = endpoint
+    if "deployment" in binding:
+        sample.metadata["omni_teacher_deployment"] = binding["deployment"]
     return sample

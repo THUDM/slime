@@ -1,0 +1,3 @@
+config_cls: MossTTSPrismScorePipelineConfig
+# Override with --model-path when launching each frozen teacher.
+model_path: /assets/prism-teacher
