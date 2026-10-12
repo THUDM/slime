@@ -1,5 +1,47 @@
 # Prism 首轮工程验收
 
+## 单卡共卡训练与 tensor IPC 验收（2026-10-12）
+
+Prism 1.7B v0.4.0 native iteration 100000 在一张 H200 上通过原 `train.py` 完成了
+两轮 GRPO，并从完整 checkpoint 恢复后继续第三轮。learner 与完整 Omni pipeline
+使用同一个 Ray GPU bundle；每个阶段均核验只有一张可见 GPU，启用 `colocate`、
+`offload_train` 和 `offload_rollout`。运行采用明确标注的 ±1 工程奖励，每轮一个
+prompt group、四条轨迹，每条八帧，并实际输出 WAV。
+
+| 阶段 | RL rollout | optimizer / scheduler | 学生发布版本 | 梯度范数 | WAV |
+| --- | --- | --- | --- | --- | --- |
+| 首次初始化与连续训练 | 0、1 | `[0,0]` → `[2,2]`；0 → 8 | 1、2、3 | 11.7136135、11.6547775 | 8 |
+| 标准完整恢复 | 2 | `[2,2]` → `[3,3]`；8 → 12 | 3、4 | 11.8521719 | 4 |
+
+每次发布经 `UpdateWeightFromTensor` 发送 68 个 SGLang flattened buckets，五次发布
+共确认 340 次 tensor 更新。接收端在确认前同步 CUDA，逐桶保持暂停，所有权重安装完成
+且 KV/graph 内存恢复后才开放生成。首次与后续发布在本次短轨迹运行中约需 0.7–0.8 秒。
+
+两秒间隔的 NVML 采样记录中，AR/preprocessing 进程最大观测值为 96,764 MiB，
+offload 窗口内为 950–1,048 MiB；vocoder 最大观测值为 2,866 MiB，offload 时为
+610–720 MiB。learner 最大观测值为 58,926 MiB。这些是该测试配置的观测值。
+
+当前共卡使用 eager prefill、eager vocoder 与 AR decode CUDA graph。SGLang 的
+breakable prefill graph 不支持 memory saver，因此 adapter 显式禁用该 prefill 后端。
+推理进程与 learner 都在可选库导入后选择匹配的 preload allocator；独立 GPU IPC
+探针复现了错误 allocator 模式的失败，并验证修复后的跨进程 tensor 逐元素一致。
+
+大文件与证据仍位于本文下述 QB 根目录：
+
+- `colocate-005/fresh/`：两轮训练、`iter_0000000` / `iter_0000001`、debug dump 和音频。
+- `colocate-005/memory-observations.json`：进程显存采样摘要。
+- `colocate-006/resume/`：恢复后的训练、`iter_0000002`、debug dump 和音频。
+- `colocate-006/verification.json`：联合通过报告，分别记录两个阶段的源码与产物来源。
+
+fresh 的 slime source 为 `deb731cae89296b5d857f1039fe4d0631d304ea2`，Omni source 为
+`032eda473bf6089bfcf0562fa19089e1217b5217`。resume 使用同一 slime source，Omni source
+为 `bb73d42c16f246ff493e676b0d9242b61f9d89f3`。首次同容器立即恢复时，旧 HTTP 服务已
+正常退出，但端口探测因 `TIME_WAIT` 误拒绝。修复探测与 listener 的复用语义后，从原
+已保存 checkpoint 重新验证恢复；原失败日志保留，联合报告明确区分两次作业。
+
+该验收覆盖共卡资源、真实 IPC、音频生成、原生训练、完整保存与恢复。未评估真实
+WER/SIM/JudgeCLAP 收益、多 learner DP、长语音或严格跨引擎概率一致性。
+
 验收使用用户指定的 `CQ-科研驾驶舱` 工作空间、H200 GPU 和 `voxrl:editable-v1-slim` 镜像。学生资产是 Prism 1.7B v0.4.0 native iteration 100000；固定路径及训练/Omni 解释器合同见 [INSPIRE.md](../../INSPIRE.md)。实际 learner 为单卡，TP=PP=CP=DP=1。结果保留在共享 QB 盘，完整 checkpoint、原始响应和 debug dump 没有写入 Git。
 
 验证目标是原 `train.py` 的训练、保存、恢复与权重发布闭环。严格跨引擎概率一致性、语音质量提升和真实奖励模型联合验收独立处理。

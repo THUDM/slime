@@ -26,3 +26,13 @@ Prism learner 使用 Megatron 原生 TE layer spec 与 `TEDotProductAttention`�
 GPU 验收源码使用 `git archive <完整 SHA>` 写入各验收入口独立的 `source/<SHA>/` 子目录，真实绝对路径由 source manifest 记录。每次 workload 使用新的结果目录，保留完整响应、逐动作分数、发布版本和清理结果；运行中的 snapshot 不修改。临时 workload 名称与结果属于验收记录，不作为永久服务地址。
 
 本项目后续 GPU 验收的大文件输出放在 `/inspire/qb-ilm2/project/cq-scientific-cooperation-zone/public/kyu/vox-slime-validation/prism17b-v04/`。其中 `ray-attempt-005/checkpoint/` 是使用明确标注的工程奖励产生的完整 RL checkpoint，作为 optimizer 与断点恢复的验证 fixture；它不代表语音质量训练结果。CPU 工具、HF 制品与代码入口的原共享路径保留。
+
+共卡运行使用同一镜像与训练 Python。经过验证的 Omni 源码解释器入口为
+`/inspire/ssd/project/cq-scientific-cooperation-zone/public/kyu/src/vox/artifacts/prism17b-v04/gpu-validation/colocate-smoke/attempt-006/omni-python`；
+该 wrapper 在原 `/opt/venvs/core/bin/python` 前固定 Omni 源码路径，源码 SHA 记录在同目录
+`sources.json`。设置 `OMNI_PYTHON` 指向此入口、`COLOCATE=1`，单卡 Ray 使用一个 GPU，
+并设置 `ACTOR_GPUS_PER_NODE=ROLLOUT_GPUS=GPUS_PER_NODE=1`。
+
+QB 根目录中的 `colocate-005/fresh/checkpoint/` 与 `colocate-006/resume/checkpoint/`
+是工程奖励下的共卡完整 RL checkpoint fixture；联合报告为 `colocate-006/verification.json`。
+端口、Ray head 和平台 workload 均为临时资源，后续运行重新分配。
