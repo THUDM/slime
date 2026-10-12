@@ -1,0 +1,279 @@
+"""A read-only numerical oracle hook for the TP1 Prism GPU smoke.
+
+Run ``diagnose`` as --before-trajectory-hook with a saved --trajectory-json.
+The hook compares the native model, functional projections of its captured
+head inputs, and the user's converted Hugging Face model at the same BF16
+dtype. It never updates weights, optimizer state, action masks or tolerances.
+Only this user-provided artifact is loaded with trust_remote_code=True.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import torch
+import torch.nn.functional as F
+
+
+def canonical_rows(value: torch.Tensor, *, native: bool) -> torch.Tensor:
+    """Convert [T,1,H] native state or [1,T,H] HF state to [1,T,H]."""
+    if value.ndim != 3 or value.shape[1 if native else 0] != 1:
+        raise ValueError("the numerical diagnostic requires one packed TP1 sample")
+    return value.transpose(0, 1) if native else value
+
+
+def selected_scores(rvq_logits, stop_logits, codes, stops):
+    """Return the native Q-code-plus-stop layout from either model's logits."""
+    if rvq_logits.ndim != 4 or tuple(rvq_logits.shape[:-1]) != tuple(codes.shape):
+        raise ValueError("RVQ logits and successor codes must have shape [1,T,Q,V] / [1,T,Q]")
+    if tuple(stop_logits.shape) != (*stops.shape, 2) or tuple(stops.shape) != tuple(codes.shape[:2]):
+        raise ValueError("stop logits/actions must align with the chronological rows")
+    code_scores = rvq_logits.float().log_softmax(-1).gather(-1, codes.unsqueeze(-1)).squeeze(-1)
+    stop_scores = stop_logits.float().log_softmax(-1).gather(-1, stops.unsqueeze(-1)).squeeze(-1)
+    return torch.cat((code_scores, stop_scores.unsqueeze(-1)), dim=-1)
+
+
+def differences(actual, expected, mask=None):
+    if actual.shape != expected.shape:
+        raise ValueError(f"diagnostic shapes differ: {actual.shape} versus {expected.shape}")
+    delta = (actual.detach().float() - expected.detach().float()).abs()
+    if mask is not None:
+        delta = delta[mask]
+    if not delta.numel():
+        return {"count": 0, "max_abs_diff": None, "mean_abs_diff": None}
+    return {
+        "count": delta.numel(),
+        "max_abs_diff": delta.max().item(),
+        "mean_abs_diff": delta.mean().item(),
+    }
+
+
+def score_differences(actual, expected, prepared):
+    q = prepared["code_mask"].shape[-1]
+    if actual.shape[-1] != q + 1:
+        raise ValueError("unexpected native selected-score layout")
+    code_mask, stop_mask = prepared["code_mask"], prepared["stop_mask"]
+    report = {
+        "code": differences(actual[..., :q], expected[..., :q], code_mask),
+        "stop": differences(actual[..., q], expected[..., q], stop_mask),
+        "per_channel": [
+            differences(actual[..., channel], expected[..., channel], code_mask[..., channel]) for channel in range(q)
+        ],
+    }
+    return report
+
+
+def oracle_inputs(batch, spec):
+    """Use exactly the native padded time dimension with padding attention hidden."""
+    from slime_plugins.models.prism import prepare_policy_inputs
+
+    if len(batch["total_lengths"]) != 1:
+        raise ValueError("HF oracle comparisons currently require one trajectory")
+    mm = batch["multimodal_train_inputs"]
+    prepared = prepare_policy_inputs(
+        batch["tokens"],
+        audio_codes=mm["audio_codes"],
+        item_kind=mm["item_kind"],
+        audio_role=mm["audio_role"],
+        successor_audio_codes=mm["successor_audio_codes"],
+        successor_audio_mask=mm["successor_audio_mask"],
+        target_history_retention_mask=mm.get("target_history_retention_mask"),
+        policy_code_mask=mm["policy_code_mask"],
+        policy_stop_mask=mm["policy_stop_mask"],
+        policy_stop_actions=mm["policy_stop_actions"],
+        n_vq=spec.topology.n_vq,
+        speech_vocab_size=spec.speech_vocab_size,
+        text_vocab_size=spec.text_vocab_size,
+        text_pad_idx=spec.text_pad_idx,
+        audio_start_token_id=spec.audio_start_token_id,
+        cu_seqlens=batch["packed_seq_params"].cu_seqlens_q,
+    )
+    time = batch["tokens"].shape[1]
+    length = int(batch["total_lengths"][0])
+    attention = torch.arange(time, device=batch["tokens"].device).unsqueeze(0) < length
+    inputs = {
+        "input_ids": prepared["tokens"],
+        "attention_mask": attention,
+        "position_ids": torch.arange(time, device=attention.device).unsqueeze(0),
+        "item_kind": prepared["item_kind"],
+        "audio_role": prepared["audio_role"],
+        "target_history_retention_mask": prepared["retention"],
+        "successor_audio_mask": prepared["successor_mask"],
+        "successor_audio_codes": prepared["successor_codes"],
+        "use_cache": False,
+        "return_dict": True,
+    }
+    if "loop_block_prefix_counts" in mm:
+        inputs["loop_block_prefix_counts"] = mm["loop_block_prefix_counts"]
+    return inputs, prepared
+
+
+def _capture(model, *, native):
+    captures, handles = {"norms": {}, "heads": {}, "stop": {}}, []
+
+    def norm(index):
+        def hook(_module, inputs, output):
+            captures["norms"][str(index)] = {
+                "raw": canonical_rows(inputs[0].detach().clone(), native=native),
+                "normalized": canonical_rows(output.detach().clone(), native=native),
+            }
+
+        return hook
+
+    def head(index, *, stop=False):
+        def hook(_module, inputs, output):
+            logits = output[0] if isinstance(output, tuple) else output
+            value = {
+                "input": canonical_rows(inputs[0].detach().clone(), native=native),
+                "logits": canonical_rows(logits.detach().clone(), native=native),
+            }
+            if stop:
+                captures["stop"] = value
+            else:
+                captures["heads"][str(index)] = value
+
+        return hook
+
+    for index, module in enumerate(model.prediction_norms):
+        handles.append(module.register_forward_hook(norm(index)))
+    for index, module in enumerate(model.audio_lm_heads):
+        handles.append(module.register_forward_hook(head(index)))
+    handles.append(model.stop_head.register_forward_hook(head(0, stop=True)))
+    return captures, handles
+
+
+def _cpu(value):
+    if isinstance(value, torch.Tensor):
+        return value.detach().cpu()
+    if isinstance(value, dict):
+        return {key: _cpu(item) for key, item in value.items()}
+    return value
+
+
+@torch.no_grad()
+def diagnose(context):
+    """Smoke before-hook; GPU execution and the HF artifact are explicit inputs."""
+    from scripts.test_prism_gpu import forward, input_samples, make_batch
+    from transformers import AutoModel
+
+    from slime_plugins.models.prism import read_prism_spec
+
+    args, wrapper = context["args"], context["model"]
+    if not args.trajectory_json or args.omni_url:
+        raise ValueError("the oracle hook requires an immutable saved Omni trajectory")
+    model = wrapper
+    while hasattr(model, "module"):
+        model = model.module
+    spec = read_prism_spec(args.hf_checkpoint)
+    if model.config.tensor_model_parallel_size != 1:
+        raise ValueError("the functional head oracle requires TP=1")
+    output = Path(context["artifact_dir"])
+    samples, _ = input_samples(args, spec, output)
+    _, batch = make_batch(samples)
+    inputs, prepared = oracle_inputs(batch, spec)
+    rows = prepared["code_mask"].any(-1)
+    device = batch["tokens"].device
+    previous_training = wrapper.training
+    native, native_handles = _capture(model, native=True)
+    hf_handles, oracle = [], None
+    try:
+        wrapper.eval()
+        with torch.no_grad():
+            native_scores = forward(wrapper, batch)
+        for handle in native_handles:
+            handle.remove()
+        native_handles.clear()
+
+        # Same stored weights and same captured hidden input isolate the
+        # projection kernel/rounding from all backbone and feedback effects.
+        torch_bf16 = torch.stack(
+            [F.linear(native["heads"][str(q)]["input"], head.weight) for q, head in enumerate(model.audio_lm_heads)],
+            dim=2,
+        )
+        precision = torch.get_float32_matmul_precision()
+        try:
+            torch.set_float32_matmul_precision("highest")
+            torch_fp32 = torch.stack(
+                [
+                    F.linear(native["heads"][str(q)]["input"].float(), head.weight.float())
+                    for q, head in enumerate(model.audio_lm_heads)
+                ],
+                dim=2,
+            )
+        finally:
+            torch.set_float32_matmul_precision(precision)
+        stop_logits = native["stop"]["logits"]
+        bf16_scores = selected_scores(torch_bf16, stop_logits, prepared["successor_codes"], prepared["stop_actions"])
+        fp32_scores = selected_scores(torch_fp32, stop_logits, prepared["successor_codes"], prepared["stop_actions"])
+
+        # Trust is scoped to the converted mossLite artifact supplied by the
+        # user. This hook never fetches another model or substitutes weights.
+        oracle = (
+            AutoModel.from_pretrained(
+                args.hf_checkpoint,
+                trust_remote_code=True,
+                dtype=getattr(torch, spec.dtype),
+                attn_implementation="sdpa",
+            )
+            .to(device)
+            .eval()
+        )
+        hf, hf_handles = _capture(oracle, native=False)
+        with torch.no_grad():
+            hf_output = oracle(**inputs)
+        hf_scores = selected_scores(
+            hf_output.rvq_logits,
+            hf_output.stop_logits,
+            prepared["successor_codes"],
+            prepared["stop_actions"],
+        )
+        omni_codes = torch.zeros_like(prepared["successor_codes"], dtype=torch.float32)
+        omni_stops = torch.zeros_like(prepared["stop_actions"], dtype=torch.float32)
+        sample_mm = samples[0].multimodal_train_inputs
+        real_length = int(batch["total_lengths"][0])
+        omni_codes[:, :real_length] = sample_mm["policy_rollout_code_logprobs"].to(device)
+        omni_stops[:, :real_length] = sample_mm["policy_rollout_stop_logprobs"].to(device)
+        omni_scores = torch.cat((omni_codes, omni_stops.unsqueeze(-1)), dim=-1)
+        native_logits = torch.stack([native["heads"][str(q)]["logits"] for q in range(spec.topology.n_vq)], dim=2)
+        report = {
+            "dtype": spec.dtype,
+            "time_rows": inputs["input_ids"].shape[1],
+            "real_rows": real_length,
+            "hf_attention_implementation": oracle.config.language_config._attn_implementation,
+            "native_vs_omni": score_differences(native_scores, omni_scores, prepared),
+            "torch_bf16_head_vs_native": score_differences(bf16_scores, native_scores, prepared),
+            "torch_fp32_head_vs_native": score_differences(fp32_scores, native_scores, prepared),
+            "torch_fp32_head_vs_omni": score_differences(fp32_scores, omni_scores, prepared),
+            "torch_bf16_logits_vs_native": differences(torch_bf16, native_logits, rows),
+            "hf_bf16_vs_native": score_differences(hf_scores, native_scores, prepared),
+            "hf_bf16_vs_omni": score_differences(hf_scores, omni_scores, prepared),
+            "sites": {
+                key: {
+                    name: differences(native["norms"][key][name], hf["norms"][key][name], rows)
+                    for name in ("raw", "normalized")
+                }
+                for key in native["norms"]
+            },
+        }
+        (output / "numerical-diagnostic.json").write_text(json.dumps(report, indent=2))
+        torch.save(
+            _cpu(
+                {
+                    "native": native,
+                    "hf": hf,
+                    "native_scores": native_scores,
+                    "hf_scores": hf_scores,
+                    "torch_bf16_head_scores": bf16_scores,
+                    "torch_fp32_head_scores": fp32_scores,
+                    "prepared": prepared,
+                }
+            ),
+            output / "numerical-diagnostic.pt",
+        )
+        return report
+    finally:
+        for handle in [*native_handles, *hf_handles]:
+            handle.remove()
+        wrapper.train(previous_training)
+        del oracle

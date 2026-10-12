@@ -328,6 +328,9 @@ class OmniEngine(RayActor):
         self.pending_version = None
         self.paused = False
         self.set_admission_disabled(False)
+        logger.info(
+            "Omni replica rank=%s committed_version=%s url=%s", self.rank, self.committed_version, self.get_url()
+        )
         return result
 
     def get_weight_version(self) -> str | None:
