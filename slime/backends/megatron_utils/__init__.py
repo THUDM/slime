@@ -1,8 +1,13 @@
 import logging
 
+import numpy as np
 import torch
 
 from slime.utils import accelerator
+
+# Megatron checkpoint code can use the alias removed in NumPy 2.
+if not hasattr(np, "product"):
+    np.product = np.prod
 
 accelerator.initialize_accelerator()
 
