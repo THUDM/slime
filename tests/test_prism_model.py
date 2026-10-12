@@ -1,5 +1,9 @@
 """CPU probability/causality contracts; these do not claim TE or NCCL validation."""
 
+import ast
+import inspect
+from dataclasses import dataclass
+from textwrap import dedent
 from types import SimpleNamespace
 
 import pytest
@@ -345,3 +349,71 @@ def test_checkpoint_selection_accepts_run_without_inspecting_training_state(tmp_
     selected, manifest = prism.select_native_checkpoint(tmp_path)
     assert selected == component / "model"
     assert manifest["iteration"] == 20
+
+
+@pytest.mark.parametrize("backend", ["auto", "flash", "fused"])
+def test_decoder_construction_retains_native_te_attention_for_every_backend(monkeypatch, backend):
+    """Exercise the real constructor's spec boundary without a CUDA dependency."""
+
+    class TEDotProductAttention:
+        pass
+
+    @dataclass
+    class Spec:
+        module: object
+        submodules: object
+
+    @dataclass
+    class AttentionSubmodules:
+        core_attention: object
+
+    @dataclass
+    class LayerSubmodules:
+        pre_mlp_layernorm: object = None
+        mlp: object = None
+        mlp_bda: object = None
+        sharded_state_dict_keys_map: object = None
+        self_attention: object = None
+
+    @dataclass
+    class BlockSubmodules:
+        layer_specs: list
+        layer_norm: object
+
+    core = TEDotProductAttention
+    attention = Spec(object(), AttentionSubmodules(core))
+    native_spec = Spec(object(), LayerSubmodules(object(), object(), object(), {"norm": "weight"}, attention))
+    norm_impl = object()
+    monkeypatch.setattr(prism, "TransformerLayerSubmodules", LayerSubmodules, raising=False)
+    monkeypatch.setattr(prism, "TransformerBlockSubmodules", BlockSubmodules, raising=False)
+    monkeypatch.setattr(prism, "LayerNormImpl", norm_impl, raising=False)
+    # This enum boundary also exercises an older attention override if one
+    # accidentally returns: auto/flash must preserve the incoming TE object.
+    choices = SimpleNamespace(auto="auto", flash="flash", fused="fused")
+    monkeypatch.setattr(prism, "AttnBackend", choices, raising=False)
+    constructor = ast.parse(dedent(inspect.getsource(prism.MossTTSPrismModel.__init__)))
+    boundary = next(
+        node
+        for node in ast.walk(constructor)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Attribute) and target.attr == "decoder" for target in node.targets)
+    )
+    namespace = {
+        **vars(prism),
+        "self": SimpleNamespace(prism_topology=SimpleNamespace(prism_mlp_only_layers=(1,))),
+        "config": SimpleNamespace(num_layers=3, attention_backend=backend),
+        "transformer_layer_spec": native_spec,
+        "TransformerBlock": lambda **kwargs: SimpleNamespace(**kwargs),
+    }
+    isolated = ast.Module(body=[boundary], type_ignores=[])
+    exec(compile(ast.fix_missing_locations(isolated), "<Prism decoder construction>", "exec"), namespace)
+    block = namespace["self"].decoder.spec
+    assert block.layer_norm is norm_impl
+    assert block.layer_specs[0] is native_spec
+    assert block.layer_specs[2] is native_spec
+    assert block.layer_specs[0].submodules.self_attention.submodules.core_attention is core
+    assert block.layer_specs[2].submodules.self_attention.submodules.core_attention is core
+    assert block.layer_specs[1].module is prism.PrismMLPOnlyLayer
+    assert block.layer_specs[1].submodules.self_attention is None
+    assert block.layer_specs[1].submodules.mlp is native_spec.submodules.mlp
+    assert native_spec.submodules.self_attention is attention

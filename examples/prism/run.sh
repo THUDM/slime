@@ -110,7 +110,6 @@ TASK_ARGS=(
   --transformer-impl transformer_engine
   --attention-dropout 0
   --hidden-dropout 0
-  --attention-backend flash
   --accumulate-allreduce-grads-in-fp32
   --recompute-granularity full
   --recompute-method uniform

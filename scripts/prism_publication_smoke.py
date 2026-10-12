@@ -184,7 +184,7 @@ def publication(engines, context):
         after_update_hook="scripts.prism_publication_smoke.after_update",
     )
     try:
-        _learner = run(args, ["--attention-backend", "flash"])
+        _learner = run(args, [])
         return {**_learner["report"]["after_update"], "learner": _learner["report"]}
     except BaseException:
         _cleanup()

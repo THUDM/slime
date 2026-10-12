@@ -37,7 +37,7 @@ try:
     from megatron.core.models.common.language_module.language_module import LanguageModule
     from megatron.core.packed_seq_params import PackedSeqParams
     from megatron.core.transformer import TransformerConfig
-    from megatron.core.transformer.enums import AttnBackend, AttnMaskType, ModelType
+    from megatron.core.transformer.enums import ModelType
     from megatron.core.transformer.module import MegatronModule
     from megatron.core.transformer.spec_utils import ModuleSpec, build_module
     from megatron.core.transformer.transformer_block import (
@@ -52,7 +52,6 @@ except ImportError as error:
     LanguageModule = LanguageModelEmbedding = TransformerLayer = nn.Module
     TransformerConfig = object
     tensor_parallel = SimpleNamespace(ColumnParallelLinear=nn.Module)
-    AttnMaskType = SimpleNamespace(causal="causal", padding_causal="padding_causal")
 
 
 def _require_megatron():
@@ -809,88 +808,6 @@ class EmbeddingHead(tensor_parallel.ColumnParallelLinear):
         return super().forward(input_, **kwargs)
 
 
-class FlashAttention(nn.Module):
-    """Call FA4 with its native window and packed-sequence API."""
-
-    def __init__(self, config, layer_number, softmax_scale=None, **_kwargs):
-        super().__init__()
-        if config.attention_dropout != 0.0:
-            raise ValueError("FlashAttention 4 requires attention_dropout=0")
-        self.softmax_scale = config.kv_channels**-0.5 if softmax_scale is None else softmax_scale
-        # FA4 already computes softmax in FP32; no FP16 intermediate rescaling.
-        self.window = (
-            tuple(None if side < 0 else side for side in config.window_size)
-            if config.window_size is not None
-            else (None, None)
-        )
-        self.deterministic = config.deterministic_mode
-
-    def get_extra_state(self):
-        """Keep the attention checkpoint slot; this kernel has no auxiliary state."""
-        return torch.empty(0, dtype=torch.uint8)
-
-    def set_extra_state(self, state):
-        """The attention checkpoint slot carries no parameters or runtime state."""
-        if not (isinstance(state, torch.Tensor) and state.dtype == torch.uint8 and state.shape == (0,)):
-            raise ValueError("FlashAttention 4 checkpoint extra state must be empty uint8")
-
-    def forward(
-        self,
-        query,
-        key,
-        value,
-        attention_mask,
-        attn_mask_type=AttnMaskType.causal,
-        attention_bias=None,
-        packed_seq_params=None,
-    ):
-        from flash_attn.cute import flash_attn_func, flash_attn_varlen_func
-
-        kwargs = dict(
-            softmax_scale=self.softmax_scale,
-            causal=attn_mask_type in (AttnMaskType.causal, AttnMaskType.padding_causal),
-            window_size=self.window,
-            deterministic=self.deterministic,
-        )
-        if packed_seq_params is not None:
-            output, _ = flash_attn_varlen_func(
-                query,
-                key,
-                value,
-                cu_seqlens_q=packed_seq_params.cu_seqlens_q,
-                cu_seqlens_k=packed_seq_params.cu_seqlens_kv,
-                max_seqlen_q=packed_seq_params.max_seqlen_q,
-                max_seqlen_k=packed_seq_params.max_seqlen_kv,
-                **kwargs,
-            )
-        else:
-            output, _ = flash_attn_func(
-                query.transpose(0, 1),
-                key.transpose(0, 1),
-                value.transpose(0, 1),
-                **kwargs,
-            )
-            output = output.transpose(0, 1)
-        return output.flatten(-2)
-
-
-def attention_layer_spec(config, layer_spec):
-    """Select the same native flash kernel for all three architectures."""
-    if config.attention_backend not in (AttnBackend.flash, AttnBackend.auto):
-        return layer_spec
-    attention = layer_spec.submodules.self_attention
-    return replace(
-        layer_spec,
-        submodules=replace(
-            layer_spec.submodules,
-            self_attention=replace(
-                attention,
-                submodules=replace(attention.submodules, core_attention=FlashAttention),
-            ),
-        ),
-    )
-
-
 class PrismMLPOnlyLayer(TransformerLayer):
     """Remove attention while retaining the native pre-norm MLP and residual."""
 
@@ -1150,7 +1067,7 @@ class MossTTSPrismModel(LanguageModule):
         self.decoder = TransformerBlock(
             config=config,
             spec=prism_block_spec(
-                attention_layer_spec(config, transformer_layer_spec),
+                transformer_layer_spec,
                 num_layers=config.num_layers,
                 mlp_only_layers=self.prism_topology.prism_mlp_only_layers,
             ),
