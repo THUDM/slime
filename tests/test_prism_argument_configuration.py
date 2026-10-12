@@ -51,6 +51,7 @@ def _load_backend(monkeypatch, argv, validate=None):
             "num-attention-heads",
             "kv-channels",
             "num-query-groups",
+            "padded-vocab-size",
         ):
             parser.add_argument(f"--{name}", type=int)
         for name, default in (("seq-length", None), ("max-position-embeddings", None), ("vocab-size", None)):
@@ -59,14 +60,24 @@ def _load_backend(monkeypatch, argv, validate=None):
         parser.add_argument("--layernorm-epsilon", type=float, default=1e-5)
         parser.add_argument("--attention-dropout", type=float, default=0.1)
         parser.add_argument("--hidden-dropout", type=float, default=0.1)
+        parser.add_argument("--rotary-percent", type=float, default=1.0)
+        parser.add_argument("--normalization", default="LayerNorm")
+        parser.add_argument("--position-embedding-type", default="learned_absolute")
+        parser.add_argument("--qk-layernorm", action="store_true")
+        parser.add_argument("--swiglu", action="store_true")
+        parser.add_argument("--group-query-attention", action="store_true")
+        parser.add_argument("--untie-embeddings-and-output-weights", action="store_true")
+        parser.add_argument("--disable-bias-linear", dest="add_bias_linear", action="store_false", default=True)
+        parser.add_argument("--pretrained-checkpoint")
+        parser.add_argument("--ckpt-step", type=int)
         parser.add_argument("--fp16", action="store_true")
         parser.add_argument("--tokenizer-model")
         parser.add_argument("--tokenizer-type")
         parser.add_argument("--context-parallel-size", type=int, default=1)
         parser.add_argument("--pipeline-model-parallel-size", type=int, default=1)
         parser.set_defaults(
-            position_embedding_type="learned_absolute",
             multi_latent_attention=False,
+            add_qkv_bias=False,
             rope_type=None,
             decoder_first_pipeline_num_layers=None,
             decoder_last_pipeline_num_layers=None,
@@ -126,13 +137,20 @@ def _write_config(tmp_path, config):
     return str(tmp_path)
 
 
-def _prism_dispatch(monkeypatch, module):
+def _synthetic_auto_config(monkeypatch, module, config):
     # Synthetic artifacts have no remote config class. The actual artifact test
     # below intentionally keeps AutoConfig.from_pretrained unpatched.
     monkeypatch.setattr(
         module,
         "AutoConfig",
-        SimpleNamespace(from_pretrained=lambda *_args, **_kwargs: SimpleNamespace(model_type="moss_tts_prism")),
+        SimpleNamespace(
+            from_pretrained=lambda *_args, **_kwargs: SimpleNamespace(
+                model_type="moss_tts_prism",
+                hidden_size=config["language_config"]["hidden_size"],
+                tie_word_embeddings=False,
+                language_config=SimpleNamespace(**config["language_config"]),
+            )
+        ),
     )
 
 
@@ -145,11 +163,6 @@ def _assert_architecture(args, spec):
     assert args.kv_channels == spec.kv_channels
     assert args.padded_vocab_size == spec.text_vocab_size
     assert args.max_position_embeddings == spec.max_position_embeddings
-    assert args.n_vq == spec.topology.n_vq
-    assert args.audio_start_token_id == spec.audio_start_token_id
-    assert args.prism_mlp_only_layers == spec.topology.prism_mlp_only_layers
-    assert args.prism_rvq_heads_per_execution_unit == spec.topology.prism_rvq_heads_per_execution_unit
-    assert args.prism_input_rvq_channels == spec.input_rvq_channels
     assert args.rotary_base == spec.rotary_base
     assert args.layernorm_epsilon == spec.norm_epsilon
     assert args.position_embedding_type == "rope"
@@ -158,14 +171,14 @@ def _assert_architecture(args, spec):
     assert args.qk_layernorm and args.swiglu and args.group_query_attention
     assert args.attention_dropout == args.hidden_dropout == 0.0
     assert not args.add_bias_linear and not args.add_qkv_bias
+    # The HF root has no text output projection. Audio head sharing belongs
+    # to the Prism provider and does not change this ordinary HF flag.
+    assert args.untie_embeddings_and_output_weights
 
 
-@pytest.mark.parametrize(
-    "stale_cli",
-    [[], ["--num-layers", "99", "--hidden-size", "1", "--padded-vocab-size", "12", "--max-position-embeddings", "32"]],
-)
-def test_prism_configures_before_defaults_and_megatron_validation(monkeypatch, tmp_path, stale_cli):
-    checkpoint = _write_config(tmp_path, _synthetic_prism_config())
+def test_prism_cli_supplies_architecture_before_generic_hf_and_megatron_validation(monkeypatch, tmp_path):
+    config = _synthetic_prism_config()
+    checkpoint = _write_config(tmp_path, config)
     spec = prism.read_prism_spec(checkpoint)
     events = []
 
@@ -174,8 +187,11 @@ def test_prism_configures_before_defaults_and_megatron_validation(monkeypatch, t
         _assert_architecture(args, spec)
         assert args.bf16 and not args.fp16
 
-    module = _load_backend(monkeypatch, ["--hf-checkpoint", checkpoint, *stale_cli], validate)
-    _prism_dispatch(monkeypatch, module)
+    module = _load_backend(
+        monkeypatch, ["--hf-checkpoint", checkpoint, *prism.prism_megatron_cli_args(checkpoint)], validate
+    )
+    _synthetic_auto_config(monkeypatch, module, config)
+    hf_validate = module._hf_validate_args
     set_defaults = module._set_default_megatron_args
 
     def defaults(args):
@@ -184,14 +200,20 @@ def test_prism_configures_before_defaults_and_megatron_validation(monkeypatch, t
         return set_defaults(args)
 
     monkeypatch.setattr(module, "_set_default_megatron_args", defaults)
-    monkeypatch.setattr(
-        module, "_hf_validate_args", lambda *_: pytest.fail("Prism must use its own nested artifact architecture")
-    )
+
+    def validate_hf(args, hf_config):
+        events.append("hf")
+        _assert_architecture(args, spec)
+        return hf_validate(args, hf_config)
+
+    monkeypatch.setattr(module, "_hf_validate_args", validate_hf)
+    monkeypatch.setattr(prism, "configure_prism_args", lambda *_: pytest.fail("core parsing must not configure Prism"))
     args = module.megatron_parse_args(_slime_cli_provider())
     module.validate_args(args)
-    assert events == ["defaults", "validate"]
+    assert events == ["hf", "defaults", "validate"]
     assert args.variable_seq_lengths
     assert args.tokenizer_model == checkpoint and args.tokenizer_type == "HuggingFaceTokenizer"
+    assert not hasattr(args, "n_vq")
 
 
 @pytest.mark.parametrize(
@@ -213,15 +235,18 @@ def test_real_prism_artifact_configures_actual_cli(monkeypatch, stale_cli):
             "slime_plugins.models.prism.model_provider",
             "--custom-megatron-log-prob-function-path",
             "slime_plugins.models.prism.extract_policy_log_probs",
-            "--prism-pretrained-checkpoint",
+            "--custom-megatron-model-initializer-path",
+            "slime_plugins.models.prism.load_prism_pretrained",
+            "--pretrained-checkpoint",
             "native-run",
-            "--prism-pretrained-step",
+            "--ckpt-step",
             "100000",
             "--actor-num-nodes",
             "2",
             "--actor-num-gpus-per-node",
             "4",
             *stale_cli,
+            *prism.prism_megatron_cli_args(checkpoint),
         ],
         lambda args: _assert_architecture(args, spec),
     )
@@ -229,13 +254,25 @@ def test_real_prism_artifact_configures_actual_cli(monkeypatch, stale_cli):
     # configuration class. No model weights are read.
     hf_config = module.AutoConfig.from_pretrained(str(checkpoint), trust_remote_code=True)
     assert hf_config.model_type == "moss_tts_prism"
+    calls = []
+    hf_validate = module._hf_validate_args
+
+    def generic_validate(args, config):
+        calls.append(config.model_type)
+        return hf_validate(args, config)
+
+    monkeypatch.setattr(module, "_hf_validate_args", generic_validate)
+    monkeypatch.setattr(prism, "configure_prism_args", lambda *_: pytest.fail("core parsing must not configure Prism"))
     args = module.megatron_parse_args(_slime_cli_provider())
     module.validate_args(args)
     _assert_architecture(args, spec)
     assert args.attention_dropout == args.hidden_dropout == 0.0
     assert args.custom_model_provider_path == "slime_plugins.models.prism.model_provider"
     assert args.custom_megatron_log_prob_function_path == "slime_plugins.models.prism.extract_policy_log_probs"
-    assert args.prism_pretrained_checkpoint == "native-run" and args.prism_pretrained_step == 100000
+    assert args.pretrained_checkpoint == "native-run" and args.ckpt_step == 100000
+    assert args.custom_megatron_model_initializer_path == "slime_plugins.models.prism.load_prism_pretrained"
+    assert calls == ["moss_tts_prism"]
+    assert not hasattr(args, "prism_pretrained_checkpoint") and not hasattr(args, "n_vq")
     assert args.world_size == 8 and args.rank == 0
     assert args.max_position_embeddings == 40960 and args.seq_length == 4096
     assert args.bf16 and args.use_distributed_optimizer
@@ -262,6 +299,7 @@ def test_regular_hf_cli_retains_existing_validation(monkeypatch, tmp_path, hidde
             "1e-6",
             "--rotary-base",
             "1000000",
+            "--untie-embeddings-and-output-weights",
         ],
     )
     monkeypatch.setattr(
@@ -294,23 +332,42 @@ def test_skip_and_no_hf_paths_keep_generic_defaults(monkeypatch, checkpoint, ski
 
 
 def test_prism_keeps_existing_allgather_cp_guard(monkeypatch, tmp_path):
-    checkpoint = _write_config(tmp_path, _synthetic_prism_config())
+    config = _synthetic_prism_config()
+    checkpoint = _write_config(tmp_path, config)
     module = _load_backend(
-        monkeypatch, ["--hf-checkpoint", checkpoint, "--allgather-cp", "--context-parallel-size", "2"]
+        monkeypatch,
+        [
+            "--hf-checkpoint",
+            checkpoint,
+            *prism.prism_megatron_cli_args(checkpoint),
+            "--allgather-cp",
+            "--context-parallel-size",
+            "2",
+        ],
     )
-    _prism_dispatch(monkeypatch, module)
+    _synthetic_auto_config(monkeypatch, module, config)
     with pytest.raises(ValueError, match="only supported for DSA"):
         module.megatron_parse_args(_slime_cli_provider())
 
 
-def test_prism_invalid_architecture_fails_before_megatron_defaults(monkeypatch, tmp_path):
+def test_prism_invalid_architecture_fails_before_generating_megatron_cli(tmp_path):
     config = _synthetic_prism_config()
     config["language_config"]["num_hidden_layers"] = 3
     checkpoint = _write_config(tmp_path, config)
-    module = _load_backend(monkeypatch, ["--hf-checkpoint", checkpoint])
-    _prism_dispatch(monkeypatch, module)
-    monkeypatch.setattr(
-        module, "_set_default_megatron_args", lambda *_: pytest.fail("invalid Prism config must fail before defaults")
-    )
     with pytest.raises(ValueError, match="physical topology"):
+        prism.prism_megatron_cli_args(checkpoint)
+
+
+def test_prism_cli_override_keeps_generic_hf_mismatch_detection(monkeypatch, tmp_path):
+    config = _synthetic_prism_config()
+    checkpoint = _write_config(tmp_path, config)
+    module = _load_backend(
+        monkeypatch,
+        ["--hf-checkpoint", checkpoint, *prism.prism_megatron_cli_args(checkpoint), "--hidden-size", "64"],
+    )
+    _synthetic_auto_config(monkeypatch, module, config)
+    monkeypatch.setattr(
+        module, "_set_default_megatron_args", lambda *_: pytest.fail("invalid HF override must fail before defaults")
+    )
+    with pytest.raises(AssertionError, match="hidden_size"):
         module.megatron_parse_args(_slime_cli_provider())

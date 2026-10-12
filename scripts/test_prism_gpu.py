@@ -5,7 +5,7 @@ Run inside the GPU image with Megatron on PYTHONPATH, for example::
     PYTHONPATH=/opt/megatron:$PWD torchrun --standalone --nproc-per-node=1 \
       scripts/test_prism_gpu.py \
       --hf-checkpoint /shared/prism-hf \
-      --prism-pretrained-checkpoint /shared/prism-native \
+      --pretrained-checkpoint /shared/prism-native \
       --artifact-dir /shared/prism-smoke \
       --numpy-overlay /shared/numpy1 \
       --omni-url http://worker-or-router:port \
@@ -32,10 +32,11 @@ from pathlib import Path
 def cli_args():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--hf-checkpoint", required=True, help="Converted Prism inference artifact directory.")
+    parser.add_argument("--pretrained-checkpoint", required=True, help="Native RUN/checkpoint/iteration directory.")
+    parser.add_argument("--ckpt-step", type=int)
     parser.add_argument(
-        "--prism-pretrained-checkpoint", required=True, help="Native RUN/checkpoint/iteration directory."
+        "--custom-megatron-model-initializer-path", default="slime_plugins.models.prism.load_prism_pretrained"
     )
-    parser.add_argument("--prism-pretrained-step", type=int)
     parser.add_argument("--artifact-dir", required=True)
     parser.add_argument("--numpy-overlay", help="Directory containing NumPy 1.x, prepended before importing Megatron.")
     source = parser.add_mutually_exclusive_group()
@@ -45,7 +46,9 @@ def cli_args():
     parser.add_argument("--omni-model-name", default="student")
     parser.add_argument("--max-frames", type=int, default=8)
     parser.add_argument("--request-timeout", type=float, default=600)
-    parser.add_argument("--alignment-atol", type=float, help="Required explicit numerical bound for Omni trajectories.")
+    parser.add_argument(
+        "--alignment-atol", type=float, help="Required explicit numerical bound for Omni trajectories."
+    )
     parser.add_argument("--alignment-rtol", type=float, default=0.0)
     parser.add_argument(
         "--expected-weight-version", help="Optional required admission version for the real trajectory."
@@ -80,7 +83,7 @@ def setup(args, extra_flags):
     from megatron.training.arguments import parse_args, validate_args
     from megatron.training.global_vars import set_args
 
-    from slime_plugins.models.prism import configure_prism_args
+    from slime_plugins.models.prism import prism_megatron_cli_args, read_prism_spec
 
     if not np.__version__.startswith("1."):
         raise RuntimeError(f"Megatron requires NumPy 1.x; found {np.__version__}. Use --numpy-overlay.")
@@ -90,14 +93,16 @@ def setup(args, extra_flags):
         raise ValueError("This first GPU smoke supports one learner rank, TP=PP=CP=DP=1.")
     previous_argv = sys.argv
     try:
-        sys.argv = [previous_argv[0], *extra_flags]
+        sys.argv = [previous_argv[0], *prism_megatron_cli_args(args.hf_checkpoint), *extra_flags]
         runtime = parse_args()
     finally:
         sys.argv = previous_argv
     runtime.hf_checkpoint = str(Path(args.hf_checkpoint).resolve())
-    runtime.prism_pretrained_checkpoint = str(Path(args.prism_pretrained_checkpoint).resolve())
-    runtime.prism_pretrained_step = args.prism_pretrained_step
-    spec = configure_prism_args(runtime)
+    runtime.load = None
+    runtime.pretrained_checkpoint = str(Path(args.pretrained_checkpoint).resolve())
+    runtime.ckpt_step = args.ckpt_step
+    runtime.custom_megatron_model_initializer_path = args.custom_megatron_model_initializer_path
+    spec = read_prism_spec(runtime.hf_checkpoint)
     # A smoke creates its own fresh RL optimizer. Architecture/dtype comes
     # exclusively from the inference artifact validated against native DCP.
     runtime.bf16, runtime.fp16 = spec.dtype == "bfloat16", spec.dtype == "float16"
@@ -327,9 +332,10 @@ def run(args, extra_flags):
     from megatron.core.distributed import DistributedDataParallel, DistributedDataParallelConfig, finalize_model_grads
     from megatron.core.optimizer import OptimizerConfig, get_megatron_optimizer
 
+    from slime.backends.megatron_utils.checkpoint import load_checkpoint
     from slime.backends.megatron_utils.loss import compute_advantages_and_returns, policy_loss_function
     from slime.backends.megatron_utils.policy_actions import store_old_action_scores
-    from slime_plugins.models.prism import extract_policy_log_probs, load_prism_pretrained, model_provider
+    from slime_plugins.models.prism import extract_policy_log_probs, model_provider
 
     runtime, spec, numpy_version = setup(args, extra_flags)
     output = Path(args.artifact_dir).resolve()
@@ -337,7 +343,7 @@ def run(args, extra_flags):
     report = {
         "status": "running",
         "hf_checkpoint": runtime.hf_checkpoint,
-        "native_checkpoint": runtime.prism_pretrained_checkpoint,
+        "native_checkpoint": runtime.pretrained_checkpoint,
         "numpy": numpy_version,
         "torch": torch.__version__,
         "device": torch.cuda.get_device_name(),
@@ -357,8 +363,6 @@ def run(args, extra_flags):
             ),
             student,
         )
-        load_prism_pretrained([model], runtime)
-        report["native_loaded"] = True
         optimizer = get_megatron_optimizer(
             OptimizerConfig(
                 optimizer="adam",
@@ -373,6 +377,8 @@ def run(args, extra_flags):
             [model],
             use_gloo_process_groups=False,
         )
+        load_checkpoint([model], optimizer, None, checkpointing_context={})
+        report["native_loaded"] = True
         learner_args = policy_args(runtime, args)
         context = dict(
             args=args,

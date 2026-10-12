@@ -1794,8 +1794,50 @@ def read_prism_spec(hf_checkpoint: str | Path) -> PrismModelSpec:
     return PrismModelSpec.from_hf_config(json.loads(config.read_text()))
 
 
+def prism_megatron_cli_args(hf_checkpoint: str | Path) -> list[str]:
+    """Generate ordinary Megatron architecture flags before its parser runs.
+
+    The provider fills Prism's private topology/RVQ fields after normal CLI
+    validation. Attention backend, parallelism and optimizer choices remain
+    caller-owned. Standard text/output tying is absent from Prism; audio
+    embedding/head use is independently described by embedding_head_usage.
+    """
+    spec = read_prism_spec(hf_checkpoint)
+    if not spec.rotary_base.is_integer():
+        raise ValueError("Megatron's --rotary-base requires an integer Prism RoPE base")
+    values = (
+        ("--num-layers", spec.topology.num_layers),
+        ("--hidden-size", spec.hidden_size),
+        ("--ffn-hidden-size", spec.ffn_hidden_size),
+        ("--num-attention-heads", spec.num_attention_heads),
+        ("--num-query-groups", spec.num_query_groups),
+        ("--kv-channels", spec.kv_channels),
+        ("--vocab-size", spec.text_vocab_size),
+        ("--padded-vocab-size", spec.text_vocab_size),
+        ("--max-position-embeddings", spec.max_position_embeddings),
+        ("--normalization", "RMSNorm"),
+        ("--layernorm-epsilon", spec.norm_epsilon),
+        ("--position-embedding-type", "rope"),
+        ("--rotary-base", int(spec.rotary_base)),
+        ("--rotary-percent", 1.0),
+        ("--attention-dropout", 0.0),
+        ("--hidden-dropout", 0.0),
+        ("--transformer-impl", "transformer_engine"),
+    )
+    result = [token for flag, field_value in values for token in (flag, str(field_value))]
+    result.extend(("--swiglu", "--qk-layernorm", "--group-query-attention", "--disable-bias-linear"))
+    result.append("--untie-embeddings-and-output-weights")
+    if spec.dtype in ("bfloat16", "float16"):
+        result.append("--bf16" if spec.dtype == "bfloat16" else "--fp16")
+    return result
+
+
 def configure_prism_args(args) -> PrismModelSpec:
-    """Apply artifact-owned architecture values before generic MCore validation."""
+    """Populate provider-owned Prism construction values from its HF artifact.
+
+    Normal entry points pass prism_megatron_cli_args before CLI validation;
+    this provider helper fills the topology, RVQ and forward-semantics fields.
+    """
     spec = read_prism_spec(args.hf_checkpoint)
     topology = spec.topology
     values = {
@@ -1835,7 +1877,7 @@ def configure_prism_args(args) -> PrismModelSpec:
         "add_qkv_bias": False,
         "apply_query_key_layer_scaling": False,
         "group_query_attention": True,
-        "untie_embeddings_and_output_weights": spec.embedding_head_usage == "untied",
+        "untie_embeddings_and_output_weights": True,
     }
     for key, value in values.items():
         setattr(args, key, value)
@@ -1880,11 +1922,11 @@ def model_provider(pre_process=True, post_process=True, vp_stage=None):
 def select_native_checkpoint(path: str | Path, step: int | None = None):
     """Select a native model component, accepting a RUN, checkpoint root or iteration."""
     root = Path(path)
+    if step is not None and (type(step) is not int or step < 0):
+        raise ValueError("checkpoint step must be a nonnegative integer")
     if (root / "checkpoints").is_dir():
         root = root / "checkpoints"
     if (root / "checkpoint.json").is_file():
-        if step is not None:
-            raise ValueError("an explicit iteration directory cannot also select another step")
         selected = root
     else:
         if step is None:
@@ -1896,14 +1938,15 @@ def select_native_checkpoint(path: str | Path, step: int | None = None):
                     raise ValueError("invalid native checkpoint tracker")
                 selected = root / f"iter_{int(marker):07d}"
         else:
-            _positive_integer(step, "checkpoint step")
-            selected = root / f"iter_{step:07d}"
+            selected = root / "release" if step == 0 else root / f"iter_{step:07d}"
     manifest = json.loads((selected / "checkpoint.json").read_text())
     if manifest.get("schema_version") != 2:
         raise ValueError("Prism requires the native logical checkpoint manifest schema 2")
     expected_iteration = 0 if selected.name == "release" else int(selected.name.removeprefix("iter_"))
     if manifest.get("iteration") != expected_iteration:
         raise ValueError("native selected directory and manifest iteration disagree")
+    if step is not None and step != expected_iteration:
+        raise ValueError("--ckpt-step disagrees with the explicit native checkpoint directory")
     component = selected / "model"
     if not (component / ".metadata").is_file():
         raise ValueError("native checkpoint model DCP is missing")
@@ -1956,12 +1999,12 @@ def _align_native_shards(value, tensor_metadata, num_layers):
     raise ValueError(f"native Prism weight is missing: {value.key}")
 
 
-def load_prism_pretrained(models, args):
+def load_prism_pretrained(models, args) -> None:
     """Import only the SFT model component; slime owns RL optimizer/resume state.
 
-    Invoke at slime's checkpoint load boundary instead of its generic HF
-    loader when ``prism_pretrained_checkpoint`` is set. A slime resume takes
-    precedence and should use the existing loader without calling this helper.
+    Use --custom-megatron-model-initializer-path with --pretrained-checkpoint
+    and optional --ckpt-step. Slime dispatches this only without --load, owns
+    master-parameter refresh, and keeps all RL progress/optimizer state fresh.
     """
     _require_megatron()
     from megatron.core import dist_checkpointing
@@ -1972,9 +2015,10 @@ def load_prism_pretrained(models, args):
     while hasattr(model, "module"):
         model = model.module
     spec = model.prism_spec
-    component, manifest = select_native_checkpoint(
-        args.prism_pretrained_checkpoint, getattr(args, "prism_pretrained_step", None)
-    )
+    source = getattr(args, "pretrained_checkpoint", None)
+    if source is None:
+        raise ValueError("Prism's model initializer requires --pretrained-checkpoint")
+    component, manifest = select_native_checkpoint(source, getattr(args, "ckpt_step", None))
     spec.check_native_identity(manifest["model_identity"])
     common = dist_checkpointing.load_common_state_dict(str(component))
     if common.get("iteration") != manifest["iteration"] or common.get("checkpoint_version") != 3.0:
@@ -1995,7 +2039,7 @@ def load_prism_pretrained(models, args):
         raise ValueError(
             f"native Prism tensor load mismatch: missing={missing}, unexpected={incompatible.unexpected_keys}"
         )
-    return 0, 0
+    return None
 
 
 def extract_policy_log_probs(args, batch, output: Tensor) -> dict[str, list[Tensor]]:

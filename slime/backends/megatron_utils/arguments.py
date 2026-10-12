@@ -205,12 +205,7 @@ def megatron_parse_args(extra_args_provider, skip_hf_validate=False):
     hf_config = None
     if args.hf_checkpoint and not skip_hf_validate:
         hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
-        if getattr(hf_config, "model_type", None) == "moss_tts_prism":
-            from slime_plugins.models.prism import configure_prism_args
-
-            configure_prism_args(args)
-        else:
-            _hf_validate_args(args, hf_config)
+        _hf_validate_args(args, hf_config)
 
     if not skip_hf_validate:
         _validate_allgather_cp_supported(args, hf_config)

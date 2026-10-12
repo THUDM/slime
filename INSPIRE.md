@@ -15,6 +15,8 @@
 
 HF 制品由 mossLite 的官方 native 转换工具在 CPU 上生成。结构为 24 RVQ、32 物理层、H2048、MLP-only 28–31、BF16；执行中的重复层保留物理参数共享。模型初始化使用 native DCP 模型组件，RL 续训使用 slime 自己的完整 checkpoint。
 
+首次初始化通过通用 `--custom-megatron-model-initializer-path` 指定 Prism 插件，来源使用 `--pretrained-checkpoint`，可选 step 使用 `--ckpt-step`。源 checkpoint 格式识别留在插件中；显式 `--load` 完整恢复优先。示例环境变量仍使用 `PRISM_PRETRAINED_CHECKPOINT` / `PRISM_PRETRAINED_STEP`，训练主包没有对应的 Prism 专属参数。
+
 Prism learner 使用 Megatron 原生 TE layer spec 与 `TEDotProductAttention`，后端沿用 Megatron 默认 `auto` 选择。模型包不再直接依赖 `flash_attn.cute` wrapper；TE 根据实际环境选择底层 attention kernel。Omni 的推理后端由其独立配置和运行时选择。
 
 训练 Python 的 NumPy 1.26.4、Transformers 5.0.0、SciPy 1.14.1、PyArrow 18.1.0 安装在独立 venv；通过其 `.pth` 和 NVIDIA runtime 符号链接引用镜像内的 Torch/TE。PyArrow 版本需要同时兼容 NumPy 1 与 Ray 的序列化，单独导入 Ray 不足以验证这一项。Omni 使用原 core 的 NumPy 2.3.5、Transformers 5.12.1。两者引用相同的 Torch 2.13.0+cu130 和 TE 2.17.0 二进制，Megatron Core 为 0.19.0。这份训练 venv 依赖镜像内 `/opt/` 的库位置，应在上述 GPU 镜像中使用。

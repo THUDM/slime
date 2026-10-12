@@ -40,6 +40,18 @@ export PRISM_PRETRAINED_STEP=100000
 
 HF 制品与 native DCP 必须对应同一个学生结构、执行计划、tokenizer/codec 和参数精度。HF 制品提供 Omni 权重、processor、prompt protocol 和模型配置；native DCP initializer 只加载预训练模型，RL optimizer 从新状态开始。恢复 slime RL checkpoint 时使用 `RL_LOAD`，保留原 optimizer、scheduler 和训练进度。
 
+脚本先由模型插件读取 HF 配置，生成普通 Megatron 架构参数，再进入原参数解析与 HF 校验。主包不判断 Prism 的模型类型。首次权重初始化使用通用接口：
+
+```text
+--custom-megatron-model-initializer-path slime_plugins.models.prism.load_prism_pretrained
+--pretrained-checkpoint <native RUN / checkpoint root / iteration>
+--ckpt-step <optional native iteration>
+```
+
+initializer 接收 `(models, args)`，只加载模型权重并返回 `None`；框架负责同步低精度 optimizer 的 master 参数和设置新训练进度。mossLite 目录、manifest、分片布局与模型身份的识别全部留在插件中。`PRISM_PRETRAINED_CHECKPOINT`、`PRISM_PRETRAINED_STEP` 仍是示例脚本的环境变量，脚本将它们转换成上述通用参数；旧的 Prism 专属 checkpoint CLI 参数已移除。明确的 iteration 目录可以同时提供一致的 step，冲突会报错。
+
+显式 `--load` 始终优先于 initializer，并走原 Megatron/HF 加载路径。错误的显式路径不会回退成重新初始化。恢复脚本仅传 `--load`，不附带首次初始化的 hook、source 或 step。
+
 ## JSONL 输入
 
 脚本使用 `--input-key script --metadata-key metadata`，不应用文本 chat template。实际 prompt 由 Omni processor 渲染。参见 [prompts.example.jsonl](prompts.example.jsonl)：

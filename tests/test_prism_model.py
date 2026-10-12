@@ -349,6 +349,112 @@ def test_checkpoint_selection_accepts_run_without_inspecting_training_state(tmp_
     selected, manifest = prism.select_native_checkpoint(tmp_path)
     assert selected == component / "model"
     assert manifest["iteration"] == 20
+    pinned, _ = prism.select_native_checkpoint(component, 20)
+    assert pinned == component / "model"
+    with pytest.raises(ValueError, match="explicit native checkpoint"):
+        prism.select_native_checkpoint(component, 21)
+
+
+@pytest.mark.parametrize("dtype,flag", [("bfloat16", "--bf16"), ("float16", "--fp16")])
+def test_generated_megatron_cli_has_ordinary_architecture_flags_before_parse(tmp_path, dtype, flag):
+    import argparse
+    import json
+
+    config = _hf_config()
+    config["dtype"] = dtype
+    config["embedding_head_usage"] = "tied_head_authoritative"
+    (tmp_path / "config.json").write_text(json.dumps(config))
+    tokens = prism.prism_megatron_cli_args(tmp_path)
+    parser = argparse.ArgumentParser()
+    integer_flags = (
+        "num-layers",
+        "hidden-size",
+        "ffn-hidden-size",
+        "num-attention-heads",
+        "num-query-groups",
+        "kv-channels",
+        "vocab-size",
+        "padded-vocab-size",
+        "max-position-embeddings",
+        "rotary-base",
+    )
+    for name in integer_flags:
+        parser.add_argument(f"--{name}", type=int)
+    for name in ("layernorm-epsilon", "rotary-percent", "attention-dropout", "hidden-dropout"):
+        parser.add_argument(f"--{name}", type=float)
+    for name in ("normalization", "position-embedding-type", "transformer-impl"):
+        parser.add_argument(f"--{name}")
+    for name in (
+        "swiglu",
+        "qk-layernorm",
+        "group-query-attention",
+        "disable-bias-linear",
+        "untie-embeddings-and-output-weights",
+        "bf16",
+        "fp16",
+    ):
+        parser.add_argument(f"--{name}", action="store_true")
+    args = parser.parse_args(tokens)
+    assert (args.num_layers, args.hidden_size, args.ffn_hidden_size) == (2, 16, 32)
+    assert (args.num_attention_heads, args.num_query_groups, args.kv_channels) == (4, 2, 4)
+    assert args.vocab_size == args.padded_vocab_size == 151700
+    assert args.max_position_embeddings == 40960
+    assert args.rotary_base == 1000000
+    assert args.layernorm_epsilon == 1e-6
+    assert args.normalization == "RMSNorm" and args.position_embedding_type == "rope"
+    assert args.transformer_impl == "transformer_engine"
+    assert args.swiglu and args.qk_layernorm and args.group_query_attention and args.disable_bias_linear
+    assert args.untie_embeddings_and_output_weights  # independent of audio's own tying policy
+    assert args.attention_dropout == args.hidden_dropout == 0
+    assert flag in tokens
+    assert "--attention-backend" not in tokens
+    assert not any(token.startswith("--prism") for token in tokens)
+
+
+def test_generated_megatron_cli_rejects_unrepresentable_fractional_rope_base(tmp_path):
+    import json
+
+    config = _hf_config()
+    config["language_config"]["rope_parameters"]["rope_theta"] = 1000000.5
+    (tmp_path / "config.json").write_text(json.dumps(config))
+    with pytest.raises(ValueError, match="integer Prism RoPE base"):
+        prism.prism_megatron_cli_args(tmp_path)
+
+
+def test_plugin_initializer_reads_generic_source_and_pin_without_rl_progress(monkeypatch, tmp_path):
+    import sys
+    import types
+
+    component = tmp_path / "iter_0000020"
+    component.mkdir()
+    (component / "model").mkdir()
+    (component / "model" / ".metadata").write_bytes(b"DCP")
+    (component / "checkpoint.json").write_text('{"schema_version":2,"iteration":20,"model_identity":{}}')
+    calls = []
+    checkpointing = SimpleNamespace(
+        load_common_state_dict=lambda path: {"iteration": 20, "checkpoint_version": 3.0},
+        load_tensors_metadata=lambda path: {"weight": SimpleNamespace(dtype=torch.bfloat16)},
+        load=lambda template, path: {"model": {"weight": torch.tensor([2.0])}},
+    )
+    core = types.ModuleType("megatron.core")
+    core.dist_checkpointing = checkpointing
+    monkeypatch.setitem(sys.modules, "megatron.core", core)
+    monkeypatch.setattr(prism, "_require_megatron", lambda: None)
+    monkeypatch.setattr(prism, "_align_native_shards", lambda value, metadata, layers: value)
+    model = SimpleNamespace(
+        prism_spec=SimpleNamespace(
+            dtype="bfloat16",
+            topology=SimpleNamespace(num_layers=1),
+            check_native_identity=lambda identity: calls.append("identity"),
+        ),
+        sharded_state_dict=lambda **kwargs: {"weight": object(), "kernel._extra_state": object()},
+        load_state_dict=lambda values, strict: calls.append(("loaded", values["weight"].item()))
+        or SimpleNamespace(missing_keys=["kernel._extra_state"], unexpected_keys=[]),
+    )
+    args = SimpleNamespace(pretrained_checkpoint=str(component), ckpt_step=20, iteration=777)
+    assert prism.load_prism_pretrained([model], args) is None
+    assert calls == ["identity", ("loaded", 2.0)]
+    assert args.iteration == 777 and args.ckpt_step == 20
 
 
 @pytest.mark.parametrize("backend", ["auto", "flash", "fused"])

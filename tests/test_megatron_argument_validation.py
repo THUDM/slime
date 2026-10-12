@@ -367,6 +367,8 @@ def make_slime_validate_args(**overrides):
         opd_type=None,
         opd_teacher_load=None,
         load=None,
+        pretrained_checkpoint=None,
+        custom_megatron_model_initializer_path=None,
         hf_checkpoint="/tmp/hf",
         ref_ckpt_step=None,
         ckpt_step=None,
@@ -642,6 +644,129 @@ def test_slime_validate_args_defaults_start_rollout_id_to_zero(monkeypatch):
 
     args, _ = module.slime_validate_args(args)
 
+    assert args.start_rollout_id == 0
+
+
+def test_model_initializer_flag_is_generic_and_explicit(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    parser = module.get_slime_extra_args_provider()(argparse.ArgumentParser())
+    defaults = parser.parse_args(["--rollout-batch-size", "1"])
+    assert defaults.custom_megatron_model_initializer_path is None
+    args = parser.parse_args(
+        ["--rollout-batch-size", "1", "--custom-megatron-model-initializer-path", "custom_model.initialize"]
+    )
+    assert args.custom_megatron_model_initializer_path == "custom_model.initialize"
+
+
+@pytest.mark.parametrize("start", [None, 5])
+def test_model_initializer_keeps_its_source_and_step_separate_from_reference(monkeypatch, start):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(
+        custom_megatron_model_initializer_path="custom_model.initialize",
+        pretrained_checkpoint="model-only-source",
+        ckpt_step=3,
+        ref_load="reference-model",
+        ref_ckpt_step=19,
+        start_rollout_id=start,
+    )
+    args, _ = module.slime_validate_args(args)
+    assert args.load is None
+    assert args.pretrained_checkpoint == "model-only-source"
+    assert args.ckpt_step == 3
+    assert args.ref_load == "reference-model" and args.ref_ckpt_step == 19
+    assert args.finetune and args.no_load_optim and args.no_load_rng
+    assert args.start_rollout_id == (0 if start is None else start)
+
+
+@pytest.mark.parametrize("source", [None, ""])
+def test_model_initializer_requires_a_source_without_an_explicit_load(monkeypatch, source):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(
+        custom_megatron_model_initializer_path="custom_model.initialize",
+        pretrained_checkpoint=source,
+        ref_load="reference-must-not-be-used",
+    )
+    with pytest.raises(ValueError, match="requires --pretrained-checkpoint"):
+        module.slime_validate_args(args)
+    assert args.load is None and args.pretrained_checkpoint == source
+
+
+@pytest.mark.parametrize("direct_iteration", [False, True])
+def test_standard_resume_is_not_rewritten_by_model_initializer_options(monkeypatch, tmp_path, direct_iteration):
+    module = load_slime_arguments_module(monkeypatch)
+    root = tmp_path / "rl"
+    iteration = root / "iter_0000007"
+    iteration.mkdir(parents=True)
+    (iteration / ".metadata").write_bytes(b"DCP")
+    (root / "latest_checkpointed_iteration.txt").write_text("7")
+    # Standard resume must not try an HF parser for unrelated copied metadata.
+    (root / "config.json").write_text("Not a HuggingFace configuration")
+    load = str(iteration if direct_iteration else root)
+    args = make_slime_validate_args(
+        load=load,
+        custom_megatron_model_initializer_path="not_importable.initialize",
+        pretrained_checkpoint=None,
+        ckpt_step=7,
+        ref_load="reference-model",
+        ref_ckpt_step=19,
+        no_load_optim=None,
+    )
+    args, _ = module.slime_validate_args(args)
+    assert args.load == load and args.ckpt_step == 7
+    assert args.exit_on_missing_checkpoint
+    assert not args.finetune and not args.no_load_rng and args.no_load_optim is None
+    assert args.start_rollout_id is None
+
+
+@pytest.mark.parametrize("kind", ["missing", "empty", "empty-iteration", "unknown", "unsupported-hf"])
+def test_invalid_explicit_load_never_falls_back_to_initializer_or_reference(monkeypatch, tmp_path, kind):
+    module = load_slime_arguments_module(monkeypatch)
+    load = tmp_path / ("iter_0000007" if kind == "empty-iteration" else kind)
+    if kind != "missing":
+        load.mkdir()
+    if kind == "unknown":
+        (load / "weights.bin").write_bytes(b"unsupported")
+    if kind == "unsupported-hf":
+        (load / "config.json").write_text("{}")
+        hf = types.ModuleType("slime.backends.megatron_utils.hf_to_megatron")
+        hf.supports_hf_weight_loading = lambda path: False
+        monkeypatch.setitem(sys.modules, hf.__name__, hf)
+    args = make_slime_validate_args(
+        load=str(load),
+        custom_megatron_model_initializer_path="custom_model.initialize",
+        pretrained_checkpoint="model-only-source",
+        ref_load="reference-must-not-be-used",
+    )
+    with pytest.raises(ValueError, match="Explicit --load"):
+        module.slime_validate_args(args)
+    assert args.load == str(load) and args.ref_load == "reference-must-not-be-used"
+
+
+def test_explicit_hf_load_keeps_existing_model_only_initialization(monkeypatch, tmp_path):
+    module = load_slime_arguments_module(monkeypatch)
+    load = tmp_path / "hf"
+    load.mkdir()
+    (load / "config.json").write_text("{}")
+    hf = types.ModuleType("slime.backends.megatron_utils.hf_to_megatron")
+    hf.supports_hf_weight_loading = lambda path: True
+    monkeypatch.setitem(sys.modules, hf.__name__, hf)
+    args = make_slime_validate_args(
+        load=str(load),
+        custom_megatron_model_initializer_path="not_importable.initialize",
+        pretrained_checkpoint=None,
+    )
+    args, _ = module.slime_validate_args(args)
+    assert args.load == str(load)
+    assert args.finetune and args.no_load_optim and args.no_load_rng
+    assert args.start_rollout_id == 0
+
+
+def test_text_initialization_without_custom_initializer_retains_reference_fallback(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(ref_load="text-reference", ref_ckpt_step=23)
+    args, _ = module.slime_validate_args(args)
+    assert args.load == "text-reference" and args.ckpt_step == 23
+    assert args.finetune and args.no_load_optim and args.no_load_rng
     assert args.start_rollout_id == 0
 
 

@@ -165,8 +165,9 @@ def publication(engines, context):
     )
     args = argparse.Namespace(
         hf_checkpoint=context["hf_checkpoint"],
-        prism_pretrained_checkpoint=context["native_checkpoint"],
-        prism_pretrained_step=options.get("native_step"),
+        pretrained_checkpoint=context["native_checkpoint"],
+        ckpt_step=options.get("native_step"),
+        custom_megatron_model_initializer_path="slime_plugins.models.prism.load_prism_pretrained",
         artifact_dir=str(output),
         numpy_overlay=None,
         omni_url=context["router_url"],

@@ -293,11 +293,7 @@ def setup_model_and_optimizer(
             - The learning-rate/weight-decay scheduler tied to the optimizer.
     """
     assert not args.moe_use_upcycling
-    assert (
-        args.load is not None
-        or args.pretrained_checkpoint is not None
-        or getattr(args, "prism_pretrained_checkpoint", None) is not None
-    )
+    assert args.load is not None or args.pretrained_checkpoint is not None
 
     model = get_model(get_model_provider_func(args, role), ModelType.encoder_or_decoder)
 

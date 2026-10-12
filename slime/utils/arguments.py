@@ -5,6 +5,7 @@ import json
 import logging
 import math
 import os
+import re
 import sys
 from typing import Any
 
@@ -282,15 +283,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "`def custom_model_provider(pre_process: bool, post_process: bool, vp_stage: int | None = None) -> GPTModel`. "
                     "Example: 'my_module.my_model_provider'."
                 ),
-            )
-            parser.add_argument(
-                "--prism-pretrained-checkpoint",
-                help="Prism native DCP initializer; ignored when resuming a slime checkpoint.",
-            )
-            parser.add_argument(
-                "--prism-pretrained-step",
-                type=int,
-                help="Pin the native Prism initializer to a pretraining iteration.",
             )
             parser.add_argument(
                 "--custom-megatron-log-prob-function-path",
@@ -1616,6 +1608,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
             )
             parser.add_argument(
+                "--custom-megatron-model-initializer-path",
+                type=str,
+                default=None,
+                help=(
+                    "Model-only initializer callable(models, args), returning None. "
+                    "Used only without --load; reads --pretrained-checkpoint and --ckpt-step."
+                ),
+            )
+            parser.add_argument(
                 "--custom-megatron-before-log-prob-hook-path",
                 type=str,
                 default=None,
@@ -2020,25 +2021,42 @@ def slime_validate_args(args):
     from slime.data.checkpoint import resolve_checkpoint
 
     args, restore_plan = resolve_checkpoint(args)
+    initializer_path = getattr(args, "custom_megatron_model_initializer_path", None)
     load_is_megatron = (
         args.load is not None
-        and os.path.exists(args.load)
-        and os.path.exists(os.path.join(args.load, "latest_checkpointed_iteration.txt"))
+        and os.path.isdir(args.load)
+        and (
+            os.path.isfile(os.path.join(args.load, "latest_checkpointed_iteration.txt"))
+            or (
+                re.fullmatch(r"iter_\d{7,}", os.path.basename(os.path.normpath(args.load))) is not None
+                and bool(os.listdir(args.load))
+            )
+        )
     )
     load_is_hf = (
-        args.load is not None and os.path.isdir(args.load) and os.path.exists(os.path.join(args.load, "config.json"))
+        not load_is_megatron
+        and args.load is not None
+        and os.path.isdir(args.load)
+        and os.path.isfile(os.path.join(args.load, "config.json"))
     )
     if load_is_hf:
         from slime.backends.megatron_utils.hf_to_megatron import supports_hf_weight_loading
 
         load_is_hf = supports_hf_weight_loading(args.load)
+    if args.load is not None and not (load_is_megatron or load_is_hf):
+        raise ValueError(f"Explicit --load must identify a supported Megatron or HuggingFace checkpoint: {args.load}")
+    if args.load is not None:
+        args.exit_on_missing_checkpoint = True
     if not load_is_megatron:
         args.no_load_optim = True
         args.no_load_rng = True
         args.finetune = True
-        if not load_is_hf and not getattr(args, "prism_pretrained_checkpoint", None):
+        if args.load is None and initializer_path:
+            if not getattr(args, "pretrained_checkpoint", None):
+                raise ValueError("--custom-megatron-model-initializer-path requires --pretrained-checkpoint")
+        elif not load_is_hf:
             args.load = args.ref_load
-        if args.ref_ckpt_step is not None and not getattr(args, "prism_pretrained_checkpoint", None):
+        if args.ref_ckpt_step is not None and not (args.load is None and initializer_path):
             args.ckpt_step = args.ref_ckpt_step
         if args.start_rollout_id is None:
             args.start_rollout_id = 0

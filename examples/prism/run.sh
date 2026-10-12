@@ -58,7 +58,24 @@ print(json.dumps({key: os.environ[key] for key in (
 PY
 )
 
+# Produce ordinary Megatron flags before its parser and HF validation run.
+# A file preserves argument boundaries and propagates configuration failures.
+TASK_ARCH_ARGS_FILE=$(mktemp)
+trap 'rm -f -- "${TASK_ARCH_ARGS_FILE}"' EXIT
+"${TASK_TRAIN_PYTHON}" - "${HF_CHECKPOINT}" > "${TASK_ARCH_ARGS_FILE}" <<'PY'
+import sys
+
+from slime_plugins.models.prism import prism_megatron_cli_args
+
+for argument in prism_megatron_cli_args(sys.argv[1]):
+    sys.stdout.buffer.write(argument.encode() + b"\0")
+PY
+mapfile -d '' -t TASK_ARCH_ARGS < "${TASK_ARCH_ARGS_FILE}"
+rm -f -- "${TASK_ARCH_ARGS_FILE}"
+trap - EXIT
+
 TASK_ARGS=(
+  "${TASK_ARCH_ARGS[@]}"
   --actor-num-nodes "${TASK_ACTOR_NODES}"
   --actor-num-gpus-per-node "${TASK_ACTOR_GPUS}"
   --rollout-num-gpus "${TASK_ROLLOUT_GPUS}"
@@ -132,9 +149,12 @@ else
   [[ -d ${PRISM_PRETRAINED_CHECKPOINT} ]] || {
     echo "Missing native Prism checkpoint: ${PRISM_PRETRAINED_CHECKPOINT}" >&2; exit 2;
   }
-  TASK_ARGS+=(--prism-pretrained-checkpoint "${PRISM_PRETRAINED_CHECKPOINT}")
+  TASK_ARGS+=(
+    --custom-megatron-model-initializer-path slime_plugins.models.prism.load_prism_pretrained
+    --pretrained-checkpoint "${PRISM_PRETRAINED_CHECKPOINT}"
+  )
   if [[ -n ${PRISM_PRETRAINED_STEP:-} ]]; then
-    TASK_ARGS+=(--prism-pretrained-step "${PRISM_PRETRAINED_STEP}")
+    TASK_ARGS+=(--ckpt-step "${PRISM_PRETRAINED_STEP}")
   fi
 fi
 

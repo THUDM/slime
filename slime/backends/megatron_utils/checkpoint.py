@@ -2,7 +2,6 @@ import logging
 import os
 import re
 from contextlib import contextmanager, nullcontext
-from copy import copy
 from pathlib import Path
 
 import torch
@@ -139,40 +138,34 @@ def load_checkpoint(ddp_model, optimizer, opt_param_scheduler, checkpointing_con
     args = get_args()
     load_path = args.load
 
-    native_load = _is_native_model_checkpoint(load_path)
-    native_initializer = getattr(args, "prism_pretrained_checkpoint", None)
-    # Native SFT components have their own model/manifest layout. They are
-    # model-only initializers, even when an explicit iter_* path is supplied.
-    # A normal slime --load always keeps precedence over the initializer flag;
-    # this also prevents reference/teacher HF loads from loading actor weights.
-    if native_load or (load_path is None and native_initializer):
-        from slime_plugins.models.prism import load_prism_pretrained
+    initializer_path = getattr(args, "custom_megatron_model_initializer_path", None)
+    # Explicit actor, reference and teacher loads keep their normal loader.
+    # The initializer only populates model weights for a fresh training run.
+    if load_path is None and initializer_path:
+        from slime.utils.misc import load_function
 
-        initializer_args = args
-        if native_load:
-            initializer_args = copy(args)
-            initializer_args.prism_pretrained_checkpoint = load_path
-            initializer_args.prism_pretrained_step = getattr(args, "ckpt_step", None)
-            if (Path(load_path) / "checkpoint.json").is_file():
-                selected_step = (
-                    0 if Path(load_path).name == "release" else int(Path(load_path).name.removeprefix("iter_"))
-                )
-                if initializer_args.prism_pretrained_step not in (None, selected_step):
-                    raise ValueError("--ckpt-step disagrees with the explicit native checkpoint directory")
-                initializer_args.prism_pretrained_step = None
-        result = load_prism_pretrained(ddp_model, initializer_args)
+        if not getattr(args, "pretrained_checkpoint", None):
+            raise ValueError("--custom-megatron-model-initializer-path requires --pretrained-checkpoint")
+        initializer = load_function(initializer_path)
+        if not callable(initializer):
+            raise TypeError(f"Model initializer {initializer_path!r} must be callable")
+        if initializer(ddp_model, args) is not None:
+            raise TypeError(f"Model initializer {initializer_path!r} must return None")
         if optimizer is not None and (args.fp16 or args.bf16):
             optimizer.reload_model_params()
-        return result
+        return 0, 0
 
     if load_path is None:
-        raise ValueError("model initialization requires --load or --prism-pretrained-checkpoint")
+        raise ValueError("model initialization requires --load or --custom-megatron-model-initializer-path")
 
     assert Path(load_path).exists() and _is_dir_nonempty(
         load_path
     ), f"{args.load=} does not exist or is an empty directory. Did you specify the wrong folder?"
 
     if _is_megatron_checkpoint(load_path):
+        # A selected checkpoint must never become random/model-only weights
+        # when Megatron cannot find its rank files or selected iteration.
+        args.exit_on_missing_checkpoint = True
         if getattr(args, "use_stateless_adam", False):
             # The master parameters are rebuilt from the saved model. There are
             # no Adam moments to load, and Megatron must skip its optimizer keys.
@@ -199,39 +192,18 @@ def load_checkpoint(ddp_model, optimizer, opt_param_scheduler, checkpointing_con
                 torch.load(checkpoint / "opt_param_scheduler.pt", map_location="cpu", weights_only=True)
             )
         return result
-    else:
+    elif (Path(load_path) / "config.json").is_file():
         return _load_checkpoint_hf(
             ddp_model=ddp_model,
             optimizer=optimizer,
             args=args,
             load_path=load_path,
         )
-
-
-def _is_native_model_checkpoint(path: str | Path | None) -> bool:
-    """Identify the split model DCP layout without loading tensors or SFT state."""
-    if path is None:
-        return False
-    candidate = Path(path)
-    if (candidate / "checkpoints").is_dir():
-        candidate /= "checkpoints"
-    if (candidate / "checkpoint.json").is_file() and (candidate / "model").is_dir():
-        return True
-    tracker = candidate / "latest_checkpointed_iteration.txt"
-    if tracker.is_file():
-        marker = tracker.read_text().strip()
-        if marker == "release":
-            selected = candidate / "release"
-        elif marker.isdecimal():
-            selected = candidate / f"iter_{int(marker):07d}"
-        else:
-            return False
-        return (selected / "checkpoint.json").is_file() and (selected / "model").is_dir()
-    return False
+    raise ValueError(f"Explicit --load must identify a Megatron or HuggingFace checkpoint: {load_path}")
 
 
 def _is_megatron_checkpoint(path: str | Path | None) -> bool:
-    if path is None or _is_native_model_checkpoint(path):
+    if path is None:
         return False
     return (Path(path) / "latest_checkpointed_iteration.txt").is_file() or bool(
         re.fullmatch(r"iter_\d{7,}", Path(path).name)
