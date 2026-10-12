@@ -5,6 +5,8 @@ from types import SimpleNamespace
 import pytest
 import torch
 from scripts.prism_numerical_diagnostic import (
+    _activation_capture,
+    activation_fusion,
     canonical_rows,
     differences,
     oracle_inputs,
@@ -107,3 +109,52 @@ def test_selected_scores_reject_misaligned_successor_head_layout():
             torch.zeros(1, 2, 2, dtype=torch.long),
             torch.zeros(1, 2, dtype=torch.long),
         )
+
+
+def test_activation_variant_restores_shared_and_independent_configs_on_error():
+    shared, independent = SimpleNamespace(bias_activation_fusion=True), SimpleNamespace(bias_activation_fusion=False)
+    model = SimpleNamespace(
+        decoder=SimpleNamespace(
+            layers=[
+                SimpleNamespace(mlp=SimpleNamespace(config=shared)),
+                SimpleNamespace(mlp=SimpleNamespace(config=shared)),
+                SimpleNamespace(mlp=SimpleNamespace(config=independent)),
+            ]
+        )
+    )
+    with pytest.raises(RuntimeError, match="diagnostic failure"), activation_fusion(model, False):
+        assert not shared.bias_activation_fusion
+        assert not independent.bias_activation_fusion
+        raise RuntimeError("diagnostic failure")
+    assert shared.bias_activation_fusion
+    assert not independent.bias_activation_fusion
+
+
+def test_activation_capture_reads_actual_linear_boundaries_and_keeps_first_loop_call():
+    class MLP(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear_fc1 = torch.nn.Linear(4, 8, bias=False).to(torch.bfloat16)
+            self.linear_fc2 = torch.nn.Linear(4, 4, bias=False).to(torch.bfloat16)
+
+        def forward(self, value):
+            gate, up = self.linear_fc1(value).chunk(2, -1)
+            return self.linear_fc2(torch.nn.functional.silu(gate) * up)
+
+    mlp = MLP()
+    model = SimpleNamespace(
+        config=SimpleNamespace(prism_mlp_only_layers=()), decoder=SimpleNamespace(layers=[SimpleNamespace(mlp=mlp)])
+    )
+    captures, handles = _activation_capture(model)
+    try:
+        mlp(torch.ones(3, 1, 4, dtype=torch.bfloat16))
+        first = captures["0"]["pre_activation"].clone()
+        mlp(torch.zeros(3, 1, 4, dtype=torch.bfloat16))
+        torch.testing.assert_close(captures["0"]["pre_activation"], first)
+        assert captures["0"]["pre_activation"].shape == (3, 1, 8)
+        assert captures["0"]["post_activation"].shape == (3, 1, 4)
+        assert captures["0"]["pre_activation"].dtype == torch.bfloat16
+        assert captures["0"]["post_activation"].dtype == torch.bfloat16
+    finally:
+        for handle in handles:
+            handle.remove()

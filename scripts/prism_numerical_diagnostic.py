@@ -10,6 +10,7 @@ Only this user-provided artifact is loaded with trust_remote_code=True.
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from pathlib import Path
 
 import torch
@@ -151,6 +152,45 @@ def _cpu(value):
     return value
 
 
+@contextmanager
+def activation_fusion(model, enabled):
+    """Temporarily select MCore's own SwiGLU path and restore shared configs."""
+    configs = {id(layer.mlp.config): layer.mlp.config for layer in model.decoder.layers}
+    previous = [(config, config.bias_activation_fusion) for config in configs.values()]
+    try:
+        for config, _ in previous:
+            config.bias_activation_fusion = enabled
+        yield
+    finally:
+        for config, value in previous:
+            config.bias_activation_fusion = value
+
+
+def _activation_capture(model):
+    """Record actual FC1 output and FC2 input; no replacement activation."""
+    values, handles = {}, []
+    indices = (0, *model.config.prism_mlp_only_layers[:1])
+
+    def before(index):
+        def hook(_module, _inputs, output):
+            tensor = output[0] if isinstance(output, tuple) else output
+            values.setdefault(str(index), {}).setdefault("pre_activation", tensor.detach().clone())
+
+        return hook
+
+    def after(index):
+        def hook(_module, inputs):
+            values.setdefault(str(index), {}).setdefault("post_activation", inputs[0].detach().clone())
+
+        return hook
+
+    for index in indices:
+        mlp = model.decoder.layers[index].mlp
+        handles.append(mlp.linear_fc1.register_forward_hook(before(index)))
+        handles.append(mlp.linear_fc2.register_forward_pre_hook(after(index)))
+    return values, handles
+
+
 @torch.no_grad()
 def diagnose(context):
     """Smoke before-hook; GPU execution and the HF artifact are explicit inputs."""
@@ -176,7 +216,7 @@ def diagnose(context):
     device = batch["tokens"].device
     previous_training = wrapper.training
     native, native_handles = _capture(model, native=True)
-    hf_handles, oracle = [], None
+    hf_handles, variant_handles, oracle = [], [], None
     try:
         wrapper.eval()
         with torch.no_grad():
@@ -235,6 +275,40 @@ def diagnose(context):
         omni_codes[:, :real_length] = sample_mm["policy_rollout_code_logprobs"].to(device)
         omni_stops[:, :real_length] = sample_mm["policy_rollout_stop_logprobs"].to(device)
         omni_scores = torch.cat((omni_codes, omni_stops.unsqueeze(-1)), dim=-1)
+        variants, variant_scores, variant_activations = {}, {}, {}
+        for enabled in (True, False):
+            key = "fused" if enabled else "unfused"
+            activations, variant_handles = _activation_capture(model)
+            try:
+                with activation_fusion(model, enabled):
+                    scores = forward(wrapper, batch)
+            finally:
+                for handle in variant_handles:
+                    handle.remove()
+                variant_handles.clear()
+            variant_scores[key] = scores
+            variant_activations[key] = activations
+            variants[key] = {
+                "bias_activation_fusion": enabled,
+                "vs_native_baseline": score_differences(scores, native_scores, prepared),
+                "vs_omni": score_differences(scores, omni_scores, prepared),
+                "vs_hf_bf16": score_differences(scores, hf_scores, prepared),
+                "activation_dtypes": {
+                    layer: {stage: str(tensor.dtype) for stage, tensor in values.items()}
+                    for layer, values in activations.items()
+                },
+            }
+        activation_deltas = {
+            layer: {
+                stage: differences(
+                    canonical_rows(variant_activations["fused"][layer][stage], native=True),
+                    canonical_rows(variant_activations["unfused"][layer][stage], native=True),
+                    rows,
+                )
+                for stage in ("pre_activation", "post_activation")
+            }
+            for layer in variant_activations["fused"]
+        }
         native_logits = torch.stack([native["heads"][str(q)]["logits"] for q in range(spec.topology.n_vq)], dim=2)
         report = {
             "dtype": spec.dtype,
@@ -248,6 +322,8 @@ def diagnose(context):
             "torch_bf16_logits_vs_native": differences(torch_bf16, native_logits, rows),
             "hf_bf16_vs_native": score_differences(hf_scores, native_scores, prepared),
             "hf_bf16_vs_omni": score_differences(hf_scores, omni_scores, prepared),
+            "activation_fusion_variants": variants,
+            "activation_fusion_deltas": activation_deltas,
             "sites": {
                 key: {
                     name: differences(native["norms"][key][name], hf["norms"][key][name], rows)
@@ -267,13 +343,15 @@ def diagnose(context):
                     "torch_bf16_head_scores": bf16_scores,
                     "torch_fp32_head_scores": fp32_scores,
                     "prepared": prepared,
+                    "activation_variant_scores": variant_scores,
+                    "activation_variant_tensors": variant_activations,
                 }
             ),
             output / "numerical-diagnostic.pt",
         )
         return report
     finally:
-        for handle in [*native_handles, *hf_handles]:
+        for handle in [*native_handles, *hf_handles, *variant_handles]:
             handle.remove()
         wrapper.train(previous_training)
         del oracle
