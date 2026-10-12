@@ -229,6 +229,256 @@ html[lang=zh-CN] h1 {
   margin: 0 0 25px
 }
 
+.hero-actions,
+.walkthrough-controls,
+.walkthrough-finish,
+.comparison-actions,
+.repair-jumps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.hero-copy .hero-note {
+  display: block;
+  margin: 18px 0 0;
+}
+
+.hero-note a {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.rl-walkthrough {
+  padding: 36px 0 48px;
+  border-top: 1px solid var(--line);
+  scroll-margin-top: 20px;
+}
+
+.walkthrough-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.walkthrough-stages {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  margin: 24px 0;
+}
+
+.walkthrough-stages [aria-current],
+.walkthrough-stages [aria-current]:hover {
+  background: var(--yellow);
+  border-color: var(--ink);
+}
+
+.walkthrough-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr);
+  align-items: start;
+  gap: 32px;
+}
+
+.walkthrough-body>.world {
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #f2f7ef;
+  min-height: 390px;
+}
+
+.walkthrough-disclaimer,
+.comparison-note,
+.recipe-source p {
+  font-size: 16px;
+  color: var(--muted);
+}
+
+.walkthrough-prompt {
+  margin: 16px 0;
+  padding: 12px;
+  background: white;
+  border-radius: 8px;
+}
+
+.walkthrough-samples {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.walkthrough-sample {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 2px;
+  background: white;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 15px;
+}
+
+.walkthrough-sample strong {
+  font-size: 21px;
+}
+
+.walkthrough-sample.correct {
+  background: #d8efd9;
+  border-color: #7ca982;
+}
+
+.walkthrough-sample.incorrect {
+  background: #fbebe2;
+}
+
+.walkthrough-update {
+  padding: 16px 0;
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+
+[data-tour-phase="1"] .sampler,
+[data-tour-phase="3"] .trainer,
+[data-tour-phase="4"] .flow-arrow {
+  outline: 3px solid #bf9200;
+  outline-offset: 2px;
+}
+
+.walkthrough-controls,
+.walkthrough-finish {
+  margin-top: 24px;
+}
+
+.comparison,
+.recipe-source {
+  padding: 20px;
+  margin: 22px 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.comparison summary,
+.recipe-source summary,
+.repair-preview summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.comparison-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin: 20px 0;
+}
+
+.comparison-config {
+  padding: 16px;
+  border-radius: 12px;
+  background: var(--paper);
+  min-width: 0;
+}
+
+.comparison-config p,
+.comparison-config li,
+.comparison-insights,
+.config-differences,
+.recipe-source dl {
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+
+.comparison-switch {
+  display: none;
+}
+
+.config-differences {
+  list-style: none;
+  padding: 0;
+}
+
+.config-differences li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.repair-issue {
+  padding: 18px;
+  margin: 16px 0;
+  background: #fff9e8;
+  border: 1px solid #d9cda6;
+  border-radius: 12px;
+}
+
+.repair-issue h3 {
+  margin: 0 0 12px;
+  font-size: 18px;
+}
+
+.repair-preview {
+  padding: 16px 0 4px;
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+
+.recipe-source dt {
+  font-weight: 700;
+  margin-top: 14px;
+}
+
+.recipe-source dd {
+  margin-left: 0;
+}
+
+.recipe-source a {
+  text-decoration: underline;
+}
+
+@media (max-width: 720px) {
+  .site-header .install-nav {
+    display: none;
+  }
+
+  .walkthrough-body,
+  .comparison-pair {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .walkthrough-stages {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .walkthrough-body>.world,
+  .comparison,
+  .comparison-config {
+    padding: 12px;
+  }
+
+  .comparison-switch {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 18px;
+  }
+
+  .comparison-switch [aria-pressed="true"] {
+    background: var(--yellow);
+  }
+
+  .comparison-config:not(.selected) {
+    display: none;
+  }
+}
+
 .button {
   display: inline-flex;
   align-items: center;
@@ -339,6 +589,180 @@ html[lang=zh-CN] h1 {
   bottom: 34px;
   left: -14px;
   font-size: 29px
+}
+
+.installation {
+  display: grid;
+  grid-template-columns: minmax(0, .8fr) minmax(0, 1.6fr);
+  gap: 48px;
+  padding: 48px 0 60px;
+  border-top: 1px solid var(--line);
+  scroll-margin-top: 20px;
+}
+
+.install-intro>p:not(.eyebrow),
+.install-description,
+.install-note {
+  color: var(--muted);
+}
+
+.installation a:not(.button) {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.install-journey {
+  list-style: none;
+  padding: 12px 0;
+}
+
+.install-journey li {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 16px 0;
+}
+
+.install-journey span {
+  display: grid;
+  place-items: center;
+  flex: 0 0 36px;
+  height: 36px;
+  background: var(--mint);
+  border: 1px solid #b5d3bd;
+  border-radius: 50%;
+  font: 700 14px "Courier New", monospace;
+}
+
+.install-workspace {
+  min-width: 0;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+}
+
+.install-methods {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.install-methods legend {
+  margin-bottom: 10px;
+  font-size: 16px;
+  color: var(--muted);
+}
+
+.install-methods label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.install-methods label:has(input:checked) {
+  background: var(--mint);
+  border-color: #4f7b5b;
+}
+
+.install-methods input {
+  accent-color: #41744c;
+  margin: 0;
+}
+
+.install-methods span {
+  font-weight: 700;
+}
+
+.install-methods small {
+  display: block;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.install-description,
+.install-note {
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+
+.install-image-control {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin: 20px 0;
+  font-size: 16px;
+}
+
+.install-image-control select {
+  max-width: 100%;
+  padding: 9px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.install-terminal {
+  margin: 16px 0;
+  border: 1px solid #3d4d41;
+  border-radius: 10px;
+  background: #141e19;
+  color: #d3ecd7;
+  overflow: hidden;
+}
+
+.install-terminal-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid #3d4d41;
+  font-size: 15px;
+}
+
+.install-terminal button {
+  flex-shrink: 0;
+  padding: 5px 10px;
+  border-color: #67786b;
+}
+
+.install-terminal button:hover {
+  background: #324538;
+}
+
+.install-terminal pre {
+  margin: 0;
+  padding: 18px 16px;
+  font-size: 15px;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+#install-image-value {
+  color: #ffdf6a;
+}
+
+.install-next {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+  font-size: 16px;
 }
 
 .lab {
@@ -1271,6 +1695,16 @@ dialog .learn-links {
 }
 
 @media(max-width:1000px) {
+  .installation {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
+  }
+
+  .install-journey {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 24px;
+  }
   main {
     padding: 0 24px
   }
@@ -1339,6 +1773,19 @@ dialog .learn-links {
 }
 
 @media(max-width:720px) {
+  .install-workspace {
+    padding: 16px;
+  }
+
+  .install-methods label {
+    padding: 10px;
+  }
+
+  .install-terminal-bar,
+  .install-terminal pre {
+    padding: 12px;
+  }
+
   main {
     padding: 0 18px
   }
@@ -1598,6 +2045,50 @@ dialog .learn-links {
 
 .glm-lineage>div>span {
   color: #9daaa1
+}
+
+.companion-projects h3 {
+  margin: 0 0 16px;
+  font-size: 20px;
+}
+
+.companion-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  gap: 16px;
+}
+
+.companion-card {
+  padding: 20px 24px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.companion-card:hover {
+  background: var(--mint);
+  border-color: #93b39a;
+  text-decoration: none;
+}
+
+.companion-name {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.companion-name>span {
+  color: #417b88;
+}
+
+.companion-card p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1.8;
 }
 
 .capabilities {
@@ -3008,13 +3499,6 @@ button,
   }
 }
 
-@media (min-width: 1001px) {
-  .preview {
-    max-height: calc(100dvh - 36px);
-    overflow-y: auto;
-  }
-}
-
 .library-teaser>* {
   min-width: 0;
   overflow-wrap: anywhere;
@@ -3057,4 +3541,546 @@ button,
 
 .external-map .pd-nodes {
   flex-direction: column;
+}
+
+/* One page scroll; compact spacing keeps controls and diagrams together. */
+.preview {
+  position: static;
+  min-width: 0;
+}
+
+.builder-panel,
+.hero-copy,
+.walkthrough-copy,
+.recipe-heading>div,
+.inputs-grid>* {
+  min-width: 0;
+}
+
+.recipe-heading {
+  flex-wrap: wrap;
+}
+
+.recipe-heading>div {
+  flex: 1 1 480px;
+}
+
+.recipe-source,
+.repair-issue {
+  color: var(--ink);
+}
+
+.artifact-preview {
+  border: 1px solid #3d4d41;
+  border-radius: 0 0 10px 10px;
+  background: #141e19;
+}
+
+.artifact-preview>summary {
+  padding: 12px 16px;
+  cursor: pointer;
+  font-size: 16px;
+}
+
+.recipe pre {
+  max-height: none;
+  min-height: 0;
+  overflow: visible;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+  border: 0;
+}
+
+.reader-article pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.schedule-explorer>summary,
+.world-placement>summary,
+.resource-options>summary {
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.schedule-explorer[open]>summary,
+.world-placement[open]>summary {
+  margin-bottom: 12px;
+}
+
+.world-placement {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.resource-options {
+  padding: 12px;
+  margin-block: 14px;
+  background: #f4f1df;
+  border: 1px solid #e1dcbf;
+  border-radius: 10px;
+}
+
+.resource-options .resource-card {
+  border: 0;
+  padding: 0;
+  margin-top: 12px;
+}
+
+.simulation-status:empty {
+  display: none;
+}
+
+.steps {
+  scroll-margin-top: 12px;
+}
+
+.walkthrough-body {
+  grid-template-columns: minmax(0, .85fr) minmax(0, 1.4fr);
+  grid-template-areas: "copy world" "controls world" "finish world";
+  gap: 12px 24px;
+}
+
+.walkthrough-copy { grid-area: copy; }
+.walkthrough-body>.world { grid-area: world; min-height: 0; }
+.walkthrough-controls { grid-area: controls; margin-top: 0; gap: 8px; }
+.walkthrough-finish { grid-area: finish; margin-top: 0; gap: 8px; }
+
+@media (min-width: 721px) {
+  .site-header {
+    height: 72px;
+  }
+
+  main,
+  .site-header {
+    padding-inline: 32px;
+  }
+
+  .hero {
+    padding: 40px 0;
+    min-height: 0;
+    gap: 24px;
+    grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  }
+
+  .hero h1 {
+    font-size: clamp(40px, 4.5vw, 62px);
+    margin: 16px 0;
+  }
+
+  .hero-description {
+    max-width: 660px;
+    margin-bottom: 16px;
+    font-size: 18px;
+  }
+
+  .hero-capabilities {
+    margin: 12px 0 20px;
+  }
+
+  .core-capabilities {
+    gap: 16px;
+    padding-bottom: 32px;
+  }
+
+  .core-capabilities article {
+    padding: 20px 24px;
+  }
+
+  .core-capabilities h2 {
+    font-size: 26px;
+    margin: 12px 0;
+  }
+
+  .core-capabilities p {
+    font-size: 17px;
+    line-height: 1.6;
+    margin: 12px 0;
+  }
+
+  .capability-flow {
+    margin-top: 12px;
+  }
+
+  .ecosystem,
+  .installation,
+  .lab,
+  .rl-walkthrough,
+  .library-teaser {
+    padding-block: 28px 36px;
+  }
+
+  .glm-lineage {
+    padding-block: 16px;
+    margin-bottom: 18px;
+  }
+
+  .companion-card {
+    padding: 16px 20px;
+  }
+
+  .scroll-invitation {
+    margin-top: 24px;
+    padding-top: 16px;
+  }
+
+  .installation {
+    grid-template-columns: minmax(0, .65fr) minmax(0, 1.7fr);
+    gap: 28px;
+  }
+
+  .install-workspace {
+    padding: 20px;
+  }
+
+  .install-workspace h3 {
+    font-size: 20px;
+    margin: 14px 0 8px;
+  }
+
+  .install-description,
+  .install-note {
+    margin-block: 10px;
+    line-height: 1.6;
+  }
+
+  .install-image-control {
+    margin-block: 12px;
+  }
+
+  .install-terminal {
+    margin-block: 12px;
+  }
+
+  .install-terminal-bar {
+    padding: 6px 12px;
+  }
+
+  .install-terminal pre {
+    padding: 12px;
+    line-height: 1.5;
+  }
+
+  .install-next {
+    margin-top: 16px;
+    padding-top: 12px;
+  }
+
+  .lab-heading .eyebrow,
+  .walkthrough-heading .eyebrow {
+    margin-top: 0;
+  }
+
+  .presets {
+    margin: 12px 0 16px;
+  }
+
+  .comparison,
+  .recipe-source {
+    padding: 12px 16px;
+    margin-block: 14px;
+  }
+
+  .steps button {
+    padding-block: 10px;
+  }
+
+  .workbench {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 16px;
+  }
+
+  .builder-panel {
+    padding: 20px;
+    min-height: 0;
+  }
+
+  .step-heading {
+    margin-bottom: 16px;
+    gap: 12px;
+  }
+
+  #step-description,
+  .option-description,
+  .toggle-row small,
+  .input-label small,
+  .resource-card p,
+  .advice p {
+    line-height: 1.5;
+  }
+
+  .field-group {
+    margin-bottom: 14px;
+  }
+
+  .option-card {
+    padding: 12px;
+  }
+
+  .toggle-row {
+    padding-block: 10px;
+  }
+
+  .inputs-grid {
+    gap: 10px;
+  }
+
+  .step-help {
+    margin-bottom: 12px;
+  }
+
+  .step-controls {
+    padding-top: 12px;
+  }
+
+  .schedule-explorer,
+  .parallel-explorer {
+    padding: 12px;
+    margin-block: 14px;
+  }
+
+  .preview-heading {
+    padding: 12px 16px 0;
+    flex-wrap: wrap;
+  }
+
+  .world {
+    padding: 14px 16px 10px;
+    min-height: 0;
+    container-type: inline-size;
+  }
+
+  .world-top {
+    margin-bottom: 12px;
+  }
+
+  .world-colocate {
+    padding: 12px 8px 8px;
+  }
+
+  .world-node {
+    padding: 8px 6px;
+  }
+
+  .world-lesson {
+    padding: 12px;
+    margin-top: 14px;
+  }
+
+  .world-top+.world-lesson {
+    margin-top: 0;
+  }
+
+  .world-lesson h4 {
+    margin-bottom: 10px;
+  }
+
+  .world-lesson p {
+    margin-top: 10px;
+    line-height: 1.5;
+  }
+
+  .serving-scene {
+    gap: 8px;
+  }
+
+  .serving-pool,
+  .serving-stage,
+  .draft-stage,
+  .verify-stage,
+  .commit-stage {
+    padding: 8px;
+  }
+
+  .serving-cache {
+    margin: 8px 0;
+  }
+
+  .serving-cache>div {
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    padding: 6px;
+  }
+
+  .serving-connector,
+  .serving-transfer {
+    padding-block: 6px;
+  }
+
+  .summary {
+    padding: 10px 16px;
+  }
+
+  .summary small {
+    display: inline;
+    margin-right: 6px;
+  }
+
+  .advice {
+    padding: 10px 16px;
+  }
+
+  .review-link {
+    padding: 10px 16px;
+  }
+
+  .walkthrough-stages {
+    margin-block: 12px;
+  }
+
+  .rl-walkthrough {
+    padding-block: 20px 24px;
+  }
+
+  .rl-walkthrough>p {
+    margin-block: 8px;
+    font-size: 16px;
+  }
+
+  .walkthrough-body>.world {
+    padding: 14px;
+  }
+
+  .walkthrough-copy h3 {
+    margin: 0 0 12px;
+  }
+
+  .walkthrough-sample b {
+    text-align: center;
+  }
+
+  .walkthrough-copy p {
+    margin-block: 12px;
+    line-height: 1.6;
+  }
+
+  .walkthrough-prompt {
+    margin-block: 10px;
+    padding: 8px;
+  }
+
+  .walkthrough-update {
+    padding-block: 10px;
+  }
+
+  .recipe {
+    padding: 24px;
+    margin-bottom: 36px;
+  }
+
+  .run-guide,
+  .artifact-toolbar {
+    margin-top: 16px;
+  }
+
+  .run-guide li,
+  .recipe-footnote {
+    line-height: 1.6;
+  }
+
+  .advanced-section {
+    padding-bottom: 40px;
+  }
+
+  .advanced-section>div {
+    margin-bottom: 20px;
+  }
+
+  .advanced-section summary {
+    padding-block: 16px;
+  }
+}
+
+@container (min-width: 500px) {
+  .serving-direction {
+    display: inline-block;
+    transform: rotate(-90deg);
+  }
+
+  .serving-scene[data-pd="true"],
+  .combined-pool {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 8px;
+    align-items: start;
+  }
+
+  .combined-pool {
+    display: grid;
+  }
+
+  .serving-prompt,
+  .combined-pool>.serving-pool-label {
+    grid-column: 1 / -1;
+  }
+
+  .prefill-pool,
+  .combined-pool>.prefill-stage {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .decode-pool,
+  .combined-pool>.decode-stage {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  .serving-transfer,
+  .combined-pool>.serving-connector {
+    grid-column: 1 / -1;
+    grid-row: 3;
+  }
+
+  .serving-transfer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+  }
+}
+
+@media (min-width: 1100px) {
+  .walkthrough-samples {
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+    gap: 5px;
+  }
+
+  .option-grid.single .option-card {
+    display: grid;
+    grid-template-columns: minmax(0, .8fr) minmax(0, 1.3fr);
+    gap: 10px;
+    align-items: center;
+  }
+
+  .option-grid.single .option-title {
+    padding-right: 0;
+  }
+
+  .option-grid.single .option-description {
+    margin: 0;
+    padding-right: 24px;
+  }
+}
+
+@media (min-width: 721px) and (max-width: 1000px) {
+  .installation {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 720px) {
+  .walkthrough-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "copy" "world" "controls" "finish";
+    gap: 16px;
+  }
+
+  .recipe-heading>div {
+    flex-basis: 100%;
+  }
 }

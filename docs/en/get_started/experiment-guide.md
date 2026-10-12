@@ -20,6 +20,14 @@ The lab's **Play a round** animation illustrates this loop. It is not a simulati
 
 ## 1. Choose the task and model
 
+New to RL? Use **Understand an RL run** on the homepage for a five-stage prompt → eight answers → verifier → GRPO → weight-sync walkthrough. Play, pause or advance manually. Its temporary example leaves your saved experiment untouched; **Use this GRPO starting point** adopts it as one undoable change. The example uses four rewards of 1 and four of 0: mean 0.5, sample standard deviation √(2/7), and normalized advantages approximately ±0.94, matching the default reward normalization in `slime/data/batch_builder.py`. These are illustrative values, not a measured training run or a promise of reward improvement.
+
+Use **Compare A / B** to save the complete current configuration as A, then edit B. A stays fixed across edits, undo/redo and reloads. Dependency changes, such as async selecting separate GPU pools, appear in the differences. Each side gets its own static validation; the default export is always B. **Restore A into B** is undoable; replacing or clearing A is separate from B's history. A/B share links filter private paths, addresses and hooks on both sides, just like ordinary share links.
+
+If PD has insufficient resources, expand a repair preview beside the export area. It shows field changes, GPU allocation and remaining requirements before applying anything. Resource adjustments derive from the selected recipe's engine size and parallelism. Apply one repair, then use Undo to restore all of its fields together. RDMA devices and external addresses must come from your environment. The installation image selector carries hardware context into Placement; it does not certify a model or memory fit.
+
+**Source & validation scope** records the page checkout, recipe and model-config sources, source hashes, known Docker build versions, and explicitly missing runtime information. A dirty local build can differ from its commit links; its hashes describe the actual source files. `experiment.json` includes the same provenance; shell comments point to the recipe commit. These records describe generation, not the versions installed on your servers. No full-configuration GPU validation is inferred from static checks or a source script. **Load JSON** accepts previous schema-1 exports or choices objects, replacing B as one undoable action and regenerating provenance for the current page.
+
 The initial experiment uses verifiable math, JSONL keys `prompt` and `label`, a chat template, and the built-in `deepscaler` reward. It samples eight responses per prompt, uses GRPO, and runs three rounds. This is a correctness run, not a claim of capability improvement.
 
 For an agent or a different reward, choose **My agent / reward**, then provide importable generation and reward functions. Those hooks must exist in the same environment on workers. The lab does not invent a reward function for your task. See [agent workflows](agent.md) and [hook contracts](customization.md).
@@ -32,7 +40,7 @@ Model selection changes architecture, TP/PP/CP/EP, conversion strategy, and serv
 
 ## 2. Choose GPU ownership, then scheduling
 
-The lab shows starting GPU counts, total allocation, and clickable TP/PP/EP/CP/ZeRO diagrams. CPU Adam and activation recomputation switches change the exported shell. See [memory accounting and parallelism](../advanced/parallelism-memory.md), including allgather/zigzag CP.
+Expand **GPU recommendation, memory & parallelism** in Placement for starting GPU counts, total allocation, CPU Adam and recomputation settings. The parallelism section contains clickable TP/PP/EP/CP/ZeRO diagrams. CPU Adam and activation recomputation switches change the exported shell. Supplementary diagrams and the generated-file preview expand on demand; the page keeps a single scroll flow. See [memory accounting and parallelism](../advanced/parallelism-memory.md), including allgather/zigzag CP.
 
 | Choice | What happens | What you must provide |
 |---|---|---|

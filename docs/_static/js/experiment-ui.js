@@ -184,6 +184,8 @@
     toastTimer, parallelView = 'tp',
     cpView = 'zigzag';
   const hashParams = new URLSearchParams(location.hash.slice(1));
+  const build = JSON.parse($('experiment-build').textContent);
+  let baseline = null;
   try {
     const encoded = hashParams.get('experiment');
     if (encoded) state = E.sanitize(JSON.parse(encoded));
@@ -191,6 +193,8 @@
       const saved = localStorage.getItem('slime-experiment-v1');
       if (saved) state = E.sanitize(JSON.parse(saved));
     }
+    const savedBaseline = encoded ? hashParams.get('baseline') : localStorage.getItem('slime-baseline-v1');
+    if (savedBaseline) baseline = E.sanitize(JSON.parse(savedBaseline));
   } catch (_) {}
 
   function toast(message) {
@@ -251,7 +255,7 @@
           ]) +
           `<p class="option-description">${t('The compact starting recipe uses GRPO, 8 responses per prompt, and 3 rounds.','起步配方使用 GRPO，每个 prompt 8 次采样，先训练 3 轮。')}</p>`;
       case 1:
-        return options('layout', t('Where do the engines live?', '引擎部署在哪里？'), [
+        return `<label class="input-label">${E.fieldLabel('hardware', lang)}<select name="hardware">${[['unspecified', t('Not specified', '未指定')], ['hopper', 'H100 / H200'], ['blackwell', 'B200 / B300']].map(([value, label]) => `<option value="${value}" ${state.hardware === value ? 'selected' : ''}>${label}</option>`).join('')}</select><small>${t('Shared with the installation image selector. Records conditions, not available GPU capacity or a validated model list.', '与安装区的镜像选择关联。只记录硬件条件，不代表可用卡数或经过验证的模型列表。')}</small></label>` + options('layout', t('Where do the engines live?', '引擎部署在哪里？'), [
             ['colocate', 'Colocated', t(
               'One pool. Rollout and training take turns; weights use CUDA IPC.',
               '同一组 GPU，训推轮流执行；CUDA IPC 同步权重。')],
@@ -266,13 +270,13 @@
               '跨 step 持续生成；搭配 straw 启用分布式 workers。')]
           ]) +
           `<div class="inputs-grid">${input('nodes',t('Training nodes × 8 GPUs','训练节点数 × 8 GPU'),'number')}${state.layout!=='colocate'?input('rollout',state.layout==='external'?t('External GPUs (planning only)','外部 GPU 数（规划用）'):t('Rollout GPUs','Rollout GPU 数'),'number'):''}</div>` +
-          schedulingPanel() + resourcePanel() + toggle('cpuAdam', 'CPU Adam · ' + t('save GPU memory',
+          schedulingPanel() + `<details class="resource-options" data-detail="resources"><summary>${t('GPU recommendation, memory & parallelism', 'GPU 推荐、显存与并行')} · ${E.validate(state).localGpus} GPU</summary>` + resourcePanel() + toggle('cpuAdam', 'CPU Adam · ' + t('save GPU memory',
             '节省显存'), t(
             'Offload optimizer states and compute; uses host RAM and transfer bandwidth.',
             '优化器状态与计算 offload 到 CPU，需要主机内存与传输带宽。')) + toggle('recompute', t('Recompute activations',
             '激活重计算'), t(
             'Keep fewer intermediates; recompute them during backward.', '少存中间激活，在 backward 时重新计算。')) +
-          parallelPanel();
+          parallelPanel() + '</details>';
       case 2:
         return options('precision', t('Training → rollout weights', '训练 → 推理权重'), [
             ['bf16', 'BF16 → BF16', t('An easy baseline for measuring mismatch.', '适合建立基线，先测量训推差异。')],
@@ -380,7 +384,7 @@
         '共享 JuiceFS 队列与张量 packs；搭配 fully async：分布式生成 workers。')) + (state.straw ?
         `<div class="inputs-grid">${input('queueDir',t('Shared JuiceFS rollout directory','共享 JuiceFS rollout 目录'),'text','/shared/juicefs/jobs/my-run/rollout_data',true)}${input('queueRun','Run ID','text','my-run')}${input('declaration',t('JuiceFS declaration JSON','JuiceFS 声明 JSON'),'text','/shared/juicefs/deployment.json')}</div>` :
         '') +
-      `<div class="schedule-explorer"><strong>${distributed?'Distributed fully async':async?'Fully async':state.partial?t('Synchronous + partial rollout','同步 + partial rollout'):t('Synchronous baseline','同步基线')}</strong><div class="schedule-lanes"><div><small>${t('Generation','生成')}</small><span class="lane-gen">${distributed?'worker 0 / 1 / …': 'SGLang'}</span><span class="lane-gen ${async?'':'lane-muted'}">${async?t('continues during training','训练时持续生成'):t('pause for update','暂停并更新')}</span></div><div><small>${t('Training','训练')}</small><span class="lane-muted">${t('ready batch','就绪 batch')}</span><span class="lane-train">Megatron</span><span class="lane-update">weights ↺</span></div>${state.partial?`<div><small>${t('Long response','长回复')}</small><span class="lane-gen">prefix · v₀</span><span class="lane-muted">${t('save','保存')}</span><span class="lane-update">suffix · v₁</span></div>`:''}</div><p>${distributed?t('Autonomous producers feed one global queue; the trainer need not wait for every worker. Admission pauses and in-flight results are persisted around weight updates.','多个 producer 向全局队列供数，训练不必等待每个 worker。权重更新时暂停接收新任务，并保存进行中的结果。'):async?t('A manager-local background worker keeps the queue warm across rounds. Select straw to distribute the producer processes.','管理进程内的后台 worker 跨轮次维持队列；选择 straw 可将 producer 进程分布到多机。'):state.partial?t('Oversample 16 groups, train with 8 accepted complete groups, save unfinished groups for continuation. Partial responses are not directly used as completed training examples.','超采样 16 组，用 8 组已完成且被接受的样本训练；未完成组留待续跑，不直接当作完整训练样本。'):t('Complete the selected batch before the training phase. Long responses can hold the batch open.','先完成当前 batch，再进入训练阶段；长回复可能让整批等待。')}</p><small>${t('Conceptual timeline; widths are not measured durations.','概念时间线，宽度不代表实际耗时。')}</small><a href="advanced/rollout-scheduling.html">${t('Compare scheduling, continuation & recovery →','对比调度、续跑与恢复 →')}</a></div>`;
+      `<details class="schedule-explorer" data-detail="schedule"><summary>${distributed?'Distributed fully async':async?'Fully async':state.partial?t('Synchronous + partial rollout','同步 + partial rollout'):t('Synchronous baseline','同步基线')} · ${t('see the timeline', '查看时间线')}</summary><div class="schedule-lanes"><div><small>${t('Generation','生成')}</small><span class="lane-gen">${distributed?'worker 0 / 1 / …': 'SGLang'}</span><span class="lane-gen ${async?'':'lane-muted'}">${async?t('continues during training','训练时持续生成'):t('pause for update','暂停并更新')}</span></div><div><small>${t('Training','训练')}</small><span class="lane-muted">${t('ready batch','就绪 batch')}</span><span class="lane-train">Megatron</span><span class="lane-update">weights ↺</span></div>${state.partial?`<div><small>${t('Long response','长回复')}</small><span class="lane-gen">prefix · v₀</span><span class="lane-muted">${t('save','保存')}</span><span class="lane-update">suffix · v₁</span></div>`:''}</div><p>${distributed?t('Autonomous producers feed one global queue; the trainer need not wait for every worker. Admission pauses and in-flight results are persisted around weight updates.','多个 producer 向全局队列供数，训练不必等待每个 worker。权重更新时暂停接收新任务，并保存进行中的结果。'):async?t('A manager-local background worker keeps the queue warm across rounds. Select straw to distribute the producer processes.','管理进程内的后台 worker 跨轮次维持队列；选择 straw 可将 producer 进程分布到多机。'):state.partial?t('Oversample 16 groups, train with 8 accepted complete groups, save unfinished groups for continuation. Partial responses are not directly used as completed training examples.','超采样 16 组，用 8 组已完成且被接受的样本训练；未完成组留待续跑，不直接当作完整训练样本。'):t('Complete the selected batch before the training phase. Long responses can hold the batch open.','先完成当前 batch，再进入训练阶段；长回复可能让整批等待。')}</p><small>${t('Conceptual timeline; widths are not measured durations.','概念时间线，宽度不代表实际耗时。')}</small><a href="advanced/rollout-scheduling.html">${t('Compare scheduling, continuation & recovery →','对比调度、续跑与恢复 →')}</a></details>`;
   }
 
   function resourcePanel() {
@@ -392,7 +396,7 @@
 
   function parallelPanel() {
     const m = E.models[state.model];
-    return `<details class="parallel-explorer" open><summary>${t('What are TP / PP / EP / CP / ZeRO?','TP / PP / EP / CP / ZeRO 是什么？')}</summary><div class="parallel-tabs" aria-label="${t('Parallelism explanations','并行方式解释')}">${['tp','pp','ep','cp','zero','memory'].map(k=>`<button type="button" data-parallel="${k}" aria-pressed="${parallelView===k}">${k==='memory'?t('Memory','内存'):k==='zero'?'ZeRO':k.toUpperCase()}</button>`).join('')}</div><div id="parallel-diagram">${parallelDiagram()}</div><p class="parallel-current">${t('Current recipe','当前配方')}: TP${m.tp} · PP${m.pp} · EP${m.ep} · CP${m.cp} · ${state.model==='glm5'?'allgather CP':'zigzag CP'} · ${t('distributed optimizer enabled','distributed optimizer 已开启')}</p><a href="advanced/parallelism-memory.html" target="_blank" rel="noopener">${t('Diagrams, formulas & papers ↗','图示、公式与论文 ↗')}</a></details>`;
+    return `<details class="parallel-explorer" data-detail="parallel"><summary>${t('What are TP / PP / EP / CP / ZeRO?','TP / PP / EP / CP / ZeRO 是什么？')}</summary><div class="parallel-tabs" aria-label="${t('Parallelism explanations','并行方式解释')}">${['tp','pp','ep','cp','zero','memory'].map(k=>`<button type="button" data-parallel="${k}" aria-pressed="${parallelView===k}">${k==='memory'?t('Memory','内存'):k==='zero'?'ZeRO':k.toUpperCase()}</button>`).join('')}</div><div id="parallel-diagram">${parallelDiagram()}</div><p class="parallel-current">${t('Current recipe','当前配方')}: TP${m.tp} · PP${m.pp} · EP${m.ep} · CP${m.cp} · ${state.model==='glm5'?'allgather CP':'zigzag CP'} · ${t('distributed optimizer enabled','distributed optimizer 已开启')}</p><a href="advanced/parallelism-memory.html" target="_blank" rel="noopener">${t('Diagrams, formulas & papers ↗','图示、公式与论文 ↗')}</a></details>`;
   }
 
   function parallelDiagram() {
@@ -472,7 +476,7 @@
     $('world').classList.remove('enter');
     void $('world').offsetWidth;
     $('world').classList.add('enter');
-    $('simulation-status').textContent = t('Click “Play a round” to follow the data.', '点击「演示一轮」，跟着数据走一遍。');
+    $('simulation-status').textContent = '';
     $('summary').innerHTML = [
       [t('Local Ray GPUs', '本地 Ray GPU'), v.localGpus],
       [t('Schedule', '调度'), state.schedule === 'async' ? (state.straw ? 'Distributed async' :
@@ -497,8 +501,8 @@
     if (generated.validation.errors.length) notes.push(
       `<span class="warning">${t(`${generated.validation.errors.length} setup item(s) to resolve before export.`, `导出前还有 ${generated.validation.errors.length} 项配置需要补齐。`)}</span>`
     );
-    else notes.push(t('The pieces fit. Review your paths and export the recipe below.',
-      '配置组合检查通过。核对路径，即可导出下方配方。'));
+    if (generated.validation.issues.length) notes.push(`<a href="#repair-options">${t('Review repair options and missing fields →', '查看修复方案与待填字段 →')}</a>`);
+
     $('advice').innerHTML = notes.map(n => `<p>${n}</p>`).join('');
   }
 
@@ -516,8 +520,13 @@
     $('copy').disabled = blocked;
   }
 
+  const expandedDetails = new Set();
   function render() {
-    generated = E.generate(state, lang);
+    document.querySelectorAll('[data-detail]').forEach(detail => {
+      if (detail.open) expandedDetails.add(detail.dataset.detail);
+      else expandedDetails.delete(detail.dataset.detail);
+    });
+    generated = E.generate(state, lang, build);
     $('steps').innerHTML = steps.map((step, i) =>
       `<button type="button" data-step="${i}" ${state.step===i?'aria-current="step"':''}><span>${String(i+1).padStart(2,'0')}</span>${step[0]}</button>`
     ).join('');
@@ -534,6 +543,9 @@
     $('undo').disabled = !history.length;
     $('redo').disabled = !future.length;
     drawWorld();
+    document.querySelectorAll('[data-detail]').forEach(detail => {
+      detail.open = expandedDetails.has(detail.dataset.detail);
+    });
     const v = generated.validation;
     $('issues').innerHTML = (v.errors.length ?
       `<div class="notice error"><strong>${t('Finish these settings to export','补齐这些配置即可导出')}</strong><ul>${v.errors.map(e=>`<li>${esc(e)}</li>`).join('')}</ul></div>` :
@@ -541,15 +553,106 @@
       `<details class="notice"><summary>${t('Recipe notes','配方说明')} · ${v.notes.length}</summary><ul>${v.notes.map(n=>`<li>${esc(n)}</li>`).join('')}</ul></details>` :
       '');
     showArtifact();
+    renderComparison();
+    renderRepairs();
+    renderSource();
+    if (state.hardware !== 'unspecified') {
+      $('install-image').value = state.hardware === 'blackwell' ? 'slimerl/slime:latest-cu130' : 'slimerl/slime:latest-cu129';
+      $('install-image-value').textContent = $('install-image').value;
+    }
     $('run-steps').innerHTML =
-      `<li><strong>${t('Prepare weights & data.','准备模型与数据。')}</strong> ${t('Use the','先准备')} <a href="get_started/quick_start.html">${t('documented environment','文档中的运行环境')}</a>${t(', then run ', '，然后运行 ')}<code>bash experiment.sh prepare</code> → <code>bash experiment.sh convert</code>${t('. Existing BF16 / torch_dist paths can be used directly.', '。也可直接填写已有 BF16 / torch_dist 路径。')}</li><li><strong>${t('Connect the cluster.','连接集群。')}</strong> ${t(`Make ${v.localGpus} Ray GPUs available. Start the head with ray start --head; join workers with ray start --address=HEAD:6379. Use the same repo and paths on all nodes.`, `准备 ${v.localGpus} 张 Ray GPU。主节点执行 ray start --head；worker 使用 ray start --address=HEAD:6379 加入。各节点保持相同仓库和路径。`)} ${state.layout==='external'?t('Deploy engines using serving-reference.sh first.','先参照 serving-reference.sh 部署引擎。'):''}</li><li><strong>${t('Run & inspect.','启动并观察。')}</strong> <code>bash experiment.sh check</code> → <code>bash experiment.sh train</code>. ${t('Then check reward and train_rollout_logprob_abs_diff. Add a held-out evaluation before a long run.','观察 reward 与 train_rollout_logprob_abs_diff；长时间训练前添加独立验证集。')} <a href="https://github.com/THUDM/slime/blob/main/scripts/run-${E.models[state.model].recipe}.sh">${t('Recipe source ↗','配方源码 ↗')}</a></li>`;
+      `<li><strong>${t('Prepare weights & data.','准备模型与数据。')}</strong> ${t('Use the','先准备')} <a href="#install">${t('environment above','上方的运行环境')}</a>${t(', save experiment.sh in the slime checkout, then run ', '，将 experiment.sh 保存到 slime 仓库根目录，然后运行 ')}<code>bash experiment.sh prepare</code> → <code>bash experiment.sh convert</code>${t('. Existing BF16 / torch_dist paths can be used directly.', '。也可直接填写已有 BF16 / torch_dist 路径。')}</li><li><strong>${t('Connect the cluster.','连接集群。')}</strong> ${t(`Make ${v.localGpus} Ray GPUs available. Start the head with ray start --head; join workers with ray start --address=HEAD:6379. Use the same repo and paths on all nodes.`, `准备 ${v.localGpus} 张 Ray GPU。主节点执行 ray start --head；worker 使用 ray start --address=HEAD:6379 加入。各节点保持相同仓库和路径。`)} ${state.layout==='external'?t('Deploy engines using serving-reference.sh first.','先参照 serving-reference.sh 部署引擎。'):''}</li><li><strong>${t('Run & inspect.','启动并观察。')}</strong> <code>bash experiment.sh check</code> → <code>bash experiment.sh train</code>. ${t('Then check reward and train_rollout_logprob_abs_diff. Add a held-out evaluation before a long run.','观察 reward 与 train_rollout_logprob_abs_diff；长时间训练前添加独立验证集。')} <a href="${generated.provenance.recipe.url || 'https://github.com/THUDM/slime/blob/main/scripts/run-' + E.models[state.model].recipe + '.sh'}">${t('Recipe source ↗','配方源码 ↗')}</a></li>`;
   }
+
+  const displayValue = value => esc(typeof value === 'boolean' ? value ? t('on', '开') : t('off', '关') : value === '' ? '—' : value);
+  const resourceSummary = (s, v) => `${v.localGpus} ${t('local Ray GPUs', '本地 Ray GPU')} · ${v.total} train · ${v.rollout} rollout${s.layout === 'colocate' ? ' (' + t('shared pool', '共享池') + ')' : s.layout === 'external' ? ' (' + t('external pool, not counted locally', '外部池，不计入本地') + ')' : ''}`;
+  const differencesHtml = diff => `<ul class="config-differences">${diff.map(d => `<li><strong>${esc(d.label)}</strong><span>${displayValue(d.before)} → ${displayValue(d.after)}</span></li>`).join('')}</ul>`;
+  let comparisonSide = 'b';
+
+  function renderComparison() {
+    for (const id of ['restore-baseline', 'share-comparison', 'clear-baseline']) $(id).disabled = !baseline;
+    $('comparison-count').textContent = '';
+    if (!baseline) {
+      $('comparison-content').innerHTML = `<p>${t('Save A, then change any choice in B to compare the tradeoffs.', '先保存 A，再修改 B 的任意选项，即可对照取舍。')}</p>`;
+      return;
+    }
+    const comparison = E.compare(baseline, state, lang);
+    $('comparison-count').textContent = `· ${comparison.differences.length} ${t('changes', '项变化')}`;
+    $('comparison-content').innerHTML = `<div class="comparison-switch" aria-label="${t('View configuration', '查看配置')}">${['a', 'b'].map(side => `<button type="button" data-compare-side="${side}" aria-pressed="${comparisonSide === side}">${side.toUpperCase()} · ${side === 'a' ? t('Saved baseline', '已存基线') : t('Current / export', '当前 / 导出')}</button>`).join('')}</div>
+      <div class="comparison-pair">${[['a', baseline], ['b', state]].map(([side, s]) => `<section class="comparison-config ${comparisonSide === side ? 'selected' : ''}" data-compare-config="${side}"><h3>${side.toUpperCase()} · ${esc(E.models[s.model].name)} · ${esc(s.schedule)}</h3><p>${resourceSummary(s, comparison[side])}</p><div class="world">${window.SlimeDiagrams.topology(s, E.models[s.model], comparison[side], lang)}</div><p>${comparison[side].errors.length ? `${comparison[side].errors.length} ${t('unresolved items', '项待解决')}` : t('Static checks passed', '静态检查通过')}</p>${comparison[side].errors.length ? `<ul>${comparison[side].errors.map(error => `<li>${esc(error)}</li>`).join('')}</ul>` : ''}</section>`).join('')}</div>
+      ${comparison.differences.length ? differencesHtml(comparison.differences) : `<p>${t('A and B have the same configuration.', 'A 与 B 的配置相同。')}</p>`}
+      <div class="comparison-insights">${comparison.insights.map(text => `<p>${esc(text)}</p>`).join('')}</div><p class="comparison-note">${t('Mechanisms and allocation counts, not measured speed or a memory-fit prediction. Current B remains the export target.', '展示机制与资源分配，不预测实测速度或显存容量。当前 B 始终是导出目标。')}</p>`;
+  }
+
+  function renderRepairs() {
+    $('repair-options').innerHTML = generated.validation.issues.map(issue => `<section class="repair-issue"><h3>${esc(issue.message)}</h3><div class="repair-jumps">${issue.fields.map(field => `<button type="button" data-repair-target="${field}">${t('Edit', '填写 / 修改')} ${esc(E.fieldLabel(field, lang))} →</button>`).join('')}</div>${issue.actions.map(action => {
+      const next = E.sanitize({...state, ...action.changes});
+      const comparison = E.compare(state, next, lang);
+      return `<details class="repair-preview"><summary>${t('Preview', '预览')} · ${esc(action.label)}</summary>${differencesHtml(comparison.differences)}<p>${resourceSummary(state, comparison.a)} → ${resourceSummary(next, comparison.b)}</p><p>${t('Allocation only; check available hardware and memory before applying.', '仅为资源分配；应用前核对可用硬件与显存条件。')}</p>${comparison.b.errors.length ? `<strong>${t('Still required after applying:', '应用后仍需解决：')}</strong><ul>${comparison.b.errors.map(error => `<li>${esc(error)}</li>`).join('')}</ul>` : `<p>${t('Static constraints would pass. GPU execution remains unverified.', '静态约束将通过；GPU 运行仍待验证。')}</p>`}<button type="button" class="button light" data-repair-issue="${issue.code}" data-repair-action="${action.id}">${t('Apply this repair', '应用此修复')}</button></details>`;
+    }).join('')}</section>`).join('');
+  }
+
+  function renderSource() {
+    const p = generated.provenance;
+    const unknown = t('Not recorded', '未记录');
+    const sourceLink = source => source.url ? `<a href="${esc(source.url)}">${esc(source.path)} ↗</a>` : esc(source.path);
+    $('recipe-source-content').innerHTML = `<p><strong>${p.staticChecksPassed ? t('Static checks passed', '静态检查通过') : t('Static checks have unresolved items', '静态检查有待解决项')}</strong> · ${t('No measured run attached to this configuration.', '此配置未附实测记录。')}</p><dl>
+      <dt>${t('Page / generator checkout', '页面 / 生成器 checkout')}</dt><dd>${esc(p.page.commit || unknown)} · ${p.page.dirty === null ? unknown : p.page.dirty ? t('local changes present; commit is the base revision', '含本地修改；commit 为基础版本') : t('clean checkout', '干净 checkout')}</dd>
+      <dt>${t('Recipe basis', '配方依据')}</dt><dd>${sourceLink(p.recipe)}<br>SHA-256: ${esc(p.recipe.sha256 || unknown)}</dd>
+      <dt>${t('Model dimensions', '模型尺寸配置')}</dt><dd>${sourceLink(p.modelConfig)}</dd>
+      <dt>${t('Recorded Dockerfile defaults', '记录的 Dockerfile 默认版本')}</dt><dd>${Object.entries(p.environment.recipeVersions || {}).map(([k, v]) => `${esc(k)}: ${esc(v || unknown)}`).join('<br>') || unknown}</dd>
+      <dt>${t('Suggested image / runtime digest', '建议镜像 / 实际 digest')}</dt><dd>${esc(p.environment.suggestedImageTag || unknown)} / ${unknown}</dd>
+      <dt>${t('Checkpoint ID / revision', 'Checkpoint ID / revision')}</dt><dd>${esc(p.checkpoint.id)} / ${unknown}</dd>
+      <dt>${t('Installed slime commit', '服务器实际 slime commit')}</dt><dd>${unknown} · <code>git rev-parse HEAD</code></dd></dl>
+      <p>${t('These records describe the sources used by this page, not the software installed on your servers. Local source hashes are included in experiment.json; dirty builds can differ from the linked commit. A script basis does not certify your modified combination. Record image digest, checkpoint revision and short-run results before scaling.', '这些记录描述页面采用的源码，不代表服务器实际安装版本。experiment.json 包含本地源码哈希；含本地修改的构建可能与 commit 链接不同。配方来源不等于对修改后组合的认证；扩容前记录镜像 digest、checkpoint revision 和短实验结果。')}</p>`;
+  }
+
+  function saveBaseline() {
+    try {
+      if (baseline) localStorage.setItem('slime-baseline-v1', JSON.stringify(baseline));
+      else localStorage.removeItem('slime-baseline-v1');
+    } catch (_) {}
+    renderComparison();
+  }
+  $('save-baseline').addEventListener('click', () => {
+    baseline = E.sanitize(state);
+    saveBaseline();
+    toast(t('Baseline A saved. Further edits change B only.', '基线 A 已保存，后续编辑只改变 B。'));
+  });
+  $('clear-baseline').addEventListener('click', () => {baseline = null; saveBaseline();});
+  $('restore-baseline').addEventListener('click', () => {
+    if (baseline) commit(E.sanitize({...baseline, step: state.step}), t('A restored into B. Undo restores the previous B.', 'A 已恢复到 B；撤销可找回之前的 B。'));
+  });
+  $('comparison-content').addEventListener('click', event => {
+    const button = event.target.closest('[data-compare-side]');
+    if (!button) return;
+    comparisonSide = button.dataset.compareSide;
+    renderComparison();
+    document.querySelector(`[data-compare-side="${comparisonSide}"]`).focus({preventScroll: true});
+  });
+  $('repair-options').addEventListener('click', event => {
+    const field = event.target.closest('[data-repair-target]')?.dataset.repairTarget;
+    if (field) {
+      navigate(['nodes', 'rollout'].includes(field) ? 1 : ['prefill', 'ib'].includes(field) ? 4 : 5);
+      document.querySelector(`[name="${field}"]`)?.focus();
+      return;
+    }
+    const button = event.target.closest('[data-repair-action]');
+    if (!button) return;
+    const action = E.validate(state, lang).issues.find(issue => issue.code === button.dataset.repairIssue)?.actions.find(action => action.id === button.dataset.repairAction);
+    if (action) {
+      commit(E.sanitize({...state, ...action.changes}), t('Repair applied. Undo restores all changed fields.', '修复已应用，撤销可一起恢复所有修改字段。'));
+      $('recipe-title').setAttribute('tabindex', '-1');
+      $('recipe-title').focus({preventScroll: true});
+    }
+  });
 
   function navigate(step) {
     commit({
       ...state,
       step
     });
+    $('steps').scrollIntoView({behavior: 'smooth', block: 'start'});
     $('step-title').focus({
       preventScroll: true
     });
@@ -562,7 +665,75 @@
     $('play').setAttribute('aria-pressed', 'false');
     $('play').textContent = '▶ ' + t('Play a round', '演示一轮');
   }
+  const walkthroughState = E.preset('first');
+  let walkthroughStage = 0, walkthroughTimer = null;
+  const walkthroughSteps = [
+    [t('Prompt', '输入'), t('Start with one question.', '从一个问题开始。'), t('For this small example, ask “What is 6 × 7?” The starting model already knows how to generate text. RL uses feedback on its sampled answers to update its behavior.', '这个例子问「6 × 7 等于多少？」。起始模型已经能生成文本，RL 用采样回答得到的反馈来更新它的行为。')],
+    [t('Generate', '生成'), t('SGLang samples eight answers.', 'SGLang 采样八个回答。'), t('Sample eight responses to the same prompt. Answers can repeat or be wrong. Save the generated tokens and rollout log-probabilities for training.', '对同一个 prompt 采样八次。回答可能重复，也可能出错；保存生成 token 及 rollout log-prob，供训练使用。')],
+    [t('Reward', '奖励'), t('A verifier scores each answer.', '验证器给每个回答打分。'), t('In this illustrative binary reward, answer 42 earns 1 and the other answers earn 0. A coding task could instead run tests. The reward function determines which behavior receives a useful learning signal.', '这个二值奖励示例中，答案 42 得 1 分，其他答案得 0 分。代码任务可以运行测试打分。奖励函数决定哪些行为获得有效学习信号。')],
+    [t('Train', '训练'), t('Relative scores become a learning signal.', '相对得分变成训练信号。'), t('Four correct and four incorrect answers give mean reward 0.5. With the repository’s sample-standard-deviation normalization, advantages are about +0.94 and −0.94. Megatron uses these signals with GRPO, clipping and the configured corrections to update model weights.', '四个正确、四个错误，平均 reward 为 0.5。按仓库采用的样本标准差归一化，advantage 约为 +0.94 和 −0.94。Megatron 结合 GRPO、裁剪和配置的修正，用这些信号更新模型权重。')],
+    [t('Sync', '同步'), t('New weights return to SGLang.', '新权重回到 SGLang。'), t('After this synchronous training phase, send the updated weights to SGLang for the next batch. Reward improvement is measured over runs, not guaranteed for the next answer. Later you can explore separate GPU pools, partial rollout and fully async scheduling.', '这轮同步训练结束后，将新权重交给 SGLang，用于下一批生成。Reward 改善要通过实验评估，不保证下一次回答更好。接下来可以探索独立 GPU 池、partial rollout 和 fully async 调度。')]
+  ];
+  function pauseWalkthrough() {
+    clearInterval(walkthroughTimer);
+    walkthroughTimer = null;
+    $('walkthrough-play').setAttribute('aria-pressed', 'false');
+    $('walkthrough-play').textContent = '▶ ' + t('Continue', '继续');
+  }
+  function renderWalkthrough() {
+    $('walkthrough-stages').innerHTML = walkthroughSteps.map(([label], stage) => `<button type="button" data-walkthrough-stage="${stage}" ${stage === walkthroughStage ? 'aria-current="step"' : ''}>${stage + 1} · ${label}</button>`).join('');
+    $('walkthrough-stage-title').textContent = walkthroughSteps[walkthroughStage][1];
+    $('walkthrough-explanation').textContent = walkthroughSteps[walkthroughStage][2];
+    $('walkthrough-world').innerHTML = window.SlimeDiagrams.walkthrough(walkthroughState, walkthroughStage, lang);
+    $('walkthrough-back').disabled = walkthroughStage === 0;
+    $('walkthrough-next').disabled = walkthroughStage === 4;
+  }
+  function playWalkthrough() {
+    if (walkthroughTimer) {pauseWalkthrough(); return;}
+    if (walkthroughStage === 4) walkthroughStage = 0;
+    stop();
+    renderWalkthrough();
+    $('walkthrough-play').setAttribute('aria-pressed', 'true');
+    $('walkthrough-play').textContent = 'Ⅱ ' + t('Pause', '暂停');
+    walkthroughTimer = setInterval(() => {
+      if (walkthroughStage === 4) {pauseWalkthrough(); return;}
+      walkthroughStage++;
+      renderWalkthrough();
+    }, 15000);
+  }
+  function openWalkthrough() {
+    $('learn').hidden = false;
+    renderWalkthrough();
+    $('walkthrough-title').focus({preventScroll: true});
+    $('learn').scrollIntoView({behavior: 'smooth'});
+  }
+  document.querySelectorAll('a[href="#learn"]').forEach(link => link.addEventListener('click', openWalkthrough));
+  window.addEventListener('hashchange', () => {if (location.hash === '#learn') openWalkthrough(); else pauseWalkthrough();});
+  document.addEventListener('visibilitychange', () => {if (document.hidden) pauseWalkthrough();});
+  $('walkthrough-play').addEventListener('click', playWalkthrough);
+  $('walkthrough-stages').addEventListener('click', event => {
+    const button = event.target.closest('[data-walkthrough-stage]');
+    if (!button) return;
+    pauseWalkthrough();
+    walkthroughStage = Number(button.dataset.walkthroughStage);
+    renderWalkthrough();
+    document.querySelector(`[data-walkthrough-stage="${walkthroughStage}"]`).focus({preventScroll: true});
+  });
+  for (const [id, delta] of [['walkthrough-back', -1], ['walkthrough-next', 1], ['walkthrough-restart', 0]]) {
+    $(id).addEventListener('click', () => {
+      pauseWalkthrough();
+      walkthroughStage = delta ? Math.min(4, Math.max(0, walkthroughStage + delta)) : 0;
+      renderWalkthrough();
+    });
+  }
+  $('adopt-walkthrough').addEventListener('click', () => {
+    pauseWalkthrough();
+    commit(E.sanitize(walkthroughState), t('GRPO starting point adopted. Undo restores your experiment.', '已采用 GRPO 起点，撤销可恢复你的实验。'));
+    location.hash = 'lab';
+  });
+  if (location.hash === '#learn') openWalkthrough();
   $('play').addEventListener('click', () => {
+    pauseWalkthrough();
     if (timer) {
       stop();
       $('simulation-status').textContent = t('Paused. You can change any piece.', '已暂停，可以修改任何一块。');
@@ -589,7 +760,7 @@
           '将 prefill 缓存传输给 decode 引擎。')]);
         const [stage, label] = stages[phase % stages.length];
         $('simulation-status').textContent = label;
-        document.querySelectorAll('[data-serving-phase]').forEach(node =>
+        $('world').querySelectorAll('[data-serving-phase]').forEach(node =>
           node.classList.toggle('active', node.dataset.servingPhase === stage));
         phase++;
         return;
@@ -610,8 +781,8 @@
           'New weights are synchronized before the next batch.', '同步新权重，然后进入下一批。')
       ];
       $('simulation-status').textContent = labels[phase % 3];
-      document.querySelector('.trainer').classList.toggle('active', async || phase % 3 === 1);
-      document.querySelectorAll('.sampler').forEach(node => node.classList.toggle('active', async ||
+      $('world').querySelector('.trainer').classList.toggle('active', async || phase % 3 === 1);
+      $('world').querySelectorAll('.sampler').forEach(node => node.classList.toggle('active', async ||
         phase % 3 === 0));
       phase++;
     };
@@ -626,6 +797,7 @@
     if (b.dataset.cp) cpView = b.dataset.cp;
     const host = document.querySelector('.parallel-explorer');
     host.outerHTML = parallelPanel();
+    document.querySelector('.parallel-explorer').open = true;
     document.querySelector(b.dataset.parallel ? `[data-parallel="${parallelView}"]` :
         `[data-cp="${cpView}"]`)
       .focus({
@@ -749,7 +921,39 @@
         '剪贴板不可用，请选中文字手动复制。'));
     }
   }
+  $('install-methods').addEventListener('change', e => {
+    $('install-docker').hidden = e.target.value !== 'docker';
+    $('install-conda').hidden = e.target.value !== 'conda';
+  });
+  $('install-image').addEventListener('change', e => {
+    $('install-image-value').textContent = e.target.value;
+    commit(E.change(state, 'hardware', e.target.value.endsWith('cu130') ? 'blackwell' : 'hopper'),
+      t('Hardware context carried into the builder. Model and GPU counts are unchanged.', '硬件条件已带入配置器，模型和 GPU 数量保持不变。'));
+  });
+  document.querySelectorAll('[data-install-copy]').forEach(button => {
+    button.hidden = false;
+    button.addEventListener('click', () => copy($(button.dataset.installCopy).textContent));
+  });
+  $('install-docker').hidden = !document.querySelector('[name="install-method"][value="docker"]').checked;
+  $('install-conda').hidden = !document.querySelector('[name="install-method"][value="conda"]').checked;
+  $('install-image-value').textContent = $('install-image').value;
+  $('install-methods').hidden = false;
+  $('install-image-control').hidden = false;
   $('copy').addEventListener('click', () => copy(generated.files[artifact]));
+  $('load-experiment').addEventListener('click', () => $('import-experiment').click());
+  $('import-experiment').addEventListener('change', async event => {
+    const file = event.target.files[0];
+    if (!file) return;
+    try {
+      if (file.size > 1024 * 1024) throw new Error('size');
+      const data = JSON.parse(await file.text());
+      if (!data || (data.schema !== undefined && data.schema !== 1) || !Object.hasOwn(E.models, (data.choices || data).model)) throw new Error('schema');
+      commit(E.sanitize(data), t('Choices loaded into B. Source records are regenerated for this page; Undo is available.', '已将选择载入 B，来源记录按当前页面重新生成；可以撤销。'));
+    } catch (_) {
+      toast(t('Use a schema 1 experiment.json or a saved choices object (up to 1 MiB).', '请选择 schema 1 的 experiment.json 或已保存的 choices 对象，大小不超过 1 MiB。'));
+    }
+    event.target.value = '';
+  });
   $('download').addEventListener('click', () => {
     const url = URL.createObjectURL(new Blob([generated.files[artifact]], {
       type: artifact.endsWith('.json') ? 'application/json' : 'text/plain;charset=utf-8'
@@ -764,18 +968,19 @@
     toast(t('Downloaded.', '已下载。'));
   });
   $('share').addEventListener('click', () => {
-    const shared = {
-      ...state
-    };
-    for (const key of ['hf', 'train', 'data', 'save', 'megatron', 'endpoints', 'shared', 'local', 'ib',
-        'generate', 'reward', 'queueDir', 'queueRun', 'declaration', 'draft'
-      ]) delete shared[key];
     const url = new URL(location.href);
     url.hash = new URLSearchParams({
-      experiment: JSON.stringify(shared)
+      experiment: JSON.stringify(E.shareChoices(state))
     }).toString();
     copy(url.href);
     toast(t('Share link copied. Machine paths and addresses are excluded.', '分享链接已复制，不包含机器路径与地址。'));
+  });
+  $('share-comparison').addEventListener('click', () => {
+    if (!baseline) return;
+    const url = new URL(location.href);
+    url.hash = new URLSearchParams({experiment: JSON.stringify(E.shareChoices(state)), baseline: JSON.stringify(E.shareChoices(baseline))}).toString();
+    copy(url.href);
+    toast(t('A/B link copied; both configurations exclude private paths and addresses.', 'A/B 链接已复制，两套配置均不含私有路径与地址。'));
   });
   $('step-help').addEventListener('click', e => {
     const b = e.target.closest('[data-learn]');

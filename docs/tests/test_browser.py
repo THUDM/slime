@@ -33,6 +33,206 @@ def expect_rendered_math(page):
     expect(page.locator(".reader-article mjx-merror")).to_have_count(0)
 
 
+def expect_share_metadata(page, lang, check_image=False):
+    canonical = "https://thudm.github.io/slime/" + ("zh/" if lang == "zh" else "")
+    expect(page.locator('link[rel="canonical"]')).to_have_attribute("href", canonical)
+    expect(page.locator('meta[property="og:url"]')).to_have_attribute("content", canonical)
+    expect(page.locator('meta[name="twitter:card"]')).to_have_attribute("content", "summary_large_image")
+    description = page.locator('meta[name="description"]').get_attribute("content")
+    assert "LLM" in description
+    expect(page.locator('meta[property="og:description"]')).to_have_attribute("content", description)
+    image = f"https://thudm.github.io/slime/_static/image/rl-world-{lang}.png"
+    expect(page.locator('meta[property="og:image"]')).to_have_attribute("content", image)
+    expect(page.locator('meta[name="twitter:image"]')).to_have_attribute("content", image)
+    if check_image:
+        assert (
+            page.evaluate(
+                """url => new Promise((resolve, reject) => {
+            const image = new Image();
+            image.onload = () => resolve([image.naturalWidth, image.naturalHeight]);
+            image.onerror = reject;
+            image.src = url;
+        })""",
+                image,
+            )
+            == [1200, 630]
+        )
+
+
+def exercise_laptop_layout(page, base, lang):
+    for width, height in ((1280, 800), (1440, 900)):
+        page.set_viewport_size({"width": width, "height": height})
+        hero = page.locator(".hero").bounding_box()
+        assert hero["y"] + hero["height"] <= height
+        page.locator('.hero-actions a[href="#learn"]').click()
+        page.locator('[data-walkthrough-stage="3"]').click()
+        # The explanation, graph and tour controls fit together on a laptop.
+        assert page.locator("#learn").bounding_box()["height"] <= height
+        for step in range(6):
+            page.locator(f'[data-step="{step}"]').click()
+            assert page.locator(".preview").evaluate("el => el.scrollHeight <= el.clientHeight + 1")
+            assert page.locator("#world").evaluate("el => el.scrollWidth <= el.clientWidth + 1")
+            assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+        page.locator(".artifact-preview > summary").click()
+        expect(page.locator("#artifact-panel")).to_be_visible()
+        # Long shell / JSON lines wrap; inspecting a file uses the page scroll.
+        assert page.locator("#artifact-panel").evaluate(
+            "el => el.scrollWidth <= el.clientWidth + 1 && el.scrollHeight <= el.clientHeight + 1"
+        )
+        page.locator(".artifact-preview > summary").click()
+        page.locator("#reset").click()
+    page.locator('[data-step="1"]').click()
+    page.locator(".resource-options > summary").click()
+    page.locator(".parallel-explorer > summary").click()
+    page.locator('[name="cpuAdam"]').uncheck()
+    expect(page.locator(".resource-options")).to_have_attribute("open", "")
+    expect(page.locator(".parallel-explorer")).to_have_attribute("open", "")
+    page.locator("#undo").click()
+    expect(page.locator('[name="cpuAdam"]')).to_be_checked()
+    expect(page.locator(".parallel-explorer")).to_have_attribute("open", "")
+    page.locator("#reset").click()
+    page.goto(f"{base}/{lang}/", wait_until="networkidle")
+    page.set_viewport_size({"width": 1440, "height": 1000})
+
+
+def exercise_homepage_review(page, context, base, lang):
+    page.locator('[name="task"][value="custom"]').check()
+    saved = page.evaluate("localStorage.getItem('slime-experiment-v1')")
+    page.locator('.hero-actions a[href="#learn"]').click()
+    expect(page.locator("#learn")).to_be_visible()
+    expect(page.locator(".walkthrough-sample")).to_have_count(8)
+    page.clock.install()
+    page.locator("#walkthrough-play").click()
+    page.clock.fast_forward(15000)
+    expect(page.locator('[data-walkthrough-stage="1"]')).to_have_attribute("aria-current", "step")
+    page.locator("#walkthrough-play").click()
+    page.clock.fast_forward(15000)
+    expect(page.locator('[data-walkthrough-stage="1"]')).to_have_attribute("aria-current", "step")
+    page.locator("#walkthrough-play").click()
+    page.clock.fast_forward(15000)
+    expect(page.locator(".walkthrough-sample.correct")).to_have_count(4)
+    page.locator("#walkthrough-next").click()
+    expect(page.locator(".walkthrough-sample").first).to_contain_text("+0.94")
+    page.locator("#walkthrough-next").click()
+    expect(page.locator('[data-tour-phase="4"]')).to_be_visible()
+    assert page.evaluate("localStorage.getItem('slime-experiment-v1')") == saved
+    for width in (390, 320):
+        page.set_viewport_size({"width": width, "height": 1000})
+        assert page.locator("#learn").evaluate("el => el.scrollWidth <= el.clientWidth")
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.set_viewport_size({"width": 1440, "height": 1000})
+    page.locator("#adopt-walkthrough").click()
+    expect(page.locator('[name="task"][value="math"]')).to_be_checked()
+    page.locator("#undo").click()
+    expect(page.locator('[name="task"][value="custom"]')).to_be_checked()
+    page.locator("#reset").click()
+    page.locator('[data-step="5"]').click()
+    page.locator('[name="hf"]').fill("/private/baseline-A")
+    page.locator('[name="hf"]').press("Tab")
+    page.locator("#comparison > summary").click()
+    page.locator("#save-baseline").click()
+    baseline = page.evaluate("localStorage.getItem('slime-baseline-v1')")
+    page.locator('[data-step="1"]').click()
+    page.locator('[name="schedule"][value="async"]').check()
+    expect(page.locator("#comparison-content")).to_contain_text("colocate → separate")
+    expect(page.locator("#comparison-content")).to_contain_text("sync → async")
+    page.locator('[data-step="2"]').click()
+    page.locator('[name="precision"][value="fp8"]').check()
+    page.locator('[data-step="3"]').click()
+    page.locator('[name="correction"][value="icepop"]').check()
+    expect(page.locator(".comparison-insights")).to_contain_text("0.4/0.1 = 4")
+    page.locator('[data-step="5"]').click()
+    page.locator('[name="hf"]').fill("/private/current-B")
+    page.locator('[name="hf"]').press("Tab")
+    assert page.evaluate("localStorage.getItem('slime-baseline-v1')") == baseline
+    page.locator('[data-artifact="experiment.json"]').click()
+    plan = json.loads(page.locator("#artifact-code").text_content())
+    assert plan["choices"]["schedule"] == "async"
+    assert plan["provenance"]["runtimeEvidence"] == []
+    assert len(plan["provenance"]["page"]["commit"]) == 40
+    page.locator("#recipe-source > summary").click()
+    expect(page.locator("#recipe-source-content")).to_contain_text(plan["provenance"]["recipe"]["path"])
+    for width in (390, 320):
+        page.set_viewport_size({"width": width, "height": 1000})
+        assert page.locator("#recipe-source").evaluate("el => el.scrollWidth <= el.clientWidth")
+        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.set_viewport_size({"width": 1440, "height": 1000})
+    page.reload(wait_until="networkidle")
+    page.locator("#comparison > summary").click()
+    assert page.evaluate("localStorage.getItem('slime-baseline-v1')") == baseline
+    for width in (390, 320):
+        page.set_viewport_size({"width": width, "height": 1000})
+        for side in ("a", "b"):
+            page.locator(f'[data-compare-side="{side}"]').click()
+            expect(page.locator(f'[data-compare-config="{side}"]')).to_be_visible()
+            expect(page.locator(f'[data-compare-config="{"b" if side == "a" else "a"}"]')).to_be_hidden()
+            assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+    page.set_viewport_size({"width": 1440, "height": 1000})
+    page.locator("#share-comparison").click()
+    link = page.evaluate("navigator.clipboard.readText()")
+    assert "private" not in link
+    shared = context.new_page()
+    shared.goto(link)
+    shared.locator("#comparison > summary").click()
+    expect(shared.locator("#comparison-content")).to_contain_text("sync → async")
+    shared.close()
+    page.locator("#restore-baseline").click()
+    assert json.loads(page.evaluate("localStorage.getItem('slime-experiment-v1')"))["schedule"] == "sync"
+    page.locator("#undo").click()
+    assert json.loads(page.evaluate("localStorage.getItem('slime-experiment-v1')"))["schedule"] == "async"
+    page.locator("#redo").click()
+    assert json.loads(page.evaluate("localStorage.getItem('slime-experiment-v1')"))["schedule"] == "sync"
+    page.locator("#undo").click()
+    current_b = page.evaluate("localStorage.getItem('slime-experiment-v1')")
+    page.locator("#save-baseline").click()
+    assert page.evaluate("localStorage.getItem('slime-experiment-v1')") == current_b
+    assert json.loads(page.evaluate("localStorage.getItem('slime-baseline-v1')"))["schedule"] == "async"
+    page.locator("#redo").click()
+    assert json.loads(page.evaluate("localStorage.getItem('slime-experiment-v1')"))["schedule"] == "sync"
+    assert json.loads(page.evaluate("localStorage.getItem('slime-baseline-v1')"))["schedule"] == "async"
+    page.locator("#clear-baseline").click()
+    assert page.evaluate("localStorage.getItem('slime-baseline-v1')") is None
+    page.locator("#reset").click()
+    page.locator('[data-step="1"]').click()
+    page.locator('[name="layout"][value="separate"]').check()
+    page.locator('[data-step="4"]').click()
+    page.locator('[name="pd"]').check()
+    before = page.evaluate("localStorage.getItem('slime-experiment-v1')")
+    apply = page.locator('[data-repair-action="pd-resources"]')
+    apply.locator("xpath=..").locator("summary").click()
+    expect(apply.locator("xpath=..")).to_contain_text("8 → 16")
+    assert page.evaluate("localStorage.getItem('slime-experiment-v1')") == before
+    apply.click()
+    expect(page.locator("#download")).to_be_disabled()
+    assert json.loads(page.evaluate("localStorage.getItem('slime-experiment-v1')"))["rollout"] == 16
+    page.locator("#undo").click()
+    assert page.evaluate("localStorage.getItem('slime-experiment-v1')") == before
+    page.locator("#redo").click()
+    page.locator('[data-repair-target="ib"]').click()
+    expect(page.locator('[name="ib"]')).to_be_focused()
+    page.locator('[name="ib"]').fill("mlx5_0")
+    page.locator('[name="ib"]').press("Tab")
+    expect(page.locator("#download")).to_be_enabled()
+    page.locator("#import-experiment").set_input_files(
+        {
+            "name": "old.json",
+            "mimeType": "application/json",
+            "buffer": json.dumps({"schema": 1, "choices": {"model": "dense"}}).encode(),
+        }
+    )
+    expect(page.locator('[name="model"][value="dense"]')).to_be_checked()
+    page.locator("#undo").click()
+    expect(page.locator('[name="pd"]')).to_be_checked()
+    before = page.evaluate("localStorage.getItem('slime-experiment-v1')")
+    page.locator("#import-experiment").set_input_files(
+        {"name": "future.json", "mimeType": "application/json", "buffer": b'{"schema":99,"choices":{"model":"dense"}}'}
+    )
+    expect(page.locator("#toast")).to_contain_text("schema 1")
+    assert page.evaluate("localStorage.getItem('slime-experiment-v1')") == before
+    page.locator("#reset").click()
+    page.goto(f"{base}/{lang}/", wait_until="networkidle")
+
+
 def run():
     build = Path(__file__).resolve().parents[1] / "build"
     server = ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(QuietHandler, directory=str(build)))
@@ -48,6 +248,53 @@ def run():
                 errors = []
                 page.on("pageerror", lambda error, target=errors: target.append(str(error)))
                 page.goto(f"{base}/{lang}/", wait_until="networkidle")
+                expect_share_metadata(page, lang)
+                expect(page.locator(".hero-copy .primary")).to_have_attribute("href", "#learn")
+                exercise_laptop_layout(page, base, lang)
+                exercise_homepage_review(page, context, base, lang)
+                expect(page.locator("#install-docker")).to_be_visible()
+                expect(page.locator("#install-conda")).to_be_hidden()
+                recipe_before_install = page.locator("#artifact-code").text_content()
+                for image in ("slimerl/slime:latest-cu130", "slimerl/slime:latest-cu129"):
+                    page.locator("#install-image").select_option(image)
+                    hardware = json.loads(page.evaluate("localStorage.getItem('slime-experiment-v1')"))["hardware"]
+                    assert hardware == ("blackwell" if image.endswith("cu130") else "hopper")
+                    page.locator('[data-install-copy="install-docker-host"]').click()
+                    commands = page.evaluate("navigator.clipboard.readText()")
+                    assert commands.startswith(f"SLIME_IMAGE={image}\n")
+                    assert 'docker pull "$SLIME_IMAGE"' in commands
+                    assert '-v "$PWD:/root/slime" -v "$PWD/../slime-data:/data"' in commands
+                    subprocess.run(["bash", "-n"], input=commands, text=True, check=True)
+                for width in (1440, 390, 320):
+                    page.set_viewport_size({"width": width, "height": 1000})
+                    for method in ("conda", "docker"):
+                        page.locator(f'[name="install-method"][value="{method}"]').check()
+                        panel = page.locator(f"#install-{method}")
+                        expect(panel).to_be_visible()
+                        for button in panel.locator("[data-install-copy]").all():
+                            button.click()
+                            commands = page.evaluate("navigator.clipboard.readText()")
+                            target = button.get_attribute("data-install-copy")
+                            assert commands == page.locator(f"#{target}").text_content()
+                            subprocess.run(["bash", "-n"], input=commands, text=True, check=True)
+                        assert page.locator("#install").evaluate("el => el.scrollWidth <= el.clientWidth")
+                        assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+                page.set_viewport_size({"width": 1440, "height": 1000})
+                page.locator('[name="install-method"][value="docker"]').focus()
+                page.keyboard.press("ArrowRight")
+                expect(page.locator("#install-conda")).to_be_visible()
+                page.keyboard.press("ArrowLeft")
+                expect(page.locator("#install-docker")).to_be_visible()
+                expect(page.locator("#artifact-code")).to_have_text(recipe_before_install)
+                page.locator(".install-next a").click()
+                expect(page).to_have_url(f"{base}/{lang}/#lab")
+                page.goto(f"{base}/{lang}/", wait_until="networkidle")
+                no_js = browser.new_page(java_script_enabled=False)
+                no_js.goto(f"{base}/{lang}/")
+                expect(no_js.locator("#install-docker")).to_be_visible()
+                expect(no_js.locator("#install-conda")).to_be_visible()
+                expect(no_js.locator("#install-methods")).to_be_hidden()
+                no_js.close()
                 expect(page.locator('[name="model"]')).to_have_count(6)
                 expect(page.locator(".hero-description")).to_contain_text("slime")
                 expect(page.locator(".core-capabilities article")).to_have_count(2)
@@ -103,7 +350,7 @@ def run():
                 page.locator('[name="model"][value="flash"]').check()
                 page.locator('[data-step="2"]').click()
                 expect(page.locator('[name="mambaDtype"]')).to_have_count(0)
-                assert "--sglang-mamba-" not in page.locator("#artifact-code").inner_text()
+                assert "--sglang-mamba-" not in page.locator("#artifact-code").text_content()
                 page.locator("#reset").click()
                 page.locator('[data-step="4"]').click()
                 for width in (1440, 390, 320):
@@ -169,21 +416,23 @@ def run():
                 expect(page.locator(".external-map .sampler")).to_have_count(3)
                 page.locator("#undo").click()
                 expect(page.locator(".external-map")).to_have_count(0)
+                page.locator(".resource-options > summary").click()
+                page.locator(".parallel-explorer > summary").click()
                 page.locator('[data-parallel="cp"]').click()
                 page.locator('[data-cp="allgather"]').click()
                 expect(page.locator("#parallel-diagram")).to_contain_text("DSA")
                 # The illustration must not change the selected model's CP recipe.
-                assert "--allgather-cp" not in page.locator("#artifact-code").inner_text()
+                assert "--allgather-cp" not in page.locator("#artifact-code").text_content()
                 page.locator('[data-parallel="memory"]').click()
                 page.locator('[name="cpuAdam"]').uncheck()
-                assert "--optimizer-cpu-offload" not in page.locator("#artifact-code").inner_text()
+                assert "--optimizer-cpu-offload" not in page.locator("#artifact-code").text_content()
                 page.locator("#undo").click()
                 expect(page.locator('[name="cpuAdam"]')).to_be_checked()
                 page.locator("#redo").click()
                 expect(page.locator('[name="cpuAdam"]')).not_to_be_checked()
                 page.locator('[name="partial"]').check()
                 page.locator('[name="maskPartial"]').check()
-                assert "--over-sampling-batch-size 16" in page.locator("#artifact-code").inner_text()
+                assert "--over-sampling-batch-size 16" in page.locator("#artifact-code").text_content()
                 page.locator('[name="schedule"][value="async"]').check()
                 expect(page.locator('[name="layout"][value="separate"]')).to_be_checked()
                 page.locator('[name="straw"]').check()
@@ -198,7 +447,7 @@ def run():
                 expect(page.locator("#download")).to_be_enabled()
                 expect(page.locator(".schedule-explorer")).to_contain_text("Distributed fully async")
                 expect(page.locator(".queue-pool")).to_contain_text("straw")
-                script = page.locator("#artifact-code").inner_text()
+                script = page.locator("#artifact-code").text_content()
                 assert "--rollout-data-transport straw" in script and "--partial-rollout" in script
                 assert "--over-sampling-batch-size" not in script
                 page.locator('[data-learn="partial"]').click()
@@ -241,7 +490,7 @@ def run():
                 expect(page.locator("#artifact-code")).to_contain_text("enable_hierarchical_cache: false")
                 page.keyboard.press("End")
                 expect(page.locator('[data-artifact="experiment.json"]')).to_be_focused()
-                plan = json.loads(page.locator("#artifact-code").inner_text())
+                plan = json.loads(page.locator("#artifact-code").text_content())
                 assert not plan["validation"]["errors"]
                 page.locator("#play").click()
                 expect(page.locator("#play")).to_have_attribute("aria-pressed", "true")
@@ -302,6 +551,7 @@ def run():
                 # Check local page/anchor targets from the new landing page and guides.
                 for doc in (
                     "index",
+                    "get_started/quick_start",
                     "get_started/experiment-guide",
                     "advanced/policy-mismatch",
                     "advanced/rl-systems",
@@ -381,12 +631,14 @@ def run():
                     context.route("https://thudm.github.io/**", production_route)
                     page = context.new_page()
                     page.goto(f"https://thudm.github.io{prefix}#lab", wait_until="networkidle")
+                    expect_share_metadata(page, "en", check_image=prefix == "/slime/")
                     expect(page.locator('[name="model"]')).to_have_count(6)
                     page.locator('[data-learn="grpo"]').click()
                     expect_rendered_math(page)
                     page.keyboard.press("Escape")
                     page.locator(".lang-toggle-btn").click()
                     page.wait_for_url(f"https://thudm.github.io{prefix}zh/#lab")
+                    expect_share_metadata(page, "zh", check_image=prefix == "/slime/")
                     page.locator('[data-learn="grpo"]').click()
                     expect_rendered_math(page)
                     page.keyboard.press("Escape")
