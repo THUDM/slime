@@ -457,6 +457,38 @@ def test_plugin_initializer_reads_generic_source_and_pin_without_rl_progress(mon
     assert args.iteration == 777 and args.ckpt_step == 20
 
 
+def test_cpu_config_helpers_survive_missing_cuda_library_but_training_fails_explicitly(monkeypatch, tmp_path):
+    import builtins
+    import importlib.util
+    import json
+    import sys
+
+    original_import = builtins.__import__
+    binary_error = OSError("libcuda.so.1: cannot open shared object file")
+
+    def missing_cuda(name, *args, **kwargs):
+        if name == "megatron.core":
+            raise binary_error
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", missing_cuda)
+    module_name = "test_prism_cpu_without_libcuda"
+    module_spec = importlib.util.spec_from_file_location(module_name, prism.__file__)
+    cpu_module = importlib.util.module_from_spec(module_spec)
+    monkeypatch.setitem(sys.modules, module_name, cpu_module)
+    module_spec.loader.exec_module(cpu_module)
+    (tmp_path / "config.json").write_text(json.dumps(_hf_config()))
+    assert cpu_module.read_prism_spec(tmp_path).hidden_size == 16
+    generated = cpu_module.prism_megatron_cli_args(tmp_path)
+    assert generated[generated.index("--num-layers") + 1] == "2"
+    assert "--qk-layernorm" in generated
+    assert cpu_module._MEGATRON_IMPORT_ERROR is binary_error
+    for operation in (cpu_module._require_megatron, cpu_module.model_provider):
+        with pytest.raises(RuntimeError, match="working Megatron Core installation") as failure:
+            operation()
+        assert failure.value.__cause__ is binary_error
+
+
 @pytest.mark.parametrize("backend", ["auto", "flash", "fused"])
 def test_decoder_construction_retains_native_te_attention_for_every_backend(monkeypatch, backend):
     """Exercise the real constructor's spec boundary without a CUDA dependency."""

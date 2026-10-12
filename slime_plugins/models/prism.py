@@ -47,7 +47,7 @@ try:
     )
     from megatron.core.transformer.transformer_layer import TransformerLayer, TransformerLayerSubmodules
     from megatron.core.utils import init_method_normal
-except ImportError as error:
+except (ImportError, OSError) as error:
     _MEGATRON_IMPORT_ERROR = error
     LanguageModule = LanguageModelEmbedding = TransformerLayer = nn.Module
     TransformerConfig = object
