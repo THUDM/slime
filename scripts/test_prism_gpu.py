@@ -120,19 +120,19 @@ def setup(args, extra_flags):
         raise ValueError("This first GPU smoke requires TP=PP=CP=1.")
     set_args(runtime)
     torch.cuda.set_device(int(os.environ.get("LOCAL_RANK", "0")))
-    if "MASTER_ADDR" in os.environ:
-        dist.init_process_group("nccl", timeout=timedelta(seconds=args.request_timeout))
-    else:
-        with socket.socket() as sock:
-            sock.bind(("127.0.0.1", 0))
-            port = sock.getsockname()[1]
-        dist.init_process_group(
-            "nccl",
-            init_method=f"tcp://127.0.0.1:{port}",
-            rank=0,
-            world_size=1,
-            timeout=timedelta(seconds=args.request_timeout),
-        )
+    # This smoke always has one learner rank. Platform MASTER_* variables
+    # can describe another service; even a one-rank torchrun needs no shared
+    # rendezvous here. Give the learner its own local TCP port.
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    dist.init_process_group(
+        "nccl",
+        init_method=f"tcp://127.0.0.1:{port}",
+        rank=0,
+        world_size=1,
+        timeout=timedelta(seconds=args.request_timeout),
+    )
     mpu.initialize_model_parallel(
         tensor_model_parallel_size=1,
         pipeline_model_parallel_size=1,

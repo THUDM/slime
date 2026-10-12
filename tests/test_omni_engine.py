@@ -507,6 +507,8 @@ def test_launch_uses_reserved_gpu_layout_strict_port_and_clean_child_allocator(o
     omni_args.omni_admin_key = "test-admin-key"
     monkeypatch.setenv("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     monkeypatch.setenv("PYTORCH_ALLOC_CONF", "expandable_segments:True")
+    for name in ("MASTER_ADDR", "MASTER_PORT", "RANK", "WORLD_SIZE", "LOCAL_RANK", "TORCHELASTIC_USE_AGENT_STORE"):
+        monkeypatch.setenv(name, "inherited-learner-value")
     captured = {}
 
     class Process:
@@ -543,6 +545,8 @@ def test_launch_uses_reserved_gpu_layout_strict_port_and_clean_child_allocator(o
     assert environment["SGLANG_OMNI_STRICT_PORT"] == "1"
     assert environment["SGLANG_OMNI_ADMIN_KEY"] == "test-admin-key"
     assert environment["SGLANG_OMNI_STARTUP_TIMEOUT"] == "60"
+    assert environment["MASTER_PORT"] == "23457"
+    assert not {"MASTER_ADDR", "RANK", "WORLD_SIZE", "LOCAL_RANK", "TORCHELASTIC_USE_AGENT_STORE"} & environment.keys()
     assert "PYTORCH_CUDA_ALLOC_CONF" not in environment and "PYTORCH_ALLOC_CONF" not in environment
     assert isinstance(parent_pid, int) and parent_pid > 0
     assert all(headers["Authorization"] == "Bearer test-admin-key" for _, _, _, headers in admin_server.requests)

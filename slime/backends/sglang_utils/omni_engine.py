@@ -154,6 +154,27 @@ class OmniEngine(RayActor):
         environment = os.environ.copy()
         environment.pop("PYTORCH_CUDA_ALLOC_CONF", None)
         environment.pop("PYTORCH_ALLOC_CONF", None)
+        # The pipeline owns its serving rendezvous. Platform/torchrun/Ray
+        # learner ranks must not leak into a separately placed AR process.
+        for name in (
+            "MASTER_ADDR",
+            "MASTER_PORT",
+            "RANK",
+            "WORLD_SIZE",
+            "LOCAL_RANK",
+            "LOCAL_WORLD_SIZE",
+            "GROUP_RANK",
+            "ROLE_RANK",
+            "ROLE_WORLD_SIZE",
+            "TORCHELASTIC_RUN_ID",
+            "TORCHELASTIC_RESTART_COUNT",
+            "TORCHELASTIC_MAX_RESTARTS",
+            "TORCHELASTIC_USE_AGENT_STORE",
+        ):
+            environment.pop(name, None)
+        # Omni's model worker uses MASTER_PORT for its local NCCL bootstrap.
+        # Reuse the distinct port already reserved for this pipeline replica.
+        environment["MASTER_PORT"] = str(nccl_port)
         if self.base_gpu_id is None:
             raise ValueError("Omni replicas require an explicit placement GPU id")
         devices = self.gpu_ids or list(range(self.base_gpu_id, self.base_gpu_id + self.num_gpus_per_engine))
