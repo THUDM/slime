@@ -493,6 +493,10 @@ async def generate_rollout_async(
     reader = getattr(data_source, "__self__", None)
     controller = getattr(reader, "controller", None)
 
+    # GenerateState is a singleton; submit_generate_tasks dispatches with self.args, so refresh per
+    # call — otherwise a prior rollout's args (e.g. eval's group_rm=False) leak into the next one.
+    state.args = args
+
     # instantiate data filters
     dynamic_filter = (
         load_function(args.dynamic_sampling_filter_path) if args.dynamic_sampling_filter_path is not None else None
