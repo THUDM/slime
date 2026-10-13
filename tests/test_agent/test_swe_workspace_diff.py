@@ -37,6 +37,9 @@ def test_patch_uses_actual_image_baseline_without_changing_git_index(tmp_path, m
     git(repo, "init", "-q")
     git(repo, "config", "user.name", "Test")
     git(repo, "config", "user.email", "test@example.invalid")
+    # Background auto-maintenance can create and remove locks while copytree runs.
+    git(repo, "config", "maintenance.auto", "false")
+    git(repo, "config", "gc.auto", "0")
     (repo / "source.py").write_text("result = 0\n")
     git(repo, "add", ".")
     git(repo, "commit", "-qm", "original")
