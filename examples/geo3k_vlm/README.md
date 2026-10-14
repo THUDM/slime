@@ -4,6 +4,7 @@ Training VLMs with Megatron on single-turn reasoning task using GRPO on the [GEO
 
 Supported models:
 * Qwen3.5-35B-A3B
+* NVIDIA Nemotron 3.5 Super VL (`run_geo3k_nemotron35.sh`; see [README_nemotron35.md](README_nemotron35.md))
 
 Note: Please make sure the cudnn version in the environment is 9.16.0.29 to prevent severe performance regression in conv3d in torch 2.9 mentioned in https://github.com/pytorch/pytorch/issues/168167. Otherwise, you can reinstall cudnn with:
 ```bash
