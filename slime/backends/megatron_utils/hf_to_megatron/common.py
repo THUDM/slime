@@ -91,11 +91,20 @@ def _tensor_parallel_shard(
     parallel_rank: int,
     partition_dim: int,
     partition_stride: int,
+    gated_mlp: bool,
 ) -> torch.Tensor:
     if parallel_size == 1:
         return tensor
 
-    if "linear_fc1.weight" in name or "linear_fc1.bias" in name:
+    # Only a GATED linear_fc1 is cat(gate, up) and needs the interleaved shard.
+    # An ungated one is a single projection and takes the plain contiguous path
+    # below; halving it hands each rank the first half of each half, which has
+    # the right shape and the wrong rows. `gated_mlp` comes from
+    # has_gated_linear_unit(args) -- see there for why neither the name nor
+    # partition_stride can answer this. The gather in
+    # update_weight/common.py must make the identical decision, or the round
+    # trip through the engine stops being the identity.
+    if gated_mlp and ("linear_fc1.weight" in name or "linear_fc1.bias" in name):
         gate, up = tensor.chunk(2, dim=partition_dim)
         gate = torch.chunk(gate, parallel_size, dim=partition_dim)[parallel_rank]
         up = torch.chunk(up, parallel_size, dim=partition_dim)[parallel_rank]
@@ -108,8 +117,10 @@ def _tensor_parallel_shard(
     return torch.cat(chunks[parallel_rank::parallel_size], dim=partition_dim).contiguous()
 
 
-def shard_mcore_tensor(name: str, tensor: torch.Tensor, parameter: torch.Tensor) -> torch.Tensor:
+def shard_mcore_tensor(args, name: str, tensor: torch.Tensor, parameter: torch.Tensor) -> torch.Tensor:
     from megatron.core import mpu
+
+    from slime.backends.megatron_utils.misc_utils import has_gated_linear_unit
 
     if (
         not getattr(parameter, "tensor_model_parallel", False)
@@ -131,6 +142,7 @@ def shard_mcore_tensor(name: str, tensor: torch.Tensor, parameter: torch.Tensor)
         parallel_rank=parallel_rank,
         partition_dim=parameter.partition_dim,
         partition_stride=parameter.partition_stride,
+        gated_mlp=has_gated_linear_unit(args),
     )
 
 
@@ -158,7 +170,7 @@ def load_model_hf_weights(
             tensor = get_hf_tensor(name, reader, config)
             if name.endswith("output_layer.weight") and parameter.shape[0] == 1 and tensor.shape[0] != 1:
                 continue
-            tensor = shard_mcore_tensor(name, _pad_vocab(args, name, tensor), parameter)
+            tensor = shard_mcore_tensor(args, name, _pad_vocab(args, name, tensor), parameter)
             if tensor.shape != parameter.shape:
                 raise ValueError(
                     f"Shape mismatch loading {name}: HuggingFace {tuple(tensor.shape)}, "

@@ -77,7 +77,7 @@ def main(args):
         for key, value in info.attrs.items():
             setattr(param, key, value)
 
-        param = update_weight_utils.all_gather_param(info.name, param)
+        param = update_weight_utils.all_gather_param(args, info.name, param)
         param = update_weight_utils.remove_padding(info.name, param, vocab_size)
         # use torch.distributed
         if is_save_rank:

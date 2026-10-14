@@ -40,7 +40,9 @@ class HfWeightIteratorDirect:
         for chunk_idx, megatron_local_param_infos in enumerate(
             tqdm(param_info_buckets, disable=rank != 0, desc=progress_desc)
         ):
-            megatron_full_params = _get_megatron_full_params(megatron_local_param_infos, megatron_local_weights)
+            megatron_full_params = _get_megatron_full_params(
+                self.args, megatron_local_param_infos, megatron_local_weights
+            )
             if should_convert_chunk is None or should_convert_chunk(chunk_idx):
                 hf_named_tensors = self._convert_to_hf_named_tensors(megatron_full_params, megatron_local_param_infos)
             else:
@@ -71,6 +73,7 @@ class HfWeightIteratorDirect:
 
 
 def _get_megatron_full_params(
+    args: Namespace,
     megatron_local_param_infos: Sequence[ParamInfo],
     megatron_local_weights,
 ) -> Sequence[torch.Tensor]:
@@ -129,7 +132,7 @@ def _get_megatron_full_params(
             setattr(param, key, value)
 
     # Batch async all_gather for all parameters
-    gathered_params = all_gather_params_async(list(zip(megatron_local_param_infos, params, strict=False)))
+    gathered_params = all_gather_params_async(args, list(zip(megatron_local_param_infos, params, strict=False)))
 
     return gathered_params
 

@@ -160,7 +160,7 @@ class UpdateWeightFromDistributed:
         for name, param in named_params_and_buffers(self.args, self.model):
             if ".experts." in name:
                 continue
-            param = all_gather_param(name, param)
+            param = all_gather_param(self.args, name, param)
             if not self._is_pp_src_rank:
                 continue
             hf_chunk = convert_to_hf(self.args, self.model_name, name, param, self.quantization_config)
@@ -183,7 +183,7 @@ class UpdateWeightFromDistributed:
         buffer_size = 0
         batch: list[tuple[str, torch.Tensor]] = []
         for name, param in params:
-            param = all_gather_param(name, param)
+            param = all_gather_param(self.args, name, param)
             param_size = param.numel() * param.element_size()
             if (
                 buffer_size + param_size
