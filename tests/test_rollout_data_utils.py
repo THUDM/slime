@@ -44,6 +44,21 @@ def test_r3_validation_rejects_wrong_shape():
         validate_rollout_routed_experts_for_replay([routes], _args())
 
 
+def test_r3_validation_in_a_hybrid_stack_checks_only_the_moe_layers():
+    pytest.importorskip("megatron.core.models.hybrid.hybrid_layer_allocation")
+    # Mamba, MoE, attention, MoE: layers 1 and 3 route, 0 and 2 have no capture.
+    # moe_layer_freq describes GPT stacks only and would call every layer MoE.
+    args = SimpleNamespace(num_layers=4, moe_router_topk=2, hybrid_override_pattern="ME*E")
+    routes = torch.zeros((4, 4, 2), dtype=torch.uint8)
+    routes[:, 1, 0] = 3
+    routes[:, 3, 1] = 5
+    validate_rollout_routed_experts_for_replay([routes], args)
+
+    routes[:, 3, 1] = 0
+    with pytest.raises(ValueError, match=r"all zero.*\[3\]"):
+        validate_rollout_routed_experts_for_replay([routes], args)
+
+
 def test_tensorize_rollout_data_for_training_normalizes_cpu_tensors():
     readonly_tokens = np.array([1, 2, 3])
     readonly_tokens.flags.writeable = False

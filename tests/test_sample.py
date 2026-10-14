@@ -283,5 +283,21 @@ def test_spec_info_only_updated_when_speculative_enabled():
     assert with_spec.spec_info.spec_draft_token_num == 10
 
 
+@pytest.mark.unit
+def test_spec_info_reads_current_sglang_key_names():
+    """Current sglang reports the counts as spec_num_correct_drafts /
+    spec_num_proposed_drafts; they must land in the same fields."""
+    meta_info = {
+        "finish_reason": {"type": "stop"},
+        "spec_num_correct_drafts": 6,
+        "spec_num_proposed_drafts": 8,
+    }
+    sample = Sample()
+    sample.append_response_tokens(_make_args(speculative=True), tokens=[], trainable=True, meta_info=meta_info)
+    assert sample.spec_info.spec_accept_token_num == 6
+    assert sample.spec_info.spec_draft_token_num == 8
+    assert sample.spec_info.spec_accept_rate == 0.75
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))

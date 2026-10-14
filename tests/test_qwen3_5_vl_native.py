@@ -176,8 +176,23 @@ def test_raw_loader_shards_swiglu_and_grouped_moe_fc2():
         parallel_rank=1,
         partition_dim=0,
         partition_stride=1,
+        gated_mlp=True,
     )
     assert torch.equal(fc1_shard, torch.cat((fc1[2:4], fc1[6:8])))
+
+    # Same name, same shape, ungated: linear_fc1 is one projection, so the rank
+    # takes a contiguous block. Different rows, identical shape -- which is why
+    # the caller's shape check cannot catch getting this wrong.
+    ungated_shard = _tensor_parallel_shard(
+        "module.module.language_model.decoder.layers.0.mlp.linear_fc1.weight",
+        fc1,
+        parallel_size=2,
+        parallel_rank=1,
+        partition_dim=0,
+        partition_stride=1,
+        gated_mlp=False,
+    )
+    assert torch.equal(ungated_shard, fc1[4:8])
 
     fc2 = torch.arange(4 * 6).reshape(4, 6)
     fc2_shard = _tensor_parallel_shard(
@@ -187,6 +202,7 @@ def test_raw_loader_shards_swiglu_and_grouped_moe_fc2():
         parallel_rank=1,
         partition_dim=0,
         partition_stride=1,
+        gated_mlp=False,
     )
     assert torch.equal(fc2_shard, fc2[:, 3:])
 

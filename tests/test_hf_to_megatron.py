@@ -332,6 +332,8 @@ def test_loader_scope_stays_explicit():
         "llama",
         "mimo",
         "minimax_m2",
+        "nemotron_h",
+        "nemotron_h_omni",
         "qwen2",
         "qwen2_moe",
         "qwen3",
