@@ -4,7 +4,7 @@ FROM slimerl/sglang:${SGLANG_IMAGE_TAG} AS sglang
 # ======================================== Arguments =============================================
 
 ARG PATCH_VERSION=latest
-ARG MEGATRON_COMMIT=1dcf0dafa884ad52ffb243625717a3471643e087
+ARG MEGATRON_COMMIT=f6c33bde4cdc10805ee7157db746d47b758f5f02
 ARG DEEPGEMM_COMMIT=b38a77cd193cf38f670caae192310521d24343be
 ARG DEEPEP_COMMIT=6845ffd9d59126ec0030c13e0e155935a61e5b5a
 ARG DEEPEP_CUDA_ARCH_LIST=
@@ -137,7 +137,7 @@ ARG ENABLE_SGLANG_PATCH=1
 COPY docker/patch/${PATCH_VERSION}/sglang*.patch /sgl-workspace/sglang/
 RUN if [ "$ENABLE_SGLANG_PATCH" = "1" ]; then \
   cd /sgl-workspace/sglang && \
-  for patch in sglang.patch sglang-top_p.patch sglang-release_hicache.patch sglang-pull_weights.patch sglang-deterministic.patch; do \
+  for patch in sglang.patch sglang-top_p.patch sglang-release_hicache.patch sglang-pull_weights.patch sglang-deterministic.patch sglang-nemotron_vl.patch; do \
     if [ ! -f "$patch" ]; then \
       continue; \
     fi; \
