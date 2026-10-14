@@ -79,6 +79,29 @@ async def _await_done_marker(sb: Sandbox, done_file: str, *, user: str, time_bud
     return EXIT_TIME_BUDGET_EXCEEDED
 
 
+async def _terminate_process_group(sb: Sandbox, pid_file: str, *, user: str) -> None:
+    """Terminate the process group recorded in ``pid_file``, if still alive."""
+    await sb.exec(
+        "for _ in 1 2 3 4 5 6 7 8 9 10; do "
+        f"test -s {pid_file} && break; "
+        "sleep 0.1; "
+        "done; "
+        f"pid=$(cat {pid_file} 2>/dev/null) || exit 0; "
+        'case "$pid" in ""|*[!0-9]*) exit 0 ;; esac; '
+        'kill -0 -- -"$pid" 2>/dev/null || exit 0; '
+        'kill -TERM -- -"$pid" 2>/dev/null || exit 0; '
+        "for _ in 1 2 3 4 5; do "
+        "sleep 0.2; "
+        'kill -0 -- -"$pid" 2>/dev/null || exit 0; '
+        "done; "
+        'kill -KILL -- -"$pid" 2>/dev/null || true',
+        user=user,
+        timeout=5,
+        check=True,
+        idempotent=True,
+    )
+
+
 async def exec_and_wait(
     sb: Sandbox,
     *,
@@ -106,6 +129,7 @@ async def exec_and_wait(
     """
     out_file = out_file or f"/tmp/.{tag}.out"
     done_file = f"/tmp/.{tag}.done"
+    pid_file = f"/tmp/.{tag}.pid"
     launcher = f"/tmp/.{tag}.sh"
     lock_dir = f"/tmp/.{tag}.spawned"
     prefix = f"cd {workdir}\nexport HOME=/home/{user}\n" if workdir else ""
@@ -120,23 +144,42 @@ async def exec_and_wait(
     # read the previous run's stale exit-code marker. Callers must not overlap
     # two exec_and_wait calls with the same tag.
     await sb.exec(
-        f"rm -rf {lock_dir}; rm -f {out_file} {done_file}",
+        f"rm -rf {lock_dir}; rm -f {out_file} {done_file} {pid_file}",
         user=user,
         timeout=30,
         check=True,
         idempotent=True,
     )
-    await sb.exec(
-        f"chmod +x {launcher}; "
-        f"mkdir {lock_dir} 2>/dev/null || exit 0; "
-        f"setsid bash {launcher} < /dev/null > {out_file} 2>&1 &",
-        user=user,
-        env=env,
-        timeout=30,
-        check=True,
-        idempotent=True,
-    )
-    exit_code = await _await_done_marker(sb, done_file, user=user, time_budget_sec=time_budget_sec)
+    try:
+        await sb.exec(
+            f"chmod +x {launcher}; "
+            f"if mkdir {lock_dir} 2>/dev/null; then\n"
+            f'setsid bash -c \'echo $$ > "$1" && exec bash "$2"\' _ {pid_file} {launcher} '
+            f"< /dev/null > {out_file} 2>&1 &\n"
+            "fi\n"
+            "for _ in 1 2 3 4 5 6 7 8 9 10; do "
+            f"test -s {pid_file} && exit 0; "
+            "sleep 0.1; "
+            "done; exit 1",
+            user=user,
+            env=env,
+            timeout=30,
+            check=True,
+            idempotent=True,
+        )
+        exit_code = await _await_done_marker(sb, done_file, user=user, time_budget_sec=time_budget_sec)
+    except asyncio.CancelledError:
+        try:
+            await _terminate_process_group(sb, pid_file, user=user)
+        except Exception:
+            logger.exception("[agent.sandbox] process-group cleanup after cancellation failed for tag %s", tag)
+        raise
+
+    if exit_code == EXIT_TIME_BUDGET_EXCEEDED:
+        try:
+            await _terminate_process_group(sb, pid_file, user=user)
+        except Exception:
+            logger.exception("[agent.sandbox] process-group cleanup after timeout failed for tag %s", tag)
     if exit_code == 0 and not want_output:
         return exit_code, ""
     if want_output:
