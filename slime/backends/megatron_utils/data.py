@@ -9,6 +9,7 @@ from slime.utils import accelerator
 from slime.utils.types import RolloutBatch
 
 from .cp_utils import slice_with_cp
+from .misc_utils import collate_multimodal_train_inputs
 
 
 def get_batch(
@@ -90,12 +91,17 @@ def get_batch(
         cu_seqlens = torch.tensor(cu_seqlens, dtype=torch.int, device=accelerator.device()) * cp_size
 
     max_seqlen = (cu_seqlens[1:] - cu_seqlens[:-1]).max().item()
+    # total_tokens makes PackedSeqParams derive seq_idx, which Mamba's conv1d and
+    # SSM scan need to reset their state at sequence boundaries. Without it, a
+    # micro-batch packing several samples runs them as one sequence and every
+    # sample after the first inherits the previous one's state.
     packed_seq_params = PackedSeqParams(
         cu_seqlens_q=cu_seqlens,
         cu_seqlens_kv=cu_seqlens,
         max_seqlen_q=max_seqlen,
         max_seqlen_kv=max_seqlen,
         qkv_format="thd",
+        total_tokens=int(cu_seqlens[-1].item()),
     )
 
     tokens = tokens.unsqueeze(0)
@@ -136,15 +142,7 @@ def get_batch(
     # Process multimodal training tensors if present
     multimodal_train_inputs = batch.get("multimodal_train_inputs", None)
     if multimodal_train_inputs is not None:
-        multimodal_data = {}  # key -> concatenated tensor
-        for mm_input_dict in multimodal_train_inputs:
-            if mm_input_dict is not None:
-                for key, mm_tensor in mm_input_dict.items():
-                    if key not in multimodal_data:
-                        multimodal_data[key] = mm_tensor
-                    else:
-                        multimodal_data[key] = torch.cat([multimodal_data[key], mm_tensor], dim=0)
-        batch["multimodal_train_inputs"] = multimodal_data
+        batch["multimodal_train_inputs"] = collate_multimodal_train_inputs(multimodal_train_inputs)
 
     return batch
 

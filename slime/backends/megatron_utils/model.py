@@ -849,12 +849,25 @@ def train(
                 config.param_sync_func = param_sync_func
                 pre_hook_enabled = True
 
+        mtp_losses = None
+        mtp_accuracies = None
         if args.enable_mtp_training:
             from megatron.core.transformer.multi_token_prediction import MTPLossLoggingHelper
 
             mtp_loss_scale = 1 / num_microbatches[step_id]
             tracker = MTPLossLoggingHelper.tracker
-            if "values" in tracker:
+            if "loss_values" in tracker:
+                # Current MCore: losses under "loss_values", plus per-depth
+                # correct / total prediction counts, reduced by the helper itself
+                # (sum within reduce_group, then AVG for losses and SUM for the
+                # counts over avg_group).
+                MTPLossLoggingHelper.reduce_metrics_in_tracker()
+                mtp_losses = tracker["loss_values"] * mtp_loss_scale
+                if "correct_values" in tracker and "total_values" in tracker:
+                    mtp_accuracies = tracker["correct_values"] / torch.clamp(tracker["total_values"], min=1)
+                MTPLossLoggingHelper.clean_metrics_in_tracker()
+            elif "values" in tracker:
+                # Older MCore: losses only, under "values".
                 values = tracker["values"]
                 if tracker.get("reduce_group") is not None:
                     torch.distributed.all_reduce(values, group=tracker.get("reduce_group"))
@@ -864,11 +877,11 @@ def train(
                 mtp_losses = tracker["values"] * mtp_loss_scale
                 MTPLossLoggingHelper.clean_loss_in_tracker()
 
-                # CI check: verify MTP loss is within expected bounds
-                if args.ci_test:
-                    from slime.backends.megatron_utils.ci_utils import check_mtp_loss
+            # CI check: verify MTP loss is within expected bounds
+            if args.ci_test and mtp_losses is not None:
+                from slime.backends.megatron_utils.ci_utils import check_mtp_loss
 
-                    check_mtp_loss(mtp_losses.sum().item())
+                check_mtp_loss(mtp_losses.sum().item())
 
         # per train step log.
         if (
@@ -884,10 +897,15 @@ def train(
                 for key, val in loss_dict.items()
             }
             log_dict[f"train/{role_tag}grad_norm"] = grad_norm
-            if args.enable_mtp_training:
+            if mtp_losses is not None:
                 for _i in range(mtp_losses.shape[0]):
                     log_dict[f"train/{role_tag}mtp_{_i + 1}_loss"] = mtp_losses[_i].item()
                 log_dict[f"train/{role_tag}mtp_loss"] = mtp_losses.sum().item()
+            if mtp_accuracies is not None:
+                # Top-1 agreement of each MTP depth with the next tokens -- the
+                # training-side analogue of the rollout's spec_accept_rate.
+                for _i in range(mtp_accuracies.shape[0]):
+                    log_dict[f"train/{role_tag}mtp_{_i + 1}_acc"] = mtp_accuracies[_i].item()
 
             for param_group_id, param_group in enumerate(optimizer.param_groups):
                 log_dict[f"train/{role_tag}lr-pg_{param_group_id}"] = opt_param_scheduler.get_lr(param_group)

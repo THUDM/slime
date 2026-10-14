@@ -166,8 +166,17 @@ class Sample:
             return self.completion_token_num / self.spec_verify_ct if self.spec_verify_ct > 0 else 0.0
 
         def add(self, meta_info: dict):
-            self.spec_accept_token_num += meta_info.get("spec_accept_token_num", 0)
-            self.spec_draft_token_num += meta_info.get("spec_draft_token_num", 0)
+            # SGLang reports the accepted / proposed draft counts as
+            # spec_num_correct_drafts / spec_num_proposed_drafts
+            # (managers/tokenizer_manager.py); older trees used the names these
+            # fields are called here. Reading only the old names left both at 0
+            # and spec_accept_rate at 0.0 while spec_accept_length was fine.
+            self.spec_accept_token_num += meta_info.get(
+                "spec_num_correct_drafts", meta_info.get("spec_accept_token_num", 0)
+            )
+            self.spec_draft_token_num += meta_info.get(
+                "spec_num_proposed_drafts", meta_info.get("spec_draft_token_num", 0)
+            )
             self.spec_verify_ct += meta_info.get("spec_verify_ct", 0)
             self.completion_token_num += meta_info.get("completion_tokens", 0)
 

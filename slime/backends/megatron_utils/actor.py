@@ -278,10 +278,31 @@ class MegatronTrainRayActor(TrainRayActor):
                 "rollout_routed_experts is required in rollout_data when use_rollout_routing_replay is set."
             )
 
-        from megatron.core.transformer.transformer_block import get_num_layers_to_build
-        from megatron.core.transformer.transformer_layer import get_transformer_layer_offset
+        from megatron.core.transformer.moe.router import TopKRouter
 
         from slime.utils.routing_replay import RoutingReplay
+
+        # Walk the routers themselves rather than deriving MoE layer ids from
+        # config.moe_layer_freq: that only describes GPT stacks, and in a hybrid
+        # (Mamba / attention / MoE) stack it would mark every layer as MoE.
+        routers = [
+            module
+            for model in self.model
+            for module in model.modules()
+            if isinstance(module, TopKRouter) and hasattr(module, "routing_replay")
+        ]
+        mtp_routers = [router for router in routers if router.is_mtp_layer]
+        if mtp_routers:
+            # The engine captures the target model only (the MTP draft opts out),
+            # so there is nothing to replay into these routers.
+            raise ValueError(
+                f"use_rollout_routing_replay does not support MTP MoE layers ({len(mtp_routers)} router(s)); "
+                "the rollout engine does not capture the draft model's routing."
+            )
+        assert len(routers) == len(RoutingReplay.all_routing_replays), (
+            f"found {len(routers)} routers with routing replay, "
+            f"but {len(RoutingReplay.all_routing_replays)} RoutingReplay objects exist"
+        )
 
         for iterator in data_iterator:
             iterator.reset()
@@ -297,24 +318,12 @@ class MegatronTrainRayActor(TrainRayActor):
                 allgather_cp=self.args.allgather_cp,
             )
 
-            routing_replay_offset = 0
-            for vp_stage, model in enumerate(self.model):
-                config = model.module.config
-                num_layers_to_build = get_num_layers_to_build(config, vp_stage=vp_stage)
-                offset = get_transformer_layer_offset(config, vp_stage=vp_stage)
-                for layer_id in range(offset, offset + num_layers_to_build):
-                    # skip dense layer
-                    if isinstance(config.moe_layer_freq, int):
-                        if layer_id % config.moe_layer_freq != 0:
-                            continue
-                    elif isinstance(config.moe_layer_freq, list):
-                        assert len(config.moe_layer_freq) == config.num_layers
-                        if config.moe_layer_freq[layer_id] == 0:
-                            continue
-                    layer_routed_experts = rollout_routed_experts[:, layer_id]
-                    RoutingReplay.all_routing_replays[routing_replay_offset].record(layer_routed_experts)
-                    routing_replay_offset += 1
-            assert routing_replay_offset == len(RoutingReplay.all_routing_replays)
+            for router in routers:
+                # The engine indexes its capture by global decoder layer, and
+                # router.layer_number is that index, 1-based (it already
+                # includes the PP / VPP offset).
+                layer_routed_experts = rollout_routed_experts[:, router.layer_number - 1]
+                router.routing_replay.record(layer_routed_experts)
 
         del rollout_data["rollout_routed_experts"]
 

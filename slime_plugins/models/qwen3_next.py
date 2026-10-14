@@ -183,7 +183,13 @@ class Attention(HuggingfaceAttention):
         layer_number: int,
         cp_comm_type: str = "p2p",
         pg_collection=None,
+        # Same as slime_plugins/models/qwen3_5.py: TransformerLayer.__init__
+        # adds is_mtp_layer unconditionally, and forwards a growing set of
+        # kwargs to submodules.self_attention. This class has the identical
+        # closed signature, it just has not been exercised on MCore main yet.
+        is_mtp_layer: bool = False,
         name: str | None = None,
+        **kwargs,
     ):
         super().__init__(
             args,

@@ -161,7 +161,19 @@ class Attention(HuggingfaceAttention):
         layer_number: int,
         cp_comm_type: str = "p2p",
         pg_collection=None,
+        # Added unconditionally by TransformerLayer.__init__ somewhere between
+        # MCore 0.16 and 0.20 (attention_optional_kwargs["is_mtp_layer"]; zero
+        # hits in 1dcf0dafa, six in f6c33bde4), which is what made this class
+        # raise TypeError on MCore main. A GDN linear-attention layer is never
+        # an MTP layer, so ignoring it is safe.
+        is_mtp_layer: bool = False,
         name: str | None = None,
+        # TransformerLayer forwards a growing set of kwargs to whatever sits at
+        # submodules.self_attention. `name` above is the scar from the previous
+        # round of this -- it is accepted and then not passed on, purely to
+        # avoid a TypeError. Absorb the rest rather than chasing them one at a
+        # time; MCore's own Attention keeps every one of them optional.
+        **kwargs,
     ):
         super().__init__(
             args,

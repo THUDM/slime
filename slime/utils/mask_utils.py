@@ -244,6 +244,20 @@ class MultiTurnLossMaskGenerator:
     def get_loss_mask_with_multimodal_alignment(
         self, messages: list[dict], input_ids: list[int], tools: list[dict] = None
     ) -> tuple[list[int], list[int]]:
+        """Align a text-only loss mask onto ``input_ids`` produced by a processor.
+
+        A processor expands every modality placeholder into as many tokens as the
+        encoder emits for that image or video, so ``input_ids`` is longer than the
+        tokenization of the same conversation with the modality items stripped. The
+        difference is reinserted here as leading zeros, which is only correct when
+        every modality token lies before the first supervised token -- in practice,
+        before the first assistant turn.
+
+        The check at the end is what enforces that, and it is not decorative: with
+        an image in a *second* user turn the padding silently slides the mask, and
+        the supervised span ends up covering image pad tokens while missing the
+        first assistant reply entirely. Raising beats training on that.
+        """
         text = []
         for msg in messages:
             if isinstance(msg.get("content"), list):
@@ -257,7 +271,7 @@ class MultiTurnLossMaskGenerator:
             else:
                 text.append(msg)
 
-        _, loss_mask_text = self.get_loss_mask(text, tools=tools)
+        text_token_ids, loss_mask_text = self.get_loss_mask(text, tools=tools)
 
         diff = len(input_ids) - len(loss_mask_text)
         assert diff >= 0, (
@@ -265,6 +279,20 @@ class MultiTurnLossMaskGenerator:
             f"Please check if processor and tokenizer tokenization are consistent."
         )
         loss_mask = [0] * diff + loss_mask_text
+
+        if 1 in loss_mask_text:
+            # The supervised span runs from the first 1 to the end of the
+            # sequence. Stripping the modality items must not have changed it, or
+            # the leading zeros are padding the wrong side of it.
+            supervised_length = len(loss_mask_text) - loss_mask_text.index(1)
+            if list(input_ids[-supervised_length:]) != list(text_token_ids[-supervised_length:]):
+                raise ValueError(
+                    f"Cannot align the loss mask onto the processor's input_ids: the supervised span "
+                    f"({supervised_length} tokens) does not tokenize identically with and without the "
+                    f"multimodal content. Leading-zero alignment requires every image/video token to "
+                    f"precede the first assistant turn; a conversation carrying modality content in or "
+                    f"after an assistant turn cannot be masked this way."
+                )
 
         return input_ids, loss_mask
 

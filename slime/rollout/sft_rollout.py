@@ -1,11 +1,16 @@
 import logging
 
 from slime.utils.mask_utils import MultiTurnLossMaskGenerator
-from slime.utils.processing_utils import load_processor, load_tokenizer
+from slime.utils.processing_utils import build_processor_kwargs, load_processor, load_tokenizer
 
 __all__ = ["generate_rollout"]
 
 logger = logging.getLogger(__name__)
+
+# Everything else the processor returns (pixel_values, image_grid_thw, ...) is
+# what the model forward needs, and travels on the sample as
+# multimodal_train_inputs. Same split as sglang_rollout._prepare_prompt_ids.
+_PROCESSOR_PROMPT_KEYS = {"input_ids", "attention_mask"}
 
 
 TOKENIZER = None
@@ -46,7 +51,29 @@ def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
         messages = sample.prompt
         tools = sample.metadata.get("tools", None)
 
-        token_ids, loss_mask = MASK_GENERATOR.get_loss_mask(messages, tools=tools)
+        multimodal_inputs = sample.multimodal_inputs or {}
+        if PROCESSOR is not None and any(value is not None for value in multimodal_inputs.values()):
+            # The tokenizer renders <|image_pad|> once; only the processor knows
+            # how many tokens the vision encoder emits for this particular image
+            # and expands the placeholder accordingly, and it is the only thing
+            # that produces pixel_values. Without this branch SFT on a VLM trains
+            # on a sequence whose image is a single unexpanded pad token and hands
+            # the model no pixel data at all.
+            #
+            # The processor takes text, so the conversation is rendered first --
+            # with tokenize=False and no generation prompt, because SFT supervises
+            # the assistant turn that is already in `messages`.
+            rendered = TOKENIZER.apply_chat_template(messages, tokenize=False, tools=tools)
+            processor_output = PROCESSOR(text=[rendered], **build_processor_kwargs(multimodal_inputs))
+            token_ids, loss_mask = MASK_GENERATOR.get_loss_mask_with_multimodal_alignment(
+                messages, processor_output["input_ids"][0], tools=tools
+            )
+            sample.multimodal_train_inputs = {
+                key: value for key, value in processor_output.items() if key not in _PROCESSOR_PROMPT_KEYS
+            } or None
+        else:
+            token_ids, loss_mask = MASK_GENERATOR.get_loss_mask(messages, tools=tools)
+
         if len(token_ids) != len(loss_mask):
             raise ValueError(
                 f"SFT rollout produced mismatched token_ids/loss_mask lengths: {len(token_ids)=}, {len(loss_mask)=}"

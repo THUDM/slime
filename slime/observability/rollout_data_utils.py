@@ -63,7 +63,16 @@ def validate_rollout_routed_experts_for_replay(
     num_layers = int(args.num_layers)
     topk = int(args.moe_router_topk)
     moe_layer_freq = getattr(args, "moe_layer_freq", None)
-    if isinstance(moe_layer_freq, (list, tuple)):
+    hybrid_pattern = getattr(args, "hybrid_layer_pattern", None) or getattr(args, "hybrid_override_pattern", None)
+    if hybrid_pattern:
+        # Hybrid (Mamba / attention / MoE) stacks name each layer's type in the
+        # pattern; only the 'E' layers route, the rest have no capture to check.
+        from megatron.core.models.hybrid.hybrid_layer_allocation import parse_hybrid_pattern
+        from megatron.core.models.hybrid.layers.utils import Symbols
+
+        main_pattern = parse_hybrid_pattern(hybrid_pattern).main_pattern.replace(Symbols.PIPE, "")
+        moe_layers = [layer_id for layer_id, symbol in enumerate(main_pattern) if symbol == Symbols.MOE]
+    elif isinstance(moe_layer_freq, (list, tuple)):
         moe_layers = [layer_id for layer_id, freq in enumerate(moe_layer_freq[:num_layers]) if int(freq) != 0]
     else:
         moe_layers = list(range(num_layers))
