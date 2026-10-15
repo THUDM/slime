@@ -1001,7 +1001,7 @@ index f4331b64b4..78cfab533d 100644
              meta_info,
              state,
 diff --git a/python/sglang/srt/managers/utils.py b/python/sglang/srt/managers/utils.py
-index 87fbb35ded..44b71f3441 100644
+index 87fbb35ded..7784f70ed5 100644
 --- a/python/sglang/srt/managers/utils.py
 +++ b/python/sglang/srt/managers/utils.py
 @@ -121,6 +121,16 @@ class GenerationBatchResult:
@@ -1010,12 +1010,12 @@ index 87fbb35ded..44b71f3441 100644
                  ]
 +            if self.logits_output.next_token_top_p_token_ids is not None:
 +                self.logits_output.next_token_top_p_token_ids = [
-+                    v.to("cpu", non_blocking=True) if torch.is_tensor(v) else v
++                    _async_d2h(v) if torch.is_tensor(v) else v
 +                    for v in self.logits_output.next_token_top_p_token_ids
 +                ]
 +            if self.logits_output.next_token_top_p_log_probs is not None:
 +                self.logits_output.next_token_top_p_log_probs = [
-+                    v.to("cpu", non_blocking=True) if torch.is_tensor(v) else v
++                    _async_d2h(v) if torch.is_tensor(v) else v
 +                    for v in self.logits_output.next_token_top_p_log_probs
 +                ]
          if return_hidden_states and self.logits_output.hidden_states is not None:

@@ -79,7 +79,7 @@ class HuggingfaceAttention(MegatronModule, ABC):
         inference_params: BaseInferenceContext | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         assert packed_seq_params is not None
-        cu_seqlens = packed_seq_params.cu_seqlens_q
+        cp_size = mpu.get_context_parallel_world_size()
 
         if self.args.sequence_parallel:
             # tensor_parallel_output_grad=False: the linear attention after this
@@ -91,8 +91,14 @@ class HuggingfaceAttention(MegatronModule, ABC):
                 group=mpu.get_tensor_model_parallel_group(),
             )
 
-        if mpu.get_context_parallel_world_size() > 1:
-            cp_size = mpu.get_context_parallel_world_size()
+        if cp_size > 1:
+            # Reordering CP chunks below needs Python integer slice bounds.
+            # Reuse get_batch's CPU boundaries to avoid synchronizing a CUDA
+            # scalar for each slice in every layer. Other callers may provide
+            # plain PackedSeqParams, which requires one host transfer here.
+            cu_seqlens = getattr(packed_seq_params, "cu_seqlens_q_cpu", None)
+            if cu_seqlens is None:
+                cu_seqlens = packed_seq_params.cu_seqlens_q.tolist()
             # Unlike the SP gather above, the gradients here are not identical across ranks: every CP rank runs the
             # layer on the whole sequence but keeps only its own output chunks (see the slicing after hf_forward),
             # so each rank backpropagates a different part of the output gradient. The input gradient of a chunk is
@@ -102,21 +108,16 @@ class HuggingfaceAttention(MegatronModule, ABC):
                 group=mpu.get_context_parallel_group(),
             )
 
-            # TODO: preprocess this for each batch to prevent tolist in the training step
             whole_hidden_states_list = []
 
-            local_cu_seqlens = cu_seqlens // cp_size
-            for i in range(len(cu_seqlens) - 1):
-                seqlen = cu_seqlens[i + 1] - cu_seqlens[i]
+            for start, end in zip(cu_seqlens[:-1], cu_seqlens[1:], strict=True):
+                seqlen = end - start
                 chunk_size = seqlen // 2 // cp_size
+                local_start, local_end = start // cp_size, end // cp_size
                 whole_hidden_states_list.extend(
-                    [
-                        hidden_states_list[cp_rank][local_cu_seqlens[i] : local_cu_seqlens[i] + chunk_size]
-                        for cp_rank in range(cp_size)
-                    ]
+                    [hidden_states_list[cp_rank][local_start : local_start + chunk_size] for cp_rank in range(cp_size)]
                     + [
-                        hidden_states_list[cp_rank][local_cu_seqlens[i] + chunk_size : local_cu_seqlens[i + 1]]
-                        for cp_rank in range(cp_size)
+                        hidden_states_list[cp_rank][local_start + chunk_size : local_end] for cp_rank in range(cp_size)
                     ][::-1],
                 )
             hidden_states = torch.cat(whole_hidden_states_list, dim=0)
@@ -128,13 +129,11 @@ class HuggingfaceAttention(MegatronModule, ABC):
 
         output = output.permute(1, 0, 2)  # [seq_len, bsz, hidden_dim]
 
-        if mpu.get_context_parallel_world_size() > 1:
+        if cp_size > 1:
             cp_rank = mpu.get_context_parallel_rank()
             output_list = []
-            for i in range(len(cu_seqlens) - 1):
-                seqlen = cu_seqlens[i + 1] - cu_seqlens[i]
-                chunk_size = seqlen // 2 // cp_size
-                seq = output[cu_seqlens[i] : cu_seqlens[i + 1]]
+            for start, end in zip(cu_seqlens[:-1], cu_seqlens[1:], strict=True):
+                seq = output[start:end]
                 chunks = torch.chunk(seq, 2 * cp_size, dim=0)
                 output_list.append(chunks[cp_rank])
                 output_list.append(chunks[2 * cp_size - 1 - cp_rank])

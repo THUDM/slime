@@ -13,14 +13,17 @@ per-sample reward via ``--custom-rm-path`` — the worker calls slime's stock
 Concurrency is sourced from ``args.sglang_server_concurrency`` and scaled by
 the number of sglang engines to match the per-sample semaphore cap in
 :mod:`slime.rollout.sglang_rollout`.
+``--fully-async-group-prefetch-factor`` can enlarge the bounded group pool
+so slow group members do not leave sample slots idle. It does not enlarge
+the per-sample semaphore.
 
-The worker is intentionally oblivious to slime's higher-level pause /
-weight-update signalling (e.g. ``GenerateState.aborted``). Each in-flight
-generation short-circuits on those signals on its own and surfaces
-:data:`Sample.Status.ABORTED`; the only piece the worker owns is
-**redirecting ABORTED groups back to ``data_buffer``** instead of shipping
-them to training, so the next rollout (with refreshed weights) can pick
-them up.
+Admission pause leaves in-flight tasks alive across training rounds. Agent
+adapters with ``--partial-rollout`` continue interrupted model turns within
+those tasks, retaining the live sandbox and CLI. A generator that does return
+an ABORTED/PENDING result is requeued instead of sent to training. Flat samples
+retain their partial response; segmented agent failures retry their original
+inputs because their closed sandbox sessions cannot be restored from tokens.
+Completed trajectories in the same group retain their results across retries.
 
 ``--dynamic-sampling-filter-path`` is honoured DAPO-style: rejected groups do
 not count toward ``rollout_batch_size`` and are replaced from the warm queue.
@@ -29,13 +32,14 @@ not count toward ``rollout_batch_size`` and are replaced from the warm queue.
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import queue
 import threading
 import time
 
 from slime.data.transport import discard_rollout_group, publish_rollout_async
-from slime.rollout.base_types import RolloutFnTrainOutput, finalize_rollout_groups
+from slime.rollout.base_types import RolloutFnTrainOutput, finalize_rollout_groups, iter_samples, prepare_retry_group
 from slime.rollout.filter_hub.base_types import call_dynamic_filter
 from slime.rollout.sglang_rollout import GenerateState, generate_and_rm_group
 from slime.utils.async_utils import run
@@ -83,6 +87,7 @@ class AsyncRolloutWorker:
         self.args = args
         self.data_buffer = data_buffer
         self.concurrency = max(1, concurrency // getattr(args, "n_samples_per_prompt", 1))
+        self.concurrency *= getattr(args, "fully_async_group_prefetch_factor", 1)
         self.running = True
         self.paused = False
         self.condition = threading.Condition()
@@ -214,7 +219,7 @@ class AsyncRolloutWorker:
                                 evaluation=False,
                             )
                         )
-                        task.add_done_callback(self._make_done_cb(gid))
+                        task.add_done_callback(self._make_done_cb(gid, group))
                         active_tasks.add(task)
 
                 with self.condition:
@@ -238,7 +243,12 @@ class AsyncRolloutWorker:
             except Exception:  # noqa: BLE001
                 pass
 
-    def _make_done_cb(self, gid: int):
+    def _make_done_cb(self, gid: int, input_group: list[Sample]):
+        # Interrupted segments cannot reopen their closed agent sessions.
+        # Save their inputs before generation mutates them; completed siblings
+        # will retain their results when the group is retried.
+        retry_group = [sample if isinstance(sample, list) else copy.deepcopy(sample) for sample in input_group]
+
         def _cb(done_task: asyncio.Task) -> None:
             try:
                 result = done_task.result()
@@ -253,10 +263,10 @@ class AsyncRolloutWorker:
                     type(result).__name__,
                 )
                 return
-            # Aborted group → requeue, don't ship to training.
-            if any(getattr(s, "status", None) == Sample.Status.ABORTED for s in result):
+            # The early weight-update exit may return untouched PENDING inputs.
+            if any(s.status in (Sample.Status.ABORTED, Sample.Status.PENDING) for s in iter_samples(result)):
                 try:
-                    self.data_buffer.add_samples([result])
+                    self.data_buffer.add_samples([prepare_retry_group(retry_group, result)])
                 except Exception:  # noqa: BLE001
                     logger.exception("fully-async: failed to requeue aborted group")
                 return

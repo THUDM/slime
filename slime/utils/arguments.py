@@ -125,6 +125,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="GDN implementation backend for Qwen linear-attention layers.",
             )
             parser.add_argument(
+                "--qwen-gdn-implementation",
+                choices=["replicated", "megatron"],
+                default="replicated",
+                help="Use the existing replicated wrapper or Megatron's TP/CP-sharded Qwen3.5 GDN.",
+            )
+            parser.add_argument(
                 "--train-env-vars",
                 type=json.loads,
                 default="{}",
@@ -358,6 +364,16 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--fully-async-group-prefetch-factor",
+                type=int,
+                default=1,
+                help=(
+                    "Multiply the fully-async in-flight prompt-group pool without increasing the "
+                    "per-sample generation semaphore. Values above 1 let another group's samples "
+                    "use slots released before a slow group finishes. Completed results remain bounded."
+                ),
+            )
+            parser.add_argument(
                 "--rollout-function-path",
                 type=str,
                 default="slime.rollout.sglang_rollout.generate_rollout",
@@ -494,6 +510,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help=(
                     "Whether to use partial rollout. "
                     "If set, the unfinished samples during dynamic sampling will be recycled back to data buffer. "
+                    "Agent adapters also continue interrupted model turns without restarting the sandbox or CLI. "
                     "This is useful for long responses."
                 ),
             )
@@ -2001,6 +2018,7 @@ def slime_validate_args(args):
         "rollout_queue_lease_seconds",
         "rollout_queue_segment_mib",
         "rollout_io_concurrency",
+        "fully_async_group_prefetch_factor",
     ):
         value = getattr(args, name)
         if name == "rollout_queue_segment_mib" and value is None:

@@ -13,6 +13,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -24,6 +25,73 @@ spec = importlib.util.spec_from_file_location("agent_e2e_test", REPO_ROOT / "tes
 e2e = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(e2e)
 NUM_GPUS = 0
+
+
+def test_parallel_mimo_image_preparation_deduplicates_and_reuses(monkeypatch, tmp_path):
+    from examples.coding_agent_rl.prepare_sunabako_images import prepare
+
+    images = ["registry.example/tasks:first", "registry.example/tasks:second"]
+    data = tmp_path / "train.jsonl"
+    data.write_text(
+        "".join(
+            json.dumps({"metadata": {"image": image, "workdir": "/testbed"}}) + "\n" for image in [*images, images[0]]
+        )
+    )
+    calls = []
+    both_running = threading.Barrier(2)
+
+    def pull(image, bundle):
+        both_running.wait(timeout=5)
+        calls.append(image)
+        (bundle / "rootfs").mkdir(parents=True)
+        (bundle / "image.json").write_text(json.dumps({"image": image, "env": {"PATH": "/bin"}}))
+
+    monkeypatch.setitem(sys.modules, "sunabako.images", SimpleNamespace(pull=pull))
+    result = prepare(data, tmp_path / "images", workers=2)
+    assert list(result) == images
+    assert sorted(calls) == sorted(images)
+    assert prepare(data, tmp_path / "images", workers=2) == result
+    assert len(calls) == 2
+
+
+def test_mimo_image_preparation_rejects_colliding_tags_before_download(monkeypatch, tmp_path):
+    from examples.coding_agent_rl.prepare_sunabako_images import prepare
+
+    data = tmp_path / "train.jsonl"
+    data.write_text(
+        "".join(
+            json.dumps({"metadata": {"image": image, "workdir": "/testbed"}}) + "\n"
+            for image in ["registry.example/a:task", "registry.example/b:task"]
+        )
+    )
+
+    def unexpected_pull(*args):
+        pytest.fail("Conflicting image names must be rejected before downloading")
+
+    monkeypatch.setitem(sys.modules, "sunabako.images", SimpleNamespace(pull=unexpected_pull))
+    with pytest.raises(ValueError, match="same bundle tag"):
+        prepare(data, tmp_path / "images", workers=2)
+
+
+def test_mimo_compressed_preparation_never_unpacks(monkeypatch, tmp_path):
+    from examples.coding_agent_rl.prepare_sunabako_images import prepare
+
+    image = "registry.example/tasks:first"
+    data = tmp_path / "train.jsonl"
+    data.write_text(json.dumps({"metadata": {"image": image, "workdir": "/testbed"}}))
+
+    def download(image, bundle):
+        bundle.mkdir(parents=True, exist_ok=True)
+        (bundle / "image.json").write_text(json.dumps({"image": image, "env": {"PATH": "/bin"}}))
+
+    def no_unpack(*args):
+        pytest.fail("Compressed-only preparation must not unpack rootfs")
+
+    monkeypatch.setitem(sys.modules, "sunabako.images", SimpleNamespace(pull=no_unpack, download=download))
+    root = tmp_path / "oci"
+    result = prepare(data, root, image_format="oci")
+    assert result[image] == {"rootfs": str(root / "first"), "env": {"PATH": "/bin"}, "workdir": "/testbed"}
+    assert not (root / "first/rootfs").exists()
 
 
 @pytest.fixture

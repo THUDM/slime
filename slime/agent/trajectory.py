@@ -49,6 +49,9 @@ class TurnRecord:
     output_log_probs: list[float] = dataclasses.field(default_factory=list)
     ill_formed: bool = False
     replay: dict[str, Any] | None = None
+    weight_versions: list[str] = dataclasses.field(default_factory=list)
+    spec_info: Sample.SpecInfo = dataclasses.field(default_factory=Sample.SpecInfo)
+    prefix_cache_info: Sample.PrefixCacheInfo = dataclasses.field(default_factory=Sample.PrefixCacheInfo)
 
 
 # ===========================================================================
@@ -179,6 +182,9 @@ class _SampleBuilder:
         self.last_response_start_idx: int | None = None
         self.leading_prompt_len: int = 0
         self.replay: dict[str, Any] | None = None
+        self.weight_versions: list[str] = []
+        self.spec_info = Sample.SpecInfo()
+        self.prefix_cache_info = Sample.PrefixCacheInfo()
 
     def classify_token_drift(self, turn: TurnRecord) -> DriftKind:
         """Decide how this builder should absorb ``turn``'s prompt.
@@ -242,6 +248,16 @@ class _SampleBuilder:
         # Shared sampled prefixes keep their original probabilities alongside
         # replay metadata. Only the loss mask changes on subsequent branches.
         self._append_tokens(turn.output_ids, loss_mask=int(trained), logprobs=turn.output_log_probs)
+        self.weight_versions.extend(turn.weight_versions)
+        if trained:
+            # Shared prefixes appear in multiple samples as masked context;
+            # their generation counters belong to the first branch only.
+            self.spec_info.spec_accept_token_num += turn.spec_info.spec_accept_token_num
+            self.spec_info.spec_draft_token_num += turn.spec_info.spec_draft_token_num
+            self.spec_info.spec_verify_ct += turn.spec_info.spec_verify_ct
+            self.spec_info.completion_token_num += turn.spec_info.completion_token_num
+            self.prefix_cache_info.cached_tokens += turn.prefix_cache_info.cached_tokens
+            self.prefix_cache_info.total_prompt_tokens += turn.prefix_cache_info.total_prompt_tokens
 
         if is_first_turn:
             self.leading_prompt_len = len(turn.prompt_ids)
@@ -319,7 +335,13 @@ class _SampleBuilder:
             reward=0.0,
             status=Sample.Status.COMPLETED,
             metadata=md,
+            weight_versions=list(self.weight_versions),
+            spec_info=dataclasses.replace(self.spec_info),
+            prefix_cache_info=dataclasses.replace(self.prefix_cache_info),
         )
+        if getattr(base_sample, "trace", None) is not None:
+            # Retain the carrier until the orchestrator closes cleanup spans.
+            sample.trace = base_sample.trace
         if self.replay is not None:
             count = sample.response_length
             for key in ("rollout_topk_token_ids", "rollout_topk_log_probs"):

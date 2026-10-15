@@ -108,8 +108,8 @@ agent 只收到原始题目和仓库，隐藏测试保留在独立评分沙箱�
 任务覆盖 CPU 合约检查。
 
 `tests/ci/setup_agent_e2e.sh` 按 `examples/coding_agent_rl/requirements-sunabako.txt`
-安装 PyPI 发布的 `sunabako==0.1.1` wheel，并在启动 Ray head 前准备认证 token；
-已有 token 会复用，其内容不会打印到 CI 日志。该版本通过 `uid_range_size` 支持 native 用户，
+安装 PyPI 发布的 `sunabako>=0.1.2` wheel，并在启动 Ray head 前准备认证 token；
+已有 token 会复用，其内容不会打印到 CI 日志。Sunabako 通过 `uid_range_size` 支持 native 用户，
 本地节点为 8 个沙箱分别保留 65,536 个 UID/GID，
 state 挂载到 `/workspace`，保证映射后的用户能遍历父目录。测试在现有特权 Docker
 容器中运行，无需内层 Docker daemon 或 PRoot。RSS 模式只用于有界功能验证，

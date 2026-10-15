@@ -29,13 +29,16 @@ import json
 import logging
 import os
 import shlex
+import sys
 import tempfile
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, NamedTuple
 
 from slime.agent import sandbox as agent_sandbox
 from slime.agent.adapters.common import flatten_content
 from slime.agent.sandbox import Sandbox, exec_and_wait
+from slime.observability.trace_utils import trace_span
 from slime.utils.types import Sample
 
 from .sandbox import create_sandbox
@@ -61,6 +64,7 @@ PROTOCOL_SWEBENCH = "swebench"
 _PATCH = "/tmp/__cagent_patch__.diff"
 _PRE = "/tmp/__cagent_pre__.sh"
 _F2P = "/tmp/__cagent_f2p__.py"
+_EVAL_SCRIPT = "/tmp/__cagent_eval__.sh"
 _SWEPRO_DIR = "/workspace/swepro_eval"
 
 SWE_PROMPT = os.environ.get(
@@ -241,13 +245,17 @@ async def _repository_tree(sb: Sandbox, workdir: str) -> str:
     cmd = (
         f"set -e\ncd {shlex.quote(workdir)}\n"
         'agent_index=$(mktemp)\nrm -f "$agent_index"\n'
-        'trap \'rm -f "$agent_index" "$agent_index.lock"\' EXIT\n'
+        'trap \'rm -f "$agent_index" "$agent_index.lock" "$agent_index.paths"\' EXIT\n'
         'export GIT_INDEX_FILE="$agent_index"\n'
         "git read-tree HEAD\n"
-        "git add -A -- . ':(exclude)PROBLEM_STATEMENT.md' ':(exclude).harness/'\n"
+        "git ls-files -z --cached --others --exclude-standard -- . "
+        "':(top,exclude)PROBLEM_STATEMENT.md' ':(top,exclude).harness' > \"$agent_index.paths\"\n"
+        'git update-index --add --remove -z --stdin < "$agent_index.paths"\n'
         "git write-tree"
     )
-    _, out, _ = await sb.exec(cmd, user="agent", timeout=120, check=True)
+    # Large repositories may need several minutes to hash their initial tree
+    # under concurrent sandbox load. The whole-rollout deadline still applies.
+    _, out, _ = await sb.exec(cmd, user="agent", timeout=600, check=True)
     tree = out.strip()
     if len(tree) not in (40, 64) or any(c not in "0123456789abcdef" for c in tree):
         raise RuntimeError(f"Invalid repository snapshot: {tree!r}")
@@ -258,7 +266,7 @@ async def git_diff(sb: Sandbox, workdir: str, baseline: str) -> str:
     current = await _repository_tree(sb, workdir)
     cmd = (
         f"cd {shlex.quote(workdir)} && git diff --binary {shlex.quote(baseline)} {shlex.quote(current)}"
-        " -- . ':(exclude)PROBLEM_STATEMENT.md' ':(exclude).harness/'"
+        " -- . ':(top,exclude)PROBLEM_STATEMENT.md' ':(top,exclude).harness'"
     )
     _, out, _ = await sb.exec(cmd, user="agent", timeout=120, check=True)
     return out
@@ -267,21 +275,33 @@ async def git_diff(sb: Sandbox, workdir: str, baseline: str) -> str:
 # ---------------------------------------------------------------------------
 # Eval dispatch (fresh sandbox, apply diff, run dataset tests)
 # ---------------------------------------------------------------------------
-async def run_evaluation(md: dict, *, diff_text: str, timeout_sec: int) -> EvalResult:
+@asynccontextmanager
+async def _evaluation_sandbox(image, trace):
+    sandbox = create_sandbox(image)
+    with trace_span(trace or [], "evaluation_sandbox_create", record_error=False):
+        ev = await sandbox.__aenter__()
+    try:
+        yield ev
+    finally:
+        with trace_span(trace or [], "evaluation_sandbox_cleanup", record_error=False):
+            await sandbox.__aexit__(*sys.exc_info())
+
+
+async def run_evaluation(md: dict, *, diff_text: str, timeout_sec: int, trace=None) -> EvalResult:
     """Uniform entry point: dispatch to the protocol's grader.
 
     No-test-cheating guarantee (both grading protocols): the eval sandbox is built from
     the same image but starts CLEAN, so only the model-produced diff affects
     reward."""
     if md.get("protocol") == PROTOCOL_SWEBENCH:
-        return await _grade_swebench(md, diff_text, timeout_sec)
-    return await _grade_scaleswe(md, diff_text, timeout_sec)
+        return await _grade_swebench(md, diff_text, timeout_sec, trace=trace)
+    return await _grade_scaleswe(md, diff_text, timeout_sec, trace=trace)
 
 
 # ---------------------------------------------------------------------------
 # scaleswe grader
 # ---------------------------------------------------------------------------
-async def _grade_scaleswe(md: dict, diff_text: str, timeout_sec: int) -> EvalResult:
+async def _grade_scaleswe(md: dict, diff_text: str, timeout_sec: int, *, trace=None) -> EvalResult:
     """Three mutually-exclusive grading paths, in priority order: swepro test
     harness, a shell ``eval_cmd``, or a self-contained ``f2p_script`` pytest
     file. All resolve to "exit 0 == solved", reward is 1.0 iff solved."""
@@ -297,24 +317,26 @@ async def _grade_scaleswe(md: dict, diff_text: str, timeout_sec: int) -> EvalRes
         logger.warning("[swe.scaleswe] no swepro/eval_cmd/f2p_script; reward=0")
         return EvalResult(0.0, True)
 
-    async with create_sandbox(image) as ev:
-        await agent_sandbox.ensure_agent_user(ev, workdir)
-        if swepro:
-            await _setup_swepro_assets(ev, swepro)
-            await apply_before_repo_set_cmd(ev, workdir, swepro)
-        if pre_commands:
-            await apply_pre_commands(ev, workdir, pre_commands)
+    async with _evaluation_sandbox(image, trace) as ev:
+        with trace_span(trace or [], "evaluation_prepare", record_error=False):
+            await agent_sandbox.ensure_agent_user(ev, workdir)
+            if swepro:
+                await _setup_swepro_assets(ev, swepro)
+                await apply_before_repo_set_cmd(ev, workdir, swepro)
+            if pre_commands:
+                await apply_pre_commands(ev, workdir, pre_commands)
 
-        applied = await _apply_diff(ev, workdir, diff_text)
-        if not applied:
-            return EvalResult(0.0, False)
+            applied = await _apply_diff(ev, workdir, diff_text)
+            if not applied:
+                return EvalResult(0.0, False)
 
-        if swepro:
-            r = await _run_swepro(ev, workdir, swepro, timeout_sec)
-        elif eval_cmd:
-            r = await _run_eval_cmd(ev, workdir, eval_cmd, timeout_sec, user=grading.get("eval_user", "agent"))
-        else:
-            r = await _run_f2p_script(ev, workdir, f2p_script, timeout_sec)
+        with trace_span(trace or [], "evaluation_tests", record_error=False):
+            if swepro:
+                r = await _run_swepro(ev, workdir, swepro, timeout_sec)
+            elif eval_cmd:
+                r = await _run_eval_cmd(ev, workdir, eval_cmd, timeout_sec, user=grading.get("eval_user", "agent"))
+            else:
+                r = await _run_f2p_script(ev, workdir, f2p_script, timeout_sec)
         return EvalResult(r, True)
 
 
@@ -370,7 +392,29 @@ async def _run_swepro(ev: Sandbox, workdir: str, swepro: dict, timeout: int) -> 
 
 
 async def _run_eval_cmd(ev: Sandbox, workdir: str, cmd: str, timeout: int, *, user: str = "agent") -> float:
-    ec, _, _ = await ev.exec(f"cd {workdir} && {cmd}", user=user, check=False, timeout=timeout)
+    if len(cmd.encode()) > 64 * 1024:
+        script = cmd
+        cmd = f". {shlex.quote(_EVAL_SCRIPT)}"
+        # Dataset commands can wrap a large embedded test payload in a single
+        # `bash -lc` argument. Merely moving that wrapper to a file still exceeds
+        # Linux's per-argument limit. Unwrap only canonical shlex.quote output;
+        # this preserves literal payloads without evaluating shell expansions.
+        for shell in ("bash", "/bin/bash", "sh", "/bin/sh"):
+            for flag in ("-c", "-lc"):
+                prefix = f"{shell} {flag} "
+                if not script.startswith(prefix):
+                    continue
+                quoted = script[len(prefix) :]
+                payload = quoted[1:-1].replace("'\"'\"'", "'")
+                if shlex.quote(payload) == quoted:
+                    script = payload
+                    cmd = shlex.join([shell, flag, cmd])
+                    break
+            else:
+                continue
+            break
+        await ev.write_file(_EVAL_SCRIPT, script, user=user)
+    ec, _, _ = await ev.exec(f"cd {shlex.quote(workdir)} && {cmd}", user=user, check=False, timeout=timeout)
     return 1.0 if ec == 0 else 0.0
 
 
@@ -468,7 +512,7 @@ def _log_swebench_result(instance_id: str, exit_code, info: dict, log: str) -> N
     )
 
 
-async def _grade_swebench(md: dict, diff_text: str, timeout_sec: int) -> EvalResult:
+async def _grade_swebench(md: dict, diff_text: str, timeout_sec: int, *, trace=None) -> EvalResult:
     """reward=1.0 iff sweb's get_eval_report declares the instance ``resolved``."""
     instance_id = md["instance_id"]
     inst = md["grading"]["sweb_instance"]
@@ -493,19 +537,21 @@ async def _grade_swebench(md: dict, diff_text: str, timeout_sec: int) -> EvalRes
         logger.warning("[swe.swebench] %s: missing image; reward=0", instance_id)
         return EvalResult(0.0, True)
 
-    async with create_sandbox(image) as ev:
-        await asyncio.gather(
-            ev.write_file("/tmp/patch.diff", diff_text or "", user="root"),
-            ev.write_file("/tmp/eval.sh", eval_sh, user="root"),
-        )
-        # Apply the model patch first (eval_script assumes it is already applied);
-        # if no apply strategy works, the instance is unsolvable -- skip the eval.
-        if not await _apply_model_patch(ev, md["workdir"]):
-            logger.warning("[swe.swebench] %s: model patch failed to apply; reward=0", instance_id)
-            return EvalResult(0.0, False)
-        exit_code, log = await exec_and_wait(
-            ev, cmd="bash /tmp/eval.sh", user="root", time_budget_sec=timeout_sec, tag="eval", want_output=True
-        )
+    async with _evaluation_sandbox(image, trace) as ev:
+        with trace_span(trace or [], "evaluation_prepare", record_error=False):
+            await asyncio.gather(
+                ev.write_file("/tmp/patch.diff", diff_text or "", user="root"),
+                ev.write_file("/tmp/eval.sh", eval_sh, user="root"),
+            )
+            # Apply the model patch first (eval_script assumes it is already applied);
+            # if no apply strategy works, the instance is unsolvable -- skip the eval.
+            if not await _apply_model_patch(ev, md["workdir"]):
+                logger.warning("[swe.swebench] %s: model patch failed to apply; reward=0", instance_id)
+                return EvalResult(0.0, False)
+        with trace_span(trace or [], "evaluation_tests", record_error=False):
+            exit_code, log = await exec_and_wait(
+                ev, cmd="bash /tmp/eval.sh", user="root", time_budget_sec=timeout_sec, tag="eval", want_output=True
+            )
 
     try:
         report = _eval_report_from_log(ts, instance_id, diff_text, log)

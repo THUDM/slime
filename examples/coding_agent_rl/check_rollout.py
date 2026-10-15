@@ -36,11 +36,15 @@ async def run(options):
         sglang_tool_call_parser="qwen3_coder",
         sglang_reasoning_parser="qwen3",
         rollout_max_context_len=options.max_context_tokens,
+        rollout_temperature=options.temperature,
+        rollout_top_p=options.top_p,
+        use_score_centering=options.use_score_centering,
+        partial_rollout=options.partial_rollout,
         apply_chat_template_kwargs=options.apply_chat_template_kwargs,
     )
     sampling = {
         "temperature": options.temperature,
-        "top_p": 0.95,
+        "top_p": options.top_p,
         "max_new_tokens": options.max_response_tokens,
         "stop_token_ids": [248046, 248044],
     }
@@ -65,6 +69,18 @@ async def run(options):
         for branch in branches:
             assert len(branch.loss_mask) == len(branch.rollout_log_probs) == branch.response_length
             assert all(math.isfinite(value) for value in branch.rollout_log_probs)
+            if options.use_score_centering and sum(branch.loss_mask):
+                from slime.utils.score_centering import validate_sampler_top_p
+
+                validate_sampler_top_p(
+                    branch.rollout_top_p_token_ids,
+                    branch.rollout_top_p_token_offsets,
+                    branch.rollout_top_p_log_probs,
+                    branch.response_length,
+                    loss_mask=branch.loss_mask,
+                    tokens=branch.tokens[-branch.response_length :],
+                    sampled_logps=branch.rollout_log_probs,
+                )
         torch.save(
             {"rollout_id": 0, "samples": [branch.to_dict() for branch in branches]}, output / f"sample-{index}.pt"
         )
@@ -107,13 +123,18 @@ def main():
     parser.add_argument("--max-context-tokens", type=int, default=65536)
     parser.add_argument("--max-response-tokens", type=int, default=8192)
     parser.add_argument("--temperature", type=float, default=1.0)
+    parser.add_argument("--top-p", type=float, default=0.95)
+    parser.add_argument("--use-score-centering", action="store_true")
+    parser.add_argument("--partial-rollout", action="store_true")
     parser.add_argument("--apply-chat-template-kwargs", type=json.loads, default={})
     options = parser.parse_args()
     if options.concurrency < 1 or options.samples_per_prompt < 1:
         parser.error("concurrency and samples-per-prompt must be positive")
+    if not 0 < options.top_p < 1:
+        parser.error("This replay check requires top-p in (0, 1)")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     results = asyncio.run(run(options))
-    if not any(result["reward"] == 1 for result in results):
+    if not any(result["reward"] == 1 and result["trainable_tokens"] > 0 for result in results):
         raise SystemExit("No reward=1 rollout; see the saved trajectories and fresh-sandbox grader logs.")
 
 

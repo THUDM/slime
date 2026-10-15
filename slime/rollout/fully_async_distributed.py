@@ -24,7 +24,7 @@ from slime.data.transport import (
 from slime.observability import logging_utils
 from slime.observability.rollout_data_utils import validate_rollout_id_annotated
 from slime.ray.utils import add_default_ray_env_vars
-from slime.rollout.base_types import finalize_rollout_groups, iter_samples
+from slime.rollout.base_types import finalize_rollout_groups, iter_samples, prepare_retry_group
 from slime.rollout.filter_hub.base_types import DynamicFilterOutput, call_dynamic_filter
 from slime.rollout.sample_hooks import rollout_context
 from slime.utils.async_utils import get_async_loop
@@ -268,7 +268,9 @@ class _GenerationActor:
             load_function(self.args.dynamic_sampling_filter_path) if self.args.dynamic_sampling_filter_path else None
         )
 
-        self.capacity = concurrency // self.args.n_samples_per_prompt
+        self.capacity = (concurrency // self.args.n_samples_per_prompt) * getattr(
+            self.args, "fully_async_group_prefetch_factor", 1
+        )
         self.running = False
         self.rollout_id = 0
         self.producer = None
@@ -288,8 +290,12 @@ class _GenerationActor:
                 self.producer.result()
             # Keep completed results bounded even when training stops consuming.
             # At most one queued result plus one result per pool slot stays local.
-            self.outputs = asyncio.Queue(maxsize=1)
+            if self.producer is None:
+                self.outputs = asyncio.Queue(maxsize=1)
+            self._slot_tasks = set()
+            self._pool_changed = asyncio.Event()
             self.producer = asyncio.create_task(self._produce())
+        self._pool_changed.set()
 
     async def pause(self):
         future = asyncio.run_coroutine_threadsafe(self._pause(), get_async_loop().loop)
@@ -297,6 +303,8 @@ class _GenerationActor:
 
     async def _pause(self):
         self.running = False
+        if changed := getattr(self, "_pool_changed", None):
+            changed.set()
 
     async def next(self):
         future = asyncio.run_coroutine_threadsafe(self._next(), get_async_loop().loop)
@@ -325,18 +333,34 @@ class _GenerationActor:
                     await self.outputs.put(output)
                 del output
 
-        tasks = []
+        tasks = self._slot_tasks
+        changed = None
         try:
-            for offset in range(0, self.capacity, 64):
-                if not self.running:
+            while self.running or tasks:
+                self._pool_changed.clear()
+                if self.running and len(tasks) < self.capacity:
+                    groups = await self.data_source.get_samples_async(min(64, self.capacity - len(tasks)))
+                    tasks.update(asyncio.create_task(generate_slot(group)) for group in groups)
+                    # Spread startup callbacks across loop turns to reduce
+                    # asyncio pressure. Each slot also refills itself locally.
+                    await asyncio.sleep(0.001)
+                    continue
+                if not tasks:
                     break
-                groups = await self.data_source.get_samples_async(min(64, self.capacity - offset))
-                tasks.extend(asyncio.create_task(generate_slot(group)) for group in groups)
-                # Spread startup callbacks across loop turns to reduce asyncio
-                # pressure. Each slot then pulls its own next group immediately.
-                await asyncio.sleep(0.001)
-            await asyncio.gather(*tasks)
+                # Resume must replenish slots that exited while paused, even
+                # when another group remains alive across many training steps.
+                changed = asyncio.create_task(self._pool_changed.wait())
+                done, _ = await asyncio.wait((*tasks, changed), return_when=asyncio.FIRST_COMPLETED)
+                changed.cancel()
+                await asyncio.gather(changed, return_exceptions=True)
+                changed = None
+                for task in done & tasks:
+                    tasks.remove(task)
+                    task.result()
         finally:
+            if changed is not None:
+                changed.cancel()
+                await asyncio.gather(changed, return_exceptions=True)
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -356,13 +380,16 @@ class _GenerationActor:
             sample.status in (Sample.Status.COMPLETED, Sample.Status.TRUNCATED) and sample.reward is not None
             for sample in iter_samples(group)
         ):
+            retry_group = [sample if isinstance(sample, list) else copy.deepcopy(sample) for sample in group]
             with rollout_context(rollout_id):
                 group = await generate_and_rm_group(self.args, group, self.state.sampling_params.copy())
+            if any(sample.status in (Sample.Status.ABORTED, Sample.Status.PENDING) for sample in iter_samples(group)):
+                # Preserve successful trajectories while restarting only the
+                # interrupted agent sessions from their original inputs.
+                await self._rebuffer(prepare_retry_group(retry_group, group))
+                return None
         validate_rollout_id_annotated([group])
         samples = list(iter_samples(group))
-        if any(sample.status == Sample.Status.ABORTED for sample in samples):
-            await self._rebuffer(group)
-            return None
         for sample in samples:
             if sample.index is None:
                 raise ValueError("Distributed generation must preserve the source sample index")
@@ -503,14 +530,16 @@ class DistributedRollout(RolloutScheduler):
             key=lambda node: (node["NodeManagerAddress"], node["NodeID"]),
         )
         total_concurrency = args.sglang_server_concurrency * get_rollout_num_engines(args)
+        total_concurrency = total_concurrency // args.n_samples_per_prompt * args.n_samples_per_prompt
         if not nodes or total_concurrency < len(nodes) * args.n_samples_per_prompt:
             raise ValueError("Distributed rollout needs concurrency for at least one prompt group per node")
         groups_per_worker, remainder = divmod(total_concurrency // args.n_samples_per_prompt, len(nodes))
+        prefetch_factor = getattr(args, "fully_async_group_prefetch_factor", 1)
         workers, capacities, reader_ids = [], [], []
         try:
             for i, node in enumerate(nodes):
                 capacity = groups_per_worker + (i < remainder)
-                capacities.append(capacity)
+                capacities.append(capacity * prefetch_factor)
                 reader = data_source.reader_config(f"fully_async_{i}")
                 reader_ids.append(reader.reader_id)
                 workers.append(
@@ -538,10 +567,11 @@ class DistributedRollout(RolloutScheduler):
         self.reader_ids = reader_ids
         self.ready.extend(recovered)
         logging.getLogger(__name__).info(
-            "Fully-async rollout: %d nodes, dataset=%d, concurrency=%d",
+            "Fully-async rollout: %d nodes, dataset=%d, concurrency=%d, group_capacity=%d",
             len(nodes),
             len(data_source),
             total_concurrency,
+            sum(capacities),
         )
 
     def state_dict(self):

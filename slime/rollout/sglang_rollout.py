@@ -326,8 +326,11 @@ async def generate_and_rm(
         ]
 
     # generate
-    async with state.semaphore:
-        await state.generation_pacer.wait()
+    with trace_span(sample, "rollout_admission_wait"):
+        await state.semaphore.acquire()
+    try:
+        with trace_span(sample, "rollout_pause_wait"):
+            await state.generation_pacer.wait()
         if state.aborted:
             sample.status = Sample.Status.ABORTED
             return sample
@@ -345,6 +348,8 @@ async def generate_and_rm(
                 sample = await _run_request_abortable_generate(state, sample, generate_call)
             else:
                 sample = await _run_server_abort_generate(state, generate_call)
+    finally:
+        state.semaphore.release()
 
     sample = inherit_queue_context(queue_input, sample)
     sample = await apply_rollout_sample_hooks(args, sample, evaluation=evaluation)
@@ -382,8 +387,8 @@ async def generate_and_rm(
     attrs_getter=lambda args, group, sampling_params, evaluation=False: {"group_size": len(group)},
 )
 async def generate_and_rm_group(
-    args: Namespace, group: list[Sample], sampling_params: dict[str, Any], evaluation: bool = False
-) -> list[Sample] | list[list[Sample]]:
+    args: Namespace, group: list[Sample | list[Sample]], sampling_params: dict[str, Any], evaluation: bool = False
+) -> list[Sample | list[Sample]]:
     # ``generate_and_rm`` may return either a ``Sample`` or a ``list[Sample]``
     # depending on whether the ``--custom-generate-function-path`` callable
     # emits one trainable sample or several (e.g. multi-turn agent rollouts
@@ -396,22 +401,34 @@ async def generate_and_rm_group(
     if state.aborted:
         return group
 
-    # Generate a unique session_id for each sample in the group
+    # Retried groups can retain completed segmented trajectories. Their tokens,
+    # rewards, masks, sessions, and weight versions must survive unchanged.
     for sample in group:
+        if isinstance(sample, list):
+            if not sample or any(
+                segment.status not in (Sample.Status.COMPLETED, Sample.Status.TRUNCATED)
+                or (not args.group_rm and segment.reward is None)
+                for segment in sample
+            ):
+                raise ValueError("Only completed segmented trajectories can be retained in a retry group")
+            continue
         if sample.session_id is None:
             sample.session_id = str(uuid.uuid4())
 
-    tasks = []
+    tasks = {}
     for idx, sample in enumerate(group):
+        if isinstance(sample, list):
+            continue
         current_sampling_params = sampling_params.copy()
         if getattr(args, "sglang_enable_deterministic_inference", False):
             seed = state.group_sampling_seeds[idx]
             current_sampling_params["sampling_seed"] = seed
-        tasks.append(
-            asyncio.create_task(generate_and_rm(args, sample, current_sampling_params, evaluation=evaluation))
-        )
+        tasks[idx] = asyncio.create_task(generate_and_rm(args, sample, current_sampling_params, evaluation=evaluation))
 
-    group = await asyncio.gather(*tasks)
+    results = await asyncio.gather(*tasks.values())
+    group = list(group)
+    for idx, result in zip(tasks, results, strict=True):
+        group[idx] = result
 
     # for the rm that need the whole group, we will do the rm here
     if not state.aborted and args.group_rm:

@@ -18,21 +18,25 @@ and produces the md dict consumed below.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import random
 import secrets
+import sys
 import time
 import traceback
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from slime.agent.adapters import AnthropicAdapter, ResponsesAdapter
 from slime.agent.aiohttp_threaded import FilteredAccessLogger, run_app_in_thread
 from slime.agent.harness import ClaudeCodeHarness, CodexHarness
-from slime.agent.sandbox import Sandbox
+from slime.agent.sandbox import EXIT_TIME_BUDGET_EXCEEDED, Sandbox, SandboxTerminatedError
+from slime.observability.trace_utils import bind_trace, export_trace, import_trace, trace_span
 from slime.utils.misc import SingletonMeta, get_current_node_ip
 from slime.utils.processing_utils import load_tokenizer
 from slime.utils.types import Sample
@@ -90,18 +94,21 @@ class SweConfig:
             agent_time_budget_sec=agent_time_budget,
             eval_timeout_sec=eval_timeout,
             rollout_guard_sec=guard,
-            boot_concurrency=int(os.environ.get("SWE_BOOT_CONCURRENCY", "16")),
+            boot_concurrency=int(os.environ.get("SWE_BOOT_CONCURRENCY", "0")),
             boot_retries=int(os.environ.get("SWE_BOOT_RETRIES", "2")),
         )
 
 
 CONFIG = SweConfig.from_env()
 
-_BOOT_SEM = asyncio.Semaphore(CONFIG.boot_concurrency)
+if CONFIG.boot_concurrency < 0:
+    raise ValueError("SWE_BOOT_CONCURRENCY must be nonnegative; 0 disables the boot limit")
+_BOOT_SEM = asyncio.Semaphore(CONFIG.boot_concurrency) if CONFIG.boot_concurrency else None
+_TRACE_FILE_ID = secrets.token_hex(8)
 
 
 @asynccontextmanager
-async def boot_agent_sandbox(image: str, instance_id: str, *, harness=None) -> AsyncIterator[Sandbox]:
+async def boot_agent_sandbox(image: str, instance_id: str, *, harness=None, trace=None) -> AsyncIterator[Sandbox]:
     """Boot a fresh sandbox and install the selected harness toolchain.
 
     Create the sandbox from the dataset image, install Node 22 + the harness CLI
@@ -113,13 +120,26 @@ async def boot_agent_sandbox(image: str, instance_id: str, *, harness=None) -> A
     for attempt in range(CONFIG.boot_retries):
         cand = create_sandbox(image)
         try:
-            async with _BOOT_SEM:
-                await cand.__aenter__()
+            with trace_span(trace, "sandbox_boot_wait", record_error=False) if trace else nullcontext():
+                if _BOOT_SEM is not None:
+                    await _BOOT_SEM.acquire()
+            try:
+                with (
+                    trace_span(trace, "sandbox_create", attrs={"attempt": attempt}, record_error=False)
+                    if trace
+                    else nullcontext()
+                ):
+                    await cand.__aenter__()
                 try:
-                    await (harness or HARNESS_CLS()).install_cli(cand)
+                    with trace_span(trace, "harness_install", record_error=False) if trace else nullcontext():
+                        await (harness or HARNESS_CLS()).install_cli(cand)
                 except BaseException:
-                    await cand.__aexit__(None, None, None)
+                    with trace_span(trace, "sandbox_cleanup", record_error=False) if trace else nullcontext():
+                        await cand.__aexit__(None, None, None)
                     raise
+            finally:
+                if _BOOT_SEM is not None:
+                    _BOOT_SEM.release()
             sb = cand
             break
         except Exception as e:
@@ -132,14 +152,16 @@ async def boot_agent_sandbox(image: str, instance_id: str, *, harness=None) -> A
                 type(e).__name__,
                 str(e)[:200],
             )
-            await asyncio.sleep(1 + attempt + random.random())
+            with trace_span(trace, "sandbox_boot_backoff", record_error=False) if trace else nullcontext():
+                await asyncio.sleep(1 + attempt + random.random())
     if sb is None:
         assert last_err is not None
         raise last_err
     try:
         yield sb
     finally:
-        await sb.__aexit__(None, None, None)
+        with trace_span(trace, "sandbox_cleanup", record_error=False) if trace else nullcontext():
+            await sb.__aexit__(*sys.exc_info())
 
 
 class _AdapterService(metaclass=SingletonMeta):
@@ -201,6 +223,35 @@ class _AdapterService(metaclass=SingletonMeta):
 
 
 async def generate(args, base_sample: Sample, sampling_params: dict[str, Any], evaluation: bool = False):
+    """Trace every trajectory, including those later rejected by group filtering."""
+    samples = []
+    try:
+        with trace_span(base_sample, "coding_rollout", record_error=False):
+            samples = await _generate(args, base_sample, sampling_params, evaluation)
+        return samples
+    finally:
+        # One append-only shard per worker, without prompts, commands, images,
+        # endpoints, or environment variables. Keep failed attempts as well.
+        if trace_dir := os.environ.get("SWE_TRACE_DIR"):
+            try:
+                path = Path(trace_dir)
+                path.mkdir(parents=True, exist_ok=True)
+                record = {
+                    "index": base_sample.index,
+                    "group_index": base_sample.group_index,
+                    "trace": base_sample.trace,
+                    "status": samples[0].status.value if samples else "interrupted",
+                    "reward": float(samples[0].reward or 0) if samples else 0.0,
+                    "response_length": sum(sum(s.loss_mask or []) for s in samples),
+                    "metadata": {"agent": agent_name_for(base_sample), "segments": len(samples)},
+                }
+                with (path / f"rollouts-{_TRACE_FILE_ID}.jsonl").open("a") as stream:
+                    stream.write(json.dumps(record) + "\n")
+            except Exception:
+                logger.exception("Could not write coding rollout trace")
+
+
+async def _generate(args, base_sample: Sample, sampling_params: dict[str, Any], evaluation: bool = False):
     """Per-sample agent function with wall-clock guard (see rollout_guard_sec)."""
     state = _AdapterService(args)
     agent_name = agent_name_for(base_sample)
@@ -218,6 +269,7 @@ async def generate(args, base_sample: Sample, sampling_params: dict[str, Any], e
     session_id = base_sample.session_id = _session_id(base_sample, instance_id)
     adapter.open_session(
         session_id,
+        trace=import_trace(export_trace(bind_trace(base_sample)), base_sample.trace),
         sampling_defaults=sampling_params,
         max_context_tokens=state.max_context_len,
         apply_chat_template_kwargs={
@@ -228,23 +280,31 @@ async def generate(args, base_sample: Sample, sampling_params: dict[str, Any], e
     t0 = time.time()
     try:
         async with asyncio.timeout(CONFIG.rollout_guard_sec):
-            async with boot_agent_sandbox(md["image"], instance_id, harness=harness) as sb:
-                baseline = await swe.prepare_workspace(sb, md["workdir"], md)
-                agent_exit_code = await harness.run(
-                    sb,
-                    workdir=md["workdir"],
-                    session_id=session_id,
-                    adapter_url=adapter_url,
-                    time_budget_sec=CONFIG.agent_time_budget_sec,
-                    prompt=swe.SWE_PROMPT,
-                )
-                diff_text = await swe.git_diff(sb, md["workdir"], baseline)
+            async with boot_agent_sandbox(md["image"], instance_id, harness=harness, trace=base_sample) as sb:
+                with trace_span(base_sample, "workspace_prepare", record_error=False):
+                    baseline = await swe.prepare_workspace(sb, md["workdir"], md)
+                with trace_span(base_sample, "agent_run", record_error=False) as span:
+                    agent_exit_code = await harness.run(
+                        sb,
+                        workdir=md["workdir"],
+                        session_id=session_id,
+                        adapter_url=adapter_url,
+                        time_budget_sec=CONFIG.agent_time_budget_sec,
+                        prompt=swe.SWE_PROMPT,
+                    )
+                    span.set("exit_code", agent_exit_code)
+                agent_metrics = await harness.collect_metrics(sb, workdir=md["workdir"])
+                with trace_span(base_sample, "patch_extract", record_error=False):
+                    diff_text = await swe.git_diff(sb, md["workdir"], baseline)
 
-            reward, applied_cleanly = await swe.run_evaluation(
-                md,
-                diff_text=diff_text,
-                timeout_sec=CONFIG.eval_timeout_sec,
-            )
+            with trace_span(base_sample, "evaluation", record_error=False) as span:
+                reward, applied_cleanly = await swe.run_evaluation(
+                    md,
+                    diff_text=diff_text,
+                    timeout_sec=CONFIG.eval_timeout_sec,
+                    trace=base_sample,
+                )
+                span.update({"reward": float(reward), "applied_cleanly": bool(applied_cleanly)})
             if evaluation:
                 logger.info(
                     "[coding_agent_rl] %s: reward=%.2f applied=%s agent_exit_code=%d elapsed=%.1fs (eval-only)",
@@ -262,22 +322,32 @@ async def generate(args, base_sample: Sample, sampling_params: dict[str, Any], e
                     instance_id=instance_id,
                 )
 
-            samples = await adapter.finish_session(
-                session_id,
-                base_sample=base_sample,
-                reward=float(reward),
-                extra_metadata={
-                    "grading_solved": float(reward) == 1.0,
-                    "instance_id": instance_id,
-                    "agent": agent_name,
-                },
-            )
+            with trace_span(base_sample, "trajectory_finalize", record_error=False):
+                samples = await adapter.finish_session(
+                    session_id,
+                    base_sample=base_sample,
+                    reward=float(reward),
+                    extra_metadata={
+                        "grading_solved": float(reward) == 1.0,
+                        "instance_id": instance_id,
+                        "agent": agent_name,
+                        "agent_metrics": agent_metrics,
+                    },
+                )
             if not samples:
                 return _abort_result(base_sample, "adapter_session_empty", instance_id)
 
             for s in samples:
                 s.metadata = {**(s.metadata or {}), "agent_exit_code": agent_exit_code}
-            if agent_exit_code != 0:
+                if agent_metrics.get("compact_limit_reached") or agent_exit_code == EXIT_TIME_BUDGET_EXCEEDED:
+                    s.status = Sample.Status.TRUNCATED
+                    s.metadata.update(
+                        truncated=True,
+                        truncation_reason=(
+                            "compact_limit" if agent_metrics.get("compact_limit_reached") else "time_budget"
+                        ),
+                    )
+            if agent_exit_code != 0 and not agent_metrics.get("compact_limit_reached"):
                 reason = "time budget exceeded" if agent_exit_code < 0 else f"CLI error (exit {agent_exit_code})"
                 logger.warning(
                     "[coding_agent_rl] %s: agent_exit_code=%d (%s)",
@@ -296,6 +366,37 @@ async def generate(args, base_sample: Sample, sampling_params: dict[str, Any], e
             )
             return samples
 
+    except SandboxTerminatedError as error:
+        # A terminal sandbox failure is an observed trajectory outcome. Keep
+        # its sampled actions and train them with zero reward instead of
+        # discarding the trajectory and retrying until execution succeeds.
+        metadata = {
+            "grading_solved": False,
+            "instance_id": instance_id,
+            "agent": agent_name,
+            "agent_error": str(error),
+            "agent_error_type": "sandbox_terminated",
+        }
+        if evaluation:
+            samples = _eval_result(
+                base_sample, reward=0.0, applied_cleanly=False, agent_exit_code=None, instance_id=instance_id
+            )
+            samples[0].metadata.update(metadata)
+        else:
+            with trace_span(base_sample, "trajectory_finalize", record_error=False):
+                samples = await adapter.finish_session(
+                    session_id, base_sample=base_sample, reward=0.0, extra_metadata=metadata
+                )
+            if not samples:
+                return _abort_result(base_sample, "sandbox_terminated_before_generation", instance_id)
+        logger.info(
+            "[coding_agent_rl] %s: reward=0.00 agent_error=%s elapsed=%.1fs segments=%d",
+            instance_id,
+            error,
+            time.time() - t0,
+            len(samples),
+        )
+        return samples
     except asyncio.TimeoutError:
         _log_timeout_diagnostic(t0, instance_id)
         return _abort_result(base_sample, "wall_clock_timeout", instance_id)
@@ -308,8 +409,8 @@ async def generate(args, base_sample: Sample, sampling_params: dict[str, Any], e
         )
         return _abort_result(base_sample, f"exception:{type(e).__name__}", instance_id)
     finally:
-        await adapter.drop_session(session_id, wait_timeout=30)  # cleanup only, idempotent
-        await asyncio.sleep(10)
+        with trace_span(base_sample, "adapter_cleanup", record_error=False):
+            await adapter.drop_session(session_id, wait_timeout=30)  # cleanup only, idempotent
 
 
 def _log_timeout_diagnostic(t0: float, instance_id: str) -> None:

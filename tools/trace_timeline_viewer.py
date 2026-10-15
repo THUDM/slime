@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build and serve an interactive timeline viewer for rollout trace dumps.
 
-The viewer consumes a rollout debug dump `.pt` file, extracts per-sample trace
+The viewer consumes a rollout debug dump `.pt` or trace-only `.jsonl` file, extracts per-sample trace
 events, rebuilds spans and point events, and writes a lightweight JSON cache
 plus a self-contained HTML viewer next to the source file.
 """
@@ -22,7 +22,6 @@ from pathlib import Path
 from typing import Any
 
 import torch
-
 
 CACHE_VERSION = 1
 
@@ -571,12 +570,16 @@ def _build_items_from_trace(sample: dict[str, Any], sample_idx: int) -> dict[str
 
 def _build_cache_data(pt_path: Path) -> dict[str, Any]:
     before_missing = len(_MISSING_PICKLE_GLOBALS)
-    data = torch.load(
-        pt_path,
-        map_location="cpu",
-        weights_only=False,
-        pickle_module=_DUMMY_FALLBACK_PICKLE_MODULE,
-    )
+    if pt_path.suffix == ".jsonl":
+        with pt_path.open() as stream:
+            data = [json.loads(line) for line in stream if line.strip()]
+    else:
+        data = torch.load(
+            pt_path,
+            map_location="cpu",
+            weights_only=False,
+            pickle_module=_DUMMY_FALLBACK_PICKLE_MODULE,
+        )
     if len(_MISSING_PICKLE_GLOBALS) > before_missing:
         missing_names = ", ".join(f"{module}.{name}" for module, name in sorted(_MISSING_PICKLE_GLOBALS))
         print(
@@ -2344,7 +2347,7 @@ def serve_directory(directory: Path, port: int) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("pt_path", help="Path to rollout debug dump .pt file")
+    parser.add_argument("pt_path", help="Path to rollout debug dump .pt or trace-only .jsonl file")
     parser.add_argument("--rebuild", action="store_true", help="Rebuild cache even if it already exists")
     parser.add_argument(
         "--serve",
@@ -2360,7 +2363,7 @@ def main() -> None:
     args = parse_args()
     pt_path = Path(args.pt_path).expanduser().resolve()
     if not pt_path.exists():
-        raise SystemExit(f"pt file not found: {pt_path}")
+        raise SystemExit(f"trace file not found: {pt_path}")
 
     paths = _timeline_paths(pt_path)
     cache_data = ensure_cache(paths, rebuild=args.rebuild)

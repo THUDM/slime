@@ -967,6 +967,243 @@ def test_distributed_completed_groups_keep_rewards_and_masks(monkeypatch, fanout
     assert sample._queue_receipt == {"position": 7}
 
 
+@pytest.mark.parametrize("fanout", [False, True])
+def test_aborted_worker_requeues_generator_inputs_for_segmented_agents(monkeypatch, fanout):
+    from slime.rollout import sglang_rollout
+    from slime.rollout.fully_async_distributed import _GenerationActor
+
+    original = Sample(index=1, prompt="task", status=Sample.Status.PENDING)
+    original._queue_lease = {"task_id": "borrowed"}
+    buffered = []
+
+    async def generate(args, group, params):
+        group[0].tokens = [1, 2]
+        group[0].status = Sample.Status.ABORTED
+        return [group] if fanout else group
+
+    async def rebuffer(group):
+        buffered.append(group)
+
+    monkeypatch.setattr(sglang_rollout, "generate_and_rm_group", generate)
+    worker = _GenerationActor.__new__(_GenerationActor)
+    worker.running = True
+    worker.args = SimpleNamespace()
+    worker.state = SimpleNamespace(sampling_params={})
+    worker._rebuffer = rebuffer
+    assert asyncio.run(worker._generate_group(0, [original])) is None
+    sample = buffered[0][0]
+    assert isinstance(sample, Sample)
+    assert sample._queue_lease == {"task_id": "borrowed"}
+    if fanout:
+        assert sample.status == Sample.Status.PENDING and sample.tokens == []
+    else:
+        assert sample is original and sample.tokens == [1, 2]
+
+
+@pytest.mark.parametrize("source_factory", [False, True], indirect=True)
+def test_aborted_worker_retains_completed_trajectories_across_queue_handoff(source_factory, monkeypatch):
+    from slime.data.transport import pack_rollout_group
+    from slime.rollout import sglang_rollout
+    from slime.rollout.fully_async_distributed import _GenerationActor
+
+    reader = source_factory("initial")
+    [original] = reader.get_samples(1)
+    finished = []
+    for version in (2, 3):
+        segment = copy.deepcopy(original[0])
+        segment.status, segment.reward = Sample.Status.COMPLETED, 1.0
+        segment.tokens, segment.response_length = [1, version], 1
+        segment.response, segment.loss_mask = "done", [1]
+        segment.weight_versions = [str(version)]
+        segment.rollout_log_probs = [float(torch.tensor(0.75).log())]
+        segment.rollout_top_p_token_ids = torch.tensor([version, 99], dtype=torch.int32)
+        segment.rollout_top_p_token_offsets = torch.tensor([0, 2], dtype=torch.int32)
+        segment.rollout_top_p_log_probs = torch.tensor([0.75, 0.25]).log()
+        finished.append(segment)
+
+    async def interrupted(args, group, params):
+        group[1].prompt = "mutation from the failed session"
+        group[1].status = Sample.Status.ABORTED
+        return [finished, [group[1]]]
+
+    async def rebuffer(group):
+        reader.add_samples([group])
+
+    worker = _GenerationActor.__new__(_GenerationActor)
+    worker.running = True
+    worker.args = SimpleNamespace()
+    worker.state = SimpleNamespace(sampling_params={})
+    worker._rebuffer = rebuffer
+    with monkeypatch.context() as patch:
+        patch.setattr(sglang_rollout, "generate_and_rm_group", interrupted)
+        assert asyncio.run(worker._generate_group(4, original)) is None
+
+    receiver = source_factory("replacement")
+    [resumed] = receiver.get_samples(1)
+    assert isinstance(resumed[0], list)
+    assert len(resumed[0]) == 2
+    assert resumed[1].status == Sample.Status.PENDING
+    assert resumed[1].prompt != "mutation from the failed session"
+    for expected, actual in zip(finished, resumed[0], strict=True):
+        for field in ("tokens", "response", "reward", "loss_mask", "weight_versions", "rollout_log_probs"):
+            assert getattr(actual, field) == getattr(expected, field)
+        assert actual._queue_lease["worker_id"] == "replacement"
+        assert actual._queue_lease["attempt_id"] != expected._queue_lease["attempt_id"]
+        for field in ("rollout_top_p_token_ids", "rollout_top_p_token_offsets", "rollout_top_p_log_probs"):
+            assert torch.equal(getattr(actual, field).load(), getattr(expected, field))
+
+    calls = []
+
+    async def generate(args, sample, params, evaluation=False):
+        calls.append((sample.index, params["sampling_seed"]))
+        assert sample is resumed[1], "Completed trajectories must not invoke generation again"
+        sample.status, sample.reward = Sample.Status.COMPLETED, 0.0
+        sample.tokens, sample.response_length = [1, 9], 1
+        sample.response, sample.loss_mask = "new", [1]
+        return [sample]
+
+    monkeypatch.setattr(
+        sglang_rollout, "GenerateState", lambda args: SimpleNamespace(aborted=False, group_sampling_seeds=[10, 20])
+    )
+    monkeypatch.setattr(sglang_rollout, "generate_and_rm", generate)
+    args = SimpleNamespace(group_rm=False, sglang_enable_deterministic_inference=True)
+    result = asyncio.run(sglang_rollout.generate_and_rm_group(args, resumed, {}))
+    assert calls == [(resumed[1].index, 20)]
+    assert result[0] is resumed[0]
+    assert [len(trajectory) for trajectory in result] == [2, 1]
+    assert all(sample.loss_mask == [1] for sample in iter_samples(result))
+    published = pack_rollout_group(result, receiver.args, 5, controller=receiver.controller)
+    assert published.receipt is not None
+    assert source_factory.controller.metrics()["tasks"]["completed"] == 1
+    source_factory.controller.store.seal()
+    if source_factory.args.rollout_queue_online_gc:
+        source_factory.controller.queue.collect_garbage()
+    restored = unpack_rollout_payload(published)
+    for expected, actual in zip(finished, restored[0], strict=True):
+        for field in ("rollout_top_p_token_ids", "rollout_top_p_token_offsets", "rollout_top_p_log_probs"):
+            assert torch.equal(getattr(actual, field).load(), getattr(expected, field))
+
+
+def test_worker_resume_restores_slots_while_an_old_group_is_still_running():
+    from slime.rollout.fully_async_distributed import _GenerationActor
+
+    async def exercise():
+        worker = _GenerationActor.__new__(_GenerationActor)
+        worker.capacity = 3
+        worker.producer = None
+        worker.running = False
+        started = asyncio.Queue()
+        releases = {}
+        active = set()
+        maximum = 0
+        cursor = 0
+
+        async def fetch(count):
+            nonlocal cursor
+            groups = list(range(cursor, cursor + count))
+            cursor += count
+            return groups
+
+        async def generate(rollout_id, group=None):
+            nonlocal maximum
+            if group is None:
+                [group] = await fetch(1)
+            releases[group] = asyncio.Event()
+            active.add(group)
+            maximum = max(maximum, len(active))
+            started.put_nowait(group)
+            try:
+                await releases[group].wait()
+                return group
+            finally:
+                active.remove(group)
+
+        worker.data_source = SimpleNamespace(get_samples_async=fetch)
+        worker._generate_group = generate
+        received = []
+        await worker._start(0)
+        try:
+            initial = [await asyncio.wait_for(started.get(), timeout=2) for _ in range(3)]
+            slow, *fast = initial
+            for rollout_id in range(1, 4):
+                await worker._pause()
+                for group in fast:
+                    releases[group].set()
+                received.extend([await asyncio.wait_for(worker._next(), timeout=2) for _ in fast])
+                # Let finished slots exit while the original slow group keeps
+                # the producer alive. Resuming must replenish those slots.
+                for _ in range(5):
+                    await asyncio.sleep(0)
+                assert active == {slow} and not worker.producer.done()
+                await worker._start(rollout_id)
+                fast = [await asyncio.wait_for(started.get(), timeout=2) for _ in range(2)]
+                assert active == {slow, *fast}
+                assert not releases[slow].is_set()
+
+            await worker._pause()
+            for event in releases.values():
+                event.set()
+            while (result := await asyncio.wait_for(worker._next(), timeout=2)) is not None:
+                received.append(result)
+            assert sorted(received) == list(range(cursor))
+            assert maximum == worker.capacity
+            assert not active and worker.producer.done()
+        finally:
+            worker.producer.cancel()
+            await asyncio.gather(worker.producer, return_exceptions=True)
+
+    asyncio.run(exercise())
+
+
+def test_worker_resume_preserves_a_queued_result_after_the_pool_drains():
+    from slime.rollout.fully_async_distributed import _GenerationActor
+
+    async def exercise():
+        worker = _GenerationActor.__new__(_GenerationActor)
+        worker.capacity = 1
+        worker.producer = None
+        worker.running = False
+        started = asyncio.Queue()
+        releases = {}
+        cursor = 0
+
+        async def fetch(count):
+            nonlocal cursor
+            groups = list(range(cursor, cursor + count))
+            cursor += count
+            return groups
+
+        async def generate(rollout_id, group=None):
+            if group is None:
+                [group] = await fetch(1)
+            releases[group] = asyncio.Event()
+            started.put_nowait(group)
+            await releases[group].wait()
+            return group
+
+        worker.data_source = SimpleNamespace(get_samples_async=fetch)
+        worker._generate_group = generate
+        await worker._start(0)
+        try:
+            assert await asyncio.wait_for(started.get(), timeout=2) == 0
+            await worker._pause()
+            releases[0].set()
+            await asyncio.wait_for(worker.producer, timeout=2)
+            assert worker.outputs.qsize() == 1
+            await worker._start(1)
+            assert await asyncio.wait_for(worker._next(), timeout=2) == 0
+            assert await asyncio.wait_for(started.get(), timeout=2) == 1
+            await worker._pause()
+            releases[1].set()
+            assert await asyncio.wait_for(worker._next(), timeout=2) == 1
+            assert await asyncio.wait_for(worker._next(), timeout=2) is None
+        finally:
+            worker.producer.cancel()
+            await asyncio.gather(worker.producer, return_exceptions=True)
+
+    asyncio.run(exercise())
+
+
 def test_worker_refills_locally_and_slow_group_does_not_block_results():
     from slime.rollout.fully_async_distributed import _GenerationActor
 
@@ -1033,6 +1270,111 @@ def test_worker_refills_locally_and_slow_group_does_not_block_results():
             assert len(generated) == count
             assert sorted(received + drained) == generated
         finally:
+            worker.producer.cancel()
+            await asyncio.gather(worker.producer, return_exceptions=True)
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("prefetch_factor", [1, 2])
+def test_group_prefetch_fills_free_sample_slots_without_exceeding_admission(monkeypatch, prefetch_factor):
+    from contextlib import nullcontext
+
+    from slime.rollout import fully_async_distributed, sglang_rollout
+
+    async def exercise():
+        release = asyncio.Event()
+        started = [asyncio.Event() for _ in range(8)]
+        first_fast_finished = asyncio.Event()
+        active = maximum = cursor = 0
+
+        async def ready():
+            pass
+
+        state = SimpleNamespace(
+            semaphore=asyncio.Semaphore(2),
+            sampling_params={},
+            aborted=False,
+            generation_pacer=SimpleNamespace(wait=ready),
+            dp_rank_context=nullcontext,
+            active_server_generations=0,
+        )
+
+        def generate_state(args, *, concurrency=None):
+            # Group prefetch must not multiply the actual admission limit.
+            assert concurrency in (None, 2)
+            return state
+
+        async def generate(args, sample, params):
+            nonlocal active, maximum
+            active += 1
+            maximum = max(maximum, active)
+            try:
+                started[sample.index].set()
+                if sample.index == 0:
+                    await release.wait()
+                else:
+                    await asyncio.sleep(0)
+                sample.response = "done"
+                sample.reward = 1.0
+                sample.status = Sample.Status.COMPLETED
+                if sample.index == 1:
+                    first_fast_finished.set()
+                return sample
+            finally:
+                active -= 1
+
+        async def fetch(count):
+            nonlocal cursor
+            groups = []
+            for _ in range(count):
+                groups.append([Sample(index=cursor + i, rollout_id=0) for i in range(2)])
+                cursor += 2
+            return groups
+
+        args = SimpleNamespace(
+            n_samples_per_prompt=2,
+            fully_async_group_prefetch_factor=prefetch_factor,
+            dynamic_sampling_filter_path=None,
+            rollout_data_transport="object-store",
+            partial_rollout=True,
+            mask_offpolicy_in_partial_rollout=False,
+            custom_generate_function_path="test.generate",
+            group_rm=False,
+        )
+        source = SimpleNamespace(get_samples_async=fetch, materialize_samples=lambda group: group, controller=None)
+        reader = SimpleNamespace(args=args, reader_id="test", open=lambda args: source)
+        monkeypatch.setattr(sglang_rollout, "GenerateState", generate_state)
+        monkeypatch.setattr(sglang_rollout, "load_function", lambda path: generate)
+        monkeypatch.setattr(fully_async_distributed, "init_http_client", lambda *args, **kwargs: None)
+        monkeypatch.setattr(fully_async_distributed.logging_utils, "configure_logger", lambda **kwargs: None)
+        worker = fully_async_distributed._GenerationActor(reader, concurrency=2)
+        received = []
+        await worker._start(0)
+        try:
+            await asyncio.wait_for(first_fast_finished.wait(), timeout=3)
+            if prefetch_factor == 2:
+                group, _ = await asyncio.wait_for(worker._next(), timeout=3)
+                received.extend(s.index for s in group)
+                assert received == [2, 3]
+                assert not release.is_set()  # Slow member 0 is still alive.
+                assert started[2].is_set()
+            else:
+                await asyncio.sleep(0.02)
+                assert not started[2].is_set()
+
+            await worker._pause()
+            claimed = cursor
+            release.set()
+            while (output := await asyncio.wait_for(worker._next(), timeout=3)) is not None:
+                received.extend(s.index for s in output[0])
+            assert cursor == claimed  # Pausing stops replacement-group admission.
+            assert sorted(received) == list(range(claimed))
+            assert maximum == 2
+            assert active == 0
+            assert state.semaphore._value == 2
+        finally:
+            release.set()
             worker.producer.cancel()
             await asyncio.gather(worker.producer, return_exceptions=True)
 

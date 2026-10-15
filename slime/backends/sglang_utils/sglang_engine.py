@@ -398,7 +398,10 @@ class SGLangEngine(RayActor):
         """Remove dead trainer peers while retaining the serving process."""
         # Old NCCL groups refer to the previous trainer's ranks and cannot be
         # reused, even when the new trainer has the same parallel layout.
-        for group_name in list(self._weight_update_groups):
+        # Process-group shutdown can synchronize peers. A set's iteration order
+        # differs across workers, so every engine must destroy groups in the
+        # same order or wait forever for a peer destroying another group.
+        for group_name in sorted(self._weight_update_groups):
             self._make_request(
                 "destroy_weights_update_group",
                 {"group_name": group_name},

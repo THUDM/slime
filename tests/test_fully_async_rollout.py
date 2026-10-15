@@ -142,6 +142,8 @@ def test_concurrency_is_scaled_by_samples_per_prompt(monkeypatch):
     args = SimpleNamespace(n_samples_per_prompt=4)
     assert fa.AsyncRolloutWorker(args, _FakeDataBuffer([]), concurrency=10).concurrency == 2
     assert fa.AsyncRolloutWorker(args, _FakeDataBuffer([]), concurrency=2).concurrency == 1
+    args.fully_async_group_prefetch_factor = 2
+    assert fa.AsyncRolloutWorker(args, _FakeDataBuffer([]), concurrency=10).concurrency == 4
 
 
 @pytest.mark.unit
@@ -171,6 +173,38 @@ def test_dynamic_filter_drops_groups_and_refills(monkeypatch):
     assert result.metrics["rollout/dynamic_filter/dropped_ratio"] == 0.5
     assert result.metrics["rollout/dynamic_filter/drop_even"] == 3
     assert [gid for gid, _ in worker.get_completed_groups()] == [6, 7]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("segmented", [False, True])
+def test_uniform_reward_filter_replenishes_eight_sample_groups(monkeypatch, segmented):
+    worker = _make_worker(monkeypatch)
+    rewards = [[0.0] * 8, [1.0] * 8, [0.0, 1.0] * 4, [1.0, 0.0] * 4, [0.0] * 8]
+    groups = []
+    for gid, values in enumerate(rewards):
+        group = []
+        for index, reward in enumerate(values):
+            sample = Sample(index=gid * 8 + index, reward=reward, status=Sample.Status.COMPLETED)
+            # Multiple context windows still represent one trajectory reward.
+            group.append([sample, sample] if segmented and index % 2 else [sample] if segmented else sample)
+        groups.append(group)
+        worker.output_queue.put((gid, group))
+    monkeypatch.setattr(fa, "_get_worker", lambda args, data_buffer: worker)
+    args = SimpleNamespace(
+        rollout_batch_size=2,
+        n_samples_per_prompt=8,
+        reward_key=None,
+        rollout_data_transport="object-store",
+        rollout_sample_filter_path=None,
+        dynamic_sampling_filter_path="slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std",
+    )
+    result = asyncio.run(fa._generate_rollout_async(args, rollout_id=0, data_buffer=None))
+    assert result.samples == groups[2:4]
+    assert all(len(group) == 8 for group in result.samples)
+    assert result.metrics["rollout/dynamic_filter/drop_zero_std_0.0"] == 1
+    assert result.metrics["rollout/dynamic_filter/drop_zero_std_1.0"] == 1
+    assert result.metrics["rollout/dynamic_filter/dropped_groups"] == 2
+    assert [gid for gid, _ in worker.get_completed_groups()] == [4]
 
 
 @pytest.mark.unit
@@ -213,7 +247,7 @@ def test_done_callback_never_blocks_event_loop_thread(monkeypatch):
 
     def _push_all():
         for gid in range(1001):
-            worker._make_done_cb(gid)(_DoneTask(gid))
+            worker._make_done_cb(gid, _make_group(gid))(_DoneTask(gid))
 
     pusher = threading.Thread(target=_push_all, daemon=True)
     pusher.start()
@@ -221,6 +255,59 @@ def test_done_callback_never_blocks_event_loop_thread(monkeypatch):
 
     assert not pusher.is_alive(), "done-callback blocked on a full output queue"
     assert worker.queue_size() == 1001
+
+
+@pytest.mark.unit
+def test_interrupted_segmented_group_retains_successful_siblings(monkeypatch):
+    worker = _make_worker(monkeypatch)
+    original = [Sample(index=i, prompt=f"original-{i}") for i in range(8)]
+    callback = worker._make_done_cb(0, original)
+    original[0].remove_sample = True
+    original[0].prompt = "mutated by aborted generator"
+    result = [[Sample(index=i, status=Sample.Status.COMPLETED)] for i in range(8)]
+    result[3].append(Sample(index=3, status=Sample.Status.ABORTED))
+    callback(SimpleNamespace(result=lambda: result))
+    assert worker.queue_size() == 0
+    [requeued] = worker.data_buffer.requeued
+    assert len(requeued) == 8
+    for index, sample in enumerate(requeued):
+        if index == 3:
+            assert isinstance(sample, Sample)
+            assert sample.prompt == "original-3"
+            assert sample.status == Sample.Status.PENDING and not sample.remove_sample
+        else:
+            assert sample is result[index]
+
+
+def test_oldest_buffer_order_uses_retained_segment_versions():
+    from slime.data.data_source import pop_oldest
+
+    older = [[Sample(weight_versions=["2", "7"])], Sample()]
+    newer = [[Sample(weight_versions=["4"])], Sample()]
+    buffer = [newer, older]
+    assert pop_oldest(None, None, buffer, 1) == [older]
+    assert buffer == [newer]
+
+
+@pytest.mark.parametrize("status,reward", [(Sample.Status.ABORTED, 0.0), (Sample.Status.COMPLETED, None)])
+def test_retry_rejects_unfinished_segments_before_starting_generation(monkeypatch, status, reward):
+    from slime.rollout import sglang_rollout
+
+    monkeypatch.setattr(sglang_rollout, "GenerateState", lambda args: types.SimpleNamespace(aborted=False))
+    group = [Sample(), [Sample(status=status, reward=reward)]]
+    with pytest.raises(ValueError, match="Only completed segmented"):
+        asyncio.run(sglang_rollout.generate_and_rm_group(types.SimpleNamespace(group_rm=False), group, {}))
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("status", [Sample.Status.PENDING, Sample.Status.ABORTED])
+def test_unfinished_flat_group_is_requeued_without_discarding_partial_response(monkeypatch, status):
+    worker = _make_worker(monkeypatch)
+    group = [Sample(index=0, status=status, response="partial", response_length=7)]
+    worker._make_done_cb(0, group)(SimpleNamespace(result=lambda: group))
+    assert worker.queue_size() == 0
+    assert worker.data_buffer.requeued == [group]
+    assert worker.data_buffer.requeued[0][0] is group[0]
 
 
 @pytest.mark.unit
@@ -254,6 +341,41 @@ def test_loop_backpressure_stops_topping_up_when_queue_is_full(monkeypatch):
     # In-flight tasks may still land after the gate check, so allow one pool
     # beyond the gate — but nothing near the unthrottled fuel size.
     assert 0 < max_seen <= 2 * concurrency, f"queue grew to {max_seen} with concurrency={concurrency}"
+
+
+def test_admission_pause_keeps_unfinished_agent_group_alive(monkeypatch):
+    started, finish = threading.Event(), threading.Event()
+    group = _make_group(7)
+    invocations = []
+
+    async def generate(args, received, sampling_params, evaluation):
+        invocations.append(received)
+        started.set()
+        while not finish.is_set():
+            await asyncio.sleep(0.01)
+        return [[received[0]]]
+
+    monkeypatch.setattr(fa, "generate_and_rm_group", generate)
+    worker = _make_worker(monkeypatch, data_buffer=_FakeDataBuffer([group]), concurrency=1)
+    worker.start()
+    try:
+        assert started.wait(5)
+        assert worker.pause(drain=False) is False
+        assert worker.active == 1 and worker.queue_size() == 0
+        # Weight publication pauses new admission; the existing sandbox task is
+        # still the same coroutine when the next training round resumes it.
+        worker.resume()
+        finish.set()
+        deadline = time.monotonic() + 5
+        while worker.queue_size() == 0:
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        assert invocations == [group]
+        assert worker.get_completed_groups()[0][1] == [[group[0]]]
+        assert not worker.data_buffer.requeued
+    finally:
+        finish.set()
+        worker.close()
 
 
 @pytest.mark.parametrize("transport", ["object-store", "straw"])
