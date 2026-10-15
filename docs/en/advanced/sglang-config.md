@@ -20,6 +20,8 @@ With `--sglang-config`, the SGLang deployment expands into a multi-model, multi-
 - **Server groups within a model can be heterogeneous.** Different groups can have different TP sizes, worker types (prefill/decode/regular), and SGLang server argument overrides.
 - **Weight sync is per-model.** Only models with `update_weights: true` receive weight updates from training. Frozen models (reference, reward, etc.) are served as-is.
 
+For external KV caching on a frozen model, see the [LMCache example](../../../examples/lmcache/README.md). It scopes LMCache to a model with `update_weights: false` and includes a same-checkpoint engine restart check.
+
 ---
 
 ## Config Format

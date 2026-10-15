@@ -24,6 +24,27 @@ def _write_yaml(data: dict) -> str:
     return f.name
 
 
+def test_lmcache_example_keeps_external_cache_on_frozen_model():
+    from slime.backends.sglang_utils.sglang_config import SglangConfig
+
+    config = SglangConfig.from_yaml(str(REPO_ROOT / "examples/lmcache/sglang.yaml"))
+    args = Namespace(hf_checkpoint="Qwen/Qwen3-0.6B", rollout_num_gpus_per_engine=1)
+    for model in config.models:
+        model.resolve(args)
+
+    actor, ref = config.models
+    assert config.total_num_gpus == 2
+    assert actor.update_weights is True
+    assert actor.server_groups[0].overrides["enable_lmcache"] is False
+    # Matching checkpoint paths must not turn the reference into a weight-update target.
+    assert ref.server_groups[0].overrides["model_path"] == args.hf_checkpoint
+    assert ref.update_weights is False
+    assert ref.server_groups[0].overrides["enable_lmcache"] is True
+    cache_config = REPO_ROOT / ref.server_groups[0].overrides["lmcache_config_file"]
+    with cache_config.open() as f:
+        assert yaml.safe_load(f) == {"mp_host": "127.0.0.1", "mp_port": 5556}
+
+
 class TestSglangConfigUpdateWeights:
     def test_update_weights_default_true(self):
         """Models without explicit update_weights should default to True."""
