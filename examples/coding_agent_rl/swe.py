@@ -238,13 +238,18 @@ async def _repository_tree(sb: Sandbox, workdir: str) -> str:
     # Images can contain modified tracked files and untracked build artifacts.
     # Snapshot the actual workspace with a temporary index, preserving HEAD and
     # the agent's real index. This also captures staged edits and new files.
+    # .harness/ is kept out through a temporary excludes file, not a pathspec:
+    # a pathspec naming a path the repo's own .gitignore already ignores (e.g. a
+    # `.*` rule) makes `git add` fail.
     cmd = (
         f"set -e\ncd {shlex.quote(workdir)}\n"
         'agent_index=$(mktemp)\nrm -f "$agent_index"\n'
-        'trap \'rm -f "$agent_index" "$agent_index.lock"\' EXIT\n'
+        "harness_excludes=$(mktemp)\n"
+        'trap \'rm -f "$agent_index" "$agent_index.lock" "$harness_excludes"\' EXIT\n'
         'export GIT_INDEX_FILE="$agent_index"\n'
         "git read-tree HEAD\n"
-        "git add -A -- . ':(exclude)PROBLEM_STATEMENT.md' ':(exclude).harness/'\n"
+        'echo .harness/ > "$harness_excludes"\n'
+        "git -c core.excludesFile=\"$harness_excludes\" add -A -- . ':(exclude)PROBLEM_STATEMENT.md'\n"
         "git write-tree"
     )
     _, out, _ = await sb.exec(cmd, user="agent", timeout=120, check=True)

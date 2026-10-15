@@ -78,5 +78,31 @@ def test_patch_uses_actual_image_baseline_without_changing_git_index(tmp_path, m
     asyncio.run(scenario())
 
 
+def test_patch_when_repo_gitignore_ignores_dot_directories(tmp_path):
+    # Some task images ship the upstream project's .gitignore with a `.*` rule
+    # (e.g. sfcc-ci), which also ignores the harness metadata directory.
+    repo = tmp_path / "agent repo"
+    repo.mkdir()
+    git(repo, "init", "-q")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.invalid")
+    (repo / "source.py").write_text("result = 0\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "original")
+    (repo / ".gitignore").write_text("node_modules\n.*\n!.github\n")
+    shell = LocalShell()
+
+    async def scenario():
+        baseline = await swe._repository_tree(shell, str(repo))
+        (repo / ".harness").mkdir()
+        (repo / ".harness/log").write_text("execution log")
+        (repo / "source.py").write_text("result = 42\n")
+        patch = await swe.git_diff(shell, str(repo), baseline)
+        assert "result = 42" in patch
+        assert ".harness" not in patch and ".gitignore" not in patch
+
+    asyncio.run(scenario())
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
