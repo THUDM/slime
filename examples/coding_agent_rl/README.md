@@ -84,7 +84,7 @@ Enable SSH connection reuse on the GPU nodes and size the sandbox SSH daemon's
 `MaxSessions` for concurrent RPCs. Use the actual host names from the cluster
 file in `~/.ssh/config`:
 
-```sshconfig
+```text
 Host sandbox-node-0 sandbox-node-1
     ControlMaster auto
     ControlPersist 600
@@ -290,5 +290,5 @@ workspaces and evaluates patches. `sandbox.py` selects the provider, and
 `sunabako_sandbox.py` implements the shared sandbox interface. `check_rollout.py`
 can validate real trajectories against an already-running SGLang server without
 starting trainers; run it with `--help` for its inputs. The
-[coding-agent CI test](../../docs/en/developer_guide/ci.md#coding-agent-training)
+[coding-agent CI test](https://thudm.github.io/slime/developer_guide/ci.html#coding-agent-training)
 covers real Codex and Claude Code training, token provenance and optimizer updates.
