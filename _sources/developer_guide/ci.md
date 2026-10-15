@@ -115,11 +115,11 @@ the container, with local Ray and sandbox traffic bypassing the proxy.
 The `run-ci-megatron` label includes this GPU test; `run-ci-changed` also discovers
 it. Automatic `agent-test` jobs cover the CPU contracts.
 
-`tests/ci/setup_agent_e2e.sh` installs the released `sunabako==0.1.1` wheel from PyPI,
-as pinned in `examples/coding_agent_rl/requirements-sunabako.txt`. It also prepares
+`tests/ci/setup_agent_e2e.sh` installs `sunabako>=0.1.2` from PyPI,
+as required by `examples/coding_agent_rl/requirements-sunabako.txt`. It also prepares
 the Ray authentication token before starting the head, reusing any existing token
-and keeping its value out of CI logs. This sunabako release
-supports native guest users with `uid_range_size`; the local node reserves 65,536 UIDs/GIDs for each of eight
+and keeping its value out of CI logs. Sunabako supports native guest users with
+`uid_range_size`; the local node reserves 65,536 UIDs/GIDs for each of eight
 sandboxes. State is mounted under `/workspace` so mapped users can traverse its
 parent directories. This runs inside the existing privileged Docker container
 without an inner Docker daemon or PRoot. The explicitly enabled RSS test mode is

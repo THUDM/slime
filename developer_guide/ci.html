@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="Oct 12, 2026"/>
+    <meta name="docbuild:last-update" content="Oct 15, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -630,11 +630,11 @@ cold downloads can exceed the timed job limit. Proxy variables are propagated to
 the container, with local Ray and sandbox traffic bypassing the proxy.
 The <code class="docutils literal notranslate"><span class="pre">run-ci-megatron</span></code> label includes this GPU test; <code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> also discovers
 it. Automatic <code class="docutils literal notranslate"><span class="pre">agent-test</span></code> jobs cover the CPU contracts.</p>
-<p><code class="docutils literal notranslate"><span class="pre">tests/ci/setup_agent_e2e.sh</span></code> installs the released <code class="docutils literal notranslate"><span class="pre">sunabako==0.1.1</span></code> wheel from PyPI,
-as pinned in <code class="docutils literal notranslate"><span class="pre">examples/coding_agent_rl/requirements-sunabako.txt</span></code>. It also prepares
+<p><code class="docutils literal notranslate"><span class="pre">tests/ci/setup_agent_e2e.sh</span></code> installs <code class="docutils literal notranslate"><span class="pre">sunabako&gt;=0.1.2</span></code> from PyPI,
+as required by <code class="docutils literal notranslate"><span class="pre">examples/coding_agent_rl/requirements-sunabako.txt</span></code>. It also prepares
 the Ray authentication token before starting the head, reusing any existing token
-and keeping its value out of CI logs. This sunabako release
-supports native guest users with <code class="docutils literal notranslate"><span class="pre">uid_range_size</span></code>; the local node reserves 65,536 UIDs/GIDs for each of eight
+and keeping its value out of CI logs. Sunabako supports native guest users with
+<code class="docutils literal notranslate"><span class="pre">uid_range_size</span></code>; the local node reserves 65,536 UIDs/GIDs for each of eight
 sandboxes. State is mounted under <code class="docutils literal notranslate"><span class="pre">/workspace</span></code> so mapped users can traverse its
 parent directories. This runs inside the existing privileged Docker container
 without an inner Docker daemon or PRoot. The explicitly enabled RSS test mode is
@@ -899,7 +899,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Oct 12, 2026.
+  Last updated on Oct 15, 2026.
   <br/>
 </p>
   </div>
