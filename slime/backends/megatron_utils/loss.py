@@ -172,25 +172,30 @@ def get_responses(
                 tokens_chunk = tokens[(s + 1) - seq_start : (e + 1) - seq_start]
             assert logits_chunk.size(0) == tokens_chunk.size(0), f"{logits_chunk.size(0)} vs {tokens_chunk.size(0)}"
         else:
-            # TODO: this is super ugly... do better abstraction.
             chunk_size, chunks_offset, logits_offset, tokens_offset = get_logits_and_tokens_offset_with_cp(
                 total_length, response_length
             )
-
-            logits_0, logits_1 = logits[end : end + chunk_size], logits[end + chunk_size : end + 2 * chunk_size]
+            # Gather both spans together. Separate slices each allocate a full
+            # [T, V] gradient in backward, even when one span is empty.
+            response_rows = torch.cat(
+                [
+                    torch.arange(
+                        end + i * chunk_size + start - chunk_start,
+                        end + i * chunk_size + stop - chunk_start,
+                        device=logits.device,
+                    )
+                    for i, ((chunk_start, _), (start, stop)) in enumerate(
+                        zip(chunks_offset, logits_offset, strict=True)
+                    )
+                ]
+            )
+            # Empty index_select backward can launch a zero-sized CUDA grid
+            # when the input requires 64-bit indexing. Keep its zero gradient
+            # connected through a single empty slice instead.
+            logits_chunk = logits.index_select(0, response_rows) if response_rows.numel() else logits[:0]
             end += 2 * chunk_size
-
-            logits_0 = logits_0[logits_offset[0][0] - chunks_offset[0][0] : logits_offset[0][1] - chunks_offset[0][0]]
-            tokens_0 = tokens[tokens_offset[0][0] : tokens_offset[0][1]]
-
-            logits_1 = logits_1[logits_offset[1][0] - chunks_offset[1][0] : logits_offset[1][1] - chunks_offset[1][0]]
-            tokens_1 = tokens[tokens_offset[1][0] : tokens_offset[1][1]]
-
-            assert logits_0.size(0) == tokens_0.size(0), f"{logits_0.size(0)} vs {tokens_0.size(0)}"
-            assert logits_1.size(0) == tokens_1.size(0), f"{logits_1.size(0)} vs {tokens_1.size(0)}"
-
-            logits_chunk = torch.cat([logits_0, logits_1], dim=0)
-            tokens_chunk = torch.cat([tokens_0, tokens_1], dim=0)
+            tokens_chunk = torch.cat([tokens[start:stop] for start, stop in tokens_offset])
+            assert logits_chunk.size(0) == tokens_chunk.size(0), f"{logits_chunk.size(0)} vs {tokens_chunk.size(0)}"
 
         seq_start += total_length
 
@@ -346,18 +351,18 @@ def _fill_topp_mask_rows(
     # iterating a TensorRef (which only supports contiguous slices).
     base = offsets[response_start]
     ids = ids[base : offsets[end]]
-    if torch.is_tensor(ids):
-        ids = ids.tolist()
-    for response_idx in range(response_start, end):
-        local_ids = [
-            token_id - vocab_start
-            for token_id in ids[offsets[response_idx] - base : offsets[response_idx + 1] - base]
-            if vocab_start <= token_id < vocab_end
-        ]
-        row = local_start + response_idx - response_start
-        keep[row].fill_(False)
-        if local_ids:
-            keep[row, torch.tensor(local_ids, device=keep.device, dtype=torch.long)] = True
+    keep[local_start : local_start + end - response_start].fill_(False)
+    ids = torch.as_tensor(ids, dtype=torch.long, device="cpu")
+    if ids.numel() == 0:
+        return
+    # Build sparse coordinates on the host, then transfer/scatter once for the
+    # entire span instead of launching a fill and copy for every response row.
+    counts = torch.diff(torch.tensor(offsets[response_start : end + 1], dtype=torch.long, device="cpu"))
+    rows = torch.repeat_interleave(torch.arange(end - response_start, device="cpu"), counts)
+    in_vocab = (ids >= vocab_start) & (ids < vocab_end)
+    rows = rows[in_vocab] + local_start
+    columns = ids[in_vocab] - vocab_start
+    keep[rows.to(keep.device), columns.to(keep.device)] = True
 
 
 def _build_topp_keep_mask(
@@ -1015,16 +1020,21 @@ def get_score_centering_terms(args, batch, logits):
             offsets = torch.as_tensor(offsets, device="cpu", dtype=torch.long)
             # Coalesce adjacent row supports, preserving zigzag/allgather CP
             # order while avoiding a filesystem read per response token.
-            spans = []
-            for i in indices.tolist():
-                start, end = int(offsets[i]), int(offsets[i + 1])
-                if start == end:
-                    continue
-                if spans and spans[-1][1] == start:
-                    spans[-1] = (spans[-1][0], end)
-                else:
-                    spans.append((start, end))
-            lengths = offsets[indices + 1] - offsets[indices]
+            starts, ends = offsets[indices], offsets[indices + 1]
+            lengths = ends - starts
+            nonempty = starts != ends
+            starts, ends = starts[nonempty], ends[nonempty]
+            # Determine contiguous read ranges in bulk. Scalar tensor indexing
+            # here otherwise performs two CPU dispatches per response token.
+            boundary = starts[1:] != ends[:-1]
+            first = torch.ones(min(len(starts), 1), dtype=torch.bool)
+            spans = list(
+                zip(
+                    starts[torch.cat((first, boundary))].tolist(),
+                    ends[torch.cat((boundary, first))].tolist(),
+                    strict=True,
+                )
+            )
             local_offsets = torch.cat((lengths.new_zeros(1), lengths.cumsum(0))).to(logits.device)
             head_ids, q = [
                 (
@@ -1564,7 +1574,7 @@ def loss_function(
 
     return (
         loss,
-        (num_tokens if args.calculate_per_token_loss else torch.tensor(1, device=logits.device)),
+        (num_tokens if args.calculate_per_token_loss else torch.ones((), dtype=torch.int64, device=logits.device)),
         {
             "keys": list(log.keys()),
             # values[0] is the consumer's reporting denominator after
@@ -1574,12 +1584,24 @@ def loss_function(
             # so we leave a 0 placeholder here and let ``train_one_step``
             # substitute the constant directly, instead of routing it through
             # per-mb fractions.
-            "values": torch.tensor(
+            # Keep GPU scalars on device. Constructing a tensor from their
+            # Python list reads them back individually and synchronizes CUDA.
+            "values": torch.stack(
                 [
-                    num_tokens if args.calculate_per_token_loss else 0,
+                    (
+                        num_tokens.detach()
+                        if args.calculate_per_token_loss
+                        else torch.zeros((), dtype=torch.int64, device=logits.device)
+                    ),
                 ]
-                + list(log.values()),
-                device=logits.device,
+                + [
+                    (
+                        value.detach().reshape(()).to(logits.device)
+                        if isinstance(value, torch.Tensor)
+                        else torch.full((), value, device=logits.device)
+                    )
+                    for value in log.values()
+                ],
             ),
         },
     )

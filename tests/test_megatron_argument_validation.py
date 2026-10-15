@@ -356,6 +356,7 @@ def make_slime_validate_args(**overrides):
         rollout_queue_lease_seconds=300,
         rollout_queue_segment_mib=None,
         rollout_io_concurrency=4,
+        fully_async_group_prefetch_factor=1,
         use_distributed_post=False,
         data_source_path=None,
         eval_config=None,

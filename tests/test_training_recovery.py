@@ -85,6 +85,8 @@ def test_session_identity_survives_checkpoint_branch_and_parallelism_changes(arg
 
 
 def test_configuration_allows_trainer_parallelism_and_memory_changes(args):
+    args.pipeline_model_parallel_size = 4
+    args.transformer_pipeline_model_parallel_size = 4
     serving = object.__new__(ServingCluster.__ray_metadata__.modified_class)
     serving.configuration = retained_rollout_configuration(args)
     serving.driver_job_id = None
@@ -95,6 +97,10 @@ def test_configuration_allows_trainer_parallelism_and_memory_changes(args):
     updated.expert_tensor_parallel_num_weight_shards = 2
     updated.expert_gtp_weight_remat_size = 2
     updated.context_parallel_size = 2
+    updated.qwen_gdn_implementation = "megatron"
+    updated.custom_megatron_before_train_step_hook_path = "diagnostics.before_train_step"
+    updated.pipeline_model_parallel_size = 2
+    updated.transformer_pipeline_model_parallel_size = 2
     updated.micro_batch_size = 2
     updated.max_tokens_per_gpu = 1024
     updated.padded_vocab_size = 152064

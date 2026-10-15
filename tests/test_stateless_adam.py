@@ -1,5 +1,8 @@
+import ast
+import dataclasses
 import importlib.util
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -10,6 +13,59 @@ import torch
 from slime.backends.megatron_utils.stateless_adam import StatelessAdam
 
 NUM_GPUS = 0
+
+
+def test_optimizer_construction_keeps_fp32_shards_out_of_autograd():
+    path = Path(__file__).resolve().parents[1] / "slime/backends/megatron_utils/model.py"
+    definition = next(
+        node
+        for node in ast.parse(path.read_text()).body
+        if isinstance(node, ast.FunctionDef) and node.name == "setup_model_and_optimizer"
+    )
+
+    @dataclasses.dataclass
+    class Config:
+        use_precision_aware_optimizer: bool = False
+
+    model = torch.nn.Linear(4, 2)
+
+    def optimizer_factory(*, config, model_chunks, use_gloo_process_groups):
+        # Real DistributedOptimizer slices FP32 model parameters this way. An
+        # autograd-tracked view is not a leaf and torch.optim rejects it.
+        shard = model_chunks[0].weight.view(-1)[:4]
+        return torch.optim.SGD([shard], lr=0.01)
+
+    namespace = dict(
+        torch=torch,
+        dataclasses=dataclasses,
+        nullcontext=nullcontext,
+        OptimizerConfig=Config,
+        get_model_provider_func=lambda args, role: None,
+        get_model=lambda provider, model_type: [model],
+        ModelType=SimpleNamespace(encoder_or_decoder=None),
+        get_megatron_optimizer=optimizer_factory,
+        get_optimizer_param_scheduler=lambda args, optimizer: None,
+    )
+    module = ast.Module(
+        body=[ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0), definition],
+        type_ignores=[],
+    )
+    exec(compile(ast.fix_missing_locations(module), str(path), "exec"), namespace)
+    args = SimpleNamespace(
+        moe_use_upcycling=False,
+        load="model",
+        num_rollout=1,
+        use_stateless_adam=False,
+        enable_gloo_process_groups=False,
+    )
+    with torch.enable_grad():
+        models, optimizer, _ = namespace["setup_model_and_optimizer"](args)
+        assert torch.is_grad_enabled()
+        models[0](torch.ones(1, 4)).sum().backward()
+    assert model.weight.grad is not None
+    shard = optimizer.param_groups[0]["params"][0]
+    assert shard.is_leaf and shard.grad_fn is None
+    assert shard.data_ptr() == model.weight.data_ptr()
 
 
 def _run_with_reinitialized_adam(param, grads, *, adam_w_mode):

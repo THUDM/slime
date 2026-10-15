@@ -29,6 +29,113 @@ from slime.utils.data import process_rollout_data
 NUM_GPUS = 0
 
 
+@pytest.mark.parametrize("change", [None, "wandb_run_id", "wandb_project", "wandb_team", "disable", "enable"])
+def test_retained_manager_tracks_the_attached_training_run(monkeypatch, change):
+    from types import SimpleNamespace
+
+    from slime.ray import rollout
+
+    previous = SimpleNamespace(
+        use_wandb=change != "enable", wandb_run_id="original", wandb_project="project", wandb_team="team"
+    )
+    attached = SimpleNamespace(**vars(previous))
+    if change in ("disable", "enable"):
+        attached.use_wandb = change == "enable"
+    elif change:
+        setattr(attached, change, "replacement")
+    manager_type = RolloutManager.__ray_metadata__.modified_class
+    manager = manager_type.__new__(manager_type)
+    manager.args = previous
+    manager.data_source = SimpleNamespace(consumers={})
+    manager._recovery_admission_was_paused = None
+    manager.recovery = None
+    manager.batch_builder = SimpleNamespace()
+    calls = []
+    monkeypatch.setattr(rollout.logging_utils, "finish_tracking", lambda args: calls.append(("finish", args)))
+    monkeypatch.setattr(rollout, "init_tracking", lambda args, *, primary: calls.append(("init", args, primary)))
+    deployment = ServingDeployment(
+        placements={"rollout": None},
+        servers={},
+        controller=None,
+        restore_plan=RestorePlan(),
+        routers={},
+        engine_lock=None,
+    )
+    manager.attach_training(attached, deployment)
+    if change is None:
+        assert calls == []
+    else:
+        assert calls[0] == ("finish", previous)
+        assert calls[1:] == ([("init", manager.args, False)] if attached.use_wandb else [])
+    assert manager.batch_builder.args is manager.args
+    assert manager.args.wandb_run_id == attached.wandb_run_id
+
+
+@pytest.mark.parametrize("initially_paused", [False, True])
+def test_repeated_detach_preserves_original_admission_state(initially_paused):
+    from types import SimpleNamespace
+
+    manager_type = RolloutManager.__ray_metadata__.modified_class
+    manager = manager_type.__new__(manager_type)
+    worker = SimpleNamespace(paused=initially_paused)
+
+    def pause(*, drain=False):
+        previous, worker.paused = worker.paused, True
+        return previous
+
+    worker.pause = pause
+    worker.resume = lambda: setattr(worker, "paused", False)
+    manager.data_source = SimpleNamespace(consumers={"fully_async": worker})
+    manager._recovery_admission_was_paused = None
+    manager.detach_training()
+    manager.detach_training()
+    assert worker.paused
+    assert manager._recovery_admission_was_paused is initially_paused
+    manager.training_ready()
+    assert worker.paused is initially_paused
+    assert manager._recovery_admission_was_paused is None
+
+
+def test_engine_reset_uses_consistent_collective_order_across_workers():
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    from types import SimpleNamespace
+
+    from slime.backends.sglang_utils.sglang_engine import SGLangEngine
+
+    class WorkerGroups(set):
+        def __init__(self, order):
+            super().__init__(order)
+            self.order = order
+
+        def __iter__(self):
+            return iter(name for name in self.order if name in self)
+
+    names = ["pipeline-0", "pipeline-1", "pipeline-2"]
+    collectives = {name: Barrier(2) for name in names}
+    engines = []
+    calls = [[], []]
+    for index, order in enumerate([names, names[::-1]]):
+        engine = SGLangEngine.__new__(SGLangEngine)
+        engine.args = SimpleNamespace(rollout_health_check_timeout=2)
+        engine._weight_update_groups = WorkerGroups(order)
+
+        def request(route, payload, timeout, index=index):
+            assert route == "destroy_weights_update_group"
+            group = payload["group_name"]
+            # Different per-worker set orders would leave peers waiting in
+            # different shutdown collectives, as in real NCCL teardown.
+            collectives[group].wait(timeout=timeout)
+            calls[index].append(group)
+
+        engine._make_request = request
+        engines.append(engine)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(lambda engine: engine.reset_weights_update_groups(), engines))
+    assert calls == [names, names]
+    assert all(not engine._weight_update_groups for engine in engines)
+
+
 @ray.remote(num_cpus=0)
 class _ServingFixture:
     """Keep the production queue alive without starting GPU inference servers."""

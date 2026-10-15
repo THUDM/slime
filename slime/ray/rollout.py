@@ -207,7 +207,17 @@ class RolloutManager:
             weight_version,
             deployment.reused,
         )
+        previous_args = self.args
         self.args = resume.apply(args)
+        if any(
+            getattr(previous_args, name, None) != getattr(self.args, name, None)
+            for name in ("use_wandb", "wandb_run_id", "wandb_project", "wandb_team", "wandb_host", "wandb_mode")
+        ):
+            # The retained manager's process-global logger still belongs to
+            # the previous driver, even after its configuration is replaced.
+            logging_utils.finish_tracking(previous_args)
+            if self.args.use_wandb:
+                init_tracking(self.args, primary=False)
         # Trainer layout affects batch splitting. Sources and their long-lived
         # workers keep their original rollout configuration; recovery keeps its
         # own storage configuration and checkpoint boundary.
@@ -224,7 +234,11 @@ class RolloutManager:
         return values
 
     def detach_training(self):
-        self._recovery_admission_was_paused = self.pause_rollout_admission()
+        was_paused = self.pause_rollout_admission()
+        if self._recovery_admission_was_paused is None:
+            # A second cleanup or a failed attachment must retain the original
+            # state, rather than recording the pause made by recovery itself.
+            self._recovery_admission_was_paused = was_paused
         logger.warning("Training stopped; preserving serving and available replay batches for manual restart")
 
     def _source_state(self):

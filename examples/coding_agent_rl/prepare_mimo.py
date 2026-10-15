@@ -40,7 +40,11 @@ def evaluation_command(instance):
     return "bash -lc " + shlex.quote("\n".join(commands))
 
 
-def convert(data: Path, instance_ids: list[str] | None = None) -> list[dict]:
+def convert(data: Path, instance_ids: list[str] | None = None, agents: list[str] | None = None) -> list[dict]:
+    if agents is not None and (
+        not agents or len(set(agents)) != len(agents) or any(agent not in {"codex", "claude_code"} for agent in agents)
+    ):
+        raise ValueError("agents must be distinct codex/claude_code names")
     selected = set(instance_ids) if instance_ids is not None else None
     if selected is not None and len(selected) != len(instance_ids):
         raise ValueError("--ids must not contain duplicate instance IDs")
@@ -80,6 +84,8 @@ def convert(data: Path, instance_ids: list[str] | None = None) -> list[dict]:
         raise ValueError(f"Missing instance IDs: {', '.join(sorted(missing))}")
     if not rows:
         raise ValueError("No code tasks found")
+    if agents is not None:
+        rows = [{**row, "metadata": {**row["metadata"], "agent": agent}} for row in rows for agent in agents]
     return rows
 
 
@@ -90,11 +96,22 @@ def main():
     )
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--ids", nargs="+", help="Select specific instance IDs; omit to convert the full code dataset")
+    p.add_argument(
+        "--agents",
+        nargs="+",
+        choices=("codex", "claude_code"),
+        help="Emit one prompt group per task and agent; use both names for equal mixture weights",
+    )
     a = p.parse_args()
-    rows = convert(a.data, a.ids)
+    rows = convert(a.data, a.ids, a.agents)
     a.output.parent.mkdir(parents=True, exist_ok=True)
     a.output.write_text("".join(json.dumps(r) + "\n" for r in rows))
-    summary = {"output": str(a.output), "tasks": len(rows), "images": len({r["metadata"]["image"] for r in rows})}
+    summary = {
+        "output": str(a.output),
+        "rows": len(rows),
+        "tasks": len({r["label"] for r in rows}),
+        "images": len({r["metadata"]["image"] for r in rows}),
+    }
     if a.ids:
         summary["instances"] = [r["label"] for r in rows]
     print(json.dumps(summary))

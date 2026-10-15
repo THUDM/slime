@@ -91,9 +91,21 @@ def _tensor_parallel_shard(
     parallel_rank: int,
     partition_dim: int,
     partition_stride: int,
+    partition_sections: tuple[int, ...] | None = None,
 ) -> torch.Tensor:
     if parallel_size == 1:
         return tensor
+
+    if partition_sections is not None:
+        if partition_stride != 1 or any(size % parallel_size for size in partition_sections):
+            raise ValueError("Projection sections must be divisible by TP and use partition_stride=1")
+        return torch.cat(
+            [
+                section.chunk(parallel_size, dim=partition_dim)[parallel_rank]
+                for section in tensor.split(partition_sections, dim=partition_dim)
+            ],
+            dim=partition_dim,
+        ).contiguous()
 
     if "linear_fc1.weight" in name or "linear_fc1.bias" in name:
         gate, up = tensor.chunk(2, dim=partition_dim)
@@ -131,6 +143,7 @@ def shard_mcore_tensor(name: str, tensor: torch.Tensor, parameter: torch.Tensor)
         parallel_rank=parallel_rank,
         partition_dim=parameter.partition_dim,
         partition_stride=parameter.partition_stride,
+        partition_sections=getattr(parameter, "partition_sections", None),
     )
 
 

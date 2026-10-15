@@ -12,7 +12,7 @@ from pathlib import Path
 import torch
 from megatron.core import mpu
 from megatron.core.distributed import DistributedDataParallel as DDP
-from megatron.core.distributed import finalize_model_grads
+from megatron.core.distributed import finalize_model_grads as megatron_finalize_model_grads
 from megatron.core.enums import ModelType
 from megatron.core.models.gpt import GPTModel
 from megatron.core.optimizer import OptimizerConfig, get_megatron_optimizer
@@ -29,6 +29,7 @@ try:
 except ImportError:
     from megatron.core.utils import unwrap_model
 from slime.observability import logging_utils, train_metric_utils
+from slime.utils import accelerator
 from slime.utils.memory_utils import clear_memory
 
 from .checkpoint import load_checkpoint, save_checkpoint
@@ -38,6 +39,16 @@ from .model_provider import get_model_provider_func
 from .stateless_adam import StatelessAdam
 
 logger = logging.getLogger(__name__)
+
+
+def _finalize_model_grads(*args, **kwargs):
+    # NCCL initializes some gradient communicators only after the last
+    # backward. Its allocations bypass PyTorch's cache reclamation, so free
+    # unused blocks before entering that collective when device memory is low.
+    free, _ = accelerator.mem_get_info(accelerator.current_device())
+    if free < 3 * 1024**3:
+        clear_memory()
+    return megatron_finalize_model_grads(*args, **kwargs)
 
 
 def _disable_tqdm_for_non_main_rank() -> bool:
@@ -313,7 +324,9 @@ def setup_model_and_optimizer(
         assert args.no_save_optim, "Stateless Adam does not save Adam moment states. Please set --no-save-optim."
 
     optimizer_context = _patch_megatron_adam(StatelessAdam) if args.use_stateless_adam else nullcontext()
-    with optimizer_context:
+    # DistributedOptimizer slices FP32 parameters into optimizer shards. Those
+    # views must remain leaves rather than retaining an initialization graph.
+    with optimizer_context, torch.no_grad():
         optimizer = get_megatron_optimizer(
             config=config,
             model_chunks=model,
@@ -785,7 +798,7 @@ def train(
         config.param_sync_func = [model_chunk.start_param_sync for model_chunk in model]
         if len(model) == 1:
             config.param_sync_func = config.param_sync_func[0]
-    config.finalize_model_grads_func = finalize_model_grads
+    config.finalize_model_grads_func = _finalize_model_grads
 
     pre_hook_enabled = False
 

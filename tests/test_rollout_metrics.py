@@ -5,15 +5,58 @@ import numpy as np
 import pytest
 import torch
 
-from slime.observability.rollout_metrics import _compute_top_p_kept_vocab_metrics
+from slime.observability.rollout_metrics import _compute_agent_compaction_metrics, _compute_top_p_kept_vocab_metrics
 from slime.utils.misc import decode_int32_meta_array
 from slime.utils.types import Sample
 
 NUM_GPUS = 0
 
 
+def test_compaction_count_is_one_mean_per_trajectory():
+    samples = [
+        Sample(
+            index=0,
+            group_index=0,
+            metadata={"agent_metrics": {"compact_count": 1, "compact_seconds": 3, "compact_limit_reached": 1}},
+        ),
+        Sample(index=0, group_index=0, metadata={"agent_metrics": {"compact_count": 1}}),
+        Sample(index=1, group_index=0, metadata={"agent_metrics": {"compact_count": 0}}),
+        Sample(index=2, group_index=0),
+    ]
+    metrics = _compute_agent_compaction_metrics(samples)
+    assert metrics == {"compact_count": 0.5}
+
+
+def test_compaction_count_is_omitted_without_observations():
+    assert _compute_agent_compaction_metrics([Sample(index=0, group_index=0)]) == {}
+
+
 def _make_args():
     return Namespace(sglang_speculative_algorithm=False, num_layers=2, moe_router_topk=2)
+
+
+@pytest.mark.parametrize(
+    "counts",
+    [
+        {"spec_accept_token_num": 2, "spec_draft_token_num": 6},
+        {"spec_num_correct_drafts": 2, "spec_num_proposed_drafts": 6},
+        {
+            "spec_num_correct_drafts": 2,
+            "spec_num_proposed_drafts": 6,
+            "spec_accept_token_num": 4,
+            "spec_draft_token_num": 8,
+        },
+    ],
+)
+def test_spec_info_accepts_sglang_counter_formats_without_double_counting(counts):
+    info = Sample.SpecInfo()
+    info.add({**counts, "spec_verify_ct": 2, "completion_tokens": 4})
+    info.add({**counts, "spec_verify_ct": 2, "completion_tokens": 4})
+    assert info.spec_accept_token_num == 4
+    assert info.spec_draft_token_num == 12
+    assert info.spec_accept_rate == pytest.approx(1 / 3)
+    assert info.spec_accept_length == 2
+    assert Sample.SpecInfo.from_dict(info.to_dict()) == info
 
 
 @pytest.mark.unit

@@ -1,81 +1,70 @@
-# Coding-agent RL with Qwen3.8-27B, MiMo SWE and sunabako
+# Coding-agent RL with Qwen3.8-27B
 
-The real Codex / Claude Code training smoke test is documented in the
-[CI guide](https://github.com/THUDM/slime/blob/main/docs/en/developer_guide/ci.md#coding-agent-training).
-Each of its two GRPO steps uses the same two small MiMo tasks, with four samples per task (eight concurrent agents) on eight GPUs.
-Step one uses Codex; step two uses Claude Code with the updated model.
-Per-sample `metadata.agent` selects `codex` or `claude_code`; `SWE_AGENT` supplies the default.
+This example trains Qwen3.8-27B on the full code split of
+[Xiaomi MiMo's RL dataset](https://huggingface.co/datasets/XiaomiMiMo/MiMo-V2.6-RL-oss).
+Codex and Claude Code use the served model to edit repositories in Sunabako
+sandboxes. A fresh sandbox applies each resulting patch and runs the official
+MiMo tests to obtain its reward.
 
-This example trains **Qwen3.8-27B** on the **code subset of
-[Xiaomi MiMo's public RL dataset](https://huggingface.co/datasets/XiaomiMiMo/MiMo-V2.6-RL-oss)**.
-Claude Code uses the served model to read and edit a repository in a sunabako
-sandbox. A second fresh sandbox applies the resulting `git diff` and runs the
-official MiMo tests to produce the reward. Model tokens, loss masks and rollout
-log-probabilities are returned to slime for GRPO training.
-Patch extraction compares the actual workspace before and after the agent runs,
-so files already shipped in the image are not counted as agent edits. It preserves
-the repository's HEAD and index while capturing staged, unstaged and new files.
+[`run_qwen38_27b_fully_async.sh`](run_qwen38_27b_fully_async.sh) is the training
+entry point. Its default allocation is three training nodes, three inference
+nodes and two sandbox nodes. Each GPU node has eight GPUs; the 128k configuration
+has been exercised on H100 80GB GPUs. Training and rollout proceed asynchronously.
 
-The main launcher is `run_qwen38_27b_sunabako_2plus2.sh`: two 8-GPU nodes run
-training and model serving; two other nodes run the agent and grader sandboxes.
-**sunabako is the default sandbox provider.** Install its independent package
-into slime's environment; dataset preparation and training code live here.
+| Setting | Default |
+| --- | --- |
+| Training batch | 8 prompts × 8 trajectories = 64 |
+| Optimizer updates | 200 |
+| Concurrent agent trajectories | 168 |
+| Training parallelism | TP=4, PP=3, CP=2; pipeline layers 22/22/20 |
+| Inference | 12 engines, TP=2 |
+| Mamba / attention cache memory budget ratio | 0.5 |
+| Context / per-turn output | 131,072 / 8,192 tokens |
+| Compaction | At 70% context, at most twice per trajectory for either CLI |
+| Agent / grader / whole-rollout timeout | 3,600 / 600 / 7,200 seconds |
 
-## Codex compatibility
+## Environment
 
-`SWE_AGENT=codex` selects `CodexHarness` and `ResponsesAdapter`. The harness is
-tested with **Codex CLI 0.162.1** (npm latest checked on 2026-10-10).
-Current Codex supports the [Responses protocol](https://learn.chatgpt.com/docs/config-file/config-reference)
-for custom providers. The adapter implements stateless `/v1/responses` requests
-with full history and `store=false`, JSON/SSE replies, function tools, custom
-text tools and namespaced tools. It preserves parallel call/result correlation
-and the model's original tokens and logprobs. The separate `OpenAIAdapter`
-continues to serve legacy Chat Completions clients.
+Use the same Slime, Megatron-LM and SGLang environment on all six GPU nodes.
+Megatron must provide native GDN with tensor/context parallelism. SGLang must
+support hybrid-attention HiCache, MTP speculative decoding and score-centering
+metadata for top-p sampling. Mount the checkout, model, data and run directories
+at the same absolute paths on these nodes.
 
-Set `SLIME_AGENT_CODEX_NATIVE_TARBALL` to the official platform npm archive
-`@openai/codex@0.162.1-linux-x64`. The harness installs its native binary and
-resources offline; Node is unnecessary for this path. The existing
-`SLIME_AGENT_NODE_TARBALL` + `SLIME_AGENT_CODEX_TARBALL` npm installation path is
-also supported. `SLIME_AGENT_CODEX_EXTRA_ARGS` and
-`SLIME_AGENT_CODEX_EXTRA_ENVS` (a JSON object) pass additional CLI settings.
-The CI test downloads and integrity-checks its pinned platform archive.
-
-Codex runs noninteractively with JSON event logs inside the outer sandbox;
-sunabako owns isolation. Its provider URL points to the local slime adapter,
-and the bearer value is a rollout session ID. No OpenAI account or paid API
-is involved: the served Qwen model generates the training tokens. Web search,
-WebSockets and subagents are disabled by default. Stored responses,
-`previous_response_id`, hosted tools, multimodal output and the server-side
-`/v1/responses/compact` endpoint are not implemented.
-
-## Install and configure the sandbox nodes
-
-Start with the standard slime training environment. On both training nodes:
+Install the example dependencies on every GPU node:
 
 ```bash
 python -m pip install -r examples/coding_agent_rl/requirements-sunabako.txt
 ```
 
-This installs the released `sunabako==0.1.1` package from PyPI, including native
-guest-user support.
+The example requires `sunabako>=0.1.2`. Provision the two sandbox
+nodes using [Sunabako's setup instructions](https://github.com/zhuzilin/sunabako),
+including its patched PRoot binary, `skopeo` and `umoci`. These nodes do not join
+Ray. Configure SSH access from every GPU node and allow sandbox connections to
+the GPU nodes' adapter HTTP ports.
 
-Provision both sandbox nodes with the sunabako CLI, its patched PRoot dependency,
-`skopeo`, `umoci`, and node configuration. Set a cgroup memory-pool limit on each
-node. Create `$DATA_ROOT/cluster.json` with **only the two sandbox nodes**:
+Set a node memory admission cap below available RAM, `memory_overcommit=1`, and
+per-sandbox memory/PID limits. The launcher requests 8 GiB and 1,024 processes
+per sandbox; image-map entries can override these with `memory_mb` and
+`pids_max`. Use delegated cgroups for memory enforcement. The optional
+`SUNABAKO_ALLOW_TEST_MEMORY=1` RSS mode is for environments without writable
+cgroups and also requires Sunabako's explicit test setting.
+
+Create a cluster file with the allocated sandbox nodes:
 
 ```json
 {
   "nodes": [
     {
       "name": "sandbox-0",
-      "host": "<first-sandbox-node-ip>",
+      "host": "<sandbox-node-0>",
       "port": 22,
       "state_dir": "/var/lib/sunabako",
       "binary": "/usr/local/bin/sunabako"
     },
     {
       "name": "sandbox-1",
-      "host": "<second-sandbox-node-ip>",
+      "host": "<sandbox-node-1>",
       "port": 22,
       "state_dir": "/var/lib/sunabako",
       "binary": "/usr/local/bin/sunabako"
@@ -84,338 +73,222 @@ node. Create `$DATA_ROOT/cluster.json` with **only the two sandbox nodes**:
 }
 ```
 
-SSH uses the allocation's existing credentials. The sandbox nodes must be able
-to reach the training/serving nodes' adapter HTTP port. For this example,
-sunabako uses the outer container's network and does not publish ports.
+Configure Sunabako's `image_cache_dir` and state directory on local storage with
+reflink support. Bound disk use with `image_cache_max_bytes` and
+`image_cache_min_free_bytes`; bound preparation work with
+`image_cache_import_concurrency` and `rootfs_clone_concurrency`. Compressed task
+images stay on shared storage, and Sunabako extracts and caches them locally.
+The image set needs substantially more space than the dataset files.
 
-sunabako defaults to cgroup enforcement. `SUNABAKO_ALLOW_TEST_MEMORY=1` is an
-explicit functional-test setting for machines without delegated writable
-cgroups, and also requires the node's test-only flag. RSS monitoring cannot
-enforce a hard aggregate memory limit. Production runs use delegated cgroups
-and `SUNABAKO_ALLOW_TEST_MEMORY=0`.
+Enable SSH connection reuse on the GPU nodes and size the sandbox SSH daemon's
+`MaxSessions` for concurrent RPCs. Use the actual host names from the cluster
+file in `~/.ssh/config`:
 
-## Prepare the Xiaomi MiMo code dataset
+```text
+Host sandbox-node-0 sandbox-node-1
+    ControlMaster auto
+    ControlPersist 600
+    ControlPath ~/.ssh/control/%C
+```
 
-Run from the slime checkout. Use a shared directory available at the same path
-on both training nodes:
+Create `~/.ssh/control` with mode 700 before establishing the connections.
+
+## Prepare data and images
+
+Run these commands from the Slime checkout after installing the example
+dependencies. The download host needs `hf` and `skopeo`; `DATA_ROOT` must be
+mounted at the same absolute path on the GPU and sandbox nodes.
+
+First download the complete code split and its official image-name mapping.
+This pinned dataset revision contains 2,698 code tasks:
 
 ```bash
-export DATA_ROOT=/shared/slime-mimo
+export DATA_ROOT=/shared/mimo
+export MIMO_REVISION=639865fd3374018d6cb29b9fb82dd531406fcf5f
 hf download XiaomiMiMo/MiMo-V2.6-RL-oss code.parquet image-mapping.jsonl \
-  --repo-type dataset --local-dir "$DATA_ROOT/data"
-
-python examples/coding_agent_rl/prepare_mimo.py \
-  --data "$DATA_ROOT/data" --output "$DATA_ROOT/train.jsonl" \
-  --ids format-code-task-002661 format-code-task-002829
+  --repo-type dataset --revision "$MIMO_REVISION" --local-dir "$DATA_ROOT/data"
 ```
 
-These two tasks provide a small first run. The Qwen3.8-27B rollout check on
-`format-code-task-002661` earned reward 1 with **8/8 official tests passing**;
-the original image failed three tests. The other task completed normally with
-reward 0. This verifies one successful model-produced fix, not full-dataset
-accuracy or a completed positive-reward training update.
-
-Omit `--ids` to convert the full code dataset (2,698 tasks in the checked
-snapshot):
+Convert every task for both CLIs. Omitting `--ids` selects the full code split;
+the following command produces 5,396 rows in `train-mixed.jsonl`:
 
 ```bash
 python examples/coding_agent_rl/prepare_mimo.py \
-  --data "$DATA_ROOT/data" --output "$DATA_ROOT/train-full.jsonl"
+  --data "$DATA_ROOT/data" --output "$DATA_ROOT/train-mixed.jsonl" \
+  --agents codex claude_code
 ```
 
-The converter maps dataset image names through the official
-`image-mapping.jsonl`. It puts only the public problem statement into the agent
-prompt; the official test patch and test command stay in the grading payload.
-The fresh grader resets official test paths before applying the test patch.
-MiMo graders run as root because some images initialize their toolchain from
-root's login profile; the coding CLI runs as `agent`.
+Each task has one row per CLI, with `metadata.agent` selecting `codex` or
+`claude_code`. Every prompt group uses one CLI. Both receive equal input weights;
+filtering groups with uniform rewards can change the mixture in accepted
+batches. For a smaller subset, pass instance IDs through `--ids`.
 
-On **each sandbox node**, import the selected tasks' images. Supply that node
-with the prepared JSONL and run this example's image helper:
+Download the task images as compressed OCI layouts. The helper uses
+`image-mapping.jsonl` through the converted rows to resolve the official Docker
+Hub tags, and downloads each unique image once even though it has two rows:
 
 ```bash
 python examples/coding_agent_rl/prepare_sunabako_images.py \
-  --data "$DATA_ROOT/train.jsonl" \
-  --root /var/lib/sunabako-images/mimo \
-  --output "$DATA_ROOT/images.json"
+  --data "$DATA_ROOT/train-mixed.jsonl" --root "$DATA_ROOT/oci" \
+  --output "$DATA_ROOT/images.json" --format oci --workers 8
 ```
 
-Use the same absolute image root on both nodes. If `DATA_ROOT` is not shared
-with sandbox nodes, copy the JSONL to each node and copy the resulting
-`images.json` back to the training nodes. The helper imports OCI images using
-sunabako, reuses matching bundles, preserves their environment, and uses the
-dataset's repository working directory rather than the image's entrypoint
-working directory. No Docker daemon is needed. The resulting mapping has this
-shape:
+Wait for this command to finish successfully before launching training. It
+writes `images.json` after every requested image is ready. Re-run the same
+command after an interrupted download: completed images and completed OCI blobs
+are reused. `--workers` controls download concurrency. OCI mode keeps compressed
+layers on shared storage; Sunabako extracts them into each node's bounded local
+cache when a sandbox first needs the image.
 
-```json
-{
-  "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-002661": {
-    "rootfs": "/var/lib/sunabako-images/mimo/format-code-task-002661/rootfs",
-    "workdir": "/testbed",
-    "env": {"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
-  }
-}
-```
+The resulting layout is:
 
-For the full dataset, pass `train-full.jsonl` to the image helper as well.
-Importing all task images can consume substantial disk space. Some images keep
-Python under `/root/.pyenv`; adjust their mapping's `env.PATH` so the `agent`
-user can invoke the image's toolchain. This does not change the official tests.
+| Path under `DATA_ROOT` | Contents |
+| --- | --- |
+| `data/code.parquet`, `data/image-mapping.jsonl` | Original tasks and official image mapping |
+| `train-mixed.jsonl` | All tasks, with one row per CLI |
+| `oci/<image-tag>/` | Compressed OCI blobs, manifest and completion metadata |
+| `images.json` | Sunabako map from image names to those absolute bundle paths |
 
-## Run Qwen3.8-27B on two training nodes and two sandbox nodes
+The launcher defaults to `$DATA_ROOT/train-mixed.jsonl` and
+`$DATA_ROOT/images.json`. `PROMPT_DATA` and `SUNABAKO_IMAGES` can override these
+paths.
 
-Supply host-side Node 22 and Claude Code npm tarballs; the harness uploads them
-into each sandbox at boot. Launch from a long-lived shell on the first training
-node, with the slime checkout and data available at the same paths on both
-training nodes:
+The agent receives the public problem statement and runs as `agent`. The official
+test patch and command are reserved for grading in a fresh sandbox, which runs
+as root to use the image-provided toolchains.
+
+Provide native CLI archives through `SLIME_AGENT_CC_NATIVE_TARBALL` and
+`SLIME_AGENT_CODEX_NATIVE_TARBALL`. The harness installs them offline inside each
+sandbox. The compaction hooks have been exercised with Claude Code 2.1.295 and
+Codex 0.162.1. Codex's archive is the official `@openai/codex@0.162.1-linux-x64`
+platform package. Both CLIs call the local adapter and the served Qwen model;
+they do not require a paid model-provider API account.
+
+## Start training
+
+Start a dedicated Ray cluster on the six GPU nodes. Set `HEAD_IP`, `RAY_PORT`
+and `DASHBOARD_PORT` to the head's address and available ports. On the head:
 
 ```bash
-export DATA_ROOT=/shared/slime-mimo
-export HF_CHECKPOINT=/path/to/Qwen3.8-27B
-export TRAIN_HEAD=<first-training-node-ip>
-export TRAIN_WORKER=<second-training-node-ip>
-export SSH_PORT=22
-export GLOO_SOCKET_IFNAME=<training-network-interface>
-export SUNABAKO_CLUSTER="$DATA_ROOT/cluster.json"
+ray start --head --node-ip-address "$HEAD_IP" --port "$RAY_PORT" \
+  --num-gpus 8 --num-cpus 64 --disable-usage-stats \
+  --dashboard-host 0.0.0.0 --dashboard-port "$DASHBOARD_PORT"
+```
+
+On each of the other five GPU nodes, set `NODE_IP` to that node's address:
+
+```bash
+ray start --address "$HEAD_IP:$RAY_PORT" --node-ip-address "$NODE_IP" \
+  --num-gpus 8 --num-cpus 64 --disable-usage-stats
+```
+
+Use your allocation's addresses and ports, and bypass HTTP proxies for inter-node
+traffic. Launch from a persistent shell on the head:
+
+```bash
+export HF_CHECKPOINT=/shared/models/Qwen3.8-27B
+export MEGATRON_DIR=/shared/Megatron-LM
+export DATA_ROOT=/shared/mimo
+export PROMPT_DATA="$DATA_ROOT/train-mixed.jsonl"
 export SUNABAKO_IMAGES="$DATA_ROOT/images.json"
-export SUNABAKO_ALLOW_TEST_MEMORY=0
-export SLIME_AGENT_NODE_TARBALL=/path/to/node-v22.x-linux-x64.tar.xz
-export SLIME_AGENT_CC_TARBALL=/path/to/claude-code.tgz
-export RUN_ROOT="$DATA_ROOT/run-001"
-bash examples/coding_agent_rl/run_qwen38_27b_sunabako_2plus2.sh
+export SUNABAKO_CLUSTER=/shared/config/sandbox-cluster.json
+export SLIME_AGENT_CC_NATIVE_TARBALL=/shared/toolchain/claude-code-linux-x64.tgz
+export SLIME_AGENT_CODEX_NATIVE_TARBALL=/shared/toolchain/codex-linux-x64.tgz
+export RAY_ADDRESS="$HEAD_IP:$RAY_PORT"
+export RAY_DASHBOARD_ADDRESS="http://$HEAD_IP:$DASHBOARD_PORT"
+export SOCKET_IFNAME="<inter-node-interface>"
+export RUN_ROOT=/shared/runs/coding-agent-001
+export LOG_ROOT=/shared/logs/coding-agent-001
+export WANDB_PROJECT=my-agent-rl WANDB_NAME=coding-agent-001
+bash examples/coding_agent_rl/run_qwen38_27b_fully_async.sh --start-rollout-id 0
 ```
 
-The launcher defaults to one rollout containing two prompts with two samples
-each, followed by one GRPO update. For longer runs, set `NUM_ROLLOUT`. Set
-`PROMPT_DATA="$DATA_ROOT/train-full.jsonl"` to use the full dataset after
-provisioning its images. `ROLLOUT_BATCH_SIZE` and `SAMPLES_PER_PROMPT` control
-sampling; `GLOBAL_BATCH_SIZE` defaults to their product.
+Supply W&B credentials through the environment; omit `WANDB_PROJECT` to disable
+tracking. Runtime environment files are private and removed when the submission
+client exits. Additional trainer arguments can be appended to the command.
 
-The model context is 64k (`MAX_CONTEXT_LEN`), with an 8192-token per-turn output
-limit (`MAX_RESPONSE_LEN`). Both limits are passed to the Claude CLI, with
-compaction at 70% of the context window. The six code tools are enabled
-explicitly: `Bash`, `Read`, `Edit`, `Write`, `Glob`, and `Grep`.
-The default agent budget is 1200 seconds. Sampling uses temperature 1.0,
-`top_p=0.95`, no top-k truncation (slime's default `top_k=-1`), and
-`reasoning_effort=medium`; override template options
-with `CHAT_TEMPLATE_KWARGS`. Each model turn retains the exact nucleus IDs and
-offsets, which the trainer replays when normalizing token probabilities. Add
-`--use-score-centering` to the launcher to also retain every nucleus token's
-original sampler probability and train with the SC REINFORCE objective. The GPU
-e2e enables this combination. The adapter forwards
-`--apply-chat-template-kwargs` and per-sample template options on every turn.
-Without an explicit effort, this checkpoint's template selects `xhigh`.
-Decode CUDA graphs are enabled for up to four requests; set
-`SGLANG_DISABLE_CUDA_GRAPH=1` when diagnosing graph compatibility.
+The launcher uses native GDN, activation recomputation, CPU optimizer offload
+and stateless Adam. Stateless Adam resets moment history on every step. Sampling
+uses temperature 1, `top_p=0.95` and medium reasoning effort; training enables
+score centering, exact top-p replay and token-wise importance sampling.
+MTP speculative decoding and HiCache are enabled.
 
-Training uses TP=2, PP=8 and DP=1. The launcher uses the shared Qwen dense-model
-architecture arguments in `scripts/models/qwen3.5-27B.sh` with the Qwen3.8-27B
-checkpoint. It propagates configuration to Ray workers and calls
-`examples.coding_agent_rl.generate.generate` for every sample.
+`SERVER_CONCURRENCY=14` across twelve engines provides 168 agent slots.
+These slots include agents doing sandbox work or waiting for model calls.
+`GROUP_PREFETCH_FACTOR=2` keeps up to 42 prompt groups available to fill slots
+as individual trajectories finish. A group enters
+training only when all eight trajectories finish and its rewards are nonuniform.
 
-The adapter also supports `--use-rollout-routing-replay` (R3) for MoE models.
-Replay snapshots stay in separate per-turn segments, preserving full prompt
-routes as well as response routes; the segments retain their original rollout
-and prompt-group IDs. Missing requested metadata fails the rollout. Qwen3.8-27B
-is dense, so this example does not exercise MoE routing on GPU.
+`FLUSH_CACHE_INTERVAL=3` publishes weights after every optimizer update while
+flushing caches every third update. Partial rollout preserves the live CLI,
+sandbox and sampled token prefix across interrupted model calls.
 
-With top-p SC, `sc_correction` uses the same centered scalar convention as the
-non-top-p path: it subtracts a baseline whose score gradient is zero. Matching
-trainer and sampler distributions therefore give zero correction, up to rounding,
-while retaining the original SC gradient, including TIS/MIS. The scalar is not
-the mean absolute difference between sampled-token logprobs.
+Each CLI may compact twice, then continue; a third compaction attempt stops the
+agent and grades its existing patch. There is no turn-count cap. The agent budget
+includes inference waiting and tool execution. The grader timeout covers its
+command. The whole-rollout timeout includes sandbox preparation, agent execution,
+patch extraction, fresh-sandbox grading and trajectory export.
 
-`ADAPTER_PUBLIC_HOST=auto` advertises the rollout actor's node IP. Set an explicit
-address if that IP is not reachable from the sandbox nodes. Use a new `RUN_ROOT`
-for each experiment. `SUNABAKO_START_RAY=0` reuses the experiment's Ray cluster;
-set a new `RUN_LOG` when retrying a run whose serving engines are retained.
-Existing logs are never overwritten. CLI trajectories, sandbox commands and
-grader output are saved under `$RUN_ROOT/sandboxes` before sandbox cleanup.
+| Environment variable | Default | Purpose |
+| --- | --- | --- |
+| `NUM_ROLLOUT` | `200` | Optimizer updates |
+| `ROLLOUT_BATCH_SIZE` / `SAMPLES_PER_PROMPT` | `8` / `8` | Training groups and trajectories per group |
+| `SERVER_CONCURRENCY` | `14` | Agent slots per inference engine |
+| `GROUP_PREFETCH_FACTOR` | `2` | Prompt-group prefetch multiplier |
+| `MAX_CONTEXT_LEN` / `MAX_RESPONSE_LEN` | `131072` / `8192` | Context and per-turn output limits |
+| `SLIME_AGENT_CC_MAX_COMPACTIONS` / `SLIME_AGENT_CODEX_MAX_COMPACTIONS` | `2` / `2` | Per-trajectory compaction limits |
+| `SWE_AGENT_TIME_BUDGET_SEC` | `3600` | Agent wall-clock budget |
+| `SWE_EVAL_TIMEOUT_SEC` | `600` | Grader command timeout |
+| `SWE_ROLLOUT_GUARD_SEC` | `7200` | Whole-rollout timeout |
+| `SWE_BOOT_CONCURRENCY` | `0` | Optional boot semaphore; zero disables it |
+| `SUNABAKO_MEMORY_MB` / `SUNABAKO_PIDS_MAX` | `8192` / `1024` | Per-sandbox resource requests |
+| `SUNABAKO_CREATE_TIMEOUT_SEC` | `600` | SDK creation deadline; increase for cold imports |
+| `ADAPTER_PUBLIC_HOST` / `ADAPTER_PORT` | `auto` / `0` | Advertised node address and dynamically assigned port |
+| `SAVE_INTERVAL` | `0` | Checkpoint interval; zero disables saving |
 
-## Check real rollouts before training
+## Outputs and restart
 
-Start an SGLang server with Qwen3.8-27B, the `qwen3_coder` tool parser and the
-`qwen3` reasoning parser. Set the same sandbox and CLI environment as above,
-then run:
+`$LOG_ROOT/run.log` contains trainer, rollout and inference logs. W&B files,
+sandbox artifacts and timing traces also live under `LOG_ROOT`. The shared
+`$RUN_ROOT/rollout_data` holds Straw payloads, queue state and recovery metadata;
+Slime's `straw-queue` dependency is required on all GPU nodes. Checkpoints are
+written under `RUN_ROOT` only when `SAVE_INTERVAL` is positive.
+
+For a fresh experiment, stop the driver and dispose its retained rollout manager
+and serving cluster, including workers, engines and owned sandboxes. After all
+writers exit, delete that experiment's Straw directory if it is no longer needed.
+Use new `RUN_ROOT`, `LOG_ROOT` and `WANDB_NAME` values and load the original model.
+A new submission alone can reattach to retained serving state when its identity
+and storage paths are reused.
+
+To inspect a stopped run's timing traces:
 
 ```bash
-export ADAPTER_PUBLIC_HOST=<host-ip-reachable-from-sandbox-nodes>
-export SUNABAKO_ARTIFACTS="$DATA_ROOT/rollout-check/sandboxes"
-export SWE_AGENT_TIME_BUDGET_SEC=1200 SWE_EVAL_TIMEOUT_SEC=180 SWE_BOOT_CONCURRENCY=2
-export SLIME_AGENT_CC_EXTRA_ARGS='--max-turns 40 --tools Bash,Read,Edit,Write,Glob,Grep --disable-slash-commands'
-export SLIME_AGENT_CC_EXTRA_ENVS='{"MAX_THINKING_TOKENS":"4096","CLAUDE_CODE_MAX_OUTPUT_TOKENS":"8192","CLAUDE_CODE_MAX_CONTEXT_TOKENS":"65536","CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":"70"}'
-python -m examples.coding_agent_rl.check_rollout \
-  --data "$DATA_ROOT/train.jsonl" --output "$DATA_ROOT/rollout-check/samples" \
-  --hf-checkpoint "$HF_CHECKPOINT" --sglang-url http://127.0.0.1:18100 \
-  --apply-chat-template-kwargs '{"reasoning_effort":"medium"}'
+cat "$LOG_ROOT"/traces/rollouts-*.jsonl > "$LOG_ROOT/coding-traces.jsonl"
+python tools/trace_timeline_viewer.py "$LOG_ROOT/coding-traces.jsonl" --no-serve
 ```
 
-This uses the training `generate()` entry point, including the coding CLI,
-patch capture and fresh-sandbox official grader. It saves tokens, loss masks,
-log-probabilities and per-task outcomes, and exits unsuccessfully if no sample
-earns reward 1. No trainers are started. Establish a failing baseline on the
-unmodified image when validating a task's reward.
+Traces cover preparation, model requests, agent execution and grading. Nested
+spans overlap; do not sum them as independent durations. `SWE_TRACE_DIR` selects
+the output directory, and an empty value disables trace files.
 
-## Modules and data contract
+## How trajectories become training samples
 
-- `prepare_mimo.py` converts the official code parquet and image mapping to slime JSONL.
-- `prepare_sunabako_images.py` imports task images and writes the provider's image mapping.
-- `sandbox.py` selects sunabako for both agent and evaluator sandboxes; `sunabako_sandbox.py` adapts the installed SDK to `slime.agent.sandbox.Sandbox`.
-- `generate.py` opens an `AnthropicAdapter` session, runs the coding harness, captures the diff, obtains the reward, and exports training `Sample`s.
-- `swe.py` prepares the task workspace and runs the independent evaluator.
-- `slime.agent.harness` installs and drives the coding CLI; the shared adapter sends model requests to SGLang and records token provenance.
+The adapters retain the exact SGLang input/output token IDs and rollout
+log-probabilities. Model outputs receive `loss_mask=1`; tool observations and
+other context receive `loss_mask=0`. Training never reconstructs sampled tokens
+by re-tokenizing decoded text.
 
-Prepared rows use `--input-key prompt --label-key label --metadata-key metadata`:
+A changed or compacted history can produce multiple `Sample` segments. They
+retain their prompt-group and trajectory identities and share one outcome
+reward. GRPO normalizes over distinct trajectories, then distributes advantages
+to their segments. Shared generated prefixes contribute loss only once, and all
+segments of a trajectory stay in the same optimizer step.
 
-```json
-{
-  "prompt": [{"role": "user", "content": "<public problem statement>"}],
-  "label": "format-code-task-002661",
-  "metadata": {
-    "instance_id": "format-code-task-002661",
-    "dataset": "XiaomiMiMo/MiMo-V2.6-RL-oss",
-    "image": "docker.io/xiaomimimo/mimo-v2.6-rl-oss:format-code-task-002661",
-    "workdir": "/testbed",
-    "problem_statement": "<public problem statement>",
-    "eval_cmd": "<converter-generated official test command>",
-    "eval_user": "root"
-  }
-}
-```
-
-The generic grader also accepts existing SWE-bench Pro and `f2p_script` rows.
-E2B remains an optional provider: set `SWE_SANDBOX_PROVIDER=e2b`, configure
-`E2B_API_KEY` and `SLIME_AGENT_SANDBOX_IMAGE_METADATA_KEY` for that service,
-and use a launcher that propagates those variables. The supplied 2+2 launcher
-selects sunabako explicitly.
-
-## Environment settings
-
-These are the 2+2 launcher's defaults; direct calls to `generate()` use the
-module defaults unless the corresponding variables are exported.
-
-| Variable | Launcher default | Meaning |
-| --- | --- | --- |
-| `SWE_SANDBOX_PROVIDER` | `sunabako` | Provider used for both agent and evaluator. |
-| `SUNABAKO_CLUSTER` / `SUNABAKO_IMAGES` | `$DATA_ROOT/cluster.json` / `images.json` | Sandbox nodes and imported task images. |
-| `SUNABAKO_MEMORY_MB` | `2048` | Requested memory per sandbox. |
-| `SUNABAKO_ALLOW_TEST_MEMORY` | Must be set explicitly | `0` for cgroups; `1` only for explicit RSS functional tests. |
-| `SUNABAKO_ARTIFACTS` | `$RUN_ROOT/sandboxes` | Saved commands, CLI trajectories and grading output. |
-| `ADAPTER_PUBLIC_HOST` | `auto` | Routable address advertised to sandbox nodes. |
-| `ADAPTER_BIND_HOST` / `ADAPTER_PORT` | `0.0.0.0` / `18091` | Adapter listening address. |
-| `SLIME_AGENT_NODE_TARBALL` / `SLIME_AGENT_CC_TARBALL` | Files in `$DATA_ROOT/toolchain` | Host-side Node 22 and Claude Code tarballs. |
-| `SLIME_AGENT_CC_NATIVE_TARBALL` | Unset | Optional official Claude Code platform archive; takes precedence over the Node/npm installation. |
-| `SLIME_AGENT_CC_EXTRA_ARGS` | Six code tools, max 40 turns | Claude CLI flags. |
-| `SLIME_AGENT_CC_EXTRA_ENVS` | Context/output/thinking limits | JSON overrides merged into the CLI environment. |
-| `SWE_AGENT_TIME_BUDGET_SEC` | `1200` | Agent CLI wall-clock budget. |
-| `SWE_EVAL_TIMEOUT_SEC` | `180` | Official grader timeout. |
-| `SWE_ROLLOUT_GUARD_SEC` | `agent+eval+300` | Whole-rollout deadline, including sandbox setup. |
-| `SWE_BOOT_CONCURRENCY` | `2` | Concurrent sandbox boots. |
-| `SWE_CC_PROMPT` | Read the problem, edit source, test, summarize | Agent instruction; official tests remain in the grader. |
-
-`SLIME_AGENT_*` belongs to the reusable agent library, `SWE_*` to this task
-example, `SUNABAKO_*` to its provider, and `ADAPTER_*` to the serving endpoint.
-`--rollout-max-response-len` limits each SGLang request; the adapter clamps it
-to the remaining multi-turn context budget. The parser flags must match the
-served model.
-
-## Token-in, token-out model calls
-
-The coding-agent environment is string/message based: claude-code sends
-Anthropic Messages requests and Codex sends Responses requests. They receive
-text, reasoning and tool calls, then send back rendered tool observations. Training must stay
-token based. A trajectory is only a valid RL target when the optimized tokens
-are the same tokens the rollout model actually sampled.
-
-The shared adapter accepts messages from the agent and uses **token in, token out**
-at the model and training boundary:
-
-- The first message history is rendered with the served model's chat template
-  and sent to SGLang as `input_ids`. When the client echoes an unchanged history
-  and tool schema, the adapter reuses the original prompt and output tokens,
-  including thinking omitted by the client, and renders only the new suffix.
-  Changed or compacted histories, ambiguous matches and unverified message
-  boundaries fall back to normal template rendering and may create branches.
-- Parallel Anthropic tool results are matched by `tool_use_id` and restored to
-  call order before rendering. Qwen's template omits those IDs, so preserving
-  asynchronous completion order would associate file contents with the wrong
-  `Read` call.
-- SGLang is called with `return_logprob=True`; the adapter records the exact
-  `prompt_ids`, sampled `output_ids`, and per-token rollout logprobs for that
-  turn. Missing logprobs, inconsistent token counts/IDs and non-finite logprobs
-  fail the request instead of producing an incomplete training trajectory.
-- At training export time, samples are assembled from those saved token ids.
-  The decoded `response` field is only a readable sidecar; it is not
-  re-tokenized to recover the training sequence.
-
-For unchanged message histories, the adapter reuses the original model input
-and output token IDs, including reasoning omitted by the wire client. It
-matches the complete message prefix and tool schema, locates the template's
-end-of-message boundary, and appends only the newly rendered context. This
-happens before the next SGLang request, so sampling and training use the same
-continuous history. Changed histories, compaction, or an unverified boundary
-fall back to the template's full rendering.
-
-`slime.agent.trajectory.TrajectoryManager` assembles the saved token stream:
-
-- New prompt suffixes that are tool/user/environment context are appended with
-  `loss_mask=0`.
-- Fresh model outputs from SGLang are appended with `loss_mask=1`.
-- Top-p and score-centering distributions are concatenated with their original
-  generated tokens. Masked tool/context tokens get empty top-p spans or finite
-  dummy top-k distributions. R3 prompt routing snapshots remain separate,
-  because their routes can differ even for identical token prefixes.
-- If a later prompt no longer token-matches an earlier sampled output, the
-  example starts a new training segment. The earlier output keeps its original
-  prompt, token IDs and logprobs. Re-rendered history in the new segment is
-  context with `loss_mask=0`.
-- Generated prefixes shared by sibling branches contribute loss only once.
-
-This example defaults to `SLIME_FORK_MERGE_MAX_RESPONSE_TOKENS=0`, including on
-remote Ray workers. It preserves every captured generated turn when history
-changes. Setting a positive threshold enables the manager's optional short-turn
-rewrite merging, which can discard earlier training signal to reduce segment count.
-The agent's message protocol itself is still text based; only the exact captured
-model tokens are used as optimization targets.
-The unit tests in `tests/test_agent/test_trajectory_manager_branching.py` cover matched
-prefixes, skipped turns, split-output drift, changed token counts, and
-prompt-base restarts.
-
-## Fan-out Semantics
-
-- `generate()` returns `list[Sample]`. A root-to-leaf chain can produce multiple
-  segments if the token prefix changes.
-- Segments retain the original `group_index` (prompt group), `index` (agent run)
-  and `rollout_id` (the unit used for optimizer scheduling and loss averaging).
-- Every segment receives the agent run's full outcome reward. GRPO computes
-  mean/std within each `group_index` over distinct `rollout_id` values, then
-  broadcasts the resulting advantage to their segments. A run with 20 segments
-  therefore contributes one outcome to these statistics, just like a run with one.
-- Shared generated prefixes are loss-masked on subsequent branches. All segments
-  of a rollout stay in one optimizer step, and their loss denominators use the
-  total number of unmasked tokens in that rollout, including across microbatches.
-- Sub-agent dispatch and auto-compaction increase the number of segments, so the
-  flattened sample count can exceed `rollout_batch_size * n_samples_per_prompt`.
-
-The GPU CI retains, audits and trains every segment of every real agent trajectory.
-It checks exact token/logprob identity again in the trainer's saved tensors and
-verifies each task's group-normalized advantages, optimizer calls and parameter changes.
-Uniform outcome groups correctly have zero advantages. CPU tests
-cover unequal fork counts, shuffled prompt groups, shared prefixes and singleton
-groups. CI and normal training both consume all segments.
-
-## Porting to a New Sandbox Backend
-
-`slime.agent.sandbox.Sandbox` exposes the shared sandbox contract, and
-`slime.agent.sandbox.E2BSandbox` is the E2B implementation:
-
-```python
-await sb.exec(cmd, user=..., check=..., timeout=...)
-await sb.write_file(sandbox_path, content_or_host_path, user=...)
-await sb.read_file(sandbox_path, user=...)
-async with create_sandbox(image) as sb: ...
-```
-
-Implement this contract and register the provider in this example's `sandbox.py`.
-Both `generate.py` and `swe.py` use that factory.
+`generate.py` coordinates the harness, adapter and grading. `swe.py` prepares
+workspaces and evaluates patches. `sandbox.py` selects the provider, and
+`sunabako_sandbox.py` implements the shared sandbox interface. `check_rollout.py`
+can validate real trajectories against an already-running SGLang server without
+starting trainers; run it with `--help` for its inputs. The
+[coding-agent CI test](https://thudm.github.io/slime/developer_guide/ci.html#coding-agent-training)
+covers real Codex and Claude Code training, token provenance and optimizer updates.

@@ -10,11 +10,43 @@ import torch
 
 from slime.utils.ppo_utils import calculate_log_probs_and_entropy
 
-
 NUM_GPUS = 0
 
 STRICT_ATOL = 1e-8
 STRICT_RTOL = 0.0
+
+
+@pytest.mark.parametrize("with_mask", [False, True])
+@pytest.mark.parametrize("with_entropy_grad", [False, True])
+def test_chunking_retains_inputs_without_full_vocab_softmax_buffers(with_mask, with_entropy_grad):
+    logits = torch.randn(11, 17, requires_grad=True)
+    tokens = torch.arange(11) % 17
+    keep_mask = torch.rand(11, 17) > 0.5 if with_mask else None
+    inputs = [logits, tokens] + ([keep_mask] if with_mask else [])
+    input_storages = {value.untyped_storage().data_ptr() for value in inputs}
+    saved = []
+
+    def pack(value):
+        saved.append(value)
+        return value
+
+    with torch.autograd.graph.saved_tensors_hooks(pack, lambda value: value):
+        log_probs, entropy = calculate_log_probs_and_entropy(
+            logits,
+            tokens,
+            None,
+            chunk_size=3,
+            with_entropy=True,
+            with_entropy_grad=with_entropy_grad,
+            log_prob_keep_mask=keep_mask,
+        )
+    # Retain views of caller-owned inputs, not one FP32 softmax per chunk.
+    assert saved
+    assert all(value.untyped_storage().data_ptr() in input_storages for value in saved)
+    assert entropy.requires_grad == with_entropy_grad
+    loss = log_probs.sum() + (entropy.sum() if with_entropy_grad else 0)
+    loss.backward()
+    assert torch.isfinite(logits.grad).all()
 
 
 def _free_port() -> int:
