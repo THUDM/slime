@@ -109,7 +109,7 @@ SEARCH_R1_CONFIGS = {
 2. 在 `"google"` 部分配置你的 serper.dev API key
 3. 从 [serper.dev](https://serper.dev) 获取 API key
 
-### 启用 TIS（轨迹重要性采样）
+### 启用 TIS（截断重要性采样）
 
 TIS 需要收集日志概率。启用 TIS 的步骤：
 
