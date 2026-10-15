@@ -458,6 +458,18 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "This is used to shuffle the prompts and also for the random sampling of the prompts."
                 ),
             )
+            parser.add_argument(
+                "--deterministic-sampling-seed-mode",
+                choices=["group", "sample"],
+                default="group",
+                help=(
+                    "Training sampling seeds when deterministic SGLang inference is enabled. "
+                    "'group' preserves rollout_seed + response index, reused for every prompt. "
+                    "'sample' uses rollout_seed + the persisted global sample.index, giving "
+                    "distinct streams to sample occurrences across prompts and updates. "
+                    "Evaluation seeds are unchanged."
+                ),
+            )
 
             # sampling
             parser.add_argument(

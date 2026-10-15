@@ -24,6 +24,7 @@ from typing import Any
 
 import torch
 import torch.nn.functional as F
+import torch.distributed as dist
 from megatron.core import parallel_state
 
 from slime.backends.megatron_utils.alignment.deepgemm_forward import (
@@ -34,15 +35,23 @@ from slime.backends.megatron_utils.alignment.deepgemm_forward import (
     _should_log_deepgemm_summary,
     _sum_to_parameter_dtype,
 )
+from slime.backends.megatron_utils.alignment.moe_bf16_expert_backward import (
+    moe_bf16_expert_backward,
+)
 
 logger = logging.getLogger(__name__)
 
 _BLOCK_SIZE = 128
 _GROUPED_M_ALIGNMENT = 128
-_ROUTER_PROBABILITY_CHUNK_ROWS = 1024
-_UNPAD_CHUNK_ROWS = 1024
-_BACKWARD_CHUNK_ROWS = 1024
-_SWIGLU_POINTWISE_CHUNK_ROWS = 512
+# Chunk sizes bound the transient temporaries of the pointwise/chunked loops
+# below.  They do not affect numerics: every chunk applies the same elementwise
+# math, and reductions that must keep a fixed accumulation order (grouped GEMMs,
+# probability sums) are unchanged.  The values are sized so the largest
+# transient stays well under ~100 MB per live tensor on B200-class memory.
+_ROUTER_PROBABILITY_CHUNK_ROWS = 4096
+_UNPAD_CHUNK_ROWS = 8192
+_BACKWARD_CHUNK_ROWS = 4096
+_SWIGLU_POINTWISE_CHUNK_ROWS = 4096
 _DEFAULT_EXPERTS_PER_GROUP = 4
 _DEFAULT_BACKWARD_EXPERTS_PER_GROUP = 4
 _DEFAULT_BACKWARD_MAX_PADDED_BYTES = 256 * 1024 * 1024
@@ -677,15 +686,14 @@ def _ordered_route_backward(
         # probability gradient first because it still reads the original
         # route values; only then overwrite that storage with route gradients.
         if routes_alias_values and flat_grad_weights is not None:
+            # Hoist the position/token-row tables: chunk slices are views, so
+            # the per-chunk torch.arange and integer division kernels disappear.
+            all_positions = torch.arange(num_routes, device=output_index.device, dtype=torch.long)
+            all_token_rows = torch.div(all_positions, topk, rounding_mode="floor")
             for start in range(0, num_routes, chunk_rows):
                 end = min(start + chunk_rows, num_routes)
-                flat_positions = torch.arange(
-                    start,
-                    end,
-                    device=output_index.device,
-                    dtype=torch.long,
-                )
-                token_rows = torch.div(flat_positions, topk, rounding_mode="floor")
+                flat_positions = all_positions[start:end]
+                token_rows = all_token_rows[start:end]
                 route_rows = flat_output_index[start:end].to(dtype=torch.long)
                 token_grads = grad_output.index_select(0, token_rows)
                 selected_route_values = route_values.index_select(0, route_rows)
@@ -707,15 +715,12 @@ def _ordered_route_backward(
         if (grad_routes is not None and not fused_route_grad) or (
             flat_grad_weights is not None and not routes_alias_values
         ):
+            all_positions = torch.arange(num_routes, device=output_index.device, dtype=torch.long)
+            all_token_rows = torch.div(all_positions, topk, rounding_mode="floor")
             for start in range(0, num_routes, chunk_rows):
                 end = min(start + chunk_rows, num_routes)
-                flat_positions = torch.arange(
-                    start,
-                    end,
-                    device=output_index.device,
-                    dtype=torch.long,
-                )
-                token_rows = torch.div(flat_positions, topk, rounding_mode="floor")
+                flat_positions = all_positions[start:end]
+                token_rows = all_token_rows[start:end]
                 route_rows = flat_output_index[start:end].to(dtype=torch.long)
                 token_grads = grad_output.index_select(0, token_rows)
                 weights = flat_weights[start:end]
@@ -750,18 +755,18 @@ def _ordered_route_backward(
                 flat_grad_weights.zero_()
             return
 
+        # Hoist the position/token-row tables once for both chunk loops below;
+        # per-chunk slices are views, so no per-chunk arange/div kernels remain.
+        slot_positions = torch.arange(num_slots, device=output_index.device, dtype=torch.long)
+        slot_token_rows = torch.div(
+            slot_positions,
+            output_index.shape[1],
+            rounding_mode="floor",
+        )
+
         def probability_grad_chunk(start: int, end: int) -> None:
-            flat_positions = torch.arange(
-                start,
-                end,
-                device=output_index.device,
-                dtype=torch.long,
-            )
-            token_rows = torch.div(
-                flat_positions,
-                output_index.shape[1],
-                rounding_mode="floor",
-            )
+            flat_positions = slot_positions[start:end]
+            token_rows = slot_token_rows[start:end]
             route_rows = flat_output_index[start:end].to(dtype=torch.long)
             valid_rows = route_rows >= 0
             safe_route_rows = route_rows.clamp(min=0, max=num_route_rows - 1)
@@ -780,17 +785,8 @@ def _ordered_route_backward(
 
         for start in range(0, num_slots, chunk_rows):
             end = min(start + chunk_rows, num_slots)
-            flat_positions = torch.arange(
-                start,
-                end,
-                device=output_index.device,
-                dtype=torch.long,
-            )
-            token_rows = torch.div(
-                flat_positions,
-                output_index.shape[1],
-                rounding_mode="floor",
-            )
+            flat_positions = slot_positions[start:end]
+            token_rows = slot_token_rows[start:end]
             route_rows = flat_output_index[start:end].to(dtype=torch.long)
             valid_rows = route_rows >= 0
             safe_route_rows = route_rows.clamp(min=0, max=num_route_rows - 1)
@@ -913,172 +909,29 @@ class _DeepGEMMMoEWithBF16Backward(torch.autograd.Function):
         permuted_probs = saved[1]
         weights = saved[2:]
         layout: _MoELayout = ctx.layout
-        counts: tuple[int, ...] = ctx.counts
-
-        fc1_weights = weights[: layout.num_local_experts]
-        fc2_weights = weights[layout.num_local_experts :]
-        if len(fc1_weights) != layout.num_local_experts or len(fc2_weights) != layout.num_local_experts:
-            raise RuntimeError(f"{ctx.module_name} saved expert weight count mismatch")
-
+        num_experts = layout.num_local_experts
         needs = ctx.needs_input_grad
-        needs_hidden = needs[0]
-        needs_probs = needs[2]
-        needs_fc1_weights = needs[6 : 6 + layout.num_local_experts]
-        needs_fc2_weights = needs[6 + layout.num_local_experts :]
-
-        grad_hidden = None
-        if needs_hidden:
-            workspace = ctx.grad_workspace
-            if workspace is None and ctx.reuse_expert_input_for_grad:
-                # DeepEP's expert-major input has no later reader.  Each
-                # expert/chunk finishes recompute and wgrad before writing its
-                # dgrad, so that input storage can safely carry the gradient.
-                grad_hidden = hidden_states.detach()
-            elif workspace is None:
-                grad_hidden = torch.empty_like(hidden_states)
-            else:
-                required_bytes = hidden_states.numel() * hidden_states.element_size()
-                if required_bytes > workspace.numel():
-                    raise RuntimeError(
-                        "Shared MoE backward workspace is too small: "
-                        f"need {required_bytes} bytes for {tuple(hidden_states.shape)}, "
-                        f"have {workspace.numel()} bytes; increase "
-                        "SLIME_DEEPGEMM_MOE_COMBINE_WORKSPACE_BYTES"
-                    )
-                if workspace.device != hidden_states.device:
-                    raise RuntimeError(
-                        "Shared MoE backward workspace is on "
-                        f"{workspace.device}, input is on {hidden_states.device}"
-                    )
-                grad_hidden = workspace.narrow(0, 0, required_bytes).view(hidden_states.dtype).view_as(hidden_states)
-        grad_probs = torch.empty_like(permuted_probs) if needs_probs else None
-        grad_fc1_weights: list[torch.Tensor | None] = [None] * layout.num_local_experts
-        grad_fc2_weights: list[torch.Tensor | None] = [None] * layout.num_local_experts
-        grad_output = grad_output.contiguous().to(dtype=hidden_states.dtype)
-        probabilities = permuted_probs.reshape(-1, 1)
-        defer_router_probabilities = ctx.defer_router_probabilities
-
-        if _use_grouped_bf16_backward(
-            hidden_states,
-            counts,
-            needs_fc1_weights,
-            needs_fc2_weights,
-        ):
-            grad_hidden, grad_probs, grad_fc1_weights, grad_fc2_weights = _grouped_expert_backward(
-                hidden_states=hidden_states,
-                permuted_probs=permuted_probs,
-                grad_output=grad_output,
-                fc1_weights=fc1_weights,
-                fc2_weights=fc2_weights,
-                counts=counts,
-                layout=layout,
-                needs_hidden=needs_hidden,
-                needs_probs=needs_probs,
-                needs_fc1_weights=needs_fc1_weights,
-                needs_fc2_weights=needs_fc2_weights,
-                defer_router_probabilities=defer_router_probabilities,
-                grad_hidden=grad_hidden,
-                grad_probs=grad_probs,
-            )
-            return (
-                grad_hidden,
-                None,
-                grad_probs,
-                None,
-                None,
-                None,
-                *grad_fc1_weights,
-                *grad_fc2_weights,
-            )
-
-        offset = 0
-        for expert_index, count in enumerate(counts):
-            fc1_weight = fc1_weights[expert_index]
-            fc2_weight = fc2_weights[expert_index]
-            needs_fc1_weight = needs_fc1_weights[expert_index]
-            needs_fc2_weight = needs_fc2_weights[expert_index]
-            if count == 0:
-                if needs_fc1_weight:
-                    grad_fc1_weights[expert_index] = torch.zeros_like(fc1_weight)
-                if needs_fc2_weight:
-                    grad_fc2_weights[expert_index] = torch.zeros_like(fc2_weight)
-                continue
-
-            fc1_accumulator = torch.zeros_like(fc1_weight, dtype=torch.float32) if needs_fc1_weight else None
-            fc2_accumulator = torch.zeros_like(fc2_weight, dtype=torch.float32) if needs_fc2_weight else None
-
-            for chunk_start in range(0, count, _BACKWARD_CHUNK_ROWS):
-                chunk_end = min(chunk_start + _BACKWARD_CHUNK_ROWS, count)
-                global_start = offset + chunk_start
-                global_end = offset + chunk_end
-                hidden = hidden_states[global_start:global_end]
-                grad = grad_output[global_start:global_end]
-                probability = probabilities[global_start:global_end]
-
-                gate_up = _deepgemm_bf16_gemm_nt(hidden, fc1_weight)
-                gate, up = gate_up.chunk(2, dim=-1)
-                gate_f = gate.float()
-                up_f = up.float()
-                silu_gate = F.silu(gate_f)
-                down_input = (silu_gate * up_f).to(dtype=hidden_states.dtype)
-
-                if needs_probs and not defer_router_probabilities:
-                    down_output = _deepgemm_bf16_gemm_nt(down_input, fc2_weight)
-                    grad_probs_chunk = _router_probability_grad_fp32_chunked(
-                        grad,
-                        down_output,
-                    )
-                    grad_probs[global_start:global_end].copy_(
-                        grad_probs_chunk.reshape_as(permuted_probs[global_start:global_end]).to(
-                            dtype=permuted_probs.dtype
-                        )
-                    )
-
-                if defer_router_probabilities:
-                    grad_down_output = grad
-                else:
-                    grad_down_output = (grad.float() * probability.float()).to(dtype=hidden_states.dtype)
-                grad_down_input = _deepgemm_bf16_gemm_nn(
-                    grad_down_output,
-                    fc2_weight,
-                )
-                if fc2_accumulator is not None:
-                    fc2_accumulator.add_(
-                        _deepgemm_bf16_gemm_tn(
-                            grad_down_output,
-                            down_input,
-                        )
-                    )
-
-                grad_down_input_f = grad_down_input.float()
-                sigmoid_gate = torch.sigmoid(gate_f)
-                grad_gate = grad_down_input_f * up_f * sigmoid_gate * (1.0 + gate_f * (1.0 - sigmoid_gate))
-                grad_up = grad_down_input_f * silu_gate
-                grad_gate_up = torch.cat([grad_gate, grad_up], dim=-1).to(dtype=hidden_states.dtype)
-
-                if fc1_accumulator is not None:
-                    fc1_accumulator.add_(_deepgemm_bf16_gemm_tn(grad_gate_up, hidden))
-                # Keep this after the final read from ``hidden`` because the
-                # DeepEP path may reuse that storage for grad_hidden.
-                if needs_hidden:
-                    grad_hidden[global_start:global_end].copy_(_deepgemm_bf16_gemm_nn(grad_gate_up, fc1_weight))
-
-            if fc1_accumulator is not None:
-                grad_fc1_weights[expert_index] = _sum_to_parameter_dtype(
-                    fc1_accumulator,
-                    fc1_weight,
-                )
-            if fc2_accumulator is not None:
-                grad_fc2_weights[expert_index] = _sum_to_parameter_dtype(
-                    fc2_accumulator,
-                    fc2_weight,
-                )
-            offset += count
-
+        grad_hidden, grad_probs, grad_fc1_weights, grad_fc2_weights = moe_bf16_expert_backward(
+            hidden_states=hidden_states,
+            permuted_probs=permuted_probs,
+            grad_output=grad_output,
+            fc1_weights=weights[:num_experts],
+            fc2_weights=weights[num_experts:],
+            counts=ctx.counts,
+            layout=layout,
+            module_name=ctx.module_name,
+            needs_hidden=needs[0],
+            needs_probs=needs[2],
+            needs_fc1_weights=needs[6 : 6 + num_experts],
+            needs_fc2_weights=needs[6 + num_experts :],
+            defer_router_probabilities=ctx.defer_router_probabilities,
+            reuse_expert_input_for_grad=ctx.reuse_expert_input_for_grad,
+            grad_workspace=ctx.grad_workspace,
+        )
         return (
             grad_hidden,
             None,
-            None if defer_router_probabilities else grad_probs,
+            grad_probs,
             None,
             None,
             None,
@@ -1865,20 +1718,24 @@ def _pad_expert_rows(
             )
         padded_value = output
         padded_value.zero_()
-    valid_ranges = []
-    padded_start = 0
-    for count, padded_count in zip(counts, padded_counts, strict=True):
-        if count:
-            valid_ranges.append(
-                torch.arange(
-                    padded_start,
-                    padded_start + count,
-                    device=value.device,
-                    dtype=torch.long,
-                )
-            )
-        padded_start += padded_count
-    valid_rows = torch.cat(valid_ranges)
+    # Build the source-row -> padded-row gather with a fixed, host-known shape:
+    # expert_of_row comes from searchsorted over the cumulative token counts,
+    # and each row is shifted by (padded_offset - token_offset) of its expert.
+    # This replaces one torch.arange per expert plus a torch.cat; every kernel
+    # launched here has a size known on the host, so no device sync is added.
+    # The resulting indices are exactly the concatenated per-expert ranges.
+    total_valid_rows = sum(counts)
+    if total_valid_rows == 0:
+        valid_rows = torch.empty(0, dtype=torch.long, device=value.device)
+    else:
+        counts_dev = torch.tensor(counts, dtype=torch.long, device=value.device)
+        padded_dev = torch.tensor(padded_counts, dtype=torch.long, device=value.device)
+        token_offsets = torch.cumsum(counts_dev, 0) - counts_dev
+        padded_offsets = torch.cumsum(padded_dev, 0) - padded_dev
+        shifts = padded_offsets - token_offsets
+        rows = torch.arange(total_valid_rows, device=value.device, dtype=torch.long)
+        row_expert = torch.searchsorted(torch.cumsum(counts_dev, 0), rows, right=True)
+        valid_rows = rows + shifts[row_expert]
     padded_value.index_copy_(0, valid_rows, value)
     return padded_value, padded_counts, valid_rows
 
@@ -2575,157 +2432,144 @@ def _compact_route_preserving_metadata_inputs(
     return compact_indices, compact_weights, fingerprints, output_index, all_routes_valid
 
 
-def _deepep_route_handle_received_rows(handle: tuple) -> int:
-    """Return the received route count encoded by a normal DeepEP handle."""
-    if not isinstance(handle, tuple):
-        raise TypeError(f"DeepEP route handle must be a tuple, got {type(handle).__name__}")
-    if len(handle) == 6:
-        # Intranode: (..., recv_src_idx, ...).
-        received_metadata = handle[3]
-    elif len(handle) == 10:
-        # Internode: (..., recv_src_meta, ...).
-        received_metadata = handle[7]
-    else:
-        raise ValueError(f"Unsupported normal DeepEP route handle length: {len(handle)}")
-    if not isinstance(received_metadata, torch.Tensor) or received_metadata.ndim < 1:
-        raise TypeError("DeepEP route handle has invalid received-source metadata")
-    return received_metadata.shape[0]
+class _SGLangSoftmaxTopK(torch.autograd.Function):
+    """Keep the inference kernel's exact forward, with selected-softmax VJP.
 
-
-def _dispatch_route_preserving_deepep_metadata(
-    manager: object,
-    hidden_states: torch.Tensor,
-    topk_indices: torch.Tensor,
-    topk_weights: torch.Tensor,
-    *,
-    assume_all_routes_valid: bool = False,
-) -> tuple[tuple, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, bool]:
-    """Create a route-level normal DeepEP handle with tiny payloads.
-
-    This is intentionally a correctness prototype.  Once validated, the same
-    route counts/source metadata are to be emitted by the primary aligned
-    dispatch so this extra metadata-only communication disappears.
+    Top-k indices are locally constant, but the selected probabilities are not.
+    The inference-only Triton kernel does not register autograd operations.
     """
-    (
-        route_indices,
-        route_weights,
-        route_fingerprints,
-        source_output_index,
-        all_routes_valid,
-    ) = _compact_route_preserving_metadata_inputs(
-        hidden_states,
-        topk_indices,
-        topk_weights,
-        assume_all_routes_valid=assume_all_routes_valid,
-    )
-    from megatron.core.transformer.moe.fused_a2a import get_buffer, get_hidden_bytes
 
-    group = manager.group
-    buffer = get_buffer(group, get_hidden_bytes(route_fingerprints))
-    (
-        num_tokens_per_rank,
-        num_tokens_per_rdma_rank,
-        num_tokens_per_expert,
-        is_token_in_rank,
-        layout_event,
-    ) = buffer.get_dispatch_layout(
-        route_indices,
-        int(manager.num_experts),
-        async_finish=False,
-        allocate_on_comm_stream=False,
-    )
-    (
-        recv_fingerprints,
-        recv_route_indices,
-        recv_route_weights,
-        _,
-        route_handle,
-        _,
-    ) = buffer.dispatch(
-        route_fingerprints,
-        topk_idx=route_indices,
-        topk_weights=route_weights,
-        num_tokens_per_rank=num_tokens_per_rank,
-        num_tokens_per_rdma_rank=num_tokens_per_rdma_rank,
-        is_token_in_rank=is_token_in_rank,
-        num_tokens_per_expert=num_tokens_per_expert,
-        previous_event=layout_event,
-        async_finish=False,
-        allocate_on_comm_stream=False,
-    )
-    if recv_route_indices is None or recv_route_weights is None:
-        raise RuntimeError("Route-preserving DeepEP metadata dispatch dropped top-k metadata")
-    return (
-        route_handle,
-        recv_fingerprints,
-        recv_route_indices.reshape(-1),
-        recv_route_weights.reshape(-1),
-        source_output_index,
-        all_routes_valid,
-    )
+    @staticmethod
+    def forward(ctx, logits, topk, scaling_factor):
+        probs, routing_map = _sglang_unbiased_softmax_topk_routing_forward(
+            logits, topk, scaling_factor
+        )
+        ctx.scale = 1.0 if scaling_factor is None else float(scaling_factor)
+        ctx.topk = topk
+        ctx.save_for_backward(probs)
+        ctx.mark_non_differentiable(routing_map)
+        return probs, routing_map
+
+    @staticmethod
+    @torch.autograd.function.once_differentiable
+    def backward(ctx, grad_probs, grad_map):
+        (probs,) = ctx.saved_tensors
+        if grad_probs is None:
+            return None, None, None
+        # Renormalized top-1 is constant. Avoid a spurious gradient from the
+        # inference kernel's one-ULP normalization roundoff.
+        if ctx.scale == 0.0 or ctx.topk == 1:
+            return torch.zeros_like(probs), None, None
+        p, g = probs.float(), grad_probs.float()
+        grad_logits = p * (g - (p * g).sum(dim=-1, keepdim=True) / ctx.scale)
+        return grad_logits.to(probs.dtype), None, None
 
 
-def _validate_and_order_route_preserving_outputs(
-    expert_outputs: torch.Tensor,
-    received_tokens: torch.Tensor,
-    received_topk_indices: torch.Tensor,
-    received_topk_weights: torch.Tensor,
-    output_index: torch.Tensor,
-    route_fingerprints: torch.Tensor,
-    route_indices: torch.Tensor,
-    route_weights: torch.Tensor,
-    *,
-    order_outputs: bool = True,
-    route_positions: torch.Tensor | None = None,
-) -> torch.Tensor:
-    """Return expert outputs in the route handle's receive order.
+def _sglang_unbiased_softmax_topk_routing(
+    logits: torch.Tensor,
+    topk: int,
+    scaling_factor: float | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """SGLang-exact forward with differentiable selected-expert probabilities."""
+    if torch.is_grad_enabled() and logits.requires_grad:
+        return _SGLangSoftmaxTopK.apply(logits, topk, scaling_factor)
+    return _sglang_unbiased_softmax_topk_routing_forward(logits, topk, scaling_factor)
 
-    DeepEP currently produces the same source-token/slot order for the primary
-    rank-deduplicated dispatch and the virtual-token metadata dispatch.  Do not
-    merely assume that invariant: validate expert ID, exact FP32 weight and an
-    sixteen-BF16 source fingerprint before using the route handle.
+
+def _sglang_unbiased_softmax_topk_routing_forward(
+    logits: torch.Tensor,
+    topk: int,
+    scaling_factor: float | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Match SGLang Qwen3 unbiased softmax top-k.
+
+    Production SGLang uses the Triton JIT ``moe_fused_gate`` (default
+    ``SGLANG_OPT_USE_JIT_KERNEL_FUSED_TOPK=1``), not AOT
+    ``sgl_kernel.topk_softmax``.  The expert set is the same, but the FP32
+    weights differ by 1-2 ULP and that flips sparse BF16 combine values.
+    GLM biased / grouped routers keep Megatron's original function.
     """
-    if expert_outputs.ndim != 2 or received_tokens.ndim != 2:
-        raise ValueError("Route-preserving DeepEP expects 2D hidden tensors")
-    if received_topk_indices.shape != received_topk_weights.shape:
-        raise ValueError("Received DeepEP IDs and weights do not align")
-    if output_index.shape != received_topk_indices.shape:
-        raise ValueError("Received DeepEP route mapping does not align")
+    if logits.ndim != 2:
+        raise ValueError(f"Expected 2D logits [tokens, experts], got {tuple(logits.shape)}")
+    num_tokens, num_experts = logits.shape
+    if num_tokens == 0:
+        routing_probs = logits.new_empty((0, num_experts))
+        routing_map = torch.zeros((0, num_experts), dtype=torch.bool, device=logits.device)
+        return routing_probs, routing_map
 
-    positions = torch.nonzero(output_index >= 0, as_tuple=False) if route_positions is None else route_positions
-    if positions.shape[0] != route_indices.numel():
-        raise RuntimeError(
-            "Route-preserving DeepEP route count mismatch: "
-            f"primary={positions.shape[0]} metadata={route_indices.numel()}"
+    from sglang.jit_kernel.moe_fused_gate import moe_fused_gate
+    from slime.utils.routing_replay import _capture_ordered_topk
+
+    # Same call as sglang.srt.layers.moe.topk.fused_topk for softmax scoring.
+    zero_bias = torch.zeros(num_experts, dtype=torch.float32, device=logits.device)
+    topk_weights, topk_ids = moe_fused_gate(
+        logits.float(),
+        zero_bias,
+        topk,
+        scoring_func="softmax",
+        renormalize=True,
+    )
+    if scaling_factor is not None and scaling_factor != 1.0:
+        topk_weights = topk_weights * float(scaling_factor)
+    top_indices = topk_ids.to(dtype=torch.int64)
+    _capture_ordered_topk(top_indices)
+
+    routing_probs = torch.zeros((num_tokens, num_experts), dtype=logits.dtype, device=logits.device)
+    rows = torch.arange(num_tokens, device=logits.device).unsqueeze(1)
+    routing_probs.index_put_((rows, top_indices), topk_weights.to(dtype=logits.dtype), accumulate=False)
+    routing_map = torch.zeros((num_tokens, num_experts), dtype=torch.bool, device=logits.device)
+    routing_map.index_put_(
+        (rows, top_indices),
+        torch.ones((num_tokens, topk), dtype=torch.bool, device=logits.device),
+        accumulate=False,
+    )
+    return routing_probs, routing_map
+
+
+def _install_sglang_topk_softmax_routing() -> None:
+    """Replace Megatron unbiased-softmax top-k with SGLang moe_fused_gate."""
+    import megatron.core.transformer.moe.moe_utils as moe_utils
+    import megatron.core.transformer.moe.router as megatron_router
+
+    if getattr(megatron_router, "_slime_sglang_topk_softmax_patched", False):
+        return
+    original = megatron_router.topk_routing_with_score_function
+
+    def topk_routing_with_score_function(
+        logits,
+        topk,
+        use_pre_softmax=False,
+        num_groups=None,
+        group_topk=None,
+        scaling_factor=None,
+        score_function="softmax",
+        expert_bias=None,
+        fused=False,
+        router_replay=None,
+    ):
+        if (
+            score_function == "softmax"
+            and expert_bias is None
+            and not group_topk
+        ):
+            return _sglang_unbiased_softmax_topk_routing(logits, topk, scaling_factor)
+        return original(
+            logits,
+            topk,
+            use_pre_softmax=use_pre_softmax,
+            num_groups=num_groups,
+            group_topk=group_topk,
+            scaling_factor=scaling_factor,
+            score_function=score_function,
+            expert_bias=expert_bias,
+            fused=fused,
+            router_replay=router_replay,
         )
-    token_rows = positions[:, 0]
-    topk_slots = positions[:, 1]
-    expected_indices = received_topk_indices[token_rows, topk_slots].reshape(-1)
-    expected_weights = received_topk_weights[token_rows, topk_slots].reshape(-1)
-    expected_fingerprints = received_tokens.narrow(1, 0, 16).index_select(0, token_rows)
-    if route_fingerprints.shape != expected_fingerprints.shape:
-        raise RuntimeError(
-            "Route-preserving DeepEP fingerprint shape mismatch: "
-            f"{tuple(route_fingerprints.shape)} != {tuple(expected_fingerprints.shape)}"
-        )
 
-    torch._assert_async(
-        torch.all(expected_indices == route_indices.to(dtype=expected_indices.dtype)),
-        "Route-preserving DeepEP metadata changed local expert order",
-    )
-    torch._assert_async(
-        torch.all(expected_weights == route_weights.to(dtype=expected_weights.dtype)),
-        "Route-preserving DeepEP metadata changed route probability order",
-    )
-    torch._assert_async(
-        torch.all(expected_fingerprints == route_fingerprints),
-        "Route-preserving DeepEP metadata changed source-token order",
-    )
-
-    if not order_outputs:
-        return expert_outputs
-    route_rows = output_index[token_rows, topk_slots].to(dtype=torch.long)
-    return expert_outputs.index_select(0, route_rows)
+    # TopKRouter.routing binds this name in router.py, not moe_utils.
+    megatron_router.topk_routing_with_score_function = topk_routing_with_score_function
+    moe_utils.topk_routing_with_score_function = topk_routing_with_score_function
+    megatron_router._slime_sglang_topk_softmax_patched = True
 
 
 def _patch_sglang_deepep_layer(mlp: torch.nn.Module, global_layer: int) -> bool:
@@ -2745,6 +2589,7 @@ def _patch_sglang_deepep_layer(mlp: torch.nn.Module, global_layer: int) -> bool:
             f"layer {global_layer} has {type(manager).__name__}"
         )
     scaling_factor = float(router.config.moe_router_topk_scaling_factor or 1.0)
+    _install_sglang_topk_softmax_routing()
     original_routing = router.routing
 
     def routing_without_final_scaling(
@@ -2825,6 +2670,7 @@ def _patch_sglang_deepep_layer(mlp: torch.nn.Module, global_layer: int) -> bool:
     ) -> torch.Tensor:
         if patched_manager.token_indices is None or patched_manager.token_probs is None:
             raise RuntimeError("Ordered source top-k metadata is unavailable before DeepEP dispatch")
+
         dispatched_hidden = original_dispatch(
             hidden_states,
             async_finish=async_finish,
@@ -2835,30 +2681,21 @@ def _patch_sglang_deepep_layer(mlp: torch.nn.Module, global_layer: int) -> bool:
         source_topk_indices = patched_manager.token_indices
         source_topk_weights = patched_manager.token_probs
         source_fixed_topk_valid = bool(getattr(patched_manager, "_slime_source_fixed_topk_valid", False))
-        (
-            route_handle,
-            recv_route_fingerprints,
-            recv_route_indices,
-            recv_route_weights,
-            source_output_index,
-            source_all_routes_valid,
-        ) = _dispatch_route_preserving_deepep_metadata(
-            patched_manager,
-            hidden_states,
-            source_topk_indices,
-            source_topk_weights,
-            assume_all_routes_valid=source_fixed_topk_valid,
-        )
-        route_metadata_prevalidated = False
-        patched_manager._slime_route_handle = route_handle
-        patched_manager._slime_route_recv_fingerprints = recv_route_fingerprints
-        patched_manager._slime_route_recv_indices = recv_route_indices
-        patched_manager._slime_route_recv_weights = recv_route_weights
-        patched_manager._slime_route_metadata_prevalidated = route_metadata_prevalidated
+        # Expert outputs return via NCCL all-to-all (_nccl_route_combine),
+        # which rebuilds the SGLang c-order locally from the primary dispatch
+        # handle.  The route-preserving second DeepEP dispatch (fused route
+        # combine incl. its dispatch-by-handle backward) is intentionally
+        # removed: its NVSHMEM flag/slot protocol races under unserialized
+        # kernel launches and intermittently drops recv rows, which was the
+        # root cause of silent per-round ref_log_probs NaN.
         patched_manager._slime_route_source_topk_indices = source_topk_indices
         patched_manager._slime_route_source_topk_weights = source_topk_weights
-        patched_manager._slime_route_source_output_index = source_output_index
-        patched_manager._slime_route_source_all_valid = source_all_routes_valid
+        patched_manager._slime_route_source_output_index = torch.arange(
+            source_topk_indices.numel(),
+            device=source_topk_indices.device,
+            dtype=torch.long,
+        ).reshape_as(source_topk_indices)
+        patched_manager._slime_route_source_all_valid = source_fixed_topk_valid
         return dispatched_hidden
 
     manager.dispatch = types.MethodType(
@@ -2888,7 +2725,7 @@ def _patch_sglang_deepep_layer(mlp: torch.nn.Module, global_layer: int) -> bool:
             topk_weights,
             patched_manager.tokens_per_expert,
             return_route_positions=True,
-            expected_route_count=_deepep_route_handle_received_rows(patched_manager._slime_route_handle),
+            expected_route_count=None,
         )
         patched_manager.hidden_shape_before_permute = hidden_states.shape
         patched_manager.dispatched_routing_map = routing_map
@@ -2896,40 +2733,14 @@ def _patch_sglang_deepep_layer(mlp: torch.nn.Module, global_layer: int) -> bool:
         patched_manager._slime_sglang_topk_weights = topk_weights
         patched_manager._slime_sglang_output_index = output_index
         patched_manager._slime_sglang_route_positions = route_positions
+        # combine_preprocess restores (and deletes) the shared route
+        # positions before MoE combine runs; keep a private copy for the
+        # NCCL route combine.
+        patched_manager._slime_route_nccl_positions = route_positions
         patched_manager._slime_sglang_all_routes_valid = all_routes_valid
         patched_manager._slime_sglang_expert_inputs = permuted_hidden
         patched_manager._slime_sglang_expert_probs = permuted_probs
         patched_manager._slime_sglang_tokens_per_expert = patched_manager.tokens_per_expert
-        route_fingerprints = getattr(
-            patched_manager,
-            "_slime_route_recv_fingerprints",
-            None,
-        )
-        route_indices = getattr(patched_manager, "_slime_route_recv_indices", None)
-        route_weights = getattr(patched_manager, "_slime_route_recv_weights", None)
-        route_metadata_prevalidated = bool(getattr(patched_manager, "_slime_route_metadata_prevalidated", False))
-        if route_metadata_prevalidated:
-            if any(value is not None for value in (route_fingerprints, route_indices, route_weights)):
-                raise RuntimeError("Cached DeepEP route metadata retained unexpected payloads")
-        else:
-            if route_fingerprints is None or route_indices is None or route_weights is None:
-                raise RuntimeError("Route-preserving DeepEP metadata handle is unavailable")
-            _validate_and_order_route_preserving_outputs(
-                permuted_hidden,
-                hidden_states,
-                sanitized_indices,
-                topk_weights,
-                output_index,
-                route_fingerprints,
-                route_indices,
-                route_weights,
-                order_outputs=False,
-                route_positions=route_positions,
-            )
-        del patched_manager._slime_route_recv_fingerprints
-        del patched_manager._slime_route_recv_indices
-        del patched_manager._slime_route_recv_weights
-        del patched_manager._slime_route_metadata_prevalidated
         return permuted_hidden, permuted_probs
 
     def get_restored_hidden_states_by_experts(
@@ -3003,28 +2814,18 @@ def _patch_sglang_deepep_layer(mlp: torch.nn.Module, global_layer: int) -> bool:
         output: torch.Tensor,
         shared_expert_output: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        route_handle = getattr(manager, "_slime_route_handle", None)
         source_topk_indices = getattr(manager, "_slime_route_source_topk_indices", None)
         source_topk_weights = getattr(manager, "_slime_route_source_topk_weights", None)
         source_output_index = getattr(manager, "_slime_route_source_output_index", None)
         source_all_routes_valid = getattr(manager, "_slime_route_source_all_valid", None)
         if (
-            route_handle is None
-            or source_topk_indices is None
+            source_topk_indices is None
             or source_topk_weights is None
             or source_output_index is None
             or source_all_routes_valid is None
         ):
-            raise RuntimeError("Route-preserving DeepEP combine handle is incomplete")
-        from megatron.core.transformer.moe.fused_a2a import fused_combine
-
-        combined_routes, _ = fused_combine(
-            output,
-            manager.group,
-            route_handle,
-            async_finish=True,
-            allocate_on_comm_stream=getattr(patched_mlp.token_dispatcher, "allocate_on_comm_stream", False),
-        )
+            raise RuntimeError("NCCL route combine source metadata is incomplete")
+        combined_routes = _nccl_route_combine(manager, output)
         output = _SGLangEPGatherWithBF16Backward.apply(
             combined_routes,
             source_topk_indices,
@@ -3034,7 +2835,6 @@ def _patch_sglang_deepep_layer(mlp: torch.nn.Module, global_layer: int) -> bool:
             source_all_routes_valid,
         )
         manager.handle = None
-        del manager._slime_route_handle
         del manager._slime_route_source_topk_indices
         del manager._slime_route_source_topk_weights
         del manager._slime_route_source_output_index
@@ -3061,14 +2861,192 @@ def _patch_sglang_deepep_layer(mlp: torch.nn.Module, global_layer: int) -> bool:
     return True
 
 
-def enable_sglang_deepep_moe_alignment(args, model, store_prefix: str) -> None:
-    """Install the exact SGLang DeepEP combine semantics on selected MoE layers."""
+
+class _NCCLRoutCombine(torch.autograd.Function):
+    """NCCL all-to-all route-output transport with its exact inverse backward.
+
+    Forward mirrors the DeepEP route handle's ordering contract (source-rank
+    major, compact route id ``c = source_token_idx * num_slots + topk_slot``
+    minor) without running a second, racy DeepEP dispatch.  Backward is the
+    exact inverse: gather by compact id, reverse all-to-all with swapped
+    split sizes, un-permute by the saved stable sort order.  Every step is
+    deterministic (stable sort, unique-index index_copy, fixed-split a2a).
+    """
+
+    @staticmethod
+    def forward(
+        ctx,
+        expert_outputs: torch.Tensor,
+        route_positions: torch.Tensor,
+        recv_src_idx: torch.Tensor,
+        rank_prefix_matrix: torch.Tensor,
+        num_slots: int,
+        group,
+        world: int,
+        rank: int,
+        source_rows: int,
+    ) -> torch.Tensor:
+        device = expert_outputs.device
+        token_rows = route_positions[:, 0].to(dtype=torch.long)
+        topk_slots = route_positions[:, 1].to(dtype=torch.long)
+
+        # Segment boundaries of each source rank inside this rank's recv
+        # stream: segment of source s starts at
+        # rank_prefix_matrix[(s-1)*world+rank].
+        total_recv = recv_src_idx.numel()
+        seg_starts = torch.zeros(world + 1, device=device, dtype=torch.long)
+        if world > 1:
+            seg_idx = (
+                torch.arange(world - 1, device=device, dtype=torch.long) * world + rank
+            )
+            seg_starts[1:world] = rank_prefix_matrix.index_select(0, seg_idx).to(dtype=torch.long)
+        seg_starts[world] = total_recv
+        dst_rank = torch.bucketize(token_rows, seg_starts[1:world], right=True)
+
+        # Compact route id of every permuted row in its owner's back-flow
+        # stream; the permuted scan order is already (destination, c) sorted,
+        # the stable sort below only re-asserts it.
+        compact_ids = recv_src_idx.index_select(0, token_rows) * num_slots + topk_slots
+        cnum_max = (recv_src_idx.max() + 1) * num_slots
+        sort_key = dst_rank * cnum_max + compact_ids
+        order = torch.argsort(sort_key, stable=True)
+        x_sorted = expert_outputs.index_select(0, order)
+        c_sorted = compact_ids.index_select(0, order)
+
+        send_counts = torch.bincount(dst_rank, minlength=world)
+        send_splits = [int(v) for v in send_counts.tolist()]
+        recv_counts = torch.empty_like(send_counts)
+        dist.all_to_all_single(recv_counts, send_counts, group=group)
+        recv_splits = [int(v) for v in recv_counts.tolist()]
+        total_return = sum(recv_splits)
+
+        recv_x = torch.empty(
+            (total_return, expert_outputs.shape[1]),
+            device=device,
+            dtype=expert_outputs.dtype,
+        )
+        dist.all_to_all_single(
+            recv_x,
+            x_sorted,
+            output_split_sizes=recv_splits,
+            input_split_sizes=send_splits,
+            group=group,
+        )
+        recv_c = torch.empty((total_return,), device=device, dtype=torch.long)
+        dist.all_to_all_single(
+            recv_c,
+            c_sorted,
+            output_split_sizes=recv_splits,
+            input_split_sizes=send_splits,
+            group=group,
+        )
+
+        combined = torch.empty(
+            (source_rows, expert_outputs.shape[1]),
+            device=device,
+            dtype=expert_outputs.dtype,
+        )
+        combined.index_copy_(0, recv_c, recv_x)
+        torch._assert_async(
+            (recv_c.sort().values == torch.arange(source_rows, device=device, dtype=torch.long)).all(),
+            "NCCL route combine coverage mismatch",
+        )
+        ctx.save_for_backward(order, recv_c)
+        ctx.send_splits = send_splits
+        ctx.recv_splits = recv_splits
+        ctx.group = group
+        ctx.expert_num_rows = expert_outputs.shape[0]
+        return combined
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor):
+        order, recv_c = ctx.saved_tensors
+        grad_recv = grad_output.index_select(0, recv_c)
+        grad_sorted = torch.empty(
+            (order.numel(), grad_output.shape[1]),
+            device=grad_output.device,
+            dtype=grad_output.dtype,
+        )
+        dist.all_to_all_single(
+            grad_sorted,
+            grad_recv,
+            output_split_sizes=ctx.send_splits,
+            input_split_sizes=ctx.recv_splits,
+            group=ctx.group,
+        )
+        grad_x = torch.empty(
+            (ctx.expert_num_rows, grad_output.shape[1]),
+            device=grad_output.device,
+            dtype=grad_output.dtype,
+        )
+        grad_x.index_copy_(0, order, grad_sorted)
+        return grad_x, None, None, None, None, None, None, None, None
+
+
+def _nccl_route_combine(
+    manager,
+    expert_outputs: torch.Tensor,
+) -> torch.Tensor:
+    """Return expert outputs to their source ranks with an NCCL all-to-all.
+
+    Replacement for the route-preserving second DeepEP dispatch whose recv
+    stream intermittently drops ~1.9% of rows when kernel launches are not
+    serialized by CUDA_LAUNCH_BLOCKING (root cause of the silent
+    ref_log_probs NaN).  NCCL all-to-all cannot lose rows: every dispatched
+    route is accounted for by construction, and any coverage violation trips
+    a loud device-side assertion instead of corrupting values.
+
+    All ordering inputs are computed locally from the *primary* dispatch
+    handle: ``recv_src_idx`` (handle[3]) gives the source-local token index
+    of each received row, and ``rank_prefix_matrix`` (handle[0]) gives each
+    source rank's segment boundaries in the receive stream.
+    """
+    route_positions = getattr(manager, "_slime_route_nccl_positions", None)
+    if route_positions is None:
+        raise RuntimeError("NCCL route combine requires saved route positions")
+    manager._slime_route_nccl_positions = None
+    handle = manager.handle
+    if not isinstance(handle, tuple) or len(handle) != 6:
+        raise RuntimeError(
+            f"NCCL route combine expects an intranode DeepEP handle, got {type(handle).__name__}"
+        )
+    source_output_index = getattr(manager, "_slime_route_source_output_index", None)
+    source_topk_indices = getattr(manager, "_slime_route_source_topk_indices", None)
+    if source_output_index is None or source_topk_indices is None:
+        raise RuntimeError("NCCL route combine requires saved source route metadata")
+    return _NCCLRoutCombine.apply(
+        expert_outputs,
+        route_positions,
+        handle[3].reshape(-1),
+        handle[0].reshape(-1),
+        source_topk_indices.shape[1],
+        manager.group,
+        dist.get_world_size(manager.group),
+        dist.get_rank(manager.group),
+        source_output_index.numel(),
+    )
+
+
+def enable_sglang_deepep_moe_alignment(
+    args,
+    model,
+    store_prefix: str,
+    selected_layers: Iterable[int] | None = None,
+) -> None:
+    """Install the exact SGLang DeepEP combine semantics on selected MoE layers.
+
+    ``selected_layers`` overrides ``--megatron-deepgemm-moe-forward-layers`` so
+    other MoE alignment backends (e.g. NVFP4 cutlass) can reuse this installer
+    without deepgemm knowing about their CLI flags.
+    """
     del store_prefix
     if not bool(getattr(args, "deterministic_mode", False)):
         return
     if not bool(getattr(args, "moe_enable_deepep", False)):
         return
-    selected_layers = {int(layer) for layer in (getattr(args, "megatron_deepgemm_moe_forward_layers", None) or ())}
+    if selected_layers is None:
+        selected_layers = getattr(args, "megatron_deepgemm_moe_forward_layers", None) or ()
+    selected_layers = {int(layer) for layer in selected_layers}
     if not selected_layers:
         return
 
