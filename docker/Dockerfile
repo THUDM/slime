@@ -96,7 +96,30 @@ RUN pip install --no-deps --force-reinstall "mooncake-transfer-engine-cuda13==${
 RUN pip install --no-deps --force-reinstall https://github.com/zhuzilin/sgl-router/releases/download/v0.3.2-9daabcd/sglang_router-0.3.2-cp38-abi3-manylinux_2_28_x86_64.whl
 RUN python -c "import sglang_router; assert 'slime' in sglang_router.__version__"
 
-RUN rm -rf /root/.cache/pip /root/flash-attention
+# DeepEP low-latency alignment fork.  CUDA 13 relocated the CCCL/libcu++ headers
+# (<cuda/std/*>) under include/cccl, which nvshmem_tensor.h includes, so add that
+# directory to the compile search path (nvcc + host compiler) when it exists.
+# Install after resolving dependencies: sgl-deep-ep shares the deep_ep namespace.
+# Keep this before patches and Slime sources so their changes reuse the build.
+RUN pip uninstall -y sgl-deep-ep deep-ep && \
+    git clone https://github.com/zhuzilin/DeepEP.git /root/DeepEP && \
+    cd /root/DeepEP && git checkout ${DEEPEP_COMMIT} && \
+    CUDA_ARCHS="${DEEPEP_CUDA_ARCH_LIST}" && \
+    if [ -d /usr/local/cuda/include/cccl ]; then \
+      export CPATH="/usr/local/cuda/include/cccl${CPATH:+:$CPATH}"; \
+      export NVCC_PREPEND_FLAGS="-I/usr/local/cuda/include/cccl ${NVCC_PREPEND_FLAGS:-}"; \
+    fi && \
+    TORCH_CUDA_ARCH_LIST="${CUDA_ARCHS}" python setup.py bdist_wheel && \
+    pip install --force-reinstall --no-deps dist/deep_ep-*.whl && \
+    cd /root/ && rm -rf DeepEP
+
+# PyTorch's dependency metadata pins older NCCL. Restore the tested runtime
+# after resolving dependencies, before the frequently changed patches/sources.
+# The remaining Slime and int4 kernel installs do not resolve runtime dependencies.
+RUN CUDA_MAJOR="$(python -c 'import torch; print(torch.version.cuda.split(".")[0])')" && \
+    pip install --no-deps --force-reinstall "nvidia-nccl-cu${CUDA_MAJOR}==${SLIME_NCCL_VERSION}"
+
+RUN rm -rf /root/.cache/pip
 
 # ====================================== Patches ============================================
 
@@ -138,8 +161,7 @@ RUN if [ "$ENABLE_SGLANG_PATCH" = "1" ]; then \
     fi; \
     git apply "$patch" || exit 1; \
   done && \
-  rm sglang*.patch && \
-  pip install -v --no-build-isolation --no-deps ./python/sglang/kernels/aot; \
+  rm sglang*.patch; \
 fi
 
 # ====================================== Install main package ============================================
@@ -153,25 +175,4 @@ RUN if [ "$SLIME_COMMIT" != "local" ]; then \
     fi && pip install -e /root/slime --no-deps
 
 RUN cd /root/slime/slime/backends/megatron_utils/kernels/int4_qat && \
-    pip install . --no-build-isolation
-
-# DeepEP low-latency alignment fork.  CUDA 13 relocated the CCCL/libcu++ headers
-# (<cuda/std/*>) under include/cccl, which nvshmem_tensor.h includes, so add that
-# directory to the compile search path (nvcc + host compiler) when it exists.
-# Install after resolving dependencies: sgl-deep-ep shares the deep_ep namespace.
-RUN pip uninstall -y sgl-deep-ep deep-ep && \
-    git clone https://github.com/zhuzilin/DeepEP.git /root/DeepEP && \
-    cd /root/DeepEP && git checkout ${DEEPEP_COMMIT} && \
-    CUDA_ARCHS="${DEEPEP_CUDA_ARCH_LIST}" && \
-    if [ -d /usr/local/cuda/include/cccl ]; then \
-      export CPATH="/usr/local/cuda/include/cccl${CPATH:+:$CPATH}"; \
-      export NVCC_PREPEND_FLAGS="-I/usr/local/cuda/include/cccl ${NVCC_PREPEND_FLAGS:-}"; \
-    fi && \
-    TORCH_CUDA_ARCH_LIST="${CUDA_ARCHS}" python setup.py bdist_wheel && \
-    pip install --force-reinstall --no-deps dist/deep_ep-*.whl && \
-    cd /root/ && rm -rf DeepEP
-
-# PyTorch's dependency metadata pins older NCCL. Restore the tested runtime
-# after all resolving installs, without changing PyTorch or other packages.
-RUN CUDA_MAJOR="$(python -c 'import torch; print(torch.version.cuda.split(".")[0])')" && \
-    pip install --no-deps --force-reinstall "nvidia-nccl-cu${CUDA_MAJOR}==${SLIME_NCCL_VERSION}"
+    pip install . --no-build-isolation --no-deps
