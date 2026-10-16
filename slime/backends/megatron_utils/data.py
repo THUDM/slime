@@ -164,6 +164,34 @@ def get_batch(
     return batch
 
 
+def get_routing_replay_real_rows(
+    tokens: Sequence[torch.Tensor],
+    pad_multiplier: int,
+    allgather_cp: bool,
+    sequence_parallel: bool,
+) -> torch.Tensor:
+    """Mark this rank's router rows that replay a route recorded by the rollout.
+
+    Rollout routes cover every token but each sample's last, so that token and the CP/TP
+    padding replay filler routes. The flags are laid out the way ``get_batch`` lays out the
+    tokens, then cut to the rank's sequence-parallel shard of the router input.
+    """
+    real = [F.pad(torch.ones(t.size(0) - 1, dtype=torch.int, device=t.device), (0, 1)) for t in tokens]
+    pad_size = mpu.get_tensor_model_parallel_world_size() * pad_multiplier
+    if allgather_cp:
+        cp_size = mpu.get_context_parallel_world_size()
+        rows = torch.cat(real)
+        global_pad_size = cp_size * pad_size
+        rows = F.pad(rows, (0, (global_pad_size - rows.size(0) % global_pad_size) % global_pad_size))
+        rows = rows.chunk(cp_size, dim=0)[mpu.get_context_parallel_rank()]
+    else:
+        rows = torch.cat([slice_with_cp(r, 0) for r in real])
+        rows = F.pad(rows, (0, (pad_size - rows.size(0) % pad_size) % pad_size))
+    if sequence_parallel:
+        rows = rows.chunk(mpu.get_tensor_model_parallel_world_size(), dim=0)[mpu.get_tensor_model_parallel_rank()]
+    return rows.bool()
+
+
 class DataIterator:
     """Iterator over a rollout dict following an explicit micro-batch index schedule."""
 

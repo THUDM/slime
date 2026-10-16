@@ -424,6 +424,8 @@ def make_slime_validate_args(**overrides):
         mtp_num_layers=None,
         use_rollout_routing_replay=False,
         use_routing_replay=False,
+        log_r3_route_mismatch=False,
+        ci_r3_route_mismatch_threshold=None,
         custom_config_path=None,
         eval_max_context_len=None,
         rollout_max_context_len=None,
@@ -475,6 +477,76 @@ def test_trainer_fault_tolerance_rejects_unrecoverable_checkpoints(monkeypatch, 
     values.update(options)
     with pytest.raises(ValueError, match=match):
         module.slime_validate_args(make_slime_validate_args(**values))
+
+
+def test_r3_route_mismatch_flags_are_off_by_default(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    parser = argparse.ArgumentParser()
+    module.get_slime_extra_args_provider()(parser)
+
+    defaults = parser.parse_args(["--rollout-batch-size", "1"])
+    assert defaults.log_r3_route_mismatch is False
+    assert defaults.ci_r3_route_mismatch_threshold is None
+
+    command = ["--rollout-batch-size", "1", "--log-r3-route-mismatch", "--ci-r3-route-mismatch-threshold", "0.2"]
+    parsed = parser.parse_args(command)
+    assert parsed.log_r3_route_mismatch is True
+    assert parsed.ci_r3_route_mismatch_threshold == 0.2
+
+
+@pytest.mark.parametrize(
+    "options,match",
+    [
+        # R2 replays the trainer's own routes, so the R3 metric is rejected there.
+        ({"use_routing_replay": True, "log_r3_route_mismatch": True}, "requires --use-rollout-routing-replay"),
+        # A CI bound without the metric would never be checked.
+        (
+            {"use_rollout_routing_replay": True, "ci_r3_route_mismatch_threshold": 0.2},
+            "requires --log-r3-route-mismatch",
+        ),
+    ],
+)
+def test_r3_route_mismatch_flags_require_r3_and_the_metric(monkeypatch, options, match):
+    module = load_slime_arguments_module(monkeypatch)
+    with pytest.raises(ValueError, match=match):
+        module.slime_validate_args(make_slime_validate_args(routing_replay_prefetch_microbatches=1, **options))
+
+
+def test_r3_route_mismatch_metric_and_bound_accepted_with_r3(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args, _ = module.slime_validate_args(
+        make_slime_validate_args(
+            use_rollout_routing_replay=True,
+            routing_replay_prefetch_microbatches=1,
+            log_r3_route_mismatch=True,
+            ci_r3_route_mismatch_threshold=0.2,
+        )
+    )
+    assert args.use_routing_replay and args.log_r3_route_mismatch
+    assert args.ci_r3_route_mismatch_threshold == 0.2
+
+
+@pytest.mark.parametrize("test_file", ["test_qwen3_30B_A3B_r3.py", "test_moonlight_16B_A3B_r3.py"])
+def test_r3_e2e_tests_bound_the_route_mismatch(monkeypatch, test_file):
+    from slime.utils import external_utils
+
+    commands = []
+    launcher = types.ModuleType("slime.utils.external_utils.command_utils")
+    launcher.execute_train = lambda **kwargs: commands.append(kwargs["train_args"])
+    launcher.get_default_wandb_args = lambda _: ""
+    monkeypatch.setitem(sys.modules, launcher.__name__, launcher)
+    monkeypatch.setattr(external_utils, "command_utils", launcher, raising=False)
+    runpy.run_path(str(Path(__file__).with_name(test_file)))["execute"]()
+    [command] = commands
+
+    module = load_slime_arguments_module(monkeypatch)
+    # No abbreviations: the command also carries Megatron flags this parser does not know.
+    parser = argparse.ArgumentParser(allow_abbrev=False)
+    module.get_slime_extra_args_provider()(parser)
+    args, _ = parser.parse_known_args(shlex.split(command))
+
+    assert args.use_rollout_routing_replay and args.ci_test and args.log_r3_route_mismatch
+    assert 0 < args.ci_r3_route_mismatch_threshold < 1
 
 
 @pytest.mark.parametrize(

@@ -478,6 +478,7 @@ def custom_hook(args, rollout_id, step_id, model, optimizer, opt_param_scheduler
 | --- | --- |
 | `--use-routing-replay` | 训练中前向-反向路由一致性。([arXiv:2507.18071](https://arxiv.org/abs/2507.18071)) |
 | `--use-rollout-routing-replay` | R3：在训练时重放 rollout 阶段的路由。slime 默认的 `sglang_router` 路径支持该功能。([arXiv:2510.11370](https://arxiv.org/abs/2510.11370)) |
+| `--log-r3-route-mismatch` | 每个训练 step 记录各 MoE 层中重放的专家集合与训练端 router 自身 top-k 不一致的真实 token 比例（`train/r3_route_mismatch`、`_max`、`_layer_<i>`）。需要 `--use-rollout-routing-replay`。 |
 
 ---
 
