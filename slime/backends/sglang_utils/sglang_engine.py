@@ -15,6 +15,7 @@ from slime.backends.sglang_utils.server_control import unregister_worker
 from slime.ray.ray_actor import RayActor
 from slime.utils import accelerator
 from slime.utils.http_utils import get_host_info
+from slime.utils.model_config import sglang_model_config_overrides
 
 logger = logging.getLogger(__name__)
 
@@ -195,6 +196,9 @@ class SGLangEngine(RayActor):
         self._register_to_router(expect_server_args)
 
     def _init_normal(self, server_args_dict):
+        server_args_dict["json_model_override_args"] = sglang_model_config_overrides(
+            server_args_dict["model_path"], server_args_dict.get("json_model_override_args", "{}")
+        )
         logger.info(f"Launch HttpServerEngineAdapter at: {self.server_host}:{self.server_port}")
         self.process = launch_server_process(ServerArgs(**server_args_dict))
         self._register_to_router(server_args_dict)

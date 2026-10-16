@@ -107,19 +107,19 @@ def load_arguments_module(monkeypatch):
     arguments_mod = types.ModuleType("megatron.training.arguments")
     tokenizer_pkg_mod = types.ModuleType("megatron.training.tokenizer")
     tokenizer_mod = types.ModuleType("megatron.training.tokenizer.tokenizer")
-    transformers_mod = types.ModuleType("transformers")
+    model_config_mod = types.ModuleType("slime.utils.model_config")
 
     arguments_mod.parse_args = lambda *args, **kwargs: None
     arguments_mod.validate_args = lambda args: args
     tokenizer_mod._vocab_size_with_padding = lambda vocab_size, _args: vocab_size
-    transformers_mod.AutoConfig = types.SimpleNamespace(from_pretrained=lambda *args, **kwargs: None)
+    model_config_mod.load_hf_config = lambda *args, **kwargs: None
 
     monkeypatch.setitem(sys.modules, "megatron", megatron_mod)
     monkeypatch.setitem(sys.modules, "megatron.training", training_mod)
     monkeypatch.setitem(sys.modules, "megatron.training.arguments", arguments_mod)
     monkeypatch.setitem(sys.modules, "megatron.training.tokenizer", tokenizer_pkg_mod)
     monkeypatch.setitem(sys.modules, "megatron.training.tokenizer.tokenizer", tokenizer_mod)
-    monkeypatch.setitem(sys.modules, "transformers", transformers_mod)
+    monkeypatch.setitem(sys.modules, "slime.utils.model_config", model_config_mod)
 
     module_path = Path(__file__).resolve().parents[1] / "slime" / "backends" / "megatron_utils" / "arguments.py"
     module_name = "test_megatron_argument_validation_module"
@@ -322,6 +322,8 @@ def test_allgather_cp_rejects_non_dsa_cp_models(monkeypatch):
     [
         types.SimpleNamespace(architectures=["DeepseekV32ForCausalLM"], model_type="deepseek_v3"),
         types.SimpleNamespace(architectures=["GlmMoeDsaForCausalLM"], model_type="glm"),
+        types.SimpleNamespace(architectures=["Glm5NextForCausalLM"], model_type="glm5_next"),
+        types.SimpleNamespace(architectures=["Glm5NextForConditionalGeneration"], model_type="glm5_next"),
     ],
 )
 def test_allgather_cp_allows_dsa_architectures(monkeypatch, hf_config):

@@ -168,6 +168,11 @@ def load_model_hf_weights(
     reader = SafetensorReader(path)
     with torch.no_grad():
         for name, parameter in named_params_and_buffers(args, model):
+            # Router._load_from_state_dict normally restores this buffer to
+            # FP32 before copying. Direct HF loading bypasses that hook; a
+            # model-wide BF16 cast must not quantize the routing correction.
+            if name.endswith(".router.expert_bias"):
+                parameter.data = parameter.data.float()
             tensor = get_hf_tensor(name, reader, config)
             if name.endswith("output_layer.weight") and parameter.shape[0] == 1 and tensor.shape[0] != 1:
                 continue
