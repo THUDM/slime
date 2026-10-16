@@ -135,6 +135,8 @@ def _generation_state():
 def _streaming_args():
     return SimpleNamespace(
         ci_test=False,
+        rollout_external=False,
+        rollout_health_check_timeout=30,
         sglang_router_ip="frontend",
         sglang_router_port=8000,
         use_rollout_routing_replay=False,
@@ -376,15 +378,15 @@ def test_stream_cancellation_closes_request_and_keeps_prefix(monkeypatch):
         sample.status = Sample.Status.ABORTED
         return sample
 
-    async def get_workers(_url):
-        return {"workers": [{"url": "http://worker:30000"}]}
+    async def get_workers(_url, *, timeout):
+        return [{"url": "http://worker:30000"}]
 
     async def abort_servers(urls):
         assert urls == ["http://worker:30000"]
         server_released.set()
 
     monkeypatch.setattr(sglang_rollout, "generate", server_generate)
-    monkeypatch.setattr(sglang_rollout, "get", get_workers)
+    monkeypatch.setattr(sglang_rollout, "get_live_router_workers", get_workers)
     monkeypatch.setattr(sglang_rollout, "abort_servers_until_idle", abort_servers)
 
     async def exercise():

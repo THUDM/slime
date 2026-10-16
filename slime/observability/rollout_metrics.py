@@ -51,11 +51,24 @@ def compute_metrics_from_samples(args, samples):
     log_dict |= _compute_zero_std_metrics(args, samples)
     log_dict |= _compute_spec_metrics(args, samples)
     log_dict |= _compute_prefix_cache_metrics(samples)
+    log_dict |= _compute_agent_compaction_metrics(samples)
     log_dict |= _compute_reward_cat_metrics(args, samples)
     log_dict |= _compute_top_p_kept_vocab_metrics(samples)
     log_dict["repetition_frac"] = np.mean([int(has_repetition(s.response)) for s in samples]).item()
-    log_dict["truncated_ratio"] = np.mean([int(s.status == Sample.Status.TRUNCATED) for s in samples]).item()
     return log_dict
+
+
+def _compute_agent_compaction_metrics(samples):
+    # Every training segment carries its trajectory's counters. Count each
+    # trajectory once so repeated context cannot bias the averages.
+    trajectories = {}
+    for sample in samples:
+        key = (sample.group_index, sample.rollout_id if sample.rollout_id is not None else sample.index)
+        trajectories.setdefault(key, (sample.metadata or {}).get("agent_metrics", {}))
+    counts = [metrics["compact_count"] for metrics in trajectories.values() if "compact_count" in metrics]
+    if not counts:
+        return {}
+    return {"compact_count": sum(counts) / len(counts)}
 
 
 def compute_perf_metrics_from_samples(args, samples, rollout_time):

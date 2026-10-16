@@ -1,23 +1,17 @@
+import logging
+
 import ray
 
 from slime.data.checkpoint import save_checkpoint
 from slime.observability.logging_utils import configure_logger, finish_tracking, init_tracking
-from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_models
+from slime.ray.placement_group import create_rollout_manager, create_training_models
 from slime.utils.arguments import parse_args
+from slime.utils.cleanup import Cleanup
 from slime.utils.misc import should_run_periodic_action
 
 
-def train(args, restore_plan=None):
-    configure_logger()
+def train(args, pgs, rollout_manager, num_rollout_per_epoch, restore_plan):
     release_train = args.release_train
-
-    # allocate the GPUs
-    pgs = create_placement_groups(args)
-    init_tracking(args)
-
-    # create the rollout manager, with sglang engines inside.
-    # need to initialize rollout manager first to calculate num_rollout
-    rollout_manager, num_rollout_per_epoch = create_rollout_manager(args, pgs["rollout"], restore_plan=restore_plan)
 
     actor_model, critic_model = create_training_models(args, pgs, rollout_manager)
 
@@ -26,6 +20,9 @@ def train(args, restore_plan=None):
 
     # Always push actor weights to rollout once weights are loaded.
     actor_model.update_weights()
+    # Reattached async producers stay paused until restored weights are installed.
+    # This startup notification resumes them once, before entering the train loop.
+    ray.get(rollout_manager.training_ready.remote())
 
     if args.check_weight_update_equal:
         ray.get(rollout_manager.check_weights.remote(action="compare"))
@@ -102,10 +99,35 @@ def train(args, restore_plan=None):
         if should_run_periodic_action(rollout_id, args.eval_interval, num_rollout_per_epoch):
             ray.get(rollout_manager.eval.remote(rollout_id))
 
-    ray.get(rollout_manager.dispose.remote())
-    finish_tracking(args)
+
+def main(args, restore_plan):
+    """Own the attempt's exit policy; actors only clean up their own resources."""
+    with Cleanup() as cleanup:
+        init_tracking(args)
+        startup = None
+        try:
+            # Create or reattach rollout resources, then run this training attempt.
+            startup = create_rollout_manager(args, restore_plan=restore_plan)
+            train(
+                startup.args, startup.placements, startup.manager, startup.num_rollout_per_epoch, startup.restore_plan
+            )
+        except BaseException:
+            # Failures and interruptions retain serving and replay data for a manual
+            # restart. Detach this driver's trainers instead of disposing the session.
+            if startup is not None:
+                try:
+                    startup.close(failed=True)
+                except Exception:
+                    logging.getLogger(__name__).exception("Failed to clean up training attempt")
+            raise
+        else:
+            startup.close(failed=False)
+        finally:
+            # Finish this driver's tracking on success, startup failure, or interruption.
+            cleanup.run("finish driver tracking", finish_tracking, args)
 
 
 if __name__ == "__main__":
     args, restore_plan = parse_args(return_restore_plan=True)
-    train(args, restore_plan)
+    configure_logger()
+    main(args, restore_plan)

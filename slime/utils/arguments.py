@@ -107,12 +107,28 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
 
         def add_train_arguments(parser):
             # --train-backend is parsed early in _pre_parse_mode() and merged later.
+            reset_arg(parser, "--post-self-attn-layernorm", action="store_true", default=False)
+            reset_arg(parser, "--post-mlp-layernorm", action="store_true", default=False)
+            if "--use-gated-attention" not in parser._option_string_actions:
+                parser.add_argument(
+                    "--use-gated-attention",
+                    dest="attention_output_gate",
+                    action="store_true",
+                    default=argparse.SUPPRESS,
+                    help="Alias for --attention-output-gate.",
+                )
             parser.add_argument(
                 "--qwen-gdn-backend",
                 type=str,
                 choices=["fla", "flashqla"],
                 default="fla",
                 help="GDN implementation backend for Qwen linear-attention layers.",
+            )
+            parser.add_argument(
+                "--qwen-gdn-implementation",
+                choices=["replicated", "megatron"],
+                default="replicated",
+                help="Use the existing replicated wrapper or Megatron's TP/CP-sharded Qwen3.5 GDN.",
             )
             parser.add_argument(
                 "--train-env-vars",
@@ -348,6 +364,16 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--fully-async-group-prefetch-factor",
+                type=int,
+                default=1,
+                help=(
+                    "Multiply the fully-async in-flight prompt-group pool without increasing the "
+                    "per-sample generation semaphore. Values above 1 let another group's samples "
+                    "use slots released before a slow group finishes. Completed results remain bounded."
+                ),
+            )
+            parser.add_argument(
                 "--rollout-function-path",
                 type=str,
                 default="slime.rollout.sglang_rollout.generate_rollout",
@@ -484,6 +510,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help=(
                     "Whether to use partial rollout. "
                     "If set, the unfinished samples during dynamic sampling will be recycled back to data buffer. "
+                    "Agent adapters also continue interrupted model turns without restarting the sandbox or CLI. "
                     "This is useful for long responses."
                 ),
             )
@@ -616,8 +643,11 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--rollout-queue-segment-mib",
                 type=int,
-                default=256,
-                help="Append queue publications to a pack file until this target size; a single larger publication is kept intact.",
+                default=None,
+                help=(
+                    "Override straw's pack target size in MiB (straw defaults to 1 GiB). "
+                    "A single larger publication is kept intact."
+                ),
             )
             parser.add_argument(
                 "--rollout-io-concurrency",
@@ -636,28 +666,43 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
 
         def add_fault_tolerance_arguments(parser):
             parser.add_argument(
+                "--rollout-session-id",
+                type=str,
+                default=None,
+                help="Identity for retained internal serving. Defaults to the straw pool/run, debug dump, save directory, or model/rollout configuration.",
+            )
+            parser.add_argument(
                 "--use-fault-tolerance",
                 action="store_true",
                 default=False,
-                help="Whether to enable the fault tolerance function during rollout.",
+                help=(
+                    "Compatibility flag: internal serving always checks engine health and recovers failed engines. "
+                    "Enable the existing health-check policy for external serving."
+                ),
             )
             parser.add_argument(
                 "--rollout-health-check-interval",
                 type=float,
-                default=30.0,
+                default=600.0,
                 help="Interval in seconds between rollout engine /health_generate checks during generate/eval.",
             )
             parser.add_argument(
                 "--rollout-health-check-timeout",
                 type=float,
-                default=30.0,
+                default=600.0,
                 help="Timeout in seconds to wait for a rollout engine /health_generate response before killing it.",
             )
             parser.add_argument(
                 "--rollout-health-check-first-wait",
                 type=float,
-                default=0,
+                default=600.0,
                 help="Initial grace period (in seconds) before starting health checks. This allows time for model compilation and initialization. Increase this value significantly when using deepgemm.",
+            )
+            parser.add_argument(
+                "--rollout-cleanup-timeout",
+                type=float,
+                default=60.0,
+                help="Total time budget in seconds for detaching or disposing a training attempt.",
             )
             return parser
 
@@ -1657,6 +1702,11 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             help="Path to the YAML config for custom function arguments.",
         )
         reset_arg(parser, "--padded-vocab-size", type=int, default=None)
+        # New Megatron versions default to NVRX, which requires an optional
+        # dependency. Keep native async checkpointing as the default while
+        # allowing an explicit --async-strategy choice on versions that support it.
+        if parser.get_default("async_strategy") is not None:
+            parser.set_defaults(async_strategy="mcore")
 
         return parser
 
@@ -1719,7 +1769,7 @@ def parse_args(add_custom_arguments=None, *, return_restore_plan=False):
         for key, value in vars(sglang_ns).items():
             setattr(args, key, value)
 
-    restore_plan = slime_validate_args(args)
+    args, restore_plan = slime_validate_args(args)
 
     if not args.debug_rollout_only:
         megatron_validate_args(args)
@@ -1855,6 +1905,9 @@ def slime_validate_args(args):
     from slime.utils.ppo_utils import get_pg_loss_type
     from slime.utils.score_centering import validate_score_centering_args
 
+    args = copy.deepcopy(args)
+    if getattr(args, "rollout_cleanup_timeout", 60) <= 0:
+        raise ValueError("--rollout-cleanup-timeout must be positive")
     get_pg_loss_type(args)
     validate_score_centering_args(args)
     args.eval_datasets = _resolve_eval_datasets(args)
@@ -1910,7 +1963,7 @@ def slime_validate_args(args):
     # HuggingFace/finetune fallback can replace --load or disable optimizer load.
     from slime.data.checkpoint import resolve_checkpoint
 
-    restore_plan = resolve_checkpoint(args)
+    args, restore_plan = resolve_checkpoint(args)
     load_is_megatron = (
         args.load is not None
         and os.path.exists(args.load)
@@ -1965,8 +2018,12 @@ def slime_validate_args(args):
         "rollout_queue_lease_seconds",
         "rollout_queue_segment_mib",
         "rollout_io_concurrency",
+        "fully_async_group_prefetch_factor",
     ):
-        if getattr(args, name) <= 0:
+        value = getattr(args, name)
+        if name == "rollout_queue_segment_mib" and value is None:
+            continue
+        if value <= 0:
             raise ValueError(f"--{name.replace('_', '-')} must be positive")
 
     if args.rollout_data_transport == "straw":
@@ -2222,4 +2279,13 @@ def slime_validate_args(args):
     if args.eval_function_path is None:
         args.eval_function_path = args.rollout_function_path
 
-    return restore_plan
+    from slime.ray.training_recovery import configure_recovery_checkpoint, training_recovery_enabled
+
+    if training_recovery_enabled(args):
+        configure_recovery_checkpoint(args)
+        if args.save_debug_rollout_data is not None and "{rollout_id" not in args.save_debug_rollout_data:
+            raise ValueError(
+                "Trainer fault tolerance requires a unique --save-debug-rollout-data path containing {rollout_id}"
+            )
+
+    return args, restore_plan

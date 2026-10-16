@@ -11,7 +11,7 @@ Megatron keeps the trainable checkpoint in BF16/torch_dist format. SGLang serves
 | Feature | Status | Recommended Use |
 |---|---|---|
 | BF16 training + FP8 rollout/inference | Stable | Default path for large MoE RL recipes. Keeps training stable while reducing rollout memory and bandwidth. |
-| FP8 KV cache in SGLang rollout | Stable when supported by your SGLang version/GPU stack | Increase KV cache capacity for long-context or agentic rollout by passing `--sglang-kv-cache-dtype fp8_e4m3`. |
+| FP8 attention KV cache in SGLang rollout | Requires model, attention backend and GPU support | Increase attention KV capacity with `--sglang-kv-cache-dtype fp8_e4m3`; hybrid recurrent state is configured separately. |
 | INT4 rollout / INT4 QAT | Beta | Use when rollout memory/throughput pressure is high and the model path has been validated. |
 | FP8 training + FP8 rollout | Experimental | Useful for research on training/inference mismatch and throughput, but still has optimizer and checkpointing caveats. |
 
@@ -51,11 +51,13 @@ For long-context, multi-turn, or agentic workloads, KV cache capacity is often t
 
 This is a rollout-side setting. It does not change Megatron training precision; it increases effective SGLang KV cache capacity and can allow longer contexts or higher concurrency, subject to the accuracy/performance behavior of your SGLang version and GPU stack.
 
+For hybrid models such as Qwen3.8-27B and GLM-5.3-Flash, this flag applies only to attention-layer KV. Linear-attention recurrent state uses `--sglang-mamba-ssm-dtype`, while `--sglang-mamba-full-memory-ratio` controls the state-pool / attention-KV-pool memory ratio. FP8 KV does not imply FP8 recurrent or convolution state. The builder leaves these overrides unset by default, and offers FP32/BF16 recurrent state for Qwen3.8-27B. See [hybrid cache settings, architecture sources and memory derivation](rl-systems.md#hybrid-cache).
+
 ## FP8 Training with FP8 Rollout
 
 slime also supports experimental FP8 training paths. We observed that FP8 training plus FP8 inference can improve inference throughput and reduce training/inference mismatch in some settings. More details are available in [this blog](https://lmsys.org/blog/2025-11-25-fp8-rl/).
 
-### Quick Start
+### FP8 Quick Start
 
 1. Convert your Hugging Face model weights to FP8 format using `tools/convert_hf_to_fp8.py`.
 
@@ -96,7 +98,7 @@ Only `Linear` and `GroupLinear` layers in TransformerEngine use FP8. `embedding`
 
 INT4 STE (Straight-Through Estimator) training and INT4 inference can further reduce rollout memory and improve throughput. Treat this path as beta unless you have validated the target model and reward setup.
 
-### Quick Start
+### INT4 Quick Start
 
 1. Convert Hugging Face weights to INT4:
 
@@ -110,7 +112,7 @@ If you only need INT4 rollout, set `--hf-checkpoint` to the converted INT4 check
 
 2. Enable INT4 fake QAT:
 
-```json
+```bash
 RUNTIME_ENV_JSON="{
   \"env_vars\": {
     \"OPEN_TRAINING_INT4_FAKE_QAT_FLAG\": \"1\",

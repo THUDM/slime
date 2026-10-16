@@ -33,7 +33,8 @@ def test_pause_mode_and_disk_reload_preserve_cache_only_when_enabled(engine_modu
     engine.server_port = 30000
     requests = []
 
-    def post(url, *, json):
+    def post(url, *, json, timeout=None):
+        assert timeout is None  # Weight reloads keep their normal unbounded wait.
         requests.append((url, json))
         return types.SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"success": True})
 

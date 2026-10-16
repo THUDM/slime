@@ -70,6 +70,25 @@ def qwen3_5_hf_tensor(name: str, reader: SafetensorReader, hf_config) -> torch.T
     if rest.startswith("self_attention.linear_attn."):
         suffix = rest.removeprefix("self_attention.")
         return reader.get_tensor(f"{hf_layer_prefix}.{suffix}")
+    if rest == "self_attention.in_proj.weight":
+        return torch.cat(
+            [
+                reader.get_tensor(f"{hf_layer_prefix}.linear_attn.{name}.weight")
+                for name in ("in_proj_qkv", "in_proj_z", "in_proj_b", "in_proj_a")
+            ],
+            dim=0,
+        )
+    if rest == "self_attention.in_proj.layer_norm_weight":
+        return reader.get_tensor(f"{hf_layer_prefix}.input_layernorm.weight")
+    native_mapping = {
+        "self_attention.A_log": "A_log",
+        "self_attention.dt_bias": "dt_bias",
+        "self_attention.conv1d.weight": "conv1d.weight",
+        "self_attention.out_norm.weight": "norm.weight",
+        "self_attention.out_proj.weight": "out_proj.weight",
+    }
+    if rest in native_mapping:
+        return reader.get_tensor(f"{hf_layer_prefix}.linear_attn.{native_mapping[rest]}")
     if rest == "self_attention.input_layernorm.weight":
         return reader.get_tensor(f"{hf_layer_prefix}.input_layernorm.weight")
     if rest == "self_attention.linear_proj.weight":

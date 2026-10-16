@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import logging
@@ -39,13 +40,18 @@ def save_checkpoint(args, rollout_id, actor_model, critic_model, rollout_manager
     """Save training and rollout state, publishing a joint boundary for straw."""
     import ray
 
+    from slime.ray.training_recovery import training_recovery_enabled
+
     straw_checkpoint = (
         args.rollout_data_transport == "straw"
         and actor_trains
         and not args.debug_train_only
         and not args.debug_rollout_only
     )
-    force_sync = straw_checkpoint or args.release_train or rollout_id == args.num_rollout - 1
+    recoverable = training_recovery_enabled(args)
+    # A recovery boundary must wait for async model writes to finish before it
+    # can declare earlier batches safe to discard.
+    force_sync = straw_checkpoint or recoverable or args.release_train or rollout_id == args.num_rollout - 1
     if straw_checkpoint and (Path(args.save) / "rollout" / f"committed_{rollout_id}.json").exists():
         raise FileExistsError("Refusing to overwrite a committed straw checkpoint")
     if actor_trains:
@@ -58,10 +64,17 @@ def save_checkpoint(args, rollout_id, actor_model, critic_model, rollout_manager
         model_args = [actor_model.args]
         if args.use_critic:
             model_args.append(critic_model.args)
-        commit_checkpoint(args, rollout_id, model_args=model_args, restore_plan=restore_plan)
+        weight_version = ray.get(rollout_manager.get_weight_version.remote())
+        commit_checkpoint(
+            args, rollout_id, model_args=model_args, restore_plan=restore_plan, weight_version=weight_version
+        )
+    if actor_trains and recoverable:
+        # Notify recovery last. Any model, rollout, or joint-commit failure above
+        # must leave the previous boundary and its replay batches intact.
+        ray.get(rollout_manager.checkpoint_committed.remote(rollout_id))
 
 
-def commit_checkpoint(args, rollout_id, *, model_args, restore_plan=None):
+def commit_checkpoint(args, rollout_id, *, model_args, restore_plan=None, weight_version=None):
     """Publish the boundary after synchronous model saves and rollout snapshots.
 
     The driver waits for those calls; a save exception prevents this call.
@@ -76,8 +89,13 @@ def commit_checkpoint(args, rollout_id, *, model_args, restore_plan=None):
     files = {}
     resumable = True
     for config in model_args:
-        resumable &= not getattr(config, "no_save_optim", False) and not getattr(config, "no_save_rng", False)
         model = Path(config.save).resolve() / f"iter_{rollout_id:07d}"
+        stateless = getattr(config, "use_stateless_adam", False)
+        if stateless and not (model / "opt_param_scheduler.pt").is_file():
+            raise ValueError(f"Missing stateless Adam scheduler checkpoint: {model}")
+        resumable &= (stateless or not getattr(config, "no_save_optim", False)) and not getattr(
+            config, "no_save_rng", False
+        )
         if not model.is_relative_to(root):
             raise ValueError("Model checkpoint must be inside --save")
         payloads = [p for p in model.rglob("*") if p.is_file()]
@@ -115,9 +133,9 @@ def commit_checkpoint(args, rollout_id, *, model_args, restore_plan=None):
             "rollout_id": rollout_id,
             "files": files,
             "resumable": bool(resumable),
-            # train.py syncs once before rollout 0, then after each rollout.
-            # This save precedes the next sync, so version = rollout_id + 1.
-            "weight_version": rollout_id + 1,
+            # Manual restarts publish an extra initial sync, so the serving
+            # version can advance independently of the training rollout ID.
+            "weight_version": rollout_id + 1 if weight_version is None else weight_version,
             "rollout_data_dir": str(Path(args.rollout_data_dir).resolve()),
             "run_id": getattr(args, "rollout_queue_run_id", None) or "rollout",
         },
@@ -217,19 +235,21 @@ def _initial_configuration(args):
 
 
 def resolve_checkpoint(args):
-    """Translate ordinary load/save arguments into an isolated checkpoint branch.
+    """Return a configuration copy and an isolated checkpoint branch plan.
 
     Each checkpoint restore gets fresh queue authority and output files. A small
     current pointer lets callers keep using the same logical save directory.
     Before the first checkpoint, the original run can instead recover its WAL.
+    Resolution never rewrites the caller's requested paths, even on failure.
     """
+    args = copy.deepcopy(args)
     mode, dataset_cursor = "new", None
     if getattr(args, "rollout_data_transport", None) != "straw":
-        return RestorePlan()
+        return args, RestorePlan()
     if any(getattr(args, key, False) for key in ("debug_train_only", "debug_rollout_only", "load_debug_rollout_data")):
-        return RestorePlan()
+        return args, RestorePlan()
     if not getattr(args, "save", None):
-        return RestorePlan()
+        return args, RestorePlan()
     save_root = Path(args.save).resolve()
     current_path = save_root / "rollout/current.json"
     expected_current = current_path.read_text() if current_path.exists() else None
@@ -300,7 +320,7 @@ def resolve_checkpoint(args):
                 raise ValueError("Interrupted run requires its original straw pool")
             args.load, args.save = branch["initial_load"], str(active)
             args.rollout_data_dir = branch["pool"]
-            return RestorePlan("resume", str(save_root), expected_current, branch, branch["queue_id"])
+            return args, RestorePlan("resume", str(save_root), expected_current, branch, branch["queue_id"])
         selected = (
             (root, step, _read_checkpoint(root, step))
             if direct_commit
@@ -334,8 +354,12 @@ def resolve_checkpoint(args):
     }
     if selected is not None:
         root, step, value = selected
-        if any(getattr(args, key, False) for key in ("finetune", "no_load_optim", "no_load_rng")):
-            raise ValueError("Checkpoint restoration requires model, optimizer and RNG state")
+        if (
+            getattr(args, "finetune", False)
+            or getattr(args, "no_load_rng", False)
+            or (getattr(args, "no_load_optim", False) and not getattr(args, "use_stateless_adam", False))
+        ):
+            raise ValueError("Checkpoint restoration requires model, scheduler, RNG and any stateful optimizer state")
         if args.start_rollout_id is not None and args.start_rollout_id != step + 1:
             raise ValueError("--start-rollout-id differs from the checkpoint")
         if value is not None:
@@ -364,7 +388,7 @@ def resolve_checkpoint(args):
             )
         args.ckpt_step, args.start_rollout_id, args.load = step, step + 1, str(root)
         # Also seed the counter when an older model has no queue snapshot.
-        args.update_weight_start_version = step + 1
+        args.update_weight_start_version = value["weight_version"] if value is not None else step + 1
         branch["parent"] = {"directory": str(root), "step": step, "queue_snapshot": value is not None}
     args.save = str(destination)
-    return RestorePlan(mode, str(save_root), expected_current, branch, branch["queue_id"], dataset_cursor)
+    return args, RestorePlan(mode, str(save_root), expected_current, branch, branch["queue_id"], dataset_cursor)
