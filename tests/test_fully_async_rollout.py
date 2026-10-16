@@ -164,6 +164,7 @@ def test_dynamic_filter_drops_groups_and_refills(monkeypatch):
         rollout_data_transport="object-store",
         rollout_sample_filter_path=None,
         dynamic_sampling_filter_path="test.keep_odd",
+        reward_key=None,
     )
     result = asyncio.run(fa._generate_rollout_async(args, rollout_id=7, data_buffer=None))
 
@@ -172,6 +173,7 @@ def test_dynamic_filter_drops_groups_and_refills(monkeypatch):
     assert result.metrics["rollout/dynamic_filter/dropped_groups"] == 3
     assert result.metrics["rollout/dynamic_filter/dropped_ratio"] == 0.5
     assert result.metrics["rollout/dynamic_filter/drop_even"] == 3
+    assert result.metrics["rollout/raw_reward_before_filters"] == 0.5
     assert [gid for gid, _ in worker.get_completed_groups()] == [6, 7]
 
 
@@ -204,6 +206,7 @@ def test_uniform_reward_filter_replenishes_eight_sample_groups(monkeypatch, segm
     assert result.metrics["rollout/dynamic_filter/drop_zero_std_0.0"] == 1
     assert result.metrics["rollout/dynamic_filter/drop_zero_std_1.0"] == 1
     assert result.metrics["rollout/dynamic_filter/dropped_groups"] == 2
+    assert result.metrics["rollout/raw_reward_before_filters"] == 0.5
     assert [gid for gid, _ in worker.get_completed_groups()] == [4]
 
 

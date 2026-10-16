@@ -364,15 +364,19 @@ def test_fully_async_stores_groups_while_collecting_the_batch(args, monkeypatch)
 
 
 @pytest.mark.parametrize("all_samples_hook", [False, True])
-def test_synchronous_rollout_stores_during_generation_and_preserves_legacy_hook(args, monkeypatch, all_samples_hook):
+@pytest.mark.parametrize("dynamic_filter", [False, True])
+def test_synchronous_rollout_stores_during_generation_and_preserves_legacy_hook(
+    args, monkeypatch, all_samples_hook, dynamic_filter
+):
     import asyncio
 
     from slime.rollout import sglang_rollout as sr
 
     args.rollout_batch_size = 2
     args.n_samples_per_prompt = 1
-    args.over_sampling_batch_size = 2
-    args.dynamic_sampling_filter_path = None
+    args.over_sampling_batch_size = 3 if dynamic_filter else 2
+    args.dynamic_sampling_filter_path = "test.dynamic_filter" if dynamic_filter else None
+    args.reward_key = None
     args.rollout_all_samples_process_path = "test.all_samples" if all_samples_hook else None
     saved = []
     hook_calls = []
@@ -390,7 +394,9 @@ def test_synchronous_rollout_stores_during_generation_and_preserves_legacy_hook(
 
         def submit(groups):
             state.remaining_batch_size += len(groups)
-            state.pendings.update(asyncio.create_task(generate(index)) for index in (2, 1))
+            state.pendings.update(
+                asyncio.create_task(generate(index)) for index in ((2, 0, 1) if dynamic_filter else (2, 1))
+            )
 
         def pack(group, *a, **kwargs):
             ref = pack_rollout_group(group, *a, **kwargs)
@@ -403,7 +409,7 @@ def test_synchronous_rollout_stores_during_generation_and_preserves_legacy_hook(
 
         def hook(received_args, samples, source):
             hook_calls.append([group[0].index for group in samples])
-            samples[0][0].reward = 42
+            next(group[0] for group in samples if group[0].index == 1).reward = 42
 
         state.submit_generate_tasks = submit
         monkeypatch.setattr(sr, "GenerateState", lambda args: state)
@@ -411,7 +417,11 @@ def test_synchronous_rollout_stores_during_generation_and_preserves_legacy_hook(
 
         monkeypatch.setattr(rollout_transport, "pack_rollout_group", pack)
         monkeypatch.setattr(sr, "abort", abort)
-        monkeypatch.setattr(sr, "load_function", lambda path: hook)
+        monkeypatch.setattr(
+            sr,
+            "load_function",
+            lambda path: (lambda args, group: group[0].reward > 0) if path == "test.dynamic_filter" else hook,
+        )
         return await asyncio.wait_for(sr.generate_rollout_async(args, 0, lambda count: [None] * count), timeout=20)
 
     output, aborted = asyncio.run(exercise())
@@ -419,9 +429,14 @@ def test_synchronous_rollout_stores_during_generation_and_preserves_legacy_hook(
     assert aborted == []
     restored = load_rollout_samples(output.samples)
     assert [group[0].index for group in restored] == [1, 2]
-    assert hook_calls == ([[1, 2]] if all_samples_hook else [])
+    expected_hook_indices = [0, 1, 2] if dynamic_filter else [1, 2]
+    assert hook_calls == ([expected_hook_indices] if all_samples_hook else [])
     assert restored[0][0].reward == (42 if all_samples_hook else 1)
     assert len(saved) == 2
+    if dynamic_filter:
+        assert output.metrics["rollout/raw_reward_before_filters"] == 1.0
+    else:
+        assert "rollout/raw_reward_before_filters" not in output.metrics
 
 
 @pytest.mark.parametrize("form", ["raw", "wrapped", "stored", "accepted"])

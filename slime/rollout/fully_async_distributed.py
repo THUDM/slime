@@ -25,7 +25,7 @@ from slime.observability import logging_utils
 from slime.observability.rollout_data_utils import validate_rollout_id_annotated
 from slime.ray.utils import add_default_ray_env_vars
 from slime.rollout.base_types import finalize_rollout_groups, iter_samples, prepare_retry_group
-from slime.rollout.filter_hub.base_types import DynamicFilterOutput, call_dynamic_filter
+from slime.rollout.filter_hub.base_types import DynamicFilterOutput, MetricGatherer, call_dynamic_filter
 from slime.rollout.sample_hooks import rollout_context
 from slime.utils.async_utils import get_async_loop
 from slime.utils.http_utils import get_rollout_num_engines, init_http_client
@@ -162,6 +162,7 @@ class RolloutScheduler:
         groups = []
         dropped_count = 0
         drop_reasons = Counter()
+        metric_gatherer = MetricGatherer()
         with self.condition:
             if self.error is not None:
                 raise self.error
@@ -184,6 +185,7 @@ class RolloutScheduler:
                     self.condition.wait()
                     continue
                 group, verdict = self.ready.popleft()
+                metric_gatherer.on_group_completed(verdict)
                 # Fully async continuously replaces rejected groups. The
                 # finite-batch keep_when_insufficient fallback does not apply.
                 if not verdict.keep:
@@ -200,6 +202,7 @@ class RolloutScheduler:
         metrics = {f"rollout/dynamic_filter/drop_{reason}": count for reason, count in drop_reasons.items()}
         metrics["rollout/dynamic_filter/dropped_groups"] = dropped_count
         metrics["rollout/dynamic_filter/dropped_ratio"] = dropped_count / (len(groups) + dropped_count)
+        metrics.update(metric_gatherer.collect())
         # Publish a manifest of group references outside the scheduler lock.
         return finalize_rollout_groups(self.args, rollout_id, groups, metrics, controller=self.controller)
 

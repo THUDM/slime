@@ -691,10 +691,12 @@ def scheduler_factory(monkeypatch):
                 if worker in failed_workers:
                     raise ray.exceptions.RayActorError("worker process exited")
                 group = [Sample(index=index, group_index=index, metadata={"worker": worker})]
+                kept = not reject(index)
                 return group, DynamicFilterOutput(
-                    keep=not reject(index),
+                    keep=kept,
                     reason="test",
                     keep_when_insufficient=keep_when_insufficient,
+                    raw_reward_stats=(float(kept), 1),
                 )
 
             return execute
@@ -775,6 +777,7 @@ def test_rejected_groups_are_released_while_filling_batch(scheduler_factory, mon
         "rollout/dynamic_filter/drop_test": 512,
         "rollout/dynamic_filter/dropped_groups": 512,
         "rollout/dynamic_filter/dropped_ratio": 512 / 513,
+        "rollout/raw_reward_before_filters": 1 / 513,
     }
 
 
@@ -851,6 +854,8 @@ def test_fully_async_filter_never_keeps_rejected_groups_to_fill_batch(
     assert len(result.samples) == 12
     assert all(group[0].index >= 16 for group in result.samples)
     assert result.metrics["rollout/dynamic_filter/dropped_groups"] == 16
+    assert result.metrics["rollout/raw_reward_before_filters"] == pytest.approx(12 / 28)
+    assert scheduler.generate(1, prefetch=2).metrics["rollout/raw_reward_before_filters"] == 1.0
 
 
 def test_scheduler_retires_failed_worker_and_survivor_fills_batches(scheduler_factory):
@@ -920,8 +925,10 @@ def test_reader_adopts_checkpoint_tensors_from_another_pool(tmp_path, source_fac
 
 
 @pytest.mark.parametrize("fanout", [False, True])
-def test_distributed_completed_groups_keep_rewards_and_masks(monkeypatch, fanout):
+@pytest.mark.parametrize("keep", [False, True])
+def test_distributed_completed_groups_keep_rewards_and_masks(monkeypatch, fanout, keep):
     from slime.rollout import fully_async_distributed, sglang_rollout
+    from slime.rollout.filter_hub.base_types import DynamicFilterOutput
     from slime.rollout.fully_async_distributed import _GenerationActor
 
     sample = Sample(
@@ -934,8 +941,9 @@ def test_distributed_completed_groups_keep_rewards_and_masks(monkeypatch, fanout
         loss_mask=[1, 1],
         status=Sample.Status.COMPLETED,
     )
-    group = [[sample]] if fanout else [sample]
+    group = [[sample, sample]] if fanout else [sample]
     sample._queue_receipt = {"position": 7}
+    dropped = []
 
     async def get_samples(count):
         assert count == 1
@@ -949,19 +957,25 @@ def test_distributed_completed_groups_keep_rewards_and_masks(monkeypatch, fanout
 
     monkeypatch.setattr(sglang_rollout, "generate_and_rm_group", unexpected_generation)
     monkeypatch.setattr(fully_async_distributed, "publish_rollout_async", republish_buffered)
+    monkeypatch.setattr(
+        fully_async_distributed, "discard_rollout_group", lambda group, *a, **kw: dropped.append(group)
+    )
     worker = _GenerationActor.__new__(_GenerationActor)
     worker.running = True
     worker.args = SimpleNamespace(
         partial_rollout=True,
         mask_offpolicy_in_partial_rollout=True,
         rollout_data_transport="object-store",
+        reward_key=None,
     )
-    worker.dynamic_filter = None
+    worker.dynamic_filter = lambda *a: DynamicFilterOutput(keep=keep, reason="test")
     worker.data_source = SimpleNamespace(
         get_samples_async=get_samples, materialize_samples=lambda value: value, controller=object()
     )
-    result, _ = asyncio.run(worker._generate_group(3))
-    assert result is group
+    result, verdict = asyncio.run(worker._generate_group(3))
+    assert result is (group if keep else None)
+    assert verdict.raw_reward_stats == (0.0, 1)
+    assert dropped == ([] if keep else [group])
     assert sample.reward == 0.0
     assert sample.loss_mask == [1, 1]
     assert sample._queue_receipt == {"position": 7}
