@@ -1,0 +1,1697 @@
+diff --git a/python/sglang/kernels/aot/csrc/gemm/per_token_group_quant_8bit_v2.cu b/python/sglang/kernels/aot/csrc/gemm/per_token_group_quant_8bit_v2.cu
+index 4fbaf08e..5bad403d 100644
+--- a/python/sglang/kernels/aot/csrc/gemm/per_token_group_quant_8bit_v2.cu
++++ b/python/sglang/kernels/aot/csrc/gemm/per_token_group_quant_8bit_v2.cu
+@@ -35,7 +35,9 @@ __device__ __forceinline__ float silu(const float& val) {
+   float t = __tanhf(half);
+   return half * (1.0f + t);
+ #else
+-  return val / (1.0f + __expf(-val));
++  // Match sgl_kernel.silu_and_mul on SM90.  That kernel uses expf and
++  // exposes only the final SiLU*up BF16 rounding boundary.
++  return val / (1.0f + expf(-val));
+ #endif
+ }
+
+@@ -266,7 +268,8 @@ __global__ void per_token_group_quant_8bit_kernel(
+     // TODO can this be removed?
+     const int scale_expert_stride,
+     const int scale_hidden_stride,
+-    const int num_tokens_per_expert) {
++    const int num_tokens_per_expert,
++    const float max_8bit) {
+   using dst_dtype_info = DtypeInfo<DST_DTYPE>;
+   using scale_element_t = std::conditional_t<SCALE_UE8M0, uint8_t, float>;
+   static_assert(sizeof(scale_packed_t) % sizeof(scale_element_t) == 0);
+@@ -347,8 +350,11 @@ __global__ void per_token_group_quant_8bit_kernel(
+         for (uint32_t j = 0; j < INPUT_PRIMARY_VEC_SIZE; ++j) {
+           float val;
+           if constexpr (FUSE_SILU_AND_MUL) {
+-            // TODO maybe vectorize
+-            T val_lowprec = static_cast<T>(silu(static_cast<float>(input_primary_vec[j]))) * input_secondary_vec[j];
++            // Keep the same single visible low-precision boundary as the
++            // contiguous activation path.  Rounding SiLU before multiplying
++            // changes the second MoE GEMM's FP8 inputs.
++            T val_lowprec = static_cast<T>(
++                silu(static_cast<float>(input_primary_vec[j])) * static_cast<float>(input_secondary_vec[j]));
+             val = static_cast<float>(val_lowprec);
+             input_primary_vec[j] = val_lowprec;
+           } else {
+@@ -362,8 +368,15 @@ __global__ void per_token_group_quant_8bit_kernel(
+         local_absmax = GroupReduceMax<THREADS_PER_SUBWARP>(local_absmax, lane_id);
+
+         float y_scale, y_scale_inv;
+-        calculate_fp8_scales<SCALE_UE8M0, dst_dtype_info>(local_absmax, y_scale, y_scale_inv);
+-        float2 y_scale_repeated = {y_scale, y_scale};
++        if constexpr (SCALE_UE8M0) {
++          calculate_fp8_scales<true, dst_dtype_info>(local_absmax, y_scale, y_scale_inv);
++        } else {
++          // Preserve the scale and division sequence of the legacy unmasked
++          // quantizer.  Reciprocal reuse under -use_fast_math moves a few
++          // values across an FP8 rounding boundary.
++          y_scale_inv = __fdiv_rn(local_absmax, max_8bit);
++          y_scale = 1.0f / y_scale_inv;
++        }
+
+         if (lane_id == 0) {
+           *scale_output = extract_required_scale_format<SCALE_UE8M0>(y_scale_inv);
+@@ -373,19 +386,33 @@ __global__ void per_token_group_quant_8bit_kernel(
+         static_assert(sizeof(output_buf) == INPUT_PRIMARY_VEC_SIZE * sizeof(DST_DTYPE));
+
+         if constexpr (std::is_same_v<DST_DTYPE, c10::Float8_e4m3fn>) {
+-          const auto output_buf_ptr = reinterpret_cast<__nv_fp8x2_storage_t*>(&output_buf);
+-          static_assert(sizeof(output_buf) == INPUT_PRIMARY_VEC_SIZE / 2 * sizeof(__nv_fp8x2_storage_t));
+-          static_assert(INPUT_PRIMARY_VEC_SIZE % 2 == 0);
++          if constexpr (SCALE_UE8M0) {
++            const auto output_buf_ptr = reinterpret_cast<__nv_fp8x2_storage_t*>(&output_buf);
++            static_assert(sizeof(output_buf) == INPUT_PRIMARY_VEC_SIZE / 2 * sizeof(__nv_fp8x2_storage_t));
++            static_assert(INPUT_PRIMARY_VEC_SIZE % 2 == 0);
+
+ #pragma unroll
+-          for (uint32_t j = 0; j < INPUT_PRIMARY_VEC_SIZE; j += 2) {
+-            float2 inputx2 = {static_cast<float>(input_primary_vec[j]), static_cast<float>(input_primary_vec[j + 1])};
+-            float2 outputx2 = fmul2_rn(inputx2, y_scale_repeated);
++            for (uint32_t j = 0; j < INPUT_PRIMARY_VEC_SIZE; j += 2) {
++              float2 inputx2 = {
++                  static_cast<float>(input_primary_vec[j]), static_cast<float>(input_primary_vec[j + 1])};
++              float2 outputx2 = fmul2_rn(inputx2, {y_scale, y_scale});
+
+-            outputx2.x = fminf(fmaxf(outputx2.x, dst_dtype_info::MIN), dst_dtype_info::MAX);
+-            outputx2.y = fminf(fmaxf(outputx2.y, dst_dtype_info::MIN), dst_dtype_info::MAX);
++              outputx2.x = fminf(fmaxf(outputx2.x, dst_dtype_info::MIN), dst_dtype_info::MAX);
++              outputx2.y = fminf(fmaxf(outputx2.y, dst_dtype_info::MIN), dst_dtype_info::MAX);
+
+-            output_buf_ptr[j / 2] = __nv_cvt_float2_to_fp8x2(outputx2, __NV_SATFINITE, __NV_E4M3);
++              output_buf_ptr[j / 2] = __nv_cvt_float2_to_fp8x2(outputx2, __NV_SATFINITE, __NV_E4M3);
++            }
++          } else {
++            // Match the legacy SM90 quantizer's scalar conversion exactly;
++            // packed conversion makes a different tie choice for rare values.
++            const auto output_buf_ptr = reinterpret_cast<DST_DTYPE*>(&output_buf);
++#pragma unroll
++            for (uint32_t j = 0; j < INPUT_PRIMARY_VEC_SIZE; ++j) {
++              float val = static_cast<float>(input_primary_vec[j]);
++              float q_val =
++                  fminf(fmaxf(__fdiv_rn(val, y_scale_inv), dst_dtype_info::MIN), dst_dtype_info::MAX);
++              output_buf_ptr[j] = DST_DTYPE(q_val);
++            }
+           }
+         } else {
+           const auto output_buf_ptr = reinterpret_cast<DST_DTYPE*>(&output_buf);
+@@ -474,7 +501,8 @@ void sgl_per_token_group_quant_8bit_v2(
+         hidden_dim_num_groups,                                                                                       \
+         scale_expert_stride,                                                                                         \
+         scale_hidden_stride,                                                                                         \
+-        num_tokens_per_expert);                                                                                      \
++        num_tokens_per_expert,                                                                                       \
++        static_cast<float>(max_8bit));                                                                               \
+   } while (0)
+
+ #define LAUNCH_KERNEL(GROUP_SIZE, T, DST_DTYPE)                                                                     \
+@@ -497,13 +525,51 @@ void sgl_per_token_group_quant_8bit_v2(
+                 NaiveScheduler, GROUP_SIZE, THREADS_PER_SUBWARP, T, DST_DTYPE, uint32_t, true, true, true);         \
+           }                                                                                                         \
+         } else {                                                                                                    \
+-          LAUNCH_KERNEL_INNER(NaiveScheduler, GROUP_SIZE, THREADS_PER_SUBWARP, T, DST_DTYPE, uint32_t, true, true); \
++          if (masked_layout) {                                                                                       \
++            LAUNCH_KERNEL_INNER(                                                                                    \
++                MaskedLayoutScheduler, GROUP_SIZE, THREADS_PER_SUBWARP, T, DST_DTYPE, uint32_t, true, true, false); \
++          } else {                                                                                                  \
++            LAUNCH_KERNEL_INNER(                                                                                    \
++                NaiveScheduler, GROUP_SIZE, THREADS_PER_SUBWARP, T, DST_DTYPE, uint32_t, true, true, false);        \
++          }                                                                                                         \
+         }                                                                                                           \
+       } else {                                                                                                      \
+-        LAUNCH_KERNEL_INNER(NaiveScheduler, GROUP_SIZE, THREADS_PER_SUBWARP, T, DST_DTYPE, float, true);            \
++        if (fuse_silu_and_mul) {                                                                                     \
++          if (masked_layout) {                                                                                       \
++            LAUNCH_KERNEL_INNER(                                                                                    \
++                MaskedLayoutScheduler, GROUP_SIZE, THREADS_PER_SUBWARP, T, DST_DTYPE, float, true, false, true);    \
++          } else {                                                                                                  \
++            LAUNCH_KERNEL_INNER(                                                                                    \
++                NaiveScheduler, GROUP_SIZE, THREADS_PER_SUBWARP, T, DST_DTYPE, float, true, false, true);           \
++          }                                                                                                         \
++        } else {                                                                                                    \
++          if (masked_layout) {                                                                                       \
++            LAUNCH_KERNEL_INNER(                                                                                    \
++                MaskedLayoutScheduler, GROUP_SIZE, THREADS_PER_SUBWARP, T, DST_DTYPE, float, true, false, false);   \
++          } else {                                                                                                  \
++            LAUNCH_KERNEL_INNER(                                                                                    \
++                NaiveScheduler, GROUP_SIZE, THREADS_PER_SUBWARP, T, DST_DTYPE, float, true, false, false);          \
++          }                                                                                                         \
++        }                                                                                                           \
+       }                                                                                                             \
+     } else {                                                                                                        \
+-      LAUNCH_KERNEL_INNER(NaiveScheduler, GROUP_SIZE, THREADS_PER_SUBWARP, T, DST_DTYPE, float, false);             \
++      if (fuse_silu_and_mul) {                                                                                       \
++        if (masked_layout) {                                                                                         \
++          LAUNCH_KERNEL_INNER(                                                                                      \
++              MaskedLayoutScheduler, GROUP_SIZE, THREADS_PER_SUBWARP, T, DST_DTYPE, float, false, false, true);     \
++        } else {                                                                                                    \
++          LAUNCH_KERNEL_INNER(                                                                                      \
++              NaiveScheduler, GROUP_SIZE, THREADS_PER_SUBWARP, T, DST_DTYPE, float, false, false, true);            \
++        }                                                                                                           \
++      } else {                                                                                                      \
++        if (masked_layout) {                                                                                         \
++          LAUNCH_KERNEL_INNER(                                                                                      \
++              MaskedLayoutScheduler, GROUP_SIZE, THREADS_PER_SUBWARP, T, DST_DTYPE, float, false, false, false);    \
++        } else {                                                                                                    \
++          LAUNCH_KERNEL_INNER(                                                                                      \
++              NaiveScheduler, GROUP_SIZE, THREADS_PER_SUBWARP, T, DST_DTYPE, float, false, false, false);           \
++        }                                                                                                           \
++      }                                                                                                             \
+     }                                                                                                               \
+   } while (0)
+
+diff --git a/python/sglang/kernels/aot/tests/test_per_token_group_quant_8bit.py b/python/sglang/kernels/aot/tests/test_per_token_group_quant_8bit.py
+index 0432f4ec..e7db42a2 100644
+--- a/python/sglang/kernels/aot/tests/test_per_token_group_quant_8bit.py
++++ b/python/sglang/kernels/aot/tests/test_per_token_group_quant_8bit.py
+@@ -3,6 +3,7 @@ import sys
+
+ import pytest
+ import torch
++from sgl_kernel import sgl_per_token_group_quant_8bit, silu_and_mul
+ from sgl_kernel.test_utils import (
+     assert_all_close_or_tiny_diff,
+     create_per_token_group_quant_test_data,
+@@ -19,6 +20,94 @@ from sglang.srt.utils import is_hip
+ _is_hip = is_hip()
+ fp8_type_ = torch.float8_e4m3fnuz if _is_hip else torch.float8_e4m3fn
+
++
++@pytest.mark.parametrize("backend", ["jit", "jit_v2", "aot"])
++def test_masked_fused_silu_quant_matches_contiguous_sm90(backend):
++    if torch.cuda.get_device_capability() != (9, 0):
++        pytest.skip("This test covers the Hopper train-rollout alignment path")
++
++    torch.manual_seed(20260806)
++    num_experts, max_tokens, hidden_dim, group_size = 4, 128, 2048, 128
++    masked_m = torch.tensor([1, 17, 64, 127], device="cuda", dtype=torch.int32)
++    gate_up = torch.randn(
++        num_experts,
++        max_tokens,
++        hidden_dim * 2,
++        device="cuda",
++        dtype=torch.bfloat16,
++    )
++    gate_up[1, 3, :256] *= 7
++
++    if backend == "jit":
++        fused_q, fused_s = sglang_per_token_group_quant_8bit(
++            x=gate_up,
++            group_size=group_size,
++            dst_dtype=torch.float8_e4m3fn,
++            column_major_scales=True,
++            scale_tma_aligned=True,
++            scale_ue8m0=False,
++            fuse_silu_and_mul=True,
++            masked_m=masked_m,
++        )
++    else:
++        fused_q = torch.empty(
++            num_experts,
++            max_tokens,
++            hidden_dim,
++            device="cuda",
++            dtype=torch.float8_e4m3fn,
++        )
++        fused_s = torch.empty(
++            num_experts,
++            hidden_dim // group_size,
++            max_tokens,
++            device="cuda",
++            dtype=torch.float32,
++        ).transpose(-1, -2)
++        if backend == "jit_v2":
++            from sglang.kernels.ops.quantization.per_token_group_quant_8bit_v2 import (
++                per_token_group_quant_8bit_v2 as quantize,
++            )
++        else:
++            quantize = sgl_per_token_group_quant_8bit
++        quantize(
++            gate_up,
++            fused_q,
++            fused_s,
++            group_size,
++            1e-10,
++            -448.0,
++            448.0,
++            scale_ue8m0=False,
++            fuse_silu_and_mul=True,
++            masked_m=masked_m,
++        )
++
++    for expert, count in enumerate(masked_m.cpu().tolist()):
++        activated = silu_and_mul(gate_up[expert, :count].contiguous())
++        # This is the unfused quantizer used by Slime's training alignment path.
++        reference_q, reference_s = sglang_per_token_group_quant_8bit(
++            x=activated,
++            group_size=group_size,
++            dst_dtype=torch.float8_e4m3fn,
++            column_major_scales=True,
++            scale_tma_aligned=True,
++            scale_ue8m0=False,
++        )
++        torch.testing.assert_close(
++            fused_q[expert, :count].view(torch.uint8),
++            reference_q.view(torch.uint8),
++            rtol=0,
++            atol=0,
++        )
++        torch.testing.assert_close(
++            fused_s[expert, :count],
++            reference_s,
++            rtol=0,
++            atol=0,
++        )
++
++
+ configs = list(
+     itertools.product(
+         [1, 4, 16, 64, 127, 128, 512, 1024, 4096, 8192],  # num_tokens
+diff --git a/python/sglang/kernels/jit/csrc/gemm/per_token_group_quant.cuh b/python/sglang/kernels/jit/csrc/gemm/per_token_group_quant.cuh
+index f4c751d6..08d326a0 100644
+--- a/python/sglang/kernels/jit/csrc/gemm/per_token_group_quant.cuh
++++ b/python/sglang/kernels/jit/csrc/gemm/per_token_group_quant.cuh
+@@ -26,7 +26,7 @@ SGL_DEVICE float silu(const float val) {
+   const float half = 0.5f * val;
+   return half * (1.0f + __tanhf(half));
+ #else
+-  return val * __frcp_rn(1.0f + __expf(-val));
++  return val / (1.0f + expf(-val));
+ #endif
+ }
+
+@@ -282,8 +282,9 @@ struct QuantTrait {
+ #pragma unroll
+       for (uint32_t i = 0; i < kVecSize / 2; ++i) {
+         const auto gate = cast<float2>(in[i]);
+-        const auto act = cast<T2>(float2{detail::silu(gate.x), detail::silu(gate.y)});
+-        in[i] = __hmul2(act, up[i]);
++        // Match the standalone activation's single BF16/FP16 rounding boundary.
++        const auto act = float2{detail::silu(gate.x), detail::silu(gate.y)};
++        in[i] = cast<T2>(detail::mul2(act, cast<float2>(up[i])));
+       }
+     }
+
+@@ -318,12 +319,20 @@ struct QuantTrait {
+       }
+     } else {
+       // fp32 scale: multiply in fp32 (hmul2 brings too much precision loss)
+-      scale_inv = raw_scale;
++      scale_inv = __fdiv_rn(amax, kMaxValue);
+       const float quant_scale = kMaxValue / amax;
+       const float2 quant_scale2 = {quant_scale, quant_scale};
+ #pragma unroll
+       for (uint32_t i = 0; i < kVecSize / 2; ++i) {
+-        out[i] = WTrait::quant(detail::mul2(cast<float2>(in[i]), quant_scale2));
++        if constexpr (std::is_same_v<Q, fp8_e4m3_t>) {
++          // Match the patched v2 path's division and scalar FP8 conversion.
++          const auto value = cast<float2>(in[i]);
++          auto* packed = reinterpret_cast<Q*>(&out[i]);
++          packed[0] = Q(fminf(fmaxf(__fdiv_rn(value.x, scale_inv), -kMaxValue), kMaxValue));
++          packed[1] = Q(fminf(fmaxf(__fdiv_rn(value.y, scale_inv), -kMaxValue), kMaxValue));
++        } else {
++          out[i] = WTrait::quant(detail::mul2(cast<float2>(in[i]), quant_scale2));
++        }
+       }
+     }
+
+@@ -377,13 +386,19 @@ struct QuantTrait {
+       scale_inv = static_cast<uint8_t>(exp);
+       quant_scale = inv_scale_ue8m0(exp);
+     } else {
+-      scale_inv = raw_scale;
++      scale_inv = __fdiv_rn(amax, kMaxValue);
+       quant_scale = kMaxValue / amax;
+     }
+     const float2 quant_scale2 = {quant_scale, quant_scale};
+ #pragma unroll
+     for (uint32_t i = 0; i < kVecSize / 2; ++i) {
+-      out[i] = WTrait::quant(detail::mul2(float2{in(2 * i), in(2 * i + 1)}, quant_scale2));
++      if constexpr (!kUe8m0 && std::is_same_v<Q, fp8_e4m3_t>) {
++        auto* packed = reinterpret_cast<Q*>(&out[i]);
++        packed[0] = Q(fminf(fmaxf(__fdiv_rn(in(2 * i), scale_inv), -kMaxValue), kMaxValue));
++        packed[1] = Q(fminf(fmaxf(__fdiv_rn(in(2 * i + 1), scale_inv), -kMaxValue), kMaxValue));
++      } else {
++        out[i] = WTrait::quant(detail::mul2(float2{in(2 * i), in(2 * i + 1)}, quant_scale2));
++      }
+     }
+
+     out.store(params.output.get<Q>(expert_idx, token_idx) + group_offset, lane_id);
+diff --git a/python/sglang/kernels/jit/csrc/gemm/per_token_group_quant_8bit_v2.cuh b/python/sglang/kernels/jit/csrc/gemm/per_token_group_quant_8bit_v2.cuh
+index 0e0ca74a..59b4f42f 100644
+--- a/python/sglang/kernels/jit/csrc/gemm/per_token_group_quant_8bit_v2.cuh
++++ b/python/sglang/kernels/jit/csrc/gemm/per_token_group_quant_8bit_v2.cuh
+@@ -45,7 +45,9 @@ SGL_DEVICE float silu(const float& val) {
+   float t = __tanhf(half);
+   return half * (1.0f + t);
+ #else
+-  return val / (1.0f + __expf(-val));
++  // Match sgl_kernel.silu_and_mul on SM90.  That kernel uses expf and
++  // exposes only the final SiLU*up BF16 rounding boundary.
++  return val / (1.0f + expf(-val));
+ #endif
+ }
+
+@@ -297,7 +299,11 @@ __global__ void per_token_group_quant_8bit_v2_kernel(
+         for (uint32_t j = 0; j < INPUT_PRIMARY_VEC_SIZE; ++j) {
+           float val;
+           if constexpr (FUSE_SILU_AND_MUL) {
+-            T val_lowprec = static_cast<T>(silu(static_cast<float>(input_primary_vec[j]))) * input_secondary_vec[j];
++            // Keep the same single visible low-precision boundary as the
++            // contiguous activation path.  Rounding SiLU before multiplying
++            // changes the second MoE GEMM's FP8 inputs.
++            T val_lowprec = static_cast<T>(
++                silu(static_cast<float>(input_primary_vec[j])) * static_cast<float>(input_secondary_vec[j]));
+             val = static_cast<float>(val_lowprec);
+             input_primary_vec[j] = val_lowprec;
+           } else {
+@@ -309,12 +315,16 @@ __global__ void per_token_group_quant_8bit_v2_kernel(
+         local_absmax = GroupReduceMax<THREADS_PER_SUBWARP>(local_absmax);
+
+         float y_scale, y_scale_inv;
+-        // When SCALE_UE8M0, always quantize with the rounded (power-of-2) scale
+-        // — not with the exact scale followed by post-hoc rounding.
+-        // This matches the official DeepSeek-V4 kernel.py act_quant(scale_fmt="ue8m0")
+-        // and avoids a scale mismatch between quantization and downstream GEMM dequant,
+-        // which otherwise amplifies error ~14x and degrades EAGLE accept rate on Blackwell.
+-        calculate_fp8_scales<SCALE_UE8M0, dst_dtype_info>(local_absmax, y_scale, y_scale_inv);
++        if constexpr (SCALE_UE8M0) {
++          // Quantize with the rounded (power-of-2) scale on Blackwell.
++          calculate_fp8_scales<true, dst_dtype_info>(local_absmax, y_scale, y_scale_inv);
++        } else {
++          // Preserve the scale and division sequence of the legacy unmasked
++          // quantizer.  Reciprocal reuse under --use_fast_math moves a few
++          // values across an FP8 rounding boundary.
++          y_scale_inv = __fdiv_rn(local_absmax, dst_dtype_info::MAX);
++          y_scale = 1.0f / y_scale_inv;
++        }
+         if (lane_id == 0) {
+           *scale_output = extract_required_scale_format < SCALE_UE8M0 && IS_COLUMN_MAJOR > (y_scale_inv);
+         }
+@@ -322,14 +332,28 @@ __global__ void per_token_group_quant_8bit_v2_kernel(
+
+         int4 output_buf;
+         if constexpr (std::is_same_v<DST_DTYPE, fp8_e4m3_t>) {
+-          const auto output_buf_ptr = reinterpret_cast<__nv_fp8x2_storage_t*>(&output_buf);
++          if constexpr (SCALE_UE8M0) {
++            const auto output_buf_ptr = reinterpret_cast<__nv_fp8x2_storage_t*>(&output_buf);
++#pragma unroll
++            for (uint32_t j = 0; j < INPUT_PRIMARY_VEC_SIZE; j += 2) {
++              float2 inputx2 = {
++                  static_cast<float>(input_primary_vec[j]), static_cast<float>(input_primary_vec[j + 1])};
++              float2 outputx2 = fmul2_rn(inputx2, y_scale_repeated);
++              outputx2.x = fminf(fmaxf(outputx2.x, dst_dtype_info::MIN), dst_dtype_info::MAX);
++              outputx2.y = fminf(fmaxf(outputx2.y, dst_dtype_info::MIN), dst_dtype_info::MAX);
++              output_buf_ptr[j / 2] = __nv_cvt_float2_to_fp8x2(outputx2, __NV_SATFINITE, __NV_E4M3);
++            }
++          } else {
++            // Match the legacy SM90 quantizer's scalar conversion exactly;
++            // packed conversion makes a different tie choice for rare values.
++            const auto output_buf_ptr = reinterpret_cast<DST_DTYPE*>(&output_buf);
+ #pragma unroll
+-          for (uint32_t j = 0; j < INPUT_PRIMARY_VEC_SIZE; j += 2) {
+-            float2 inputx2 = {static_cast<float>(input_primary_vec[j]), static_cast<float>(input_primary_vec[j + 1])};
+-            float2 outputx2 = fmul2_rn(inputx2, y_scale_repeated);
+-            outputx2.x = fminf(fmaxf(outputx2.x, dst_dtype_info::MIN), dst_dtype_info::MAX);
+-            outputx2.y = fminf(fmaxf(outputx2.y, dst_dtype_info::MIN), dst_dtype_info::MAX);
+-            output_buf_ptr[j / 2] = __nv_cvt_float2_to_fp8x2(outputx2, __NV_SATFINITE, __NV_E4M3);
++            for (uint32_t j = 0; j < INPUT_PRIMARY_VEC_SIZE; ++j) {
++              float val = static_cast<float>(input_primary_vec[j]);
++              float q_val =
++                  fminf(fmaxf(__fdiv_rn(val, y_scale_inv), dst_dtype_info::MIN), dst_dtype_info::MAX);
++              output_buf_ptr[j] = fp8_e4m3_t(q_val);
++            }
+           }
+         } else {
+           const auto output_buf_ptr = reinterpret_cast<DST_DTYPE*>(&output_buf);
+@@ -461,16 +485,56 @@ struct PerTokenGroupQuant8bitV2Kernel {
+           else
+             launch_with_config(TypeTag<NaiveScheduler>{}, std::true_type{}, std::true_type{}, std::true_type{});
+         } else {
+-          launch_with_config(TypeTag<NaiveScheduler>{}, std::true_type{}, std::true_type{}, std::false_type{});
++          if (masked_layout)
++            launch_with_config(
++                TypeTag<MaskedLayoutScheduler>{}, std::true_type{}, std::true_type{}, std::false_type{});
++          else
++            launch_with_config(TypeTag<NaiveScheduler>{}, std::true_type{}, std::true_type{}, std::false_type{});
+         }
+       } else {
+-        launch_with_config(TypeTag<NaiveScheduler>{}, std::true_type{}, std::false_type{}, std::false_type{});
++        if (fuse_silu_and_mul) {
++          if (masked_layout)
++            launch_with_config(
++                TypeTag<MaskedLayoutScheduler>{}, std::true_type{}, std::false_type{}, std::true_type{});
++          else
++            launch_with_config(TypeTag<NaiveScheduler>{}, std::true_type{}, std::false_type{}, std::true_type{});
++        } else {
++          if (masked_layout)
++            launch_with_config(
++                TypeTag<MaskedLayoutScheduler>{}, std::true_type{}, std::false_type{}, std::false_type{});
++          else
++            launch_with_config(TypeTag<NaiveScheduler>{}, std::true_type{}, std::false_type{}, std::false_type{});
++        }
+       }
+     } else {
+       if (scale_ue8m0) {
+-        launch_with_config(TypeTag<NaiveScheduler>{}, std::false_type{}, std::true_type{}, std::false_type{});
++        if (fuse_silu_and_mul) {
++          if (masked_layout)
++            launch_with_config(
++                TypeTag<MaskedLayoutScheduler>{}, std::false_type{}, std::true_type{}, std::true_type{});
++          else
++            launch_with_config(TypeTag<NaiveScheduler>{}, std::false_type{}, std::true_type{}, std::true_type{});
++        } else {
++          if (masked_layout)
++            launch_with_config(
++                TypeTag<MaskedLayoutScheduler>{}, std::false_type{}, std::true_type{}, std::false_type{});
++          else
++            launch_with_config(TypeTag<NaiveScheduler>{}, std::false_type{}, std::true_type{}, std::false_type{});
++        }
+       } else {
+-        launch_with_config(TypeTag<NaiveScheduler>{}, std::false_type{}, std::false_type{}, std::false_type{});
++        if (fuse_silu_and_mul) {
++          if (masked_layout)
++            launch_with_config(
++                TypeTag<MaskedLayoutScheduler>{}, std::false_type{}, std::false_type{}, std::true_type{});
++          else
++            launch_with_config(TypeTag<NaiveScheduler>{}, std::false_type{}, std::false_type{}, std::true_type{});
++        } else {
++          if (masked_layout)
++            launch_with_config(
++                TypeTag<MaskedLayoutScheduler>{}, std::false_type{}, std::false_type{}, std::false_type{});
++          else
++            launch_with_config(TypeTag<NaiveScheduler>{}, std::false_type{}, std::false_type{}, std::false_type{});
++        }
+       }
+     }
+   }
+diff --git a/python/sglang/kernels/jit/glm5_router_gemm.py b/python/sglang/kernels/jit/glm5_router_gemm.py
+new file mode 100644
+index 00000000..4d336a34
+--- /dev/null
++++ b/python/sglang/kernels/jit/glm5_router_gemm.py
+@@ -0,0 +1,37 @@
++from __future__ import annotations
++
++from typing import TYPE_CHECKING
++
++import torch
++
++from sglang.kernels.jit.utils import cache_once, load_jit
++from sglang.kernels.kernel_api_logging import debug_kernel_api
++
++if TYPE_CHECKING:
++    from tvm_ffi.module import Module
++
++
++@cache_once
++def _jit_glm5_router_gemm_module() -> Module:
++    return load_jit(
++        "glm5_router_gemm",
++        cuda_files=["gemm/glm5_router_gemm.cuh"],
++        cuda_wrappers=[("glm5_router_gemm", "glm5_router_gemm")],
++        extra_cuda_cflags=["-DSGLANG_NAMESPACED_KERNELS=1"],
++    )
++
++
++@debug_kernel_api
++def glm5_router_gemm(
++    hidden_states: torch.Tensor, router_weight: torch.Tensor
++) -> torch.Tensor:
++    """BF16 [M, 6144] x BF16 [256, 6144]^T -> FP32 [M, 256]."""
++    output = torch.empty(
++        (hidden_states.shape[0], 256),
++        dtype=torch.float32,
++        device=hidden_states.device,
++    )
++    _jit_glm5_router_gemm_module().glm5_router_gemm(
++        output, hidden_states, router_weight
++    )
++    return output
+diff --git a/python/sglang/kernels/jit/utils/compile/paths.py b/python/sglang/kernels/jit/utils/compile/paths.py
+index 6e4caf22..87a4d3cc 100644
+--- a/python/sglang/kernels/jit/utils/compile/paths.py
++++ b/python/sglang/kernels/jit/utils/compile/paths.py
+@@ -8,6 +8,7 @@ from __future__ import annotations
+
+ import importlib.util
+ import pathlib
++import os
+ from typing import List
+
+ from sglang.kernels.jit.utils.common import cache_once
+@@ -27,6 +28,30 @@ def _resolve_kernel_path() -> pathlib.Path:
+
+
+ KERNEL_PATH = _resolve_kernel_path()
++def _extra_kernel_roots() -> List[pathlib.Path]:
++    """Additional kernel roots (each with a ``csrc/`` subdir) searched after
++    sglang's own tree, from ``$SGLANG_JIT_KERNEL_EXTRA_PATH`` (os.pathsep-
++    separated). Lets a downstream package (e.g. slime) host custom ``.cuh``
++    sources and have sglang's JIT try-cache compile them, without sglang
++    importing that package."""
++    raw = os.environ.get("SGLANG_JIT_KERNEL_EXTRA_PATH", "")
++    return [pathlib.Path(p).expanduser().resolve() for p in raw.split(os.pathsep) if p]
++
++
++def _resolve_source_file(rel: str) -> str:
++    """Resolve a ``csrc``-relative source file: sglang's own tree first, then
++    any extra kernel roots. Falls back to sglang's path (a later compile step
++    then raises with a clear location)."""
++    primary = (KERNEL_PATH / "csrc" / rel).resolve()
++    if primary.is_file():
++        return str(primary)
++    for root in _extra_kernel_roots():
++        candidate = (root / "csrc" / rel).resolve()
++        if candidate.is_file():
++            return str(candidate)
++    return str(primary)
++
++
+ DEFAULT_INCLUDE: List[str] = [str(KERNEL_PATH / "include")]
+ DEFAULT_CFLAGS: List[str] = ["-std=c++20", "-O3"]
+ DEFAULT_LDFLAGS: List[str] = []
+diff --git a/python/sglang/kernels/jit/utils/compile/spec.py b/python/sglang/kernels/jit/utils/compile/spec.py
+index c435dea9..d78bd549 100644
+--- a/python/sglang/kernels/jit/utils/compile/spec.py
++++ b/python/sglang/kernels/jit/utils/compile/spec.py
+@@ -15,7 +15,7 @@ from typing import List, Optional, Tuple
+
+ import msgspec
+
+-from sglang.kernels.jit.utils.compile.paths import KERNEL_PATH
++from sglang.kernels.jit.utils.compile.paths import _resolve_source_file
+
+ _MODULE_NAME_PREFIX = "sgl_kernel_jit_"
+
+@@ -128,7 +128,7 @@ def resolve_sources(files: List[str] | None) -> Tuple[str, ...]:
+         str(
+             path.resolve()
+             if path.is_absolute()
+-            else (KERNEL_PATH / "csrc" / path).resolve()
++            else _resolve_source_file(str(path))
+         )
+         for path in map(pathlib.Path, files or [])
+     )
+diff --git a/python/sglang/srt/arg_groups/choices.py b/python/sglang/srt/arg_groups/choices.py
+index 809e33ff..df021440 100644
+--- a/python/sglang/srt/arg_groups/choices.py
++++ b/python/sglang/srt/arg_groups/choices.py
+@@ -109,6 +109,7 @@ DRAFT_ATTENTION_BACKEND_CHOICES = [
+ ]
+
+ DETERMINISTIC_ATTENTION_BACKEND_CHOICES = [
++    "dsa",
+     "ascend",
+     "fa3",
+     "fa4",
+@@ -241,7 +242,7 @@ add_deterministic_attention_backend_choices = (
+     DETERMINISTIC_ATTENTION_BACKEND_CHOICES.extend
+ )
+
+-RADIX_SUPPORTED_DETERMINISTIC_ATTENTION_BACKEND = ["ascend", "fa3", "fa4", "triton"]
++RADIX_SUPPORTED_DETERMINISTIC_ATTENTION_BACKEND = ["dsa", "ascend", "fa3", "fa4", "triton"]
+ add_radix_supported_deterministic_attention_backend_choices = (
+     RADIX_SUPPORTED_DETERMINISTIC_ATTENTION_BACKEND.extend
+ )
+diff --git a/python/sglang/srt/arg_groups/field_order.py b/python/sglang/srt/arg_groups/field_order.py
+index 7665e2a8..498b1dcb 100644
+--- a/python/sglang/srt/arg_groups/field_order.py
++++ b/python/sglang/srt/arg_groups/field_order.py
+@@ -473,6 +473,7 @@ POSITIONAL_FIELD_ORDER = (
+     "prefill_delayer_max_delay_ms",
+     "min_free_slots_delay",
+     "enable_deterministic_inference",
++    "enable_fp32_moe_router",
+     "rl_on_policy_target",
+     "kv_canary",
+     "kv_canary_real_data",
+diff --git a/python/sglang/srt/arg_groups/fields/exec_.py b/python/sglang/srt/arg_groups/fields/exec_.py
+index 20196e94..f8f230bb 100644
+--- a/python/sglang/srt/arg_groups/fields/exec_.py
++++ b/python/sglang/srt/arg_groups/fields/exec_.py
+@@ -1032,6 +1032,7 @@ class ExecDeterministic(msgspec.Struct):
+     enable_deterministic_inference: A[
+         bool, "Enable deterministic inference mode with batch invariant ops."
+     ] = False
++    enable_fp32_moe_router: A[bool, "Compute DeepSeek-style MoE router logits in FP32."] = False
+     rl_on_policy_target: A[
+         Optional[str],
+         Arg(
+diff --git a/python/sglang/srt/batch_invariant_ops/__init__.py b/python/sglang/srt/batch_invariant_ops/__init__.py
+index 3caa60f0..4a387c78 100644
+--- a/python/sglang/srt/batch_invariant_ops/__init__.py
++++ b/python/sglang/srt/batch_invariant_ops/__init__.py
+@@ -10,6 +10,7 @@ from .batch_invariant_ops import (
+     matmul_persistent,
+     mean_dim,
+     rms_norm_batch_invariant,
++    router_gemm_batch_invariant,
+     set_batch_invariant_mode,
+ )
+
+@@ -26,4 +27,5 @@ __all__ = [
+     "get_batch_invariant_attention_block_size",
+     "AttentionBlockSize",
+     "rms_norm_batch_invariant",
++    "router_gemm_batch_invariant",
+ ]
+diff --git a/python/sglang/srt/batch_invariant_ops/batch_invariant_ops.py b/python/sglang/srt/batch_invariant_ops/batch_invariant_ops.py
+index b6a7a584..f9c6ef79 100644
+--- a/python/sglang/srt/batch_invariant_ops/batch_invariant_ops.py
++++ b/python/sglang/srt/batch_invariant_ops/batch_invariant_ops.py
+@@ -216,7 +216,7 @@ def _matmul_persistent_triton(
+             "num_warps": 8,
+         },
+         torch.float32: {
+-            "BLOCK_SIZE_M": 128,
++            "BLOCK_SIZE_M": 16 if M <= 16 else 128,
+             "BLOCK_SIZE_N": 128,
+             "BLOCK_SIZE_K": 32,
+             "GROUP_SIZE_M": 8,
+@@ -339,6 +339,68 @@ def matmul_persistent(
+     return _matmul_persistent_triton(a=a, b=b, bias=bias, out_dtype=out_dtype)
+
+
++def router_gemm_batch_invariant(
++    hidden_states: torch.Tensor,
++    router_weight: torch.Tensor,
++) -> torch.Tensor:
++    """BF16 router GEMM with a fixed K reduction and FP32 logits."""
++    if hidden_states.ndim != 2 or router_weight.ndim != 2:
++        raise ValueError(
++            "router_gemm_batch_invariant expects 2D tensors, got "
++            f"{hidden_states.shape=} and {router_weight.shape=}"
++        )
++    if hidden_states.shape[1] != router_weight.shape[1]:
++        raise ValueError(
++            "Incompatible router dimensions: "
++            f"{hidden_states.shape=} and {router_weight.shape=}"
++        )
++
++    supported_shape = (router_weight.shape[0], router_weight.shape[1]) in {
++        (160, 5120),
++        (256, 6144),
++        (256, 7168),
++        (384, 7168),
++    }
++    use_fast_kernel = (
++        hidden_states.is_cuda
++        and hidden_states.dtype == torch.bfloat16
++        and router_weight.dtype == torch.bfloat16
++        and hidden_states.is_contiguous()
++        and router_weight.is_contiguous()
++        and supported_shape
++        and torch.cuda.get_device_capability(hidden_states.device)[0] >= 9
++    )
++    if not use_fast_kernel:
++        return matmul_persistent(
++            hidden_states.to(torch.float32),
++            router_weight.to(torch.float32).t(),
++        )
++
++    if (router_weight.shape[0], router_weight.shape[1]) == (256, 6144):
++        from sglang.kernels.jit.glm5_router_gemm import (
++            glm5_router_gemm as fast_router_gemm,
++        )
++    else:
++        from sgl_kernel import dsv3_router_gemm
++
++        def fast_router_gemm(input_chunk, weight):
++            return dsv3_router_gemm(input_chunk, weight, out_dtype=torch.float32)
++
++    if hidden_states.shape[0] == 0:
++        return torch.empty(
++            (0, router_weight.shape[0]),
++            dtype=torch.float32,
++            device=hidden_states.device,
++        )
++
++    chunk_size = 16
++    chunks = [
++        fast_router_gemm(hidden_states[start : start + chunk_size], router_weight)
++        for start in range(0, hidden_states.shape[0], chunk_size)
++    ]
++    return chunks[0] if len(chunks) == 1 else torch.cat(chunks, dim=0)
++
++
+ @triton.jit
+ def _log_softmax_kernel(
+     input_ptr,
+diff --git a/python/sglang/srt/debug_utils/tensor_dump_forward_hook.py b/python/sglang/srt/debug_utils/tensor_dump_forward_hook.py
+index cd841b51..10a29c61 100644
+--- a/python/sglang/srt/debug_utils/tensor_dump_forward_hook.py
++++ b/python/sglang/srt/debug_utils/tensor_dump_forward_hook.py
+@@ -33,7 +33,22 @@ class TensorDumper:
+         pp_rank: int,
+     ):
+         self._dump_layers = dump_layers
++        self._layer_outputs_only = (
++            os.getenv("SGLANG_TENSOR_DUMP_LAYER_OUTPUTS_ONLY", "0") == "1"
++        )
++        self._module_suffixes = tuple(
++            suffix.strip()
++            for suffix in os.getenv(
++                "SGLANG_TENSOR_DUMP_MODULE_SUFFIXES", ""
++            ).split(",")
++            if suffix.strip()
++        )
+         self._forward_pass_id = 0
++        self._chunk_size = max(
++            1, int(os.getenv("SGLANG_TENSOR_DUMP_CHUNK_SIZE", "1"))
++        )
++        self._chunk_id = 0
++        self._chunk_records = []
+         self._pid = os.getpid()
+         self._current_tensors = {}
+         self._base_dir = Path(dump_dir)
+@@ -58,14 +73,21 @@ class TensorDumper:
+         elif isinstance(tensor_item, LogitsProcessorOutput):
+             self._current_tensors[name] = tensor_item.next_token_logits.cpu()
+         elif isinstance(tensor_item, ForwardBatch):
+-            self._current_tensors[name + ".forward_batch_info.input_ids"] = (
+-                tensor_item.input_ids.cpu()
+-            )
+-            self._current_tensors[name + ".forward_batch_info.seq_lens"] = (
+-                tensor_item.seq_lens.cpu()
+-            )
+-            self._current_tensors[name + ".forward_batch_info.positions"] = (
+-                tensor_item.positions.cpu()
++            prefix = name + ".forward_batch_info."
++            for field_name in (
++                "input_ids",
++                "seq_lens",
++                "positions",
++                "req_pool_indices",
++                "extend_seq_lens",
++                "extend_prefix_lens",
++            ):
++                value = getattr(tensor_item, field_name, None)
++                if isinstance(value, torch.Tensor):
++                    self._current_tensors[prefix + field_name] = value.cpu()
++            self._current_tensors[prefix + "rids"] = tensor_item.rids
++            self._current_tensors[prefix + "forward_mode"] = str(
++                tensor_item.forward_mode
+             )
+         elif isinstance(tensor_item, PPProxyTensors):
+             for tensor_name in tensor_item.tensors.keys():
+@@ -78,11 +100,21 @@ class TensorDumper:
+     def dump_current_tensors(self):
+         if len(self._current_tensors) == 0:
+             return
+-        tensor_file_for_pass = self._process_dir / f"Pass{self._forward_pass_id:05d}.pt"
++        if self._layer_outputs_only and self._chunk_size > 1:
++            self._chunk_records.append(self._current_tensors)
++            tensor_file_for_pass = self._process_dir / f"Chunk{self._chunk_id:05d}.pt"
++            torch.save(self._chunk_records, str(tensor_file_for_pass))
++            if len(self._chunk_records) == self._chunk_size:
++                self._chunk_records = []
++                self._chunk_id += 1
++        else:
++            tensor_file_for_pass = (
++                self._process_dir / f"Pass{self._forward_pass_id:05d}.pt"
++            )
++            torch.save(self._current_tensors, str(tensor_file_for_pass))
+         logger.info(
+             f"Dump {self._forward_pass_id:05d}th pass to {tensor_file_for_pass}"
+         )
+-        torch.save(self._current_tensors, str(tensor_file_for_pass))
+         self._current_tensors = {}
+         self._forward_pass_id += 1
+
+@@ -100,21 +132,31 @@ class TensorDumper:
+                     top_level_model = True
+             else:
+                 cur_name = prefix + "." + name
+-            if (
+-                self._dump_layers is not None
+-                and name.isdigit()
+-                and prefix == layers_prefix
+-            ):
++            is_layer_module = name.isdigit() and prefix == layers_prefix
++            if self._dump_layers is not None and is_layer_module:
+                 # If we only need n layers, skip the reset layers.
+                 # Most models' layout is like model.layers.0.
+                 cur_layer = int(name)
+                 if cur_layer not in self._dump_layers:
+                     continue
+             if module is not None:
++                if is_layer_module and self._layer_outputs_only:
++                    module.register_forward_hook(
++                        self._dump_layer_hook(cur_name), with_kwargs=True
++                    )
++                    if not self._module_suffixes:
++                        continue
+                 _, sub_count = self._add_hook_recursive(
+                     module, cur_name, top_level_module_name, layers_module_name
+                 )
+-                if sub_count == 0 or top_level_model:
++                selected_module = any(
++                    cur_name.endswith(suffix) for suffix in self._module_suffixes
++                )
++                if (
++                    top_level_model
++                    or selected_module
++                    or (sub_count == 0 and not self._layer_outputs_only)
++                ):
+                     # Avoid duplicated output hooks, e.g. self_attn may contain:
+                     # self_attn.qkv_proj, self_attn.attn & self_attn.o_proj.
+                     # Therefore, we do not need to add output hooks for self_attn,
+@@ -124,16 +166,40 @@ class TensorDumper:
+                     )
+         return model_top_level_module_matched, len(model._modules.items())
+
++    def _dump_layer_hook(self, tensor_name):
++        def inner_dump_hook(module, args, kwargs, output):
++            forward_batch = next(
++                (
++                    item
++                    for item in (*args, *kwargs.values())
++                    if isinstance(item, ForwardBatch)
++                ),
++                None,
++            )
++            stream = getattr(forward_batch, "residual_stream", None)
++            if stream is not None:
++                # Stage-boundary decoders carry their residual on ForwardBatch;
++                # the second returned tensor may be top-k indices, not a residual.
++                # Snapshot the complete value without consuming the stream.
++                hidden_states = output[0] if isinstance(output, tuple) else output
++                self._current_tensors[tensor_name] = {
++                    "residual_sum": stream.snapshot(hidden_states).cpu()
++                }
++            elif output is not None:
++                self.add_tensor(tensor_name, output)
++
++        return inner_dump_hook
++
+     def _dump_hook(self, tensor_name, do_dump):
+         def inner_dump_hook(module, input, output):
++            if output is not None and not (do_dump and self._layer_outputs_only):
++                self.add_tensor(tensor_name, output)
+             if do_dump:
+                 # This is the top-level model, so we will record the input for it.
+                 for item in input:
+                     if isinstance(item, ForwardBatch):
+                         self.add_tensor(tensor_name, item)
+                 self.dump_current_tensors()
+-            if output is not None:
+-                self.add_tensor(tensor_name, output)
+
+         return inner_dump_hook
+
+diff --git a/python/sglang/srt/environ.py b/python/sglang/srt/environ.py
+index 787234e0..c6ed3789 100644
+--- a/python/sglang/srt/environ.py
++++ b/python/sglang/srt/environ.py
+@@ -1199,6 +1199,7 @@ class Envs:
+     SGLANG_DG_USE_NVRTC = EnvBool(False)
+     SGLANG_USE_DEEPGEMM_BMM = EnvBool(False)
+     SGLANG_DEEPGEMM_SANITY_CHECK = EnvBool(False)
++    SGLANG_DEEPGEMM_BATCH_INVARIANT = EnvBool(False)
+     SGLANG_DEEPGEMM_PDL = EnvBool(True)
+     SGLANG_PP_PARALLEL_DEEPGEMM_WARMUP = EnvBool(False)
+
+@@ -1255,6 +1256,7 @@ class Envs:
+     SGLANG_DEEPEP_V2_NUM_MAX_DISPATCH_TOKENS_PER_RANK = EnvInt(128)
+     # 0 lets ElasticBuffer select its theoretical communication SM/QP counts.
+     SGLANG_DEEPEP_V2_NUM_SMS = EnvInt(0)
++    SGLANG_DEEPEP_LL_PREFILL_STAGING = EnvBool(False)
+     SGLANG_DEEPEP_LL_COMBINE_SEND_NUM_SMS = EnvInt(32)
+     # A5 DSV4 FP4 + DeepEP low-latency dispatch wire format. This is read only
+     # by the model-specific dispatcher configuration; all other paths retain
+diff --git a/python/sglang/srt/layers/attention/dsa/dsa_indexer.py b/python/sglang/srt/layers/attention/dsa/dsa_indexer.py
+index 557ae6b8..158e0a5e 100644
+--- a/python/sglang/srt/layers/attention/dsa/dsa_indexer.py
++++ b/python/sglang/srt/layers/attention/dsa/dsa_indexer.py
+@@ -432,6 +432,19 @@ class Indexer(DSANPUIndexerMixin, BaseFusedOp):
+         if _use_aiter and _is_gfx95_supported and isinstance(x, tuple) and len(x) == 3:
+             x = x[2]
+         if _is_cuda:
++            if get_exec().deterministic.enable_deterministic_inference:
++                flat_input = x.reshape(-1, x.shape[-1]).contiguous()
++                output = torch.empty(
++                    (flat_input.shape[0], self.weights_proj.weight.shape[0]),
++                    dtype=torch.float32,
++                    device=flat_input.device,
++                )
++                deep_gemm_wrapper.gemm_nt_bf16bf16f32(
++                    flat_input,
++                    self.weights_proj.weight.contiguous(),
++                    output,
++                )
++                return output.view(*x.shape[:-1], self.weights_proj.weight.shape[0])
+             return torch.mm(x, self.weights_proj.weight.t(), out_dtype=torch.float32)
+
+         weights, _ = self.weights_proj(x)
+diff --git a/python/sglang/srt/layers/attention/dsa/dsa_topk_backend.py b/python/sglang/srt/layers/attention/dsa/dsa_topk_backend.py
+index 7802f959..d2bde441 100644
+--- a/python/sglang/srt/layers/attention/dsa/dsa_topk_backend.py
++++ b/python/sglang/srt/layers/attention/dsa/dsa_topk_backend.py
+@@ -304,6 +304,15 @@ def _topk_unfused(
+     topk_local_indices = topk_local_indices.masked_fill(
+         topk_scores == float("-inf"), -1
+     )
++    if envs.SGLANG_ENABLE_DETERMINISTIC_INFERENCE.get():
++        invalid_sort_key = torch.iinfo(torch.int32).max
++        topk_local_indices = torch.sort(
++            topk_local_indices.masked_fill(topk_local_indices < 0, invalid_sort_key),
++            dim=-1,
++        ).values
++        topk_local_indices = topk_local_indices.masked_fill(
++            topk_local_indices == invalid_sort_key, -1
++        )
+     topk_indices[:, :valid_topk] = topk_local_indices
+
+     return topk_indices
+diff --git a/python/sglang/srt/layers/attention/dsa_backend.py b/python/sglang/srt/layers/attention/dsa_backend.py
+index 84a21fc5..696abe9f 100644
+--- a/python/sglang/srt/layers/attention/dsa_backend.py
++++ b/python/sglang/srt/layers/attention/dsa_backend.py
+@@ -27,6 +27,7 @@ from sglang.srt.runtime_context import (
+ logger = logging.getLogger(__name__)
+ from sglang.kernels.ops.attention.dsa.dequant_k_cache import (
+     concat_cast_kv_fp8_pad,
++    dequantize_k_cache,
+     dequantize_k_cache_paged,
+     gather_dequant_requant_fp8_paged,
+ )
+@@ -96,6 +97,45 @@ from sglang.srt.utils.torch_memory_saver_adapter import TorchMemorySaverAdapter
+
+ _IS_GFX95 = is_gfx95_supported()
+
++
++def _quantize_dequantize_fp8_sparse_kv(kv: torch.Tensor) -> torch.Tensor:
++    """Round fresh MLA KV through the packed FP8 cache representation."""
++
++    if kv.shape[-2:] != (1, 576):
++        raise ValueError(
++            "FP8 sparse MLA expects KV shaped [..., 1, 576], " f"got {tuple(kv.shape)}"
++        )
++    num_tokens = kv.numel() // 576
++    packed = quantize_k_cache(kv.reshape(num_tokens, 1, 1, 576))
++    return dequantize_k_cache(packed).reshape(num_tokens, 1, 576)
++
++
++def _dequantize_fp8_sparse_paged_kv(
++    kv_cache: torch.Tensor,
++    page_table_1: torch.Tensor,
++) -> Tuple[torch.Tensor, torch.Tensor]:
++    """Gather selected FP8 KV and remap indices to the compact BF16 copy."""
++
++    if page_table_1.ndim != 2:
++        raise ValueError(
++            "FP8 sparse MLA expects a two-dimensional page table, "
++            f"got shape {tuple(page_table_1.shape)}"
++        )
++    safe_physical_indices = page_table_1.clamp_min(0).contiguous().view(-1)
++    dequantized_kv = dequantize_k_cache_paged(kv_cache, safe_physical_indices)
++    compact_indices = torch.arange(
++        page_table_1.numel(),
++        dtype=torch.int32,
++        device=page_table_1.device,
++    ).view_as(page_table_1)
++    compact_indices = torch.where(
++        page_table_1 >= 0,
++        compact_indices,
++        torch.full_like(compact_indices, -1),
++    )
++    return dequantized_kv, compact_indices
++
++
+ if is_cuda():
+     import deep_gemm
+
+@@ -2189,6 +2229,12 @@ class DeepseekSparseAttnBackend(
+                     )
+                 else:
+                     kv_cache = _cat([k, k_rope], dim=-1)
++                    if self.dsa_kv_cache_store_fp8:
++                        kv_cache = _quantize_dequantize_fp8_sparse_kv(kv_cache)
++            elif self.dsa_kv_cache_store_fp8:
++                kv_cache, page_table_1 = _dequantize_fp8_sparse_paged_kv(
++                    kv_cache, page_table_1
++                )
+
+             if q_rope is not None:
+                 q_all = concat_mla_absorb_q_general(q_nope, q_rope)
+@@ -2370,6 +2416,10 @@ class DeepseekSparseAttnBackend(
+         if dsa_impl == "flashmla_sparse":
+             if q_rope is not None:
+                 q_all = concat_mla_absorb_q_general(q_nope, q_rope)
++            if self.dsa_kv_cache_store_fp8:
++                kv_cache, page_table_1 = _dequantize_fp8_sparse_paged_kv(
++                    kv_cache, page_table_1
++                )
+             return self._forward_flashmla_sparse(
+                 q_all=q_all,
+                 kv_cache=kv_cache,
+diff --git a/python/sglang/srt/layers/deep_gemm_wrapper/entrypoint.py b/python/sglang/srt/layers/deep_gemm_wrapper/entrypoint.py
+index 6134374b..019baeae 100644
+--- a/python/sglang/srt/layers/deep_gemm_wrapper/entrypoint.py
++++ b/python/sglang/srt/layers/deep_gemm_wrapper/entrypoint.py
+@@ -5,6 +5,7 @@ from typing import Any, Optional, Tuple
+ import torch
+
+ from sglang.srt.environ import envs
++from sglang.srt.runtime_context import get_exec
+ from sglang.srt.layers.deep_gemm_wrapper import compile_utils
+ from sglang.srt.layers.deep_gemm_wrapper.configurer import (  # noqa: F401
+     DEEPGEMM_BLACKWELL,
+@@ -295,9 +296,37 @@ def update_deep_gemm_config(gpu_id: int):
+     if envs.SGLANG_DEEPGEMM_PDL.get() and hasattr(deep_gemm, "set_pdl"):
+         deep_gemm.set_pdl(True)
+
++    configure_deep_gemm_batch_invariant(
++        get_exec().deterministic.enable_deterministic_inference
++        or envs.SGLANG_DEEPGEMM_BATCH_INVARIANT.get()
++    )
+     compile_utils.update_deep_gemm_config(gpu_id)
+
+
++def configure_deep_gemm_batch_invariant(enabled: bool):
++    if not ENABLE_JIT_DEEPGEMM:
++        return
++
++    setter = getattr(deep_gemm, "set_batch_invariant", None)
++    if setter is None:
++        if enabled:
++            logger.warning(
++                "The installed DeepGEMM does not expose set_batch_invariant; "
++                "install the GLM-5 alignment DeepGEMM build."
++            )
++        return
++
++    # Configure this before warmup/JIT so serving and training select the same
++    # invariant dense and grouped kernel variants.
++    setter(enabled)
++    # Recent DeepGEMM versions otherwise dispatch BF16 GEMMs to cuBLASLt,
++    # whose reduction can change with the batch shape. The DSA head gate needs
++    # the native BF16 kernel as well as invariant FP8 projections.
++    deterministic_setter = getattr(deep_gemm, "use_deterministic_algorithms", None)
++    if deterministic_setter is not None:
++        deterministic_setter(enabled)
++
++
+ @contextmanager
+ def configure_deep_gemm_num_sms(num_sms):
+     if num_sms is None or not ENABLE_JIT_DEEPGEMM:
+diff --git a/python/sglang/srt/layers/moe/fused_moe_triton/layer.py b/python/sglang/srt/layers/moe/fused_moe_triton/layer.py
+index 739ad795..6cca2e1c 100644
+--- a/python/sglang/srt/layers/moe/fused_moe_triton/layer.py
++++ b/python/sglang/srt/layers/moe/fused_moe_triton/layer.py
+@@ -21,7 +21,10 @@ from sglang.srt.distributed.device_communicators.pynccl_allocator import (
+ )
+ from sglang.srt.environ import envs
+ from sglang.srt.eplb.expert_location import get_global_expert_location_metadata
+-from sglang.srt.layers.dp_attention import is_allocation_symmetric
++from sglang.srt.layers.dp_attention import (
++    get_is_extend_in_batch,
++    is_allocation_symmetric,
++)
+ from sglang.srt.layers.moe import (
+     MoeRunnerConfig,
+     get_deepep_mode,
+@@ -146,6 +149,31 @@ def _maybe_copy_weight_view_before_h2d(
+         return loaded_weight
+     return _copy_weight_view_before_h2d(loaded_weight)
+
++def compute_deepep_ll_prefill_staging_slices(
++    *,
++    local_num_tokens: int,
++    max_num_tokens: int,
++    capacity: int,
++) -> List[slice]:
++    """Return rank-synchronous token windows for low-latency prefill."""
++
++    if capacity <= 0:
++        raise ValueError(f"DeepEP staging capacity must be positive, got {capacity}")
++    if local_num_tokens < 0 or max_num_tokens < local_num_tokens:
++        raise ValueError(
++            "Invalid DeepEP staging token counts: "
++            f"local={local_num_tokens}, max={max_num_tokens}"
++        )
++    num_stages = (max_num_tokens + capacity - 1) // capacity
++    return [
++        slice(
++            min(stage * capacity, local_num_tokens),
++            min((stage + 1) * capacity, local_num_tokens),
++        )
++        for stage in range(num_stages)
++    ]
++
++
+
+ def _get_deepep_comm_group(a2a_backend):
+     group = get_parallel().tp_group.device_group
+@@ -1559,7 +1587,78 @@ class FusedMoE(torch.nn.Module):
+                 hidden_states, topk_output, pre_quant_input=pre_quant_input
+             )
+
+-    def forward_impl(
++    def _get_deepep_ll_prefill_staging_slices(
++        self,
++        hidden_states: torch.Tensor,
++        topk_output: TopKOutput,
++    ) -> Optional[List[slice]]:
++        if not envs.SGLANG_DEEPEP_LL_PREFILL_STAGING.get():
++            return None
++        if not get_moe_a2a_backend().is_deepep() or not get_is_extend_in_batch():
++            return None
++        if not get_deepep_mode().resolve(True).is_low_latency():
++            return None
++        if not TopKOutputChecker.format_is_standard(topk_output):
++            raise TypeError(
++                "DeepEP LL prefill staging requires standard top-k output, "
++                f"got {topk_output.format}"
++            )
++
++        local_num_tokens = hidden_states.shape[0]
++        max_num_tokens_tensor = torch.tensor(
++            local_num_tokens,
++            dtype=torch.int64,
++            device=hidden_states.device,
++        )
++        torch.distributed.all_reduce(
++            max_num_tokens_tensor,
++            op=torch.distributed.ReduceOp.MAX,
++            group=get_parallel().tp_group.device_group,
++        )
++        max_num_tokens = int(max_num_tokens_tensor.item())
++
++        capacity = envs.SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK.get()
++        if max_num_tokens <= capacity:
++            return None
++        return compute_deepep_ll_prefill_staging_slices(
++            local_num_tokens=local_num_tokens,
++            max_num_tokens=max_num_tokens,
++            capacity=capacity,
++        )
++
++    @staticmethod
++    def _slice_standard_topk_output(
++        topk_output: StandardTopKOutput, token_slice: slice
++    ) -> StandardTopKOutput:
++        router_logits = topk_output.router_logits
++        return StandardTopKOutput(
++            topk_weights=topk_output.topk_weights[token_slice],
++            topk_ids=topk_output.topk_ids[token_slice],
++            router_logits=(
++                router_logits[token_slice] if router_logits is not None else None
++            ),
++        )
++
++    def forward_impl(self, hidden_states: torch.Tensor, topk_output: TopKOutput, pre_quant_input: Optional[Tuple] = None):
++        staging_slices = self._get_deepep_ll_prefill_staging_slices(
++            hidden_states, topk_output
++        )
++        if staging_slices is None:
++            return self._forward_impl_once(hidden_states, topk_output, pre_quant_input)
++
++        if pre_quant_input is not None:
++            raise ValueError("DeepEP LL prefill staging does not support pre-quantized inputs")
++        final_hidden_states = hidden_states.new_empty(hidden_states.shape)
++        for token_slice in staging_slices:
++            staged_hidden_states = self._forward_impl_once(
++                hidden_states[token_slice],
++                self._slice_standard_topk_output(topk_output, token_slice),
++            )
++            if token_slice.stop > token_slice.start:
++                final_hidden_states[token_slice].copy_(staged_hidden_states)
++        return final_hidden_states
++
++    def _forward_impl_once(
+         self,
+         hidden_states: torch.Tensor,
+         topk_output: TopKOutput,
+diff --git a/python/sglang/srt/layers/moe/moe_runner/deep_gemm.py b/python/sglang/srt/layers/moe/moe_runner/deep_gemm.py
+index bbff20fa..b7498d3e 100644
+--- a/python/sglang/srt/layers/moe/moe_runner/deep_gemm.py
++++ b/python/sglang/srt/layers/moe/moe_runner/deep_gemm.py
+@@ -89,6 +89,18 @@ else:
+ _DEEPGEMM_ON_H20 = get_bool_env_var("SGLANG_DEEPGEMM_ON_H20")
+ _masked_standard_layout_memory_budget_bytes: Optional[int] = None
+
++_DEEPGEMM_PAD_EXPERT_M = get_bool_env_var("SGLANG_DEEPGEMM_PAD_EXPERT_M")
++
++
++def _should_pad_contiguous_expert_m() -> bool:
++    return _DEEPGEMM_PAD_EXPERT_M or envs.SGLANG_ENABLE_DETERMINISTIC_INFERENCE.get()
++
++
++def _pad_count_to_deepgemm_m_tile(count: int) -> int:
++    if count <= 0:
++        return 0
++    return ceil_div(count, 128) * 128
++
+
+ # TODO(kaixih@nvidia): ideally we should merge this logic into
+ # `fill_gateup_input_triton_kernel` to directly generate e8m0 scale.
+@@ -1369,8 +1381,17 @@ def pre_permute_deepep_normal_to_deep_gemm(
+     ) = dispatch_output
+     assert runner_config.activation in ("silu", "situ")
+
+-    all_tokens = sum(num_recv_tokens_per_expert)
++    actual_all_tokens = sum(num_recv_tokens_per_expert)
++    if _should_pad_contiguous_expert_m():
++        deepgemm_num_recv_tokens_per_expert = [
++            _pad_count_to_deepgemm_m_tile(int(count))
++            for count in num_recv_tokens_per_expert
++        ]
++    else:
++        deepgemm_num_recv_tokens_per_expert = num_recv_tokens_per_expert
++    all_tokens = sum(deepgemm_num_recv_tokens_per_expert)
+     running_state["all_tokens"] = all_tokens
++    running_state["actual_all_tokens"] = actual_all_tokens
+
+     K = hidden_states.shape[1]
+
+@@ -1390,7 +1411,7 @@ def pre_permute_deepep_normal_to_deep_gemm(
+     # The scale buffer only matters for FP8 activations sharing this
+     # pre-permute (ep_scatter skips scales entirely for BF16 dispatch).
+     deterministic = get_exec().deterministic.enable_deterministic_inference
+-    buffer_init = torch.zeros if deterministic else torch.empty
++    buffer_init = torch.zeros if deterministic or all_tokens != actual_all_tokens else torch.empty
+
+     input_tensor = buffer_init(
+         (all_tokens, K),
+@@ -1415,11 +1436,11 @@ def pre_permute_deepep_normal_to_deep_gemm(
+
+     if get_offloader().forbid_copy_engine_usage:
+         num_recv_tokens_per_expert_gpu = copy_list_to_gpu_no_ce(
+-            num_recv_tokens_per_expert
++            deepgemm_num_recv_tokens_per_expert
+         )
+     else:
+         num_recv_tokens_per_expert_gpu = torch.tensor(
+-            num_recv_tokens_per_expert,
++            deepgemm_num_recv_tokens_per_expert,
+             dtype=torch.int32,
+             pin_memory=True,
+             device="cpu",
+diff --git a/python/sglang/srt/layers/moe/token_dispatcher/deepep.py b/python/sglang/srt/layers/moe/token_dispatcher/deepep.py
+index 6e7588d9..f7bbc2a0 100644
+--- a/python/sglang/srt/layers/moe/token_dispatcher/deepep.py
++++ b/python/sglang/srt/layers/moe/token_dispatcher/deepep.py
+@@ -28,10 +28,9 @@ from sglang.srt.layers.moe.utils import (
+     get_deepep_output_dtype,
+     is_tbo_enabled,
+ )
+-from sglang.srt.runtime_context import get_parallel
++from sglang.srt.runtime_context import get_parallel, get_exec
+ from sglang.srt.utils import (
+     get_bool_env_var,
+-    get_cuda_version,
+     is_blackwell,
+     is_flashinfer_available,
+     is_hip,
+@@ -285,16 +284,9 @@ class DeepEPBuffer:
+         )
+         # Use CU_MEM_HANDLE_TYPE_FABRIC on hardware that advertises MNNVL fabric
+         # support, so cross-pod GB200/GB300 EP groups use
+-        # cuMemImportFromShareableHandle instead of the intra-node-only
+-        # cudaIpcOpenMemHandle. The DeepEP build we ship is keyed on the CUDA major
+-        # version:
+-        #   cu13x -> hybrid-ep, which gates fabric behind a use_fabric kwarg, so we
+-        #            pass it when the device advertises fabric support.
+-        #   cu12x -> fzyzcjy/DeepEP, which has no use_fabric kwarg but already
+-        #            auto-enables fabric in C++ when supported, so we skip it:
+-        #            https://github.com/fzyzcjy/DeepEP/blob/814e508537c6ffc775d59f6f1b9ba43f3a65968c/csrc/deep_ep.cpp#L52
+-        is_cu12 = get_cuda_version()[0] == 12
+-        if not is_cu12 and use_mnnvl_fabric:
++        # CUDA IPC uses the fork's automatic fabric detection; newer DeepEP
++        # builds expose an explicit switch. Detect the API, not the CUDA version.
++        if use_mnnvl_fabric and "use_fabric" in inspect.signature(Buffer).parameters:
+             buffer_kwargs["use_fabric"] = True
+
+         state.buffer = Buffer(group, num_nvl_bytes, num_rdma_bytes, **buffer_kwargs)
+@@ -745,6 +737,19 @@ class _DeepEPDispatcherImplLowLatency(_DeepEPDispatcherImplBase):
+         self.return_recv_hook = return_recv_hook
+         self.device_module = torch.get_device_module()
+         self.quant_config = {}
++        self.align_fp8_quantization = self._supports_aligned_fp8_quantization(
++            Buffer.low_latency_dispatch
++        ) and bool(get_exec().deterministic.enable_deterministic_inference)
++
++    @staticmethod
++    def _supports_aligned_fp8_quantization(dispatch_method) -> bool:
++        try:
++            return (
++                "align_fp8_quantization"
++                in inspect.signature(dispatch_method).parameters
++            )
++        except (TypeError, ValueError):
++            return False
+
+     def dispatch_a(
+         self,
+@@ -828,6 +833,9 @@ class _DeepEPDispatcherImplLowLatency(_DeepEPDispatcherImplBase):
+         buffer = self._get_buffer()
+         _deepep_precompile_tp_barrier()
+         npu_mxfp_quantization_opts = self._get_npu_mxfp_quantization_kwargs(buffer)
++        alignment_kwargs = (
++            {"align_fp8_quantization": True} if self.align_fp8_quantization else {}
++        )
+         packed_recv_hidden, self.packed_recv_count, self.handle, event, hook = (
+             buffer.low_latency_dispatch(
+                 hidden_states,
+@@ -850,6 +858,7 @@ class _DeepEPDispatcherImplLowLatency(_DeepEPDispatcherImplBase):
+                 async_finish=not self.return_recv_hook,
+                 return_recv_hook=self.return_recv_hook,
+                 **fp8_deepgemm_scale_opts,
++                **alignment_kwargs,
+             )
+         )
+         return packed_recv_hidden, self.packed_recv_count, event, hook
+diff --git a/python/sglang/srt/layers/moe/topk.py b/python/sglang/srt/layers/moe/topk.py
+index a4b6541f..be614f40 100644
+--- a/python/sglang/srt/layers/moe/topk.py
++++ b/python/sglang/srt/layers/moe/topk.py
+@@ -1705,6 +1705,20 @@ def biased_grouped_topk_gpu(
+     routed_scaling_factor: Optional[float] = None,
+     apply_routed_scaling_factor_on_output: Optional[bool] = False,
+ ) -> Tuple[torch.Tensor, torch.Tensor]:
++    if envs.SGLANG_ENABLE_DETERMINISTIC_INFERENCE.get():
++        return biased_grouped_topk_impl.__wrapped__(
++            hidden_states,
++            gating_output,
++            correction_bias,
++            topk,
++            renormalize,
++            num_expert_group,
++            topk_group,
++            num_fused_shared_experts=num_fused_shared_experts,
++            routed_scaling_factor=routed_scaling_factor,
++            apply_routed_scaling_factor_on_output=apply_routed_scaling_factor_on_output,
++        )
++
+     num_tokens = gating_output.shape[0]
+     num_experts = gating_output.shape[1]
+     experts_per_group = (
+diff --git a/python/sglang/srt/model_executor/model_runner_components/weight_updater.py b/python/sglang/srt/model_executor/model_runner_components/weight_updater.py
+index 5d852a61..c126a291 100644
+--- a/python/sglang/srt/model_executor/model_runner_components/weight_updater.py
++++ b/python/sglang/srt/model_executor/model_runner_components/weight_updater.py
+@@ -401,6 +401,9 @@ class WeightUpdater:
+
+         # Load the reconstructed tensors using the standard method
+         self.get_model().load_weights(reconstructed_tensors)
++        # The trainer owns the CUDA IPC buffer until this RPC returns.
++        if self.device == "cuda":
++            torch.cuda.synchronize()
+
+         return True, "Success"
+
+diff --git a/python/sglang/srt/models/deepseek_v2.py b/python/sglang/srt/models/deepseek_v2.py
+index 0181eb7b..3a4d56ce 100644
+--- a/python/sglang/srt/models/deepseek_v2.py
++++ b/python/sglang/srt/models/deepseek_v2.py
+@@ -533,9 +533,14 @@ class MoEGate(nn.Module):
+             )
+
+         if get_exec().deterministic.enable_deterministic_inference:
+-            if _is_cuda or _is_hip:
+-                return torch.mm(hidden_states, self.weight.t(), out_dtype=torch.float32)
+-            return F.linear(hidden_states.float(), self.weight.float(), None)
++            if get_exec().deterministic.enable_fp32_moe_router:
++                from sglang.srt.batch_invariant_ops import router_gemm_batch_invariant
++
++                return router_gemm_batch_invariant(
++                    hidden_states.contiguous(),
++                    self.weight.contiguous(),
++                )
++            return F.linear(hidden_states, self.weight, None)
+
+         if hidden_states.shape[0] <= self.tiny_router_gemm_max_tokens:
+             logits = tiny_gemm_bf16(
+diff --git a/python/sglang/test/kernels/test_glm5_router_gemm.py b/python/sglang/test/kernels/test_glm5_router_gemm.py
+new file mode 100644
+index 00000000..a05f15f8
+--- /dev/null
++++ b/python/sglang/test/kernels/test_glm5_router_gemm.py
+@@ -0,0 +1,54 @@
++import deep_gemm
++import pytest
++import torch
++
++from sglang.kernels.jit.glm5_router_gemm import glm5_router_gemm
++from sglang.srt.layers import deep_gemm_wrapper
++
++
++@pytest.mark.parametrize("num_tokens", [1, 2, 4, 8, 16])
++def test_glm5_router_gemm_accuracy(num_tokens: int):
++    torch.manual_seed(42)
++    hidden_states = torch.randn((num_tokens, 6144), dtype=torch.bfloat16, device="cuda")
++    router_weight = torch.randn((256, 6144), dtype=torch.bfloat16, device="cuda")
++    actual = glm5_router_gemm(hidden_states, router_weight)
++    expected = torch.mm(hidden_states, router_weight.t(), out_dtype=torch.float32)
++    torch.testing.assert_close(actual, expected, rtol=1e-4, atol=1e-3)
++
++
++def test_glm5_router_gemm_batch_invariance():
++    torch.manual_seed(42)
++    token = torch.randn((1, 6144), dtype=torch.bfloat16, device="cuda")
++    router_weight = torch.randn((256, 6144), dtype=torch.bfloat16, device="cuda")
++    expected = glm5_router_gemm(token, router_weight)
++
++    for num_tokens, token_index in [(2, 1), (8, 5), (16, 15)]:
++        hidden_states = torch.randn(
++            (num_tokens, 6144), dtype=torch.bfloat16, device="cuda"
++        )
++        hidden_states[token_index].copy_(token[0])
++        actual = glm5_router_gemm(hidden_states, router_weight)[
++            token_index : token_index + 1
++        ]
++        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
++
++
++def test_glm5_indexer_head_gate_batch_invariance():
++    torch.manual_seed(728)
++    hidden_states = torch.randn((4608, 6144), dtype=torch.bfloat16, device="cuda")
++    weight = torch.randn((32, 6144), dtype=torch.bfloat16, device="cuda")
++    expected = torch.empty((4608, 32), dtype=torch.float32, device="cuda")
++    old_batch_invariant = deep_gemm.get_batch_invariant()
++    old_deterministic = deep_gemm.get_deterministic_algorithms()
++    try:
++        deep_gemm_wrapper.configure_deep_gemm_batch_invariant(True)
++        deep_gemm_wrapper.gemm_nt_bf16bf16f32(hidden_states, weight, expected)
++        for num_tokens in (1, 8, 17, 65, 257, 1024):
++            actual = torch.empty((num_tokens, 32), dtype=torch.float32, device="cuda")
++            deep_gemm_wrapper.gemm_nt_bf16bf16f32(
++                hidden_states[:num_tokens], weight, actual
++            )
++            torch.testing.assert_close(actual, expected[:num_tokens], rtol=0, atol=0)
++    finally:
++        deep_gemm_wrapper.configure_deep_gemm_batch_invariant(old_batch_invariant)
++        deep_gemm.use_deterministic_algorithms(old_deterministic)
+diff --git a/python/sglang/test/kits/attention_unittest/attention_methods/dsa_attention.py b/python/sglang/test/kits/attention_unittest/attention_methods/dsa_attention.py
+index 440e497e..5e5e0684 100644
+--- a/python/sglang/test/kits/attention_unittest/attention_methods/dsa_attention.py
++++ b/python/sglang/test/kits/attention_unittest/attention_methods/dsa_attention.py
+@@ -1242,16 +1242,14 @@ DSA_DECODE_IMPL_VARIANTS: tuple[str, ...] = (
+     "aiter",
+ )
+
+-# Impls that accept an FP8-stored K cache. The flashmla *sparse* and FA3
+-# kernels require BF16 K (`kv must have dtype torch::kBFloat16`), so they
+-# fall back to the inline-quantize-of-bf16 path that production *doesn't*
+-# take in FP8 deployments. The `flashmla_kv` decode kernel and *both*
+-# flashmla prefill kernels are the production-relevant FP8 paths.
++# Impls that support an FP8-stored K cache. FlashMLA sparse requires BF16 K,
++# so the backend gathers and dequantizes only the selected pages before calling
++# it. The `flashmla_kv` kernels consume the packed cache directly.
+ DSA_FP8_COMPATIBLE_PREFILL_IMPLS: frozenset[str] = frozenset(
+     {"flashmla_sparse", "flashmla_kv", "flashmla_auto"}
+ )
+ DSA_FP8_COMPATIBLE_DECODE_IMPLS: frozenset[str] = frozenset(
+-    {"flashmla_kv", "flashmla_auto"}
++    {"flashmla_sparse", "flashmla_kv", "flashmla_auto"}
+ )
+
+
+@@ -1414,15 +1412,12 @@ def run_dsa_sparse_fp8_decode_case(
+     *,
+     dsa_decode_backend: str = "flashmla_kv",
+ ) -> None:
+-    """FP8-KV-cache decode. Only `flashmla_kv` (and `flashmla_auto`
+-    which resolves to it for FP8) accepts an FP8-stored K cache;
+-    `flashmla_sparse` and `fa3` decode kernels assert BF16 K and would
+-    fall back to the inline-quantize-of-bf16 path that production
+-    doesn't take in FP8 deployments."""
++    """FP8-KV-cache decode. `flashmla_kv` reads the packed cache directly;
++    `flashmla_sparse` gathers and dequantizes the selected pages to BF16."""
+     if dsa_decode_backend not in DSA_FP8_COMPATIBLE_DECODE_IMPLS:
+         testcase.skipTest(
+             f"DSA decode impl `{dsa_decode_backend}` does not support FP8 KV "
+-            f"cache (only `flashmla_kv` / `flashmla_auto` read FP8 K directly)."
++            "cache."
+         )
+     if not case.forward_mode.is_decode():
+         raise ValueError("run_dsa_sparse_fp8_decode_case expects a DECODE case.")
+diff --git a/test/registered/debug_utils/test_tensor_dump_layer_outputs_only.py b/test/registered/debug_utils/test_tensor_dump_layer_outputs_only.py
+new file mode 100644
+index 00000000..42e247e5
+--- /dev/null
++++ b/test/registered/debug_utils/test_tensor_dump_layer_outputs_only.py
+@@ -0,0 +1,105 @@
++from pathlib import Path
++
++import torch
++from torch import nn
++
++from sglang.srt.debug_utils.tensor_dump_forward_hook import (
++    register_forward_hook_for_model,
++)
++from sglang.srt.model_executor.forward_batch_info import ForwardBatch
++
++
++class _Layer(nn.Module):
++    def __init__(self):
++        super().__init__()
++        self.experts = nn.Sequential(nn.Linear(2, 2, bias=False))
++        self.shared_experts = nn.Sequential(nn.Linear(2, 2, bias=False))
++
++    def forward(self, value):
++        return self.experts(value) + self.shared_experts(value)
++
++
++class _InnerModel(nn.Module):
++    def __init__(self):
++        super().__init__()
++        self.layers = nn.ModuleList([_Layer(), _Layer()])
++
++    def forward(self, value, forward_batch):
++        del forward_batch
++        for layer in self.layers:
++            value = layer(value)
++        return value
++
++
++class _Model(nn.Module):
++    def __init__(self):
++        super().__init__()
++        self.model = _InnerModel()
++
++    def forward(self, value, forward_batch):
++        return self.model(value, forward_batch)
++
++
++def _make_forward_batch() -> ForwardBatch:
++    batch = object.__new__(ForwardBatch)
++    batch.input_ids = torch.tensor([11, 12])
++    batch.seq_lens = torch.tensor([2], dtype=torch.int32)
++    batch.positions = torch.tensor([0, 1])
++    batch.req_pool_indices = torch.tensor([3], dtype=torch.int32)
++    batch.extend_seq_lens = torch.tensor([2], dtype=torch.int32)
++    batch.extend_prefix_lens = torch.tensor([0], dtype=torch.int32)
++    batch.rids = ["request-0"]
++    batch.forward_mode = "extend"
++    return batch
++
++
++def test_layer_outputs_only_dump(monkeypatch, tmp_path: Path):
++    monkeypatch.setenv("SGLANG_TENSOR_DUMP_LAYER_OUTPUTS_ONLY", "1")
++    monkeypatch.setenv("SGLANG_TENSOR_DUMP_CHUNK_SIZE", "16")
++    model = _Model()
++    dumper = register_forward_hook_for_model(
++        model,
++        str(tmp_path),
++        dump_layers=[0, 1],
++        tp_size=1,
++        tp_rank=0,
++        pp_rank=0,
++    )
++
++    model(torch.ones((2, 2)), _make_forward_batch())
++
++    (dump_file,) = list(Path(dumper.get_dump_dir()).glob("Chunk*.pt"))
++    (values,) = torch.load(dump_file, weights_only=False)
++    assert "model.layers.0" in values
++    assert "model.layers.1" in values
++    assert not any("experts" in name for name in values)
++    assert values["model.forward_batch_info.rids"] == ["request-0"]
++    torch.testing.assert_close(
++        values["model.forward_batch_info.positions"], torch.tensor([0, 1])
++    )
++
++
++def test_layer_outputs_only_can_select_nested_modules(monkeypatch, tmp_path: Path):
++    monkeypatch.setenv("SGLANG_TENSOR_DUMP_LAYER_OUTPUTS_ONLY", "1")
++    monkeypatch.setenv(
++        "SGLANG_TENSOR_DUMP_MODULE_SUFFIXES", "mlp.experts,experts,shared_experts"
++    )
++    model = _Model()
++    dumper = register_forward_hook_for_model(
++        model,
++        str(tmp_path),
++        dump_layers=[0],
++        tp_size=1,
++        tp_rank=0,
++        pp_rank=0,
++    )
++
++    model(torch.ones((2, 2)), _make_forward_batch())
++
++    data = torch.load(
++        Path(dumper.get_dump_dir()) / "Pass00000.pt", weights_only=False
++    )
++    assert "model.layers.0" in data
++    assert "model.layers.0.experts" in data
++    assert "model.layers.0.shared_experts" in data
++    assert not any(name.startswith("model.layers.1") for name in data)
+diff --git a/test/registered/moe/test_deepep_ll_prefill_staging.py b/test/registered/moe/test_deepep_ll_prefill_staging.py
+new file mode 100644
+index 00000000..e3c883a9
+--- /dev/null
++++ b/test/registered/moe/test_deepep_ll_prefill_staging.py
+@@ -0,0 +1,47 @@
++import pytest
++
++from sglang.srt.layers.moe.fused_moe_triton.layer import (
++    compute_deepep_ll_prefill_staging_slices,
++)
++
++
++@pytest.mark.parametrize(
++    ("local_num_tokens", "max_num_tokens", "capacity", "expected"),
++    [
++        (0, 0, 64, []),
++        (63, 63, 64, [slice(0, 63)]),
++        (130, 130, 64, [slice(0, 64), slice(64, 128), slice(128, 130)]),
++        (17, 130, 64, [slice(0, 17), slice(17, 17), slice(17, 17)]),
++    ],
++)
++def test_compute_deepep_ll_prefill_staging_slices(
++    local_num_tokens: int,
++    max_num_tokens: int,
++    capacity: int,
++    expected: list[slice],
++):
++    assert (
++        compute_deepep_ll_prefill_staging_slices(
++            local_num_tokens=local_num_tokens,
++            max_num_tokens=max_num_tokens,
++            capacity=capacity,
++        )
++        == expected
++    )
++
++
++@pytest.mark.parametrize(
++    ("local_num_tokens", "max_num_tokens", "capacity"),
++    [(1, 1, 0), (-1, 1, 64), (2, 1, 64)],
++)
++def test_compute_deepep_ll_prefill_staging_slices_rejects_invalid_inputs(
++    local_num_tokens: int,
++    max_num_tokens: int,
++    capacity: int,
++):
++    with pytest.raises(ValueError):
++        compute_deepep_ll_prefill_staging_slices(
++            local_num_tokens=local_num_tokens,
++            max_num_tokens=max_num_tokens,
++            capacity=capacity,
++        )

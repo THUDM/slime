@@ -5,6 +5,7 @@ import tempfile
 from argparse import Namespace
 from dataclasses import dataclass
 from pathlib import Path
+from types import ModuleType
 from unittest.mock import Mock
 
 import pytest
@@ -228,7 +229,8 @@ class TestZeroGpuRolloutConfig:
         assert kwargs["pp_size"] == 2
         assert kwargs["tp_size"] == 16
 
-    def test_memory_saver_disables_default_breakable_prefill_cuda_graph(self, monkeypatch):
+    @pytest.mark.parametrize("record_type", ["dataclass", "msgspec"])
+    def test_memory_saver_disables_default_breakable_prefill_cuda_graph(self, monkeypatch, record_type):
         from slime.backends.sglang_utils import sglang_engine
 
         monkeypatch.setattr(sglang_engine.accelerator, "resolve_visible_device_id", lambda device_id: device_id)
@@ -241,6 +243,15 @@ class TestZeroGpuRolloutConfig:
         @dataclass
         class LegacyServerArgs:
             enable_memory_saver: bool = False
+
+        if record_type == "msgspec":
+            import msgspec
+
+            CurrentServerArgs = msgspec.defstruct(
+                "CurrentServerArgs",
+                [("enable_memory_saver", bool, False), ("cuda_graph_backend_prefill", str | None, None)],
+            )
+            LegacyServerArgs = msgspec.defstruct("LegacyServerArgs", [("enable_memory_saver", bool, False)])
 
         args = Namespace(
             hf_checkpoint="/tmp/hf",
@@ -274,6 +285,54 @@ class TestZeroGpuRolloutConfig:
         monkeypatch.setattr(sglang_engine, "ServerArgs", LegacyServerArgs)
         kwargs, _ = sglang_engine._compute_server_args(args, **compute_kwargs)
         assert "cuda_graph_backend_prefill" not in kwargs
+
+    @pytest.mark.parametrize(
+        "legacy_key,value,current_key,current_value",
+        [
+            ("cuda-graph-max-bs", 8, "cuda_graph_max_bs_decode", 8),
+            ("nsa_prefill_backend", "flashmla_sparse", "dsa_prefill_backend", "flashmla_sparse"),
+            ("disable_piecewise_cuda_graph", True, "cuda_graph_backend_prefill", "disabled"),
+            ("disable_piecewise_cuda_graph", False, "cuda_graph_backend_prefill", "full"),
+        ],
+    )
+    def test_legacy_yaml_overrides_remain_effective(self, monkeypatch, legacy_key, value, current_key, current_value):
+        from slime.backends.sglang_utils import sglang_engine
+
+        monkeypatch.setattr(sglang_engine.accelerator, "resolve_visible_device_id", lambda device_id: device_id)
+        args = Namespace(
+            hf_checkpoint="/tmp/hf",
+            seed=1,
+            offload_rollout=False,
+            rollout_num_gpus_per_engine=1,
+            num_gpus_per_node=8,
+            sglang_pp_size=1,
+            sglang_dp_size=1,
+            sglang_ep_size=1,
+            sglang_cuda_graph_max_bs_decode=32,
+            sglang_cuda_graph_backend_prefill="full",
+            use_rollout_routing_replay=False,
+            fp16=False,
+        )
+        kwargs, _ = sglang_engine._compute_server_args(
+            args,
+            rank=0,
+            dist_init_addr="127.0.0.1:12345",
+            nccl_port=12346,
+            host="127.0.0.1",
+            port=30000,
+            base_gpu_id=0,
+            sglang_overrides={legacy_key: value},
+        )
+        fields = getattr(
+            sglang_engine.ServerArgs,
+            "__dataclass_fields__",
+            getattr(sglang_engine.ServerArgs, "__struct_fields__", ()),
+        )
+        if current_key in fields:
+            assert kwargs[current_key] == current_value
+            assert legacy_key.replace("-", "_") not in kwargs
+        else:
+            assert kwargs[legacy_key.replace("-", "_")] == value
 
     def test_start_rollout_servers_defers_engine_wait(self, monkeypatch):
         from slime.backends.sglang_utils import deployment, disaggregation
@@ -565,6 +624,58 @@ class TestGetModelUrl:
             sglang_router_port=3000,
         )
         assert get_model_url(args, "anything") == "http://10.0.0.1:3000/generate"
+
+
+@pytest.mark.parametrize(
+    "rpc_range",
+    [
+        {},
+        {"MC_MIN_RPC_PORT": "31000", "MC_MAX_RPC_PORT": "32000"},
+        {"MC_MIN_PRC_PORT": "31000", "MC_MAX_PRC_PORT": "32000"},
+        {"MC_MIN_RPC_PORT": "16000"},
+        {"MC_MAX_PRC_PORT": "25000"},
+    ],
+)
+def test_encoder_launch_preserves_legacy_process_helper(monkeypatch, rpc_range):
+    from slime.backends.sglang_utils import sglang_engine
+
+    monkeypatch.setattr(sglang_engine.os, "environ", rpc_range.copy())
+    calls = []
+    process = object()
+    module = ModuleType("sglang.srt.disaggregation.encode_server")
+
+    def launch(server_args, **kwargs):
+        calls.append((server_args, kwargs))
+        return process
+
+    module.launch_server_process = launch
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    args = Namespace(encoder_only=True)
+    assert sglang_engine.launch_server_process(args) is process
+    assert calls == [(args, {"start_method": "spawn", "wait_for_server": True})]
+    assert dict(sglang_engine.os.environ) == (rpc_range or {"MC_MIN_PRC_PORT": "27000", "MC_MAX_PRC_PORT": "28000"})
+
+
+@pytest.mark.parametrize("encoder_only", [False, True])
+def test_spawned_server_selects_current_entrypoint(monkeypatch, encoder_only):
+    import sglang.srt.utils
+
+    from slime.backends.sglang_utils import sglang_engine
+
+    calls = []
+    module_name = (
+        "sglang.srt.disaggregation.encoder.http_server" if encoder_only else "sglang.srt.entrypoints.http_server"
+    )
+    module = ModuleType(module_name)
+    module.launch_server = lambda args: calls.append(args)
+    monkeypatch.setitem(sys.modules, module_name, module)
+    monkeypatch.setattr(sglang.srt.utils, "kill_itself_when_parent_died", lambda: None)
+    monkeypatch.setattr(sglang_engine.os, "getppid", lambda: 123)
+    args = Namespace(encoder_only=encoder_only)
+    sglang_engine._launch_server(args, parent_pid=123)
+    assert calls == [args]
+    sglang_engine._launch_server(args, parent_pid=456)
+    assert calls == [args]
 
 
 if __name__ == "__main__":

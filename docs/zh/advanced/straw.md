@@ -9,7 +9,7 @@
 标准 slime 安装和 Docker 构建包含 `straw-queue`。已有环境可以在每个 rollout 和训练节点执行以下命令，同一任务使用相同版本：
 
 ```bash
-pip install 'straw-queue>=0.1.2'
+pip install 'straw-queue>=0.1.3'
 ```
 
 在训练命令中添加：

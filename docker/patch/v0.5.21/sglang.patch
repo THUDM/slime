@@ -1,0 +1,1621 @@
+diff --git a/python/sglang/srt/arg_groups/fields/exec_.py b/python/sglang/srt/arg_groups/fields/exec_.py
+index 21afe7f0..20196e94 100644
+--- a/python/sglang/srt/arg_groups/fields/exec_.py
++++ b/python/sglang/srt/arg_groups/fields/exec_.py
+@@ -186,6 +186,7 @@ class ExecKernel(msgspec.Struct):
+         Arg(
+             help="Choose the runner backend for Blockwise FP8 GEMM operations. Options: 'auto' (default, auto-selects based on hardware; MXFP8 dense picks flashinfer_cutedsl on SM100/SM103 and FlashInfer CUTLASS on other supported Blackwell GPUs), 'deep_gemm' (JIT-compiled; enabled by default on NVIDIA Hopper (SM90) and Blackwell (SM100) when DeepGEMM is installed), 'flashinfer_trtllm' (optimal for Blackwell and low-latency), 'flashinfer_cutlass' (FlashInfer CUTLASS groupwise FP8 GEMM), 'flashinfer_cutedsl' (FlashInfer CuTe DSL MXFP8 GEMM on SM100/SM103), 'flashinfer_deepgemm' (Hopper SM90 only; uses swapAB optimization for small M dimensions in decoding), 'cutlass' (optimal for SM120 GPUs), 'triton' (fallback, widely compatible), 'aiter' (ROCm only). ",
+             cli_name="--fp8-gemm-backend",
++            aliases=["--fp8-gemm-runner-backend"],
+             choices=FP8_GEMM_RUNNER_BACKEND_CHOICES,
+             resolvable=True,
+         ),
+@@ -195,6 +196,7 @@ class ExecKernel(msgspec.Struct):
+         Arg(
+             help="Choose the runner backend for NVFP4 GEMM operations. Options: 'auto' (default; selects flashinfer_cutedsl on SM100, marlin on SM80-SM90, flashinfer_cutlass otherwise (including SM120)), 'flashinfer_cutlass' (FlashInfer CUTLASS backend), 'flashinfer_cudnn' (FlashInfer cuDNN backend, optimal on CUDA 13+ with cuDNN 9.15+), 'flashinfer_cutedsl' (FlashInfer CuTe DSL backend), 'flashinfer_trtllm' (FlashInfer TensorRT-LLM backend, requires different weight preparation with shuffling), 'marlin' (weight-only W4A16 fallback for SM80+). ",
+             cli_name="--fp4-gemm-backend",
++            aliases=["--fp4-gemm-runner-backend"],
+             choices=FP4_GEMM_RUNNER_BACKEND_CHOICES,
+             resolvable=True,
+         ),
+@@ -211,6 +213,7 @@ class ExecKernel(msgspec.Struct):
+         Optional[str],
+         Arg(
+             help="DSA (DeepSeek Sparse Attention) prefill backend. If not specified, auto-detects based on hardware and kv_cache_dtype.",
++            aliases=["--nsa-prefill-backend"],
+             choices=[
+                 "flashmla_sparse",
+                 "flashmla_sparse_q8",
+@@ -241,6 +244,7 @@ class ExecKernel(msgspec.Struct):
+         Optional[str],
+         Arg(
+             help="DSA (DeepSeek Sparse Attention) decode backend. If not specified, auto-detects based on hardware and kv_cache_dtype.",
++            aliases=["--nsa-decode-backend"],
+             choices=[
+                 "flashmla_sparse",
+                 "flashmla_sparse_q8",
+@@ -386,6 +390,7 @@ class ExecMamba(msgspec.Struct):
+         str,
+         Arg(
+             help="The strategy to use for mamba radix cache.",
++            aliases=["--mamba-scheduler-strategy"],
+             choices=["auto", "no_buffer", "extra_buffer", "extra_buffer_lazy"],
+             resolvable=True,
+         ),
+@@ -498,10 +503,18 @@ class ExecGraph(msgspec.Struct):
+         ),
+     ] = None
+     cuda_graph_max_bs_decode: A[
+-        Optional[int], "Maximum batch size captured for the decode cuda graph."
++        Optional[int],
++        Arg(
++            help="Maximum batch size captured for the decode cuda graph.",
++            aliases=["--cuda-graph-max-bs"],
++        ),
+     ] = None
+     cuda_graph_max_bs_prefill: A[
+-        Optional[int], "Maximum batch size captured for the prefill cuda graph."
++        Optional[int],
++        Arg(
++            help="Maximum batch size captured for the prefill cuda graph.",
++            aliases=["--piecewise-cuda-graph-max-tokens"],
++        ),
+     ] = None
+     cuda_graph_max_seq_len_prefill: A[
+         Optional[int],
+@@ -510,11 +523,17 @@ class ExecGraph(msgspec.Struct):
+     ] = None
+     cuda_graph_bs_decode: A[
+         Optional[List[int]],
+-        "Explicit list of batch sizes to capture for the decode cuda graph.",
++        Arg(
++            help="Explicit list of batch sizes to capture for the decode cuda graph.",
++            aliases=["--cuda-graph-bs"],
++        ),
+     ] = None
+     cuda_graph_bs_prefill: A[
+         Optional[List[int]],
+-        "Explicit list of batch sizes to capture for the prefill cuda graph.",
++        Arg(
++            help="Explicit list of batch sizes to capture for the prefill cuda graph.",
++            aliases=["--piecewise-cuda-graph-tokens"],
++        ),
+     ] = None
+     cuda_graph_prefill_max_context: A[
+         Optional[int],
+@@ -532,7 +551,10 @@ class ExecGraph(msgspec.Struct):
+     ] = None
+     cuda_graph_tc_compiler: A[
+         Optional[Literal["eager", "inductor"]],
+-        "Compiler used by the tc_piecewise backend (currently only the prefill phase consumes it).",
++        Arg(
++            help="Compiler used by the tc_piecewise backend (currently only the prefill phase consumes it).",
++            aliases=["--piecewise-cuda-graph-compiler"],
++        ),
+     ] = None
+     disable_prefill_cuda_graph: A[
+         bool,
+diff --git a/python/sglang/srt/disaggregation/decode.py b/python/sglang/srt/disaggregation/decode.py
+index 2ee23a97..1e550f2f 100644
+--- a/python/sglang/srt/disaggregation/decode.py
++++ b/python/sglang/srt/disaggregation/decode.py
+@@ -22,6 +22,7 @@ from __future__ import annotations
+
+ import hashlib
+ import logging
++import os
+ import time
+ from collections import deque
+ from concurrent.futures import Future
+@@ -1042,6 +1043,11 @@ class DecodePreallocQueue(DecodeHiCachePreallocMixin):
+                 [decode_req.kv_receiver for decode_req in self.queue], self.gloo_group
+             )
+
++        bootstrap_timeout = float(
++            os.environ.get("SGLANG_DISAGGREGATION_TRANSFER_TIMEOUT", "600")
++        )
++        now = time.perf_counter()
++
+         for decode_req, poll in zip(self.queue, polls):
+             if poll is None:
+                 continue
+@@ -1049,7 +1055,23 @@ class DecodePreallocQueue(DecodeHiCachePreallocMixin):
+                 continue
+
+             if poll == KVPoll.Bootstrapping:
+-                pass
++                entry_time = (
++                    decode_req.req.time_stats.decode_prealloc_queue_entry_time
++                )
++                if entry_time > 0 and now - entry_time > bootstrap_timeout:
++                    error_message = (
++                        f"Decode prealloc timeout for request rank={self.tp_rank} "
++                        f"{decode_req.req.rid=} {decode_req.req.bootstrap_room=} "
++                        f"after {bootstrap_timeout}s"
++                    )
++                    logger.error(error_message)
++                    prepare_abort(
++                        decode_req.req,
++                        error_message,
++                        status_code=HTTPStatus.GATEWAY_TIMEOUT,
++                    )
++                    if self.scheduler.metrics_reporter.enable_metrics:
++                        self.scheduler.metrics_collector.increment_bootstrap_failed_reqs()
+             elif poll == KVPoll.WaitingForInput:
+                 decode_req.waiting_for_input = True
+                 decode_req.req.time_stats.set_bootstrap_done_time()
+@@ -2217,6 +2239,17 @@ class DecodePreallocQueue(DecodeHiCachePreallocMixin):
+             return host_indices
+         return kv_loc
+
++    def release_memory_occupation(self):
++        self.queue.clear()
++        self.retracted_queue.clear()
++        self.pending_reqs.clear()
++        if hasattr(self.kv_manager, "deregister_buffer_to_engine"):
++            self.kv_manager.deregister_buffer_to_engine()
++
++    def resume_memory_occupation(self):
++        if hasattr(self.kv_manager, "register_buffer_to_engine"):
++            self.kv_manager.register_buffer_to_engine()
++
+
+ def alloc_for_decode_prealloc_hisparse(
+     allocator: BaseTokenToKVPoolAllocator,
+@@ -2631,6 +2664,11 @@ class DecodeTransferQueue(DecodeHiCacheTransferMixin):
+         else:
+             polls = self._poll_with_metadata_gate()
+
++        transfer_timeout = float(
++            os.environ.get("SGLANG_DISAGGREGATION_TRANSFER_TIMEOUT", "600")
++        )
++        now = time.perf_counter()
++
+         transferred_reqs = []
+         indices_to_remove = set()
+         # Queue-removed but held for deferred release; excluded from the metadata
+@@ -2752,7 +2790,17 @@ class DecodeTransferQueue(DecodeHiCacheTransferMixin):
+                 KVPoll.WaitingForInput,
+                 KVPoll.Transferring,
+             ]:
+-                pass
++                entry_time = decode_req.req.time_stats.decode_transfer_queue_entry_time
++                if entry_time > 0 and now - entry_time > transfer_timeout:
++                    logger.error(
++                        "Decode transfer timeout for request rank=%s rid=%s room=%s "
++                        "after %ss",
++                        self.tp_rank,
++                        decode_req.req.rid,
++                        decode_req.req.bootstrap_room,
++                        transfer_timeout,
++                    )
++                    decode_req.kv_receiver.abort()
+             else:
+                 raise ValueError(f"Unexpected poll case: {poll}")
+
+@@ -2859,6 +2907,9 @@ class DecodeTransferQueue(DecodeHiCacheTransferMixin):
+
+     def release_memory_occupation(self):
+         """Clean up in-flight transfers before releasing GPU memory."""
++        for decode_req in self.queue:
++            if decode_req.kv_receiver is not None:
++                decode_req.kv_receiver.abort()
+         self.queue.clear()
+         # Pool is being torn down; drop held entries without per-request release.
+         self._deferred_releases.clear()
+@@ -3184,6 +3235,11 @@ class SchedulerDisaggregationDecodeMixin:
+         resumed_reqs = self.disagg_decode_prealloc_queue.resume_retracted_reqs()
+         self.waiting_queue.extend(resumed_reqs)
+         if len(self.disagg_decode_prealloc_queue.retracted_queue) > 0:
++            transferred_reqs = self.disagg_decode_transfer_queue.pop_transferred()
++            if self.enable_hisparse:
++                for req in transferred_reqs:
++                    self.hisparse_coordinator.admit_request_direct(req)
++            self.waiting_queue.extend(transferred_reqs)
+             # if there are still retracted requests, we do not allocate new requests
+             return
+
+diff --git a/python/sglang/srt/disaggregation/mooncake/conn.py b/python/sglang/srt/disaggregation/mooncake/conn.py
+index 0f0edd88..f1c34629 100644
+--- a/python/sglang/srt/disaggregation/mooncake/conn.py
++++ b/python/sglang/srt/disaggregation/mooncake/conn.py
+@@ -1491,7 +1491,7 @@ class MooncakeKVManager(StagingManagerMixin, CommonKVManager):
+         for i, dst_aux_ptr in enumerate(dst_aux_ptrs):
+             length = prefill_aux_item_lens[i]
+             src_addr = prefill_aux_ptrs[i] + length * prefill_aux_index
+-            dst_addr = dst_aux_ptrs[i] + length * req.dst_aux_index
++            dst_addr = dst_aux_ptr + length * req.dst_aux_index
+             transfer_blocks.append((src_addr, dst_addr, length))
+
+         return self._transfer_data(req.mooncake_session_id, transfer_blocks)
+@@ -2304,12 +2304,6 @@ class MooncakeKVManager(StagingManagerMixin, CommonKVManager):
+                         if ret != 0:
+                             with self.session_lock:
+                                 self.session_failures[req.mooncake_session_id] += 1
+-                                # Failures should never happen if the session is not dead, if the session fails once, mark it as failed
+-                                if self.session_failures[req.mooncake_session_id] >= 1:
+-                                    self.failed_sessions.add(req.mooncake_session_id)
+-                                    logger.error(
+-                                        f"Session {req.mooncake_session_id} failed."
+-                                    )
+                             self.conclude_failure(
+                                 bootstrap_room=kv_chunk.room,
+                                 failure_reason=(
+diff --git a/python/sglang/srt/disaggregation/prefill.py b/python/sglang/srt/disaggregation/prefill.py
+index b72dc2a2..06e2e46a 100644
+--- a/python/sglang/srt/disaggregation/prefill.py
++++ b/python/sglang/srt/disaggregation/prefill.py
+@@ -21,6 +21,8 @@ from __future__ import annotations
+
+ import hashlib
+ import logging
++import os
++import time
+ from array import array
+ from collections import deque
+ from http import HTTPStatus
+@@ -495,6 +497,11 @@ class PrefillBootstrapQueue:
+                 self.scheduler.attn_tp_cpu_group,
+             )
+
++        bootstrap_timeout = float(
++            os.environ.get("SGLANG_DISAGGREGATION_TRANSFER_TIMEOUT", "600")
++        )
++        now = time.perf_counter()
++
+         for i, (req, poll) in enumerate(zip(self.queue, polls)):
+             if poll is None:
+                 continue
+@@ -504,6 +511,27 @@ class PrefillBootstrapQueue:
+                 indices_to_remove.add(i)
+                 failed_reqs.append(req)
+             elif poll == KVPoll.Bootstrapping:
++                entry_time = req.time_stats.prefill_bootstrap_queue_entry_time
++                if entry_time > 0 and now - entry_time > bootstrap_timeout:
++                    error_message = (
++                        f"Prefill bootstrap timed out after {now - entry_time:.1f}s "
++                        f"for request rank={self.tp_rank} "
++                        f"{req.rid=} {req.bootstrap_room=}"
++                    )
++                    logger.error(error_message)
++                    prepare_abort(
++                        req,
++                        error_message,
++                        status_code=HTTPStatus.GATEWAY_TIMEOUT,
++                    )
++                    self.scheduler.output_streamer.stream_output(
++                        [req], req.return_logprob
++                    )
++                    indices_to_remove.add(i)
++                    failed_reqs.append(req)
++                    if self.scheduler.metrics_reporter.enable_metrics:
++                        self.scheduler.metrics_collector.increment_bootstrap_failed_reqs()
++                    continue
+                 if (
+                     req.prefill_attempt_count < get_disagg().optimistic_prefill_attempts
+                     and not req.is_retracted  # engine paused
+@@ -1020,6 +1048,11 @@ class SchedulerDisaggregationPrefillMixin:
+             self.attn_tp_cpu_group,
+         )
+
++        transfer_timeout = float(
++            os.environ.get("SGLANG_DISAGGREGATION_TRANSFER_TIMEOUT", "600")
++        )
++        now = time.perf_counter()
++
+         undone_reqs: List[Req] = []
+         # Check .poll() for the reqs in disagg_prefill_inflight_queue. If Success, respond to the client and remove it from the queue
+         for req, poll in zip(self.disagg_prefill_inflight_queue, polls):
+@@ -1053,8 +1086,27 @@ class SchedulerDisaggregationPrefillMixin:
+                 continue
+
+             if poll in [KVPoll.WaitingForInput, KVPoll.Transferring]:
+-                # todo: set Transferring correctly in backend
+-                undone_reqs.append(req)
++                entry_time = req.time_stats.prefill_transfer_queue_entry_time
++                if entry_time > 0 and now - entry_time > transfer_timeout:
++                    error_message = (
++                        f"Prefill transfer timed out after {now - entry_time:.1f}s "
++                        f"(state={poll}) for request rank={self.ps.tp_rank} "
++                        f"{req.rid=} {req.bootstrap_room=}"
++                    )
++                    logger.error(error_message)
++                    release_kv_cache(req, self.tree_cache)
++                    prepare_abort(
++                        req,
++                        error_message,
++                        status_code=HTTPStatus.GATEWAY_TIMEOUT,
++                    )
++                    if hasattr(req.disagg_kv_sender, "clear"):
++                        req.disagg_kv_sender.clear()
++                    done_reqs.append(req)
++                    if self.metrics_reporter.enable_metrics:
++                        self.metrics_collector.increment_transfer_failed_reqs()
++                else:
++                    undone_reqs.append(req)
+             elif poll == KVPoll.Success:  # transfer done
+                 if not isinstance(req.finished_reason, FINISH_ABORT):
+                     req.finished_reason = FINISH_LENGTH(length=0)
+@@ -1575,6 +1627,7 @@ class SchedulerDisaggregationPrefillMixin:
+         req.hidden_states_tensor = None
+         req.output_dsa_topk_indices = None
+         req.pending_bootstrap = True
++        req.time_stats.prefill_retry_count += 1
+         req.time_stats.reset_prefill_retry_time()
+         req.advance_cache_request_handle()
+         # A fresh lookup budget for the new attempt, as after a retraction.
+diff --git a/python/sglang/srt/entrypoints/engine.py b/python/sglang/srt/entrypoints/engine.py
+index 4df81823..b04db5c4 100644
+--- a/python/sglang/srt/entrypoints/engine.py
++++ b/python/sglang/srt/entrypoints/engine.py
+@@ -81,6 +81,7 @@ from sglang.srt.managers.io_struct import (
+     LoadLoRAAdapterReqInput,
+     MultimodalDataInputFormat,
+     OpenSessionReqInput,
++    PostProcessWeightsReqInput,
+     ProfileReq,
+     ProfileReqType,
+     ReleaseMemoryOccupationReqInput,
+@@ -1646,6 +1647,20 @@ class Engine(EngineScoreMixin, EngineBase):
+             self.tokenizer_manager.update_weights_from_ipc(obj, None)
+         )
+
++    def post_process_weights(
++        self,
++        restore_weights_before_load: bool = False,
++        post_process_quantization: bool = False,
++    ):
++        """Optional post-processing for updated weights, e.g. quantization packing."""
++        obj = PostProcessWeightsReqInput(
++            restore_weights_before_load=restore_weights_before_load,
++            post_process_quantization=post_process_quantization,
++        )
++        return self.loop.run_until_complete(
++            self.tokenizer_manager.post_process_weights(obj, None)
++        )
++
+     def get_weights_by_name(self, name: str, truncate_size: int = 100):
+         """Get weights by parameter name."""
+         obj = GetWeightsByNameReqInput(name=name, truncate_size=truncate_size)
+diff --git a/python/sglang/srt/entrypoints/http_server.py b/python/sglang/srt/entrypoints/http_server.py
+index 3258cfb9..ad52d1dc 100644
+--- a/python/sglang/srt/entrypoints/http_server.py
++++ b/python/sglang/srt/entrypoints/http_server.py
+@@ -141,6 +141,7 @@ from sglang.srt.managers.io_struct import (
+     ParseFunctionCallReq,
+     PauseGenerationReqInput,
+     PdRoleSwitchReqInput,
++    PostProcessWeightsReqInput,
+     ProfileReq,
+     ReleaseMemoryOccupationReqInput,
+     ResumeMemoryOccupationReqInput,
+@@ -828,6 +829,14 @@ async def model_info():
+     return msgspec_to_builtins(result)
+
+
++@app.get("/get_weight_version")
++@app.get("/weight_version")
++async def weight_version():
++    """Get the current weight version."""
++    result = await model_info()
++    return {"weight_version": result.get("weight_version", None)}
++
++
+ @app.get("/get_server_info")
+ async def get_server_info():
+     """Get the server information (deprecated - use /server_info instead)."""
+@@ -851,9 +860,18 @@ async def server_info():
+     HiCache mirror by `GET /hicache/storage-backend`.
+     """
+     # Returns internal states per DP.
+-    internal_states: List[
+-        Dict[Any, Any]
+-    ] = await _global_state.tokenizer_manager.get_internal_state()
++    server_info_timeout = float(os.environ.get("SGLANG_SERVER_INFO_TIMEOUT", "2"))
++    try:
++        internal_states: List[Dict[Any, Any]] = await asyncio.wait_for(
++            _global_state.tokenizer_manager.get_internal_state(),
++            timeout=server_info_timeout,
++        )
++    except asyncio.TimeoutError:
++        logger.warning(
++            "Timed out getting internal state for /server_info after %.1fs; returning empty internal_states",
++            server_info_timeout,
++        )
++        internal_states = []
+
+     server_args = _global_state.tokenizer_manager.server_args
+
+@@ -1466,6 +1484,22 @@ async def update_weights_from_ipc(
+         return ORJSONResponse(content, status_code=HTTPStatus.BAD_REQUEST)
+
+
++@app.post("/post_process_weights")
++@auth_level(AuthLevel.ADMIN_OPTIONAL)
++async def post_process_weights(
++    req: Annotated[PostProcessWeightsReqInput, Body()], request: Request
++):
++    """Optional post-processing for updated weights, e.g. quantization packing."""
++    success, message = await _global_state.tokenizer_manager.post_process_weights(
++        req, request
++    )
++
++    content = {"success": success, "message": message}
++    return ORJSONResponse(
++        content, status_code=200 if success else HTTPStatus.BAD_REQUEST
++    )
++
++
+ @app.post("/update_weight_version")
+ @auth_level(AuthLevel.ADMIN_OPTIONAL)
+ async def update_weight_version(
+diff --git a/python/sglang/srt/layers/attention/dsa/dsa_indexer.py b/python/sglang/srt/layers/attention/dsa/dsa_indexer.py
+index f4e23f74..557ae6b8 100644
+--- a/python/sglang/srt/layers/attention/dsa/dsa_indexer.py
++++ b/python/sglang/srt/layers/attention/dsa/dsa_indexer.py
+@@ -2,6 +2,7 @@ from __future__ import annotations
+
+ import contextlib
+ import logging
++import os
+ from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
+
+ import torch
+@@ -150,6 +151,7 @@ DUAL_STREAM_TOKEN_THRESHOLD = 1024 if _is_cuda else 0
+ if _is_cuda or _is_hip:
+     # Plain-torch graph helpers: usable wherever the split-op surface is.
+     from sglang.srt.layers.attention.dsa.dsa_prefill_cuda_graph import (
++        _match_head_gate_q_scale,
+         logits_head_gate_graph,
+         scale_head_gate_graph,
+     )
+@@ -352,6 +354,14 @@ class Indexer(DSANPUIndexerMixin, BaseFusedOp):
+                     else (torch.bfloat16 if _use_aiter else torch.float32)
+                 ),
+             )
++        env_neox_style = os.environ.get("INDEXER_ROPE_NEOX_STYLE")
++        if env_neox_style is not None:
++            if env_neox_style not in ("0", "1"):
++                raise ValueError(
++                    "INDEXER_ROPE_NEOX_STYLE must be either '0' or '1' when set."
++                )
++            is_neox_style = env_neox_style == "1"
++
+         self.rotary_emb = get_rope_wrapper(
+             rope_head_dim,
+             rotary_dim=rope_head_dim,
+@@ -444,6 +454,7 @@ class Indexer(DSANPUIndexerMixin, BaseFusedOp):
+     ):
+         weights = self._weights_proj_bf16_in_fp32_out(x)
+         weights = weights * self.n_heads**-0.5
++        weights = _match_head_gate_q_scale(weights, q_scale)
+         weights = weights.unsqueeze(-1) * q_scale * self.softmax_scale
+         return weights
+
+@@ -451,6 +462,7 @@ class Indexer(DSANPUIndexerMixin, BaseFusedOp):
+     def _apply_q_scale_and_softmax_scale(
+         self, weights: torch.Tensor, q_scale: torch.Tensor
+     ):
++        weights = _match_head_gate_q_scale(weights, q_scale)
+         return weights.unsqueeze(-1) * q_scale * self.softmax_scale
+
+     @torch.compile(dynamic=True)
+@@ -593,6 +605,12 @@ class Indexer(DSANPUIndexerMixin, BaseFusedOp):
+
+         return False
+
++    def _maybe_repeat_query_heads(self, query: torch.Tensor) -> torch.Tensor:
++        if query.shape[1] < 32:
++            assert 32 % query.shape[1] == 0
++            query = query.repeat_interleave(32 // query.shape[1], dim=1)
++        return query
++
+     def _get_q_k_bf16(
+         self,
+         q_lora: torch.Tensor,
+@@ -1744,6 +1762,7 @@ class Indexer(DSANPUIndexerMixin, BaseFusedOp):
+             query, key, weights_raw = self._get_q_k_bf16(
+                 q_lora, x, positions, enable_dual_stream, forward_batch=forward_batch
+             )
++            query = self._maybe_repeat_query_heads(query)
+             q_fp8, q_scale = act_quant(query, self.block_size, self.scale_fmt)
+             with torch.cuda.stream(self.alt_stream):
+                 self._store_index_k_cache(
+@@ -1765,6 +1784,7 @@ class Indexer(DSANPUIndexerMixin, BaseFusedOp):
+                 enable_dual_stream,
+                 forward_batch=forward_batch,
+             )
++            query = self._maybe_repeat_query_heads(query)
+
+             if enable_dual_stream:
+                 current_stream = torch.cuda.current_stream()
+diff --git a/python/sglang/srt/layers/attention/dsa/dsa_prefill_cuda_graph.py b/python/sglang/srt/layers/attention/dsa/dsa_prefill_cuda_graph.py
+index 92a661a1..0f689fc6 100644
+--- a/python/sglang/srt/layers/attention/dsa/dsa_prefill_cuda_graph.py
++++ b/python/sglang/srt/layers/attention/dsa/dsa_prefill_cuda_graph.py
+@@ -32,6 +32,13 @@ def _is_in_piecewise_or_breakable_cuda_graph() -> bool:
+     return is_in_tc_piecewise_cuda_graph() or is_in_breakable_cuda_graph()
+
+
++def _match_head_gate_q_scale(weights: torch.Tensor, q_scale: torch.Tensor) -> torch.Tensor:
++    if weights.shape[1] < q_scale.shape[1]:
++        assert q_scale.shape[1] % weights.shape[1] == 0
++        weights = weights.repeat_interleave(q_scale.shape[1] // weights.shape[1], dim=1)
++    return weights
++
++
+ if _is_cuda or _is_hip:
+
+     def _scale_head_gate_graph_fake_impl(
+@@ -66,7 +73,7 @@ if _is_cuda or _is_hip:
+         q_scale: torch.Tensor,
+     ) -> torch.Tensor:
+         return torch.empty(
+-            (x.shape[0], weight.shape[0], q_scale.shape[-1]),
++            (x.shape[0], q_scale.shape[1], q_scale.shape[-1]),
+             dtype=torch.float32,
+             device=x.device,
+         )
+@@ -82,6 +89,7 @@ if _is_cuda or _is_hip:
+     ) -> torch.Tensor:
+         out = torch.mm(x, weight.t(), out_dtype=torch.float32)
+         weights = out * n_heads_inv_sqrt
++        weights = _match_head_gate_q_scale(weights, q_scale)
+         weights = weights.unsqueeze(-1) * q_scale * softmax_scale
+         return weights
+
+diff --git a/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors.py b/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors.py
+index e1214b46..2ce48da3 100644
+--- a/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors.py
++++ b/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors.py
+@@ -1205,6 +1205,10 @@ class CompressedTensorsLinearMethod(LinearMethodBase):
+     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
+         layer.scheme.process_weights_after_loading(layer)
+
++    def restore_weights_before_loading(self, layer: torch.nn.Module) -> None:
++        if hasattr(layer.scheme, "restore_weights_before_loading"):
++            layer.scheme.restore_weights_before_loading(layer)
++
+     def create_weights(
+         self,
+         layer: torch.nn.Module,
+@@ -1259,7 +1263,8 @@ class CompressedTensorsFusedMoEMethod(FusedMoEMethodBase):
+         layer.scheme.process_weights_after_loading(layer)
+
+     def restore_weights_before_loading(self, layer: torch.nn.Module) -> None:
+-        layer.scheme.restore_weights_before_loading(layer)
++        if hasattr(layer.scheme, "restore_weights_before_loading"):
++            layer.scheme.restore_weights_before_loading(layer)
+
+     def create_weights(
+         self,
+diff --git a/python/sglang/srt/managers/io_struct.py b/python/sglang/srt/managers/io_struct.py
+index 9629b7aa..771128e1 100644
+--- a/python/sglang/srt/managers/io_struct.py
++++ b/python/sglang/srt/managers/io_struct.py
+@@ -22,6 +22,8 @@ instead, such as sglang.srt.utils.common.
+
+ from __future__ import annotations
+
++from sglang.srt.managers.load_snapshot import LoadSnapshot
++
+ import copy
+ import logging
+ import pickle
+@@ -1942,6 +1944,8 @@ class UpdateWeightsFromTensorReqInput(BaseReq, kw_only=True):
+     weight_version: Optional[str] = None
+     # which runners the op applies to
+     selector: Literal["target", "draft", "all"] = "all"
++    # Legacy clients use this flag to update only the target model.
++    disable_draft_model: bool = False
+     # Whether to call torch.cuda.empty_cache() during flush
+     torch_empty_cache: bool = False
+
+@@ -2113,6 +2117,16 @@ class EndWeightUpdateReqOutput(BaseReq, kw_only=True):
+     message: str
+
+
++class PostProcessWeightsReqInput(BaseReq, kw_only=True):
++    restore_weights_before_load: bool = False
++    post_process_quantization: bool = False
++
++
++class PostProcessWeightsReqOutput(BaseReq, kw_only=True):
++    success: bool
++    message: str
++
++
+ class CheckWeightsReqInput(BaseReq, kw_only=True):
+     action: str = "checksum"
+     allow_quant_error: bool = False
+@@ -2472,6 +2486,18 @@ class BlockReqInput(BaseReq, kw_only=True):
+     req_type: BlockReqType
+
+
++class GetLoadsReqInput(BaseReq, kw_only=True):
++    pass
++
++
++class GetLoadsReqOutput(BaseReq, kw_only=True):
++    snapshot: LoadSnapshot
++
++
++class SetInjectDumpMetadataReqInput(BaseReq, kw_only=True):
++    dump_metadata: Dict[str, Any]
++
++
+ class SetInjectDumpMetadataReqOutput(BaseReq, kw_only=True):
+     success: bool
+
+diff --git a/python/sglang/srt/managers/load_snapshot.py b/python/sglang/srt/managers/load_snapshot.py
+index 968f438f..c1db84e0 100644
+--- a/python/sglang/srt/managers/load_snapshot.py
++++ b/python/sglang/srt/managers/load_snapshot.py
+@@ -45,7 +45,7 @@ import mmap
+ import os
+ import struct
+ from contextlib import contextmanager
+-from typing import Optional
++from typing import Any, Optional
+
+ import msgspec
+ import msgspec.msgpack
+@@ -185,7 +185,7 @@ class QueueMetrics(msgspec.Struct, array_like=True):
+ # LoadSnapshot's nested sub-struct fields; every other struct field is a flat
+ # scalar returned under "core".
+ _SECTION_FIELDS = frozenset(
+-    {"memory", "speculative", "lora", "disaggregation", "queues"}
++    {"memory", "speculative", "lora", "disaggregation", "queues", "inflight"}
+ )
+
+
+@@ -221,8 +221,10 @@ class LoadSnapshot(msgspec.Struct, omit_defaults=True):
+     disaggregation: Optional[DisaggregationMetrics] = None
+     queues: Optional[QueueMetrics] = None
+
++    inflight: Optional[list[dict[str, Any]]] = None
++
+     VALID_SECTIONS = frozenset(
+-        {"core", "memory", "spec", "lora", "disagg", "queues", "all"}
++        {"core", "memory", "spec", "lora", "disagg", "queues", "inflight", "all"}
+     )
+
+     def to_dict(self, include: Optional[set[str]] = None) -> dict:
+@@ -251,6 +253,8 @@ class LoadSnapshot(msgspec.Struct, omit_defaults=True):
+                 continue
+             load[field] = msgspec.structs.asdict(section)
+
++        if self.inflight is not None and (include_all or "inflight" in include):
++            load["inflight"] = self.inflight
+         return load
+
+
+diff --git a/python/sglang/srt/managers/schedule_batch.py b/python/sglang/srt/managers/schedule_batch.py
+index 52c72a0e..f1b4f39d 100755
+--- a/python/sglang/srt/managers/schedule_batch.py
++++ b/python/sglang/srt/managers/schedule_batch.py
+@@ -1342,6 +1342,7 @@ class Req(ReqDllmMixin):
+         self.metrics_collector = metrics_collector
+         if time_stats is not None:
+             self.time_stats = SchedulerReqTimeStats.new_from_obj(time_stats)
++            self.time_stats.disagg_mode = disagg_mode
+         else:
+             self.time_stats = SchedulerReqTimeStats(disagg_mode=disagg_mode)
+         self.time_stats.set_metrics_collector(metrics_collector)
+@@ -3302,11 +3303,14 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
+         retracted_reqs = []
+         reqs_to_abort: List[Req] = []
+         first_iter = True
++        num_minimum_reqs = (
++            0 if get_disagg().disaggregation_mode == "decode" else 1
++        )
+         while first_iter or (
+             not self.check_decode_mem(selected_indices=sorted_indices)
+         ):
+-            if len(sorted_indices) == 1:
+-                # Always keep at least one request
++            if len(sorted_indices) <= num_minimum_reqs:
++                # Unified mode keeps one request; decode disaggregation may retract all.
+                 break
+
+             first_iter = False
+@@ -3351,7 +3355,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
+                     "retract_decode: aborted request %s: %s", req.rid, message
+                 )
+
+-        if len(sorted_indices) <= 1 and not self.check_decode_mem(
++        if sorted_indices and len(sorted_indices) <= num_minimum_reqs and not self.check_decode_mem(
+             selected_indices=sorted_indices
+         ):
+             # Even the last remaining request cannot fit in memory.
+diff --git a/python/sglang/srt/managers/scheduler.py b/python/sglang/srt/managers/scheduler.py
+index a7d8baee..90f09760 100644
+--- a/python/sglang/srt/managers/scheduler.py
++++ b/python/sglang/srt/managers/scheduler.py
+@@ -162,6 +162,9 @@ from sglang.srt.managers.io_struct import (
+     OpenSessionReqInput,
+     PauseGenerationReqInput,
+     PdRoleSwitchReqInput,
++    PostProcessWeightsReqInput,
++    GetLoadsReqInput,
++    GetLoadsReqOutput,
+     ProfileReq,
+     ReleaseMemoryOccupationReqInput,
+     RemoveExternalCorpusReqInput,
+@@ -1773,6 +1776,14 @@ class Scheduler(
+                     UpdateWeightVersionReqInput,
+                     self.handle_update_weight_version,
+                 ),
++                (
++                    GetLoadsReqInput,
++                    lambda req: GetLoadsReqOutput(snapshot=self.load_inquirer.get_loads(include_inflight=True)),
++                ),
++                (
++                    PostProcessWeightsReqInput,
++                    self.weight_updater.post_process_weights,
++                ),
+                 (
+                     GetWeightsByNameReqInput,
+                     self.weight_updater.get_weights_by_name,
+@@ -5575,6 +5586,12 @@ class Scheduler(
+                 # The request will still run one decode forward pass.
+                 # Then we reuse all existing code to clean up the KV cache allocation.
+                 logger.debug(f"Abort running request. {req.rid=}")
++                if self.disaggregation_mode == DisaggregationMode.PREFILL and hasattr(
++                    req, "disagg_kv_sender"
++                ):
++                    sender = getattr(req, "disagg_kv_sender", None)
++                    if sender is not None and hasattr(sender, "abort"):
++                        sender.abort()
+                 if recv_req.abort_message:
+                     # Timeout aborts carry an SLA message + 503 for the client.
+                     req.to_finish = FINISH_ABORT(
+diff --git a/python/sglang/srt/managers/scheduler_components/load_inquirer.py b/python/sglang/srt/managers/scheduler_components/load_inquirer.py
+index 4764a768..742576eb 100644
+--- a/python/sglang/srt/managers/scheduler_components/load_inquirer.py
++++ b/python/sglang/srt/managers/scheduler_components/load_inquirer.py
+@@ -92,7 +92,7 @@ class SchedulerLoadInquirer:
+             num_tokens += max(0, cr.seqlen - len(cr.prefix_indices))
+         return num_tokens
+
+-    def get_loads(self) -> LoadSnapshot:
++    def get_loads(self, *, include_inflight: bool = False) -> LoadSnapshot:
+         """Build the per-DP-rank load snapshot for DP balancing and /v1/loads."""
+         stats = self.get_stats()
+         num_running_reqs = len(self.get_running_batch().reqs)
+@@ -201,6 +201,88 @@ class SchedulerLoadInquirer:
+             kv_transfer_latency_ms=stats.kv_transfer_latency_ms,
+         )
+
++        inflight = None
++        if include_inflight:
++            now_perf = time.perf_counter()
++            inflight_queues = [("running", self.get_running_batch().reqs, None)]
++            if self.disaggregation_mode == DisaggregationMode.PREFILL:
++                inflight_queues += [
++                    ("waiting", self.get_waiting_queue(), "wait_queue_entry_time"),
++                    (
++                        "bootstrap",
++                        self.get_disagg_prefill_bootstrap_queue().queue,
++                        "prefill_bootstrap_queue_entry_time",
++                    ),
++                    (
++                        "prefill_inflight",
++                        self.get_disagg_prefill_inflight_queue(),
++                        "prefill_transfer_queue_entry_time",
++                    ),
++                ]
++            elif self.disaggregation_mode == DisaggregationMode.DECODE:
++                inflight_queues += [
++                    ("waiting", self.get_waiting_queue(), "wait_queue_entry_time"),
++                    (
++                        "prealloc",
++                        self.get_disagg_decode_prealloc_queue().queue,
++                        "decode_prealloc_queue_entry_time",
++                    ),
++                    (
++                        "transfer",
++                        self.get_disagg_decode_transfer_queue().queue,
++                        "decode_transfer_queue_entry_time",
++                    ),
++                    (
++                        "retracted",
++                        self.get_disagg_decode_prealloc_queue().retracted_queue,
++                        "decode_prealloc_queue_entry_time",
++                    ),
++                ]
++            else:
++                inflight_queues.append(
++                    ("waiting", self.get_waiting_queue(), "wait_queue_entry_time")
++                )
++
++            def describe_req(entry, stage, entry_time_field):
++                req = getattr(entry, "req", entry)
++                info = {
++                    "rid": getattr(req, "rid", None),
++                    "bootstrap_room": getattr(req, "bootstrap_room", None),
++                    "seqlen": getattr(entry, "seqlen", None),
++                    "stage": stage,
++                }
++                if entry_time_field is not None:
++                    time_stats = getattr(req, "time_stats", None)
++                    entry_time = (
++                        getattr(time_stats, entry_time_field, 0.0)
++                        if time_stats
++                        else 0.0
++                    )
++                    info["age_s"] = (
++                        round(now_perf - entry_time, 3) if entry_time else None
++                    )
++                if entry is not req:
++                    info["waiting_for_input"] = getattr(
++                        entry, "waiting_for_input", None
++                    )
++                    info["timeout_cancel_issued"] = getattr(
++                        entry, "timeout_cancel_issued", None
++                    )
++                return info
++
++            inflight = []
++            for name, queue, entry_time_field in inflight_queues:
++                inflight.append(
++                    {
++                        "name": name,
++                        "num_reqs": len(queue),
++                        "reqs": [
++                            describe_req(entry, name, entry_time_field)
++                            for entry in queue
++                        ],
++                    }
++                )
++
+         queues = QueueMetrics(
+             waiting=len(self.get_waiting_queue()),
+             grammar=stats.num_grammar_queue_reqs,
+@@ -238,4 +320,5 @@ class SchedulerLoadInquirer:
+             total_prefill_uncached_tokens=self.get_total_prefill_uncached_tokens(),
+             total_prefill_busy_us=self.get_total_prefill_busy_us(),
+             decode_moments=decode_moments,
++            inflight=inflight,
+         )
+diff --git a/python/sglang/srt/managers/scheduler_components/profiler_manager.py b/python/sglang/srt/managers/scheduler_components/profiler_manager.py
+index 2791c3a4..3bb77b04 100644
+--- a/python/sglang/srt/managers/scheduler_components/profiler_manager.py
++++ b/python/sglang/srt/managers/scheduler_components/profiler_manager.py
+@@ -419,7 +419,7 @@ class SchedulerProfilerManager:
+                 if self.profiler_prefill_ct > self.profiler_target_prefill_ct:
+                     if self.profile_in_progress:
+                         self._stop_profile(stage=ForwardMode.EXTEND)
+-            elif batch.forward_mode.is_decode():
++            elif batch.forward_mode.is_decode() or batch.forward_mode.is_prebuilt():
+                 if self.profiler_decode_ct == 0:
+                     if self.profile_in_progress:
+                         # force trace flush (a prefill capture must not absorb decode steps)
+diff --git a/python/sglang/srt/managers/scheduler_components/weight_updater.py b/python/sglang/srt/managers/scheduler_components/weight_updater.py
+index d9a11737..6d1a4056 100644
+--- a/python/sglang/srt/managers/scheduler_components/weight_updater.py
++++ b/python/sglang/srt/managers/scheduler_components/weight_updater.py
+@@ -31,6 +31,8 @@ from sglang.srt.managers.io_struct import (
+     GetWeightsByNameReqOutput,
+     InitWeightsUpdateGroupReqInput,
+     InitWeightsUpdateGroupReqOutput,
++    PostProcessWeightsReqInput,
++    PostProcessWeightsReqOutput,
+     ReleaseMemoryOccupationReqInput,
+     ReleaseMemoryOccupationReqOutput,
+     ResumeMemoryOccupationReqInput,
+@@ -176,12 +178,8 @@ class SchedulerWeightUpdaterManager:
+         recv_req: UpdateWeightsFromDistributedReqInput,
+     ) -> Tuple[bool, str]:
+         """Update the online model parameter, fanning out to the selected runners."""
+-        if self._session is None:
+-            return UpdateWeightsFromDistributedReqOutput(
+-                success=False,
+-                message="update_weights_from_distributed must run between "
+-                "begin_weight_update() and end_weight_update()",
+-            )
++        # Legacy clients stream buckets while paused and run post_process_weights
++        # themselves. New clients can still use an explicit begin/end session.
+         with self._observe_weight_load("distributed"):
+             # only the target runner joined the update group; drafts load its receive
+             target = self.tp_worker.model_runner.weight_updater
+@@ -205,9 +203,10 @@ class SchedulerWeightUpdaterManager:
+                     if not success:
+                         break
+             if success:
+-                self._session = msgspec.structs.replace(
+-                    self._session, loaded_weights=True
+-                )
++                if self._session is not None:
++                    self._session = msgspec.structs.replace(
++                        self._session, loaded_weights=True
++                    )
+                 self.flush_cache_after_weight_update(recv_req)
+                 self.record_weight_version_after_update(recv_req.weight_version)
+             return UpdateWeightsFromDistributedReqOutput(
+@@ -216,18 +215,15 @@ class SchedulerWeightUpdaterManager:
+
+     def update_weights_from_tensor(self, recv_req: UpdateWeightsFromTensorReqInput):
+         """Update the online model parameter from tensors on the selected runners."""
+-        if self._session is None:
+-            return UpdateWeightsFromTensorReqOutput(
+-                success=False,
+-                message="update_weights_from_tensor must run between "
+-                "begin_weight_update() and end_weight_update()",
+-            )
++        # Legacy clients stream buckets while paused and run post_process_weights
++        # themselves. New clients can still use an explicit begin/end session.
+         with self._observe_weight_load("tensor"):
+             named_tensors = self.tp_worker.deserialize_own_rank(
+                 recv_req.serialized_named_tensors
+             )
+             success, message = True, "Success"
+-            for _, runner in self._select_runners(recv_req.selector):
++            selector = "target" if recv_req.disable_draft_model else recv_req.selector
++            for _, runner in self._select_runners(selector):
+                 success, message = runner.weight_updater.update_weights_from_tensor(
+                     named_tensors=named_tensors,
+                     load_format=recv_req.load_format,
+@@ -235,9 +231,10 @@ class SchedulerWeightUpdaterManager:
+                 if not success:
+                     break
+             if success:
+-                self._session = msgspec.structs.replace(
+-                    self._session, loaded_weights=True
+-                )
++                if self._session is not None:
++                    self._session = msgspec.structs.replace(
++                        self._session, loaded_weights=True
++                    )
+                 self.flush_cache_after_weight_update(recv_req)
+                 self.record_weight_version_after_update(recv_req.weight_version)
+             else:
+@@ -315,6 +312,20 @@ class SchedulerWeightUpdaterManager:
+         torch.distributed.barrier(group=self.tp_cpu_group)
+         return EndWeightUpdateReqOutput(success=True, message="Success")
+
++    def post_process_weights(self, recv_req: PostProcessWeightsReqInput):
++        success, message = True, "Success"
++        for _, runner in self._select_runners():
++            success, message = runner.post_process_weights(
++                restore_weights_before_load=recv_req.restore_weights_before_load,
++                post_process_quantization=recv_req.post_process_quantization,
++            )
++            if not success:
++                break
++        if not success:
++            logger.error(message)
++        torch.distributed.barrier(group=self.tp_cpu_group)
++        return PostProcessWeightsReqOutput(success=success, message=message)
++
+     def release_memory_occupation(self, recv_req: ReleaseMemoryOccupationReqInput):
+         scheduler = self.scheduler
+         assert self.is_fully_idle(
+diff --git a/python/sglang/srt/managers/tokenizer_control_mixin.py b/python/sglang/srt/managers/tokenizer_control_mixin.py
+index f5051295..2490ccb3 100644
+--- a/python/sglang/srt/managers/tokenizer_control_mixin.py
++++ b/python/sglang/srt/managers/tokenizer_control_mixin.py
+@@ -55,6 +55,10 @@ from sglang.srt.managers.io_struct import (
+     OpenSessionReqInput,
+     PdRoleSwitchReqInput,
+     PdRoleSwitchReqOutput,
++    PostProcessWeightsReqInput,
++    GetLoadsReqInput,
++    GetLoadsReqOutput,
++    PostProcessWeightsReqOutput,
+     ProfileReq,
+     ProfileReqOutput,
+     ProfileReqType,
+@@ -118,6 +122,8 @@ _COMMUNICATOR_SPECS = [
+     ("update_weights_from_tensor", UpdateWeightsFromTensorReqOutput),
+     ("update_weights_from_ipc", UpdateWeightsFromIPCReqOutput),
+     ("update_weight_version", UpdateWeightVersionReqOutput),
++    ("post_process_weights", PostProcessWeightsReqOutput),
++    ("get_loads", GetLoadsReqOutput),
+     ("get_weights_by_name", GetWeightsByNameReqOutput),
+     ("release_memory_occupation", ReleaseMemoryOccupationReqOutput),
+     ("resume_memory_occupation", ResumeMemoryOccupationReqOutput),
+@@ -883,6 +889,16 @@ class TokenizerControlMixin:
+         self.auto_create_handle_loop()
+         await self.resume_memory_occupation_communicator(obj)
+
++    async def post_process_weights(
++        self: TokenizerManager,
++        obj: PostProcessWeightsReqInput,
++        request: Optional[fastapi.Request] = None,
++    ) -> Tuple[bool, str]:
++        self.auto_create_handle_loop()
++        async with self.model_update_lock.writer_lock:
++            results = await self.post_process_weights_communicator(obj)
++        return FanOutCommunicator.merge_results(results)
++
+     async def check_weights(
+         self: TokenizerManager,
+         obj: CheckWeightsReqInput,
+@@ -994,6 +1010,10 @@ class TokenizerControlMixin:
+         ):
+             return []
+
++        if include is None or "all" in include or "inflight" in include:
++            responses = await self.get_loads_communicator(GetLoadsReqInput())
++            return [res.snapshot for res in responses if dp_rank is None or res.snapshot.dp_rank == dp_rank]
++
+         reader = self.load_snapshot_reader
+         if dp_rank is not None:
+             load = reader.read(dp_rank)
+diff --git a/python/sglang/srt/managers/tokenizer_manager.py b/python/sglang/srt/managers/tokenizer_manager.py
+index eb74ca02..f4407df8 100644
+--- a/python/sglang/srt/managers/tokenizer_manager.py
++++ b/python/sglang/srt/managers/tokenizer_manager.py
+@@ -3043,27 +3043,25 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
+             priority = getattr(state.obj, "priority", None)
+             if priority is not None:
+                 labels["priority"] = str(priority)
+-        if (
+-            not state.ttft_observed
+-            and self.disaggregation_mode != DisaggregationMode.PREFILL
+-        ):
++        if not state.ttft_observed:
+             state.ttft_observed = True
+             state.last_completion_tokens = completion_tokens
+-            self.metrics_collector.observe_time_to_first_token(
+-                labels,
+-                state.time_stats.get_first_token_latency(),
+-                stream=getattr(state.obj, "stream", False),
+-            )
++            if self.disaggregation_mode != DisaggregationMode.PREFILL:
++                self.metrics_collector.observe_time_to_first_token(
++                    labels,
++                    state.time_stats.get_first_token_latency(),
++                    stream=getattr(state.obj, "stream", False),
++                )
+         else:
+             num_new_tokens = completion_tokens - state.last_completion_tokens
+-            if num_new_tokens:
++            if num_new_tokens > 0:
+                 self.metrics_collector.observe_inter_token_latency(
+                     labels,
+                     state.time_stats.get_interval(),
+                     num_new_tokens,
+                 )
+                 state.time_stats.set_last_time()
+-                state.last_completion_tokens = completion_tokens
++            state.last_completion_tokens = completion_tokens
+
+         if state.finished:
+             # Get detailed cache breakdown if available
+diff --git a/python/sglang/srt/managers/tp_worker.py b/python/sglang/srt/managers/tp_worker.py
+index 6adfbe04..7340c200 100644
+--- a/python/sglang/srt/managers/tp_worker.py
++++ b/python/sglang/srt/managers/tp_worker.py
+@@ -30,6 +30,7 @@ from sglang.srt.managers.io_struct import (
+     InitWeightsUpdateGroupReqInput,
+     LoadLoRAAdapterFromTensorsReqInput,
+     LoadLoRAAdapterReqInput,
++    PostProcessWeightsReqInput,
+     SendWeightsToRemoteInstanceReqInput,
+     UnloadLoRAAdapterReqInput,
+ )
+@@ -189,6 +190,13 @@ class BaseTpWorker(ABC):
+         )
+         return success, message
+
++    def post_process_weights(self, recv_req: PostProcessWeightsReqInput):
++        success, message = self.model_runner.post_process_weights(
++            restore_weights_before_load=recv_req.restore_weights_before_load,
++            post_process_quantization=recv_req.post_process_quantization,
++        )
++        return success, message
++
+     def deserialize_own_rank(self, serialized_named_tensors):
+         """Each rank deserializes only its own payload (index tp_rank);
+         deserializing another rank's copy would break producer-side CUDA-IPC
+diff --git a/python/sglang/srt/mem_cache/memory_pool.py b/python/sglang/srt/mem_cache/memory_pool.py
+index aa8a3b44..415bcf97 100644
+--- a/python/sglang/srt/mem_cache/memory_pool.py
++++ b/python/sglang/srt/mem_cache/memory_pool.py
+@@ -4996,9 +4996,12 @@ class DSATokenToKVPool(MLATokenToKVPool):
+         tail_dtype = torch.bfloat16
+         tail_width = index_kpool + tail_extra_slots
+         with (
+-            torch.cuda.use_mem_pool(self.custom_mem_pool)
+-            if self.custom_mem_pool
+-            else nullcontext()
++            (
++                torch.cuda.use_mem_pool(self.custom_mem_pool)
++                if self.custom_mem_pool
++                else nullcontext()
++            ),
++            self.memory_saver_adapter.region(GPU_MEMORY_TYPE_KV_CACHE),
+         ):
+             self._compress_tail_k: Optional[List[torch.Tensor]] = [
+                 torch.zeros(
+diff --git a/python/sglang/srt/mem_cache/radix_cache.py b/python/sglang/srt/mem_cache/radix_cache.py
+index fa5f9df2..d012ab54 100644
+--- a/python/sglang/srt/mem_cache/radix_cache.py
++++ b/python/sglang/srt/mem_cache/radix_cache.py
+@@ -505,7 +505,7 @@ class RadixCache(BasePrefixCache):
+             return
+
+         radix_key, kv_indices, _ = self._insert_cache(
+-            req, req.get_fill_ids(), chunked=chunked
++            req, req.get_fill_ids()[: req.kv.kv_committed_len], chunked=chunked
+         )
+
+         # The prefix indices could be updated, reuse it
+@@ -610,9 +610,7 @@ class RadixCache(BasePrefixCache):
+             node.lock_ref -= 1
+             self._update_leaf_status(node)
+             if node.parent is None:
+-                assert node is self.root_node, (
+-                    "This request holds the node from another tree"
+-                )
++                break
+             node = node.parent
+         return DecLockRefResult(delta=delta)
+
+diff --git a/python/sglang/srt/model_executor/model_runner.py b/python/sglang/srt/model_executor/model_runner.py
+index 604a72f4..b11e9321 100644
+--- a/python/sglang/srt/model_executor/model_runner.py
++++ b/python/sglang/srt/model_executor/model_runner.py
+@@ -437,7 +437,8 @@ class ModelRunner:
+         self.prefill_shared_read_stager: Optional[Callable[[ForwardBatch], bool]] = None
+
+         # CPU offload
+-        set_offloader(create_offloader())
++        if not is_draft_worker:
++            set_offloader(create_offloader())
+
+         self._weight_checker = WeightChecker(get_model=lambda: self.model)
+
+@@ -1767,6 +1768,12 @@ class ModelRunner:
+         output.expert_distribution_metrics = recorder_outputs.get("metrics")
+
+         no_copy_to_cpu = not get_schedule().disable_overlap_schedule
++        cuda_graph_num_tokens = None
++        decode_graph_runner = getattr(self, "decode_cuda_graph_runner", None)
++        if getattr(decode_graph_runner, "bs", None):
++            cuda_graph_num_tokens = decode_graph_runner.bs * getattr(
++                decode_graph_runner, "num_tokens_per_bs", 1
++            )
+         if (
+             not self.is_draft_worker
+             and (experts_capturer := get_global_experts_capturer()) is not None
+@@ -1774,7 +1781,7 @@ class ModelRunner:
+             output.routed_experts_output = experts_capturer.on_forward_end(
+                 forward_batch=forward_batch,
+                 can_run_graph=output.can_run_graph,
+-                cuda_graph_batch=getattr(self.decode_cuda_graph_runner, "bs", None),
++                cuda_graph_batch=cuda_graph_num_tokens,
+                 no_copy_to_cpu=no_copy_to_cpu,
+             )
+
+@@ -1782,7 +1789,7 @@ class ModelRunner:
+             output.indexer_topk_output = indexer_capturer.on_forward_end(
+                 forward_batch=forward_batch,
+                 can_run_graph=output.can_run_graph,
+-                cuda_graph_batch=getattr(self.decode_cuda_graph_runner, "bs", None),
++                cuda_graph_batch=cuda_graph_num_tokens,
+                 no_copy_to_cpu=no_copy_to_cpu,
+             )
+
+@@ -2137,6 +2144,39 @@ class ModelRunner:
+         )
+         self._rearm_eplb_after_elastic_scale()
+
++    def post_process_weights(
++        self,
++        restore_weights_before_load: bool = False,
++        post_process_quantization: bool = False,
++    ):
++        """Run optional post-loading hooks, such as quantization repacking."""
++        from sglang.srt.model_loader.loader import device_loading_context
++
++        if self.device == "cuda":
++            target_device = torch.device("cuda", torch.cuda.current_device())
++        else:
++            target_device = torch.device(self.device)
++
++        if restore_weights_before_load:
++            for _, module in self.model.named_modules():
++                quant_method = getattr(module, "quant_method", None)
++                if quant_method is not None and hasattr(
++                    quant_method, "restore_weights_before_loading"
++                ):
++                    with device_loading_context(module, target_device):
++                        quant_method.restore_weights_before_loading(module)
++
++        if post_process_quantization:
++            for _, module in self.model.named_modules():
++                quant_method = getattr(module, "quant_method", None)
++                if quant_method is not None and hasattr(
++                    quant_method, "process_weights_after_loading"
++                ):
++                    with device_loading_context(module, target_device):
++                        quant_method.process_weights_after_loading(module)
++
++        return True, "Success"
++
+     def _report_elastic_scale_failure(self, error: str, effective_size: int) -> None:
+         if self.tp_rank != 0 or get_exec().moe.is_ep_scale_joiner:
+             return
+diff --git a/python/sglang/srt/models/glm4v_moe.py b/python/sglang/srt/models/glm4v_moe.py
+index 6acc2789..7d142d0b 100644
+--- a/python/sglang/srt/models/glm4v_moe.py
++++ b/python/sglang/srt/models/glm4v_moe.py
+@@ -41,6 +41,8 @@ class Glm4vMoeForConditionalGeneration(Glm4vForConditionalGeneration):
+
+         self.pp_group = get_parallel().pp_group
+         self.config = config
++        self.config.encoder_only = getattr(config, "encoder_only", False)
++        self.config.language_only = getattr(config, "language_only", False)
+         self.use_data_parallel = get_mm().mm_enable_dp_encoder
+         vision_utils.update_vit_attn_dummy_heads_config(self.config)
+         self.tp_size = get_parallel().tp_size
+@@ -48,11 +50,30 @@ class Glm4vMoeForConditionalGeneration(Glm4vForConditionalGeneration):
+         self.num_fused_shared_experts = 0
+         self.determine_num_fused_shared_experts()
+
+-        self.model = Glm4MoeModel(
+-            config,
+-            quant_config,
+-            prefix=add_prefix("language_model", prefix),
+-        )
++        if not self.config.encoder_only:
++            self.model = Glm4MoeModel(
++                config,
++                quant_config,
++                prefix=add_prefix("language_model", prefix),
++            )
++
++            if self.pp_group.is_last_rank:
++                if self.pp_group.world_size == 1 and self.config.tie_word_embeddings:
++                    self.lm_head = self.model.embed_tokens
++                else:
++                    self.lm_head = ParallelLMHead(
++                        config.vocab_size,
++                        config.hidden_size,
++                        quant_config=quant_config,
++                        prefix=add_prefix("lm_head", prefix),
++                        use_attn_tp_group=get_parallel().enable_dp_lm_head,
++                    )
++            else:
++                # ranks other than the last rank will have a placeholder layer
++                self.lm_head = PPMissingLayer()
++        else:
++            self.lm_head = None
++
+         self.visual = Glm4vVisionModel(
+             config.vision_config,
+             quant_config=quant_config,
+@@ -60,24 +81,14 @@ class Glm4vMoeForConditionalGeneration(Glm4vForConditionalGeneration):
+             use_data_parallel=self.use_data_parallel,
+         )
+
+-        if self.pp_group.is_last_rank:
+-            if self.pp_group.world_size == 1 and self.config.tie_word_embeddings:
+-                self.lm_head = self.model.embed_tokens
+-            else:
+-                self.lm_head = ParallelLMHead(
+-                    config.vocab_size,
+-                    config.hidden_size,
+-                    quant_config=quant_config,
+-                    prefix=add_prefix("lm_head", prefix),
+-                    use_attn_tp_group=get_parallel().enable_dp_lm_head,
+-                )
+-        else:
+-            # ranks other than the last rank will have a placeholder layer
+-            self.lm_head = PPMissingLayer()
+-
+         self.logits_processor = LogitsProcessor(config)
+         self.pooler = Pooler(pooling_type=PoolingType.LAST, normalize=True)
+-        self.is_mrope_enabled = "mrope_section" in self.config.rope_scaling
++        rope_config = (
++            getattr(self.config, "rope_scaling", None)
++            or getattr(self.config, "rope_parameters", None)
++            or {}
++        )
++        self.is_mrope_enabled = "mrope_section" in rope_config
+
+         # For EAGLE3 support
+         self.capture_aux_hidden_states = False
+@@ -211,6 +222,10 @@ class Glm4vMoeForConditionalGeneration(Glm4vForConditionalGeneration):
+                 # Skip loading extra bias for GPTQ models.
+                 if name.endswith(".bias") and name not in params_dict:
+                     continue
++                if (
++                    self.config.encoder_only or self.config.language_only
++                ) and name not in params_dict:
++                    continue
+                 if name not in params_dict:
+                     continue
+
+@@ -226,6 +241,8 @@ class Glm4vMoeForConditionalGeneration(Glm4vForConditionalGeneration):
+                     param_name, weight_name, expert_id, shard_id = mapping
+                     if weight_name not in name:
+                         continue
++                    if "visual" in name or self.config.encoder_only:
++                        continue
+
+                     # Mark as expert weight regardless of whether we can process it
+                     is_expert_weight = True
+@@ -257,6 +274,10 @@ class Glm4vMoeForConditionalGeneration(Glm4vForConditionalGeneration):
+                     # Skip loading extra bias for GPTQ models.
+                     if name.endswith(".bias") and name not in params_dict:
+                         continue
++                    if (
++                        self.config.encoder_only or self.config.language_only
++                    ) and name not in params_dict:
++                        continue
+                     if name not in params_dict:
+                         continue
+
+diff --git a/python/sglang/srt/multimodal/processors/glm4v.py b/python/sglang/srt/multimodal/processors/glm4v.py
+index 105814e2..92ccbc98 100644
+--- a/python/sglang/srt/multimodal/processors/glm4v.py
++++ b/python/sglang/srt/multimodal/processors/glm4v.py
+@@ -6,8 +6,14 @@ from typing import List, Tuple, Union
+ import numpy as np
+ import torch
+
++import torch
++
+ from sglang.srt.layers.rotary_embedding import MRotaryEmbedding
+-from sglang.srt.managers.schedule_batch import Modality, MultimodalProcessorOutput
++from sglang.srt.managers.schedule_batch import (
++    Modality,
++    MultimodalDataItem,
++    MultimodalProcessorOutput,
++)
+ from sglang.srt.models.glm4v import Glm4vForConditionalGeneration
+ from sglang.srt.models.glm4v_moe import Glm4vMoeForConditionalGeneration
+ from sglang.srt.multimodal.processors.base_processor import (
+@@ -513,6 +519,39 @@ class Glm4vImageProcessor(SGLangBaseProcessor):
+             return [offset for offset in all_offsets if is_video_offset(offset)]
+         return [offset for offset in all_offsets if not is_video_offset(offset)]
+
++    def get_mm_data(self, prompt, embeddings, img_grid_thw):
++        input_ids, offsets, _ = self.build_input_ids(prompt, img_grid_thw=img_grid_thw)
++        image_embeddings = (
++            embeddings.get(Modality.IMAGE, embeddings)
++            if isinstance(embeddings, dict)
++            else embeddings
++        )
++        mm_items = [
++            MultimodalDataItem(
++                modality=Modality.IMAGE,
++                offsets=offsets,
++                precomputed_embeddings=image_embeddings,
++            )
++        ]
++
++        mrope_positions, mrope_position_delta = MRotaryEmbedding.get_rope_index_glm4v(
++            input_ids=torch.tensor(input_ids, dtype=torch.long).unsqueeze(0),
++            hf_config=self.hf_config,
++            image_grid_thw=img_grid_thw,
++            video_grid_thw=None,
++            attention_mask=None,
++        )
++
++        return MultimodalProcessorOutput(
++            input_ids=input_ids,
++            mm_items=mm_items,
++            im_start_id=self.IM_START_TOKEN_ID,
++            im_end_id=self.IM_END_TOKEN_ID,
++            im_token_id=self.IM_TOKEN_ID,
++            mrope_positions=mrope_positions.squeeze(1),
++            mrope_position_delta=mrope_position_delta,
++        )
++
+     def compute_mrope_positions(self, input_ids, mm_items):
+         image_grid_thw = None
+         video_grid_thw = None
+diff --git a/python/sglang/srt/multimodal/processors/qwen_vl.py b/python/sglang/srt/multimodal/processors/qwen_vl.py
+index 44f17939..0069cb81 100644
+--- a/python/sglang/srt/multimodal/processors/qwen_vl.py
++++ b/python/sglang/srt/multimodal/processors/qwen_vl.py
+@@ -1011,7 +1011,7 @@ class QwenVLImageProcessor(MediaArtifactCacheMixin, SGLangBaseProcessor):
+         **kwargs,
+     ):
+         entry_time = time.perf_counter()
+-        base_output = await self.load_mm_data(
++        base_output = await self.legacy_load_mm_data(
+             prompt=input_text,
+             image_data=image_data,
+             video_data=request_obj.video_data,
+diff --git a/python/sglang/srt/observability/req_time_stats.py b/python/sglang/srt/observability/req_time_stats.py
+index 5af9cbc4..217429f8 100644
+--- a/python/sglang/srt/observability/req_time_stats.py
++++ b/python/sglang/srt/observability/req_time_stats.py
+@@ -363,7 +363,7 @@ class ReqTimeStatsBase:
+                 state["trace_ctx"] = TraceNullContext()
+
+         for key in state.keys():
+-            if key.endswith("time") and state[key]:
++            if key.endswith("time") and state[key] > 0.0:
+                 state[key] = convert_time_cross_thread(
+                     state[key],
+                     state["diff_realtime_monotonic"],
+@@ -629,6 +629,7 @@ class SchedulerReqTimeStats(ReqTimeStatsBase):
+
+     # bootstrap sub-phase tracking (PD disagg)
+     bootstrap_done_time: float = 0.0
++    prefill_retry_count: int = 0
+
+     # only for request tracing
+     scheduler_recv_time: float = 0.0
+@@ -666,6 +667,17 @@ class SchedulerReqTimeStats(ReqTimeStatsBase):
+             "prefill_finished_time": self.prefill_finished_time,
+             # Read by meta_info["queue_time"] on the tokenizer; timestamps cannot rebuild it.
+             "queue_duration_s": self.queue_duration_s,
++            "prefill_retry_count": self.prefill_retry_count,
++            "enable_metrics": self.enable_metrics,
++            "disagg_mode": self.disagg_mode,
++            "completion_time": self.completion_time,
++            "prefill_bootstrap_queue_entry_time": self.prefill_bootstrap_queue_entry_time,
++            "prefill_transfer_queue_entry_time": self.prefill_transfer_queue_entry_time,
++            "decode_prealloc_queue_entry_time": self.decode_prealloc_queue_entry_time,
++            "decode_transfer_queue_entry_time": self.decode_transfer_queue_entry_time,
++            "bootstrap_done_time": self.bootstrap_done_time,
++            "transfer_speed_gb_s": self.transfer_speed_gb_s,
++            "transfer_total_mb": self.transfer_total_mb,
+             "diff_realtime_monotonic": global_diff_realtime_monotonic,
+         }
+         return state
+@@ -1160,6 +1172,13 @@ class SchedulerReqTimeStats(ReqTimeStatsBase):
+
+     def convert_to_output_meta_info(self):
+         meta_data = {}
++
++        def add_duration(key: str, start: float, end: float):
++            if start > 0.0 and end > 0.0:
++                duration = end - start
++                if duration >= 0.0:
++                    meta_data[key] = duration
++
+         if self.forward_entry_time > 0.0:
+             meta_data["forward_entry_time"] = convert_time_to_realtime(
+                 self.forward_entry_time
+@@ -1173,6 +1192,67 @@ class SchedulerReqTimeStats(ReqTimeStatsBase):
+                 "queue_time": self.get_queueing_time(),
+             }
+         )
++        if self.disagg_mode == DisaggregationMode.PREFILL:
++            meta_data["pd_prefill_retry_count"] = self.prefill_retry_count
++            add_duration(
++                "pd_prefill_bootstrap_queue_duration",
++                self.prefill_bootstrap_queue_entry_time,
++                self.wait_queue_entry_time,
++            )
++            add_duration(
++                "pd_prefill_bootstrap_duration",
++                self.prefill_bootstrap_queue_entry_time,
++                self.bootstrap_done_time,
++            )
++            add_duration(
++                "pd_prefill_alloc_wait_duration",
++                self.bootstrap_done_time,
++                self.wait_queue_entry_time,
++            )
++            add_duration(
++                "pd_prefill_forward_duration",
++                self.forward_entry_time,
++                self.completion_time,
++            )
++            add_duration(
++                "pd_prefill_transfer_queue_duration",
++                self.prefill_transfer_queue_entry_time,
++                self.completion_time,
++            )
++            if self.transfer_speed_gb_s > 0.0:
++                meta_data["pd_transfer_speed_gb_s"] = self.transfer_speed_gb_s
++            if self.transfer_total_mb > 0.0:
++                meta_data["pd_transfer_total_mb"] = self.transfer_total_mb
++        elif self.disagg_mode == DisaggregationMode.DECODE:
++            add_duration(
++                "pd_decode_prealloc_duration",
++                self.decode_prealloc_queue_entry_time,
++                self.decode_transfer_queue_entry_time,
++            )
++            add_duration(
++                "pd_decode_bootstrap_duration",
++                self.decode_prealloc_queue_entry_time,
++                self.bootstrap_done_time,
++            )
++            add_duration(
++                "pd_decode_alloc_wait_duration",
++                self.bootstrap_done_time,
++                self.decode_transfer_queue_entry_time,
++            )
++            add_duration(
++                "pd_decode_transfer_duration",
++                self.decode_transfer_queue_entry_time,
++                self.wait_queue_entry_time,
++            )
++            add_duration(
++                "pd_decode_forward_duration",
++                self.forward_entry_time,
++                self.completion_time,
++            )
++            if self.transfer_speed_gb_s > 0.0:
++                meta_data["pd_transfer_speed_gb_s"] = self.transfer_speed_gb_s
++            if self.transfer_total_mb > 0.0:
++                meta_data["pd_transfer_total_mb"] = self.transfer_total_mb
+         return meta_data
+
+     def format_duration(self, duration: float) -> str:
+diff --git a/python/sglang/srt/server_args.py b/python/sglang/srt/server_args.py
+index a49b2300..12cb0f29 100644
+--- a/python/sglang/srt/server_args.py
++++ b/python/sglang/srt/server_args.py
+@@ -34,6 +34,8 @@ from sglang.srt.arg_groups.arg_utils import (
+     record_fields,
+ )
+ from sglang.srt.arg_groups.argparse_actions import (
++    DeprecatedAction,
++    DeprecatedStoreConstAction,
+     DeprecatedStoreTrueAction,
+ )
+ from sglang.srt.arg_groups.model_override_base import ep_joiner_of, ep_scale_joiner_of
+@@ -337,6 +339,26 @@ class ServerArgs:
+         )
+
+         # --- Deprecated argument registrations ---
++        parser.add_argument(
++            "--prefill-round-robin-balance",
++            action=DeprecatedAction,
++            help="Deprecated; prefill balancing is handled by the PD router.",
++        )
++        for legacy_flag, backend in (
++            ("--enable-breakable-cuda-graph", "breakable"),
++            ("--disable-piecewise-cuda-graph", "disabled"),
++            ("--enforce-piecewise-cuda-graph", "tc_piecewise"),
++        ):
++            new_flag = f"--cuda-graph-backend-prefill={backend}"
++            parser.add_argument(
++                legacy_flag,
++                action=DeprecatedStoreConstAction,
++                dest="cuda_graph_backend_prefill",
++                const_value=backend,
++                default=argparse.SUPPRESS,
++                new_flag=new_flag,
++                help=f"Deprecated alias for {new_flag}.",
++            )
+         # `disable_cuda_graph` is `no_cli=True`, so this deprecated spelling is
+         # its only command-line entry point.
+         parser.add_argument(
+diff --git a/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py b/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py
+index 543690c1..648c5914 100644
+--- a/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py
++++ b/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py
+@@ -594,8 +594,10 @@ class EAGLEDraftCudaGraphRunner(DecodeCudaGraphRunner):
+             forward_batch.seq_lens,
+             forward_batch.out_cache_loc,
+             forward_batch.positions,
+-            forward_batch.spec_info.topk_p,
+-            forward_batch.spec_info.topk_index,
++            forward_batch.spec_info.topk_p.clamp(0.0, 1.0),
++            forward_batch.spec_info.topk_index.clamp(
++                0, self.model_runner.model_config.vocab_size - 1
++            ),
+             forward_batch.req_pool_indices,
+         ]
+         if self.model_runner.model_config.model_is_mrope:
+diff --git a/python/sglang/srt/utils/common.py b/python/sglang/srt/utils/common.py
+index 59572210..a022d58c 100644
+--- a/python/sglang/srt/utils/common.py
++++ b/python/sglang/srt/utils/common.py
+@@ -2786,6 +2786,12 @@ def _get_fastapi_request_path(request) -> Tuple[str, bool]:
+     for route in request.app.routes:
+         match, child_scope = route.matches(request.scope)
+         if match == Match.FULL:
+-            return getattr(route, "path", request.url.path), True
++            path = getattr(route, "path", None) or getattr(route, "path_format", None)
++            if path is None:
++                child_route = child_scope.get("route")
++                path = getattr(child_route, "path", None) or getattr(
++                    child_route, "path_format", None
++                )
++            return path or request.url.path, True
+
+     return request.url.path, False

@@ -85,7 +85,16 @@ def main() -> int:
         if re.sub(r"-cu\d+$", "", tag) != conda_sglang_version:
             errors.append(f"docker/justfile uses inconsistent SGLang tag {tag}")
 
-    for pin in ("MEGATRON_COMMIT", "TMS_COMMIT", "FLASH_QLA_COMMIT", "TRANSFORMER_ENGINE_VERSION", "NCCL_VERSION"):
+    for pin in (
+        "MEGATRON_COMMIT",
+        "TMS_COMMIT",
+        "DEEPGEMM_COMMIT",
+        "DEEPEP_COMMIT",
+        "TRANSFORMER_ENGINE_VERSION",
+        "SLIME_NCCL_VERSION",
+        "CUDA_COMPAT_VERSION",
+        "MOONCAKE_VERSION",
+    ):
         if docker_args.get(pin) != conda_exports.get(pin):
             errors.append(
                 f"{pin}: Docker={docker_args.get(pin, '<missing>')}, conda={conda_exports.get(pin, '<missing>')}"

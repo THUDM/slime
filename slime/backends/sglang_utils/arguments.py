@@ -88,6 +88,13 @@ def add_sglang_arguments(parser):
         if canonical_name_for_skip_check and canonical_name_for_skip_check in skipped_args:
             return  # Skip this entire argument definition
 
+        # Existing Slime scripts also use the field name when SGLang's CLI
+        # shortens it to --fp8-gemm-backend / --fp4-gemm-backend.
+        if canonical_name_for_skip_check in ("fp8_gemm_runner_backend", "fp4_gemm_runner_backend"):
+            legacy_flag = f"--{canonical_name_for_skip_check.replace('_', '-')}"
+            if legacy_flag not in name_or_flags:
+                name_or_flags = (*name_or_flags, legacy_flag)
+
         # If not skipped, proceed to prefix flags and dest
         new_name_or_flags_list = []
         for item_flag in name_or_flags:

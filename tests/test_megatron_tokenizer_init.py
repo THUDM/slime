@@ -8,6 +8,7 @@ from concurrent.futures import TimeoutError as FutureTimeoutError
 from contextlib import nullcontext
 from pathlib import Path
 
+import numpy as np
 import pytest
 from filelock import FileLock
 
@@ -25,7 +26,7 @@ def load_init(cache_dir, build_tokenizer):
         "_set_random_seed": lambda *args: None,
         "_build_tokenizer": build_tokenizer,
         "init_num_microbatches_calculator": lambda *args: None,
-        "np": types.SimpleNamespace(__version__="1.26.4"),
+        "np": np,
         "nullcontext": nullcontext,
         "Path": Path,
         "FileLock": FileLock,

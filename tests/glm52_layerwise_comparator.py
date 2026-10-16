@@ -65,6 +65,8 @@ def _token_rows(value: Any, num_tokens: int, context: str) -> torch.Tensor:
 
 
 def _sglang_layer_token_rows(value: Any, num_tokens: int, context: str) -> torch.Tensor:
+    if isinstance(value, dict) and "residual_sum" in value:
+        return _token_rows(value["residual_sum"], num_tokens, context)
     if not isinstance(value, (tuple, list)) or len(value) < 2:
         raise TypeError(f"{context} must contain the SGLang layer delta and residual tensors")
     delta, residual = value[:2]

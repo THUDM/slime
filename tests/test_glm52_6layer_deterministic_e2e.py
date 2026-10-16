@@ -70,7 +70,7 @@ assert hasattr(deep_gemm, "set_batch_invariant"), "DeepGEMM lacks set_batch_inva
 assert "align_fp8_quantization" in inspect.signature(Buffer.low_latency_dispatch).parameters, (
     "DeepEP lacks align_fp8_quantization"
 )
-assert "enable_fp32_moe_router" in ServerArgs.__dataclass_fields__, "SGLang lacks enable_fp32_moe_router"
+assert hasattr(ServerArgs, "enable_fp32_moe_router"), "SGLang lacks enable_fp32_moe_router"
 """
 
 
@@ -381,6 +381,7 @@ def run_gate(*, layerwise_zero: bool = False, rollout_max_response_len: int = 40
                 ],
                 env=env,
                 cwd=str(REPO_ROOT),
+                check=False,
                 stream=True,
             )
             assert code == 0, f"train.py exited {code} (train/rollout bound {float(threshold):g} likely breached)"
@@ -451,6 +452,8 @@ def _run(cmd, env=None, cwd=None, check=True, stream=False):
         sys.stdout.write(line)
         sys.stdout.flush()
     proc.wait()
+    if check and proc.returncode != 0:
+        raise RuntimeError(f"{cmd} failed ({proc.returncode})")
     return proc.returncode, "".join(lines)
 
 

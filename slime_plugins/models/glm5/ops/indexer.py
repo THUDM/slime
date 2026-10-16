@@ -31,9 +31,14 @@ def _sglang_fp8_indexer_logits(
     if index_q.shape[-1] != 128:
         raise ValueError("SGLang FP8 indexer alignment requires head_dim=128, " f"got {index_q.shape[-1]}")
     import deep_gemm
-    from sglang.jit_kernel.fused_store_index_cache import fused_store_index_k_cache
+
+    try:
+        from sglang.kernels.ops.attention.dsa.triton_kernel import act_quant
+        from sglang.kernels.ops.attention.fused_store_index_cache import fused_store_index_k_cache
+    except ImportError:
+        from sglang.jit_kernel.fused_store_index_cache import fused_store_index_k_cache
+        from sglang.srt.layers.attention.dsa.triton_kernel import act_quant
     from sglang.srt.layers.attention.dsa.dsa_indexer import rotate_activation
-    from sglang.srt.layers.attention.dsa.triton_kernel import act_quant
 
     q_rotated = rotate_activation(index_q.contiguous())
     if index_k.ndim == 3:
