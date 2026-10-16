@@ -46,6 +46,9 @@ def test_patch_uses_actual_image_baseline_without_changing_git_index(
     git(repo, "init", "-q")
     git(repo, "config", "user.name", "Test")
     git(repo, "config", "user.email", "test@example.invalid")
+    # Background auto-maintenance can create and remove locks while copytree runs.
+    git(repo, "config", "maintenance.auto", "false")
+    git(repo, "config", "gc.auto", "0")
     (repo / "source.py").write_text("result = 0\n")
     (repo / "deleted.py").write_text("obsolete = True\n")
     if ignore_harness:
