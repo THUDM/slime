@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="Oct 15, 2026"/>
+    <meta name="docbuild:last-update" content="Oct 16, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -491,8 +491,8 @@
 </thead>
 <tbody>
 <tr class="row-even"><td><p>H100/H200</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">slimerl/slime:latest</span></code> or <code class="docutils literal notranslate"><span class="pre">slimerl/slime:latest-cu129</span></code></p></td>
-<td><p>12.9</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">slimerl/slime:latest</span></code> or <code class="docutils literal notranslate"><span class="pre">slimerl/slime:latest-cu130</span></code></p></td>
+<td><p>13.0</p></td>
 </tr>
 <tr class="row-odd"><td><p>B200/B300 (Blackwell, x86)</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">slimerl/slime:latest-cu130</span></code></p></td>
@@ -501,14 +501,14 @@
 </tbody>
 </table>
 </div>
-<p>The default <code class="docutils literal notranslate"><span class="pre">latest</span></code> tag follows the CUDA 12 image. For Blackwell, replace the image in the commands below with <code class="docutils literal notranslate"><span class="pre">slimerl/slime:latest-cu130</span></code>. The two variants use different kernel and Transformer Engine builds. See the <a class="reference external" href="https://github.com/THUDM/slime/blob/main/docker/README.md">Docker guide</a> for source pins and build options.</p>
+<p>New builds use the same CUDA 13 image for Hopper and Blackwell. On supported data-center GPUs, the image automatically enables CUDA 13 forward-compatibility libraries for older drivers, including 535 and 570, without replacing the host driver. Older versioned CUDA 12 images remain usable. See the <a class="reference external" href="https://github.com/THUDM/slime/blob/main/docker/README.md">Docker guide</a> for build options, driver compatibility and explicit CUDA 12 image selection.</p>
 <p>GPU CI primarily covers H100/H200. Check each recipe’s hardware and parallelism requirements before running it on other platforms.</p>
 <p>For installation without Docker, use the <a class="reference internal" href="#conda"><span class="std std-ref">conda path below</span></a>. For AMD, see the <a class="reference internal" href="../platform_support/amd_tutorial.html"><span class="std std-doc">AMD tutorial</span></a>.</p>
 </section>
 <section id="pull-and-start-docker-container">
 <h3>Pull and Start Docker Container<a class="headerlink" href="#pull-and-start-docker-container" title="Link to this heading">#</a></h3>
 <p>On a Linux x86_64 GPU host, prepare Git, Docker, a compatible NVIDIA driver and <a class="reference external" href="https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html">NVIDIA Container Toolkit</a>. Run these commands on the <strong>host</strong> to pull the image, clone slime and start a container:</p>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span><span class="nv">SLIME_IMAGE</span><span class="o">=</span>slimerl/slime:latest-cu129
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span><span class="nv">SLIME_IMAGE</span><span class="o">=</span>slimerl/slime:latest-cu130
 docker<span class="w"> </span>pull<span class="w"> </span><span class="s2">"</span><span class="nv">$SLIME_IMAGE</span><span class="s2">"</span>
 git<span class="w"> </span>clone<span class="w"> </span>https://github.com/THUDM/slime.git
 <span class="nb">cd</span><span class="w"> </span>slime
@@ -532,8 +532,8 @@ python<span class="w"> </span>-c<span class="w"> </span><span class="s2">"import
 </section>
 <section id="conda-micromamba">
 <span id="conda"></span><h2>Conda / micromamba<a class="headerlink" href="#conda-micromamba" title="Link to this heading">#</a></h2>
-<p><a class="reference external" href="https://github.com/THUDM/slime/blob/main/build_conda.sh">build_conda.sh</a> installs micromamba and creates the <code class="docutils literal notranslate"><span class="pre">slime</span></code> environment with Python 3.12 and CUDA 12.9. It builds Megatron, SGLang and native dependencies, installs slime, and applies the repository’s matching patches. This takes longer than starting a prepared image.</p>
-<p>Use a Linux x86_64 NVIDIA machine with Bash, Git, curl, patch, a C/C++ toolchain and a compatible GPU driver. The current script writes to <code class="docutils literal notranslate"><span class="pre">/root</span></code> (including <code class="docutils literal notranslate"><span class="pre">/root/.cargo</span></code>) and expects permission to do so; the commands below use its default <code class="docutils literal notranslate"><span class="pre">/root</span></code> source directory. For B200/B300, use the CUDA 13 Docker image instead.</p>
+<p><a class="reference external" href="https://github.com/THUDM/slime/blob/main/build_conda.sh">build_conda.sh</a> installs micromamba and creates the <code class="docutils literal notranslate"><span class="pre">slime</span></code> environment with Python 3.12 and CUDA 13.0. It builds Megatron, SGLang and native dependencies, installs slime, and applies the repository’s matching patches. This takes longer than starting a prepared image.</p>
+<p>Use a Linux x86_64 NVIDIA machine with Bash, Git, curl, patch, a C/C++ toolchain and a compatible GPU driver. The current script writes to <code class="docutils literal notranslate"><span class="pre">/root</span></code> (including <code class="docutils literal notranslate"><span class="pre">/root/.cargo</span></code>) and expects permission to do so; the commands below use its default <code class="docutils literal notranslate"><span class="pre">/root</span></code> source directory. The script installs the same CUDA compatibility libraries as the Docker image.</p>
 <p>From a Bash shell:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/THUDM/slime.git
 <span class="nb">cd</span><span class="w"> </span>slime
@@ -644,7 +644,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Oct 15, 2026.
+  Last updated on Oct 16, 2026.
   <br/>
 </p>
   </div>

@@ -10,10 +10,10 @@
 
 | 硬件 | 镜像 | CUDA |
 | --- | --- | --- |
-| H100/H200 | `slimerl/slime:latest` 或 `slimerl/slime:latest-cu129` | 12.9 |
+| H100/H200 | `slimerl/slime:latest` 或 `slimerl/slime:latest-cu130` | 13.0 |
 | B200/B300（Blackwell，x86） | `slimerl/slime:latest-cu130` | 13.0 |
 
-默认 `latest` 标签对应 CUDA 12 镜像。使用 Blackwell 时，请将下方命令中的镜像替换为 `slimerl/slime:latest-cu130`。两种镜像使用不同的 kernel 和 Transformer Engine 构建方式；依赖版本和构建选项见 [Docker 指南](https://github.com/THUDM/slime/blob/main/docker/README.md)。
+新构建的 Hopper 和 Blackwell 环境统一使用 CUDA 13 镜像。在受支持的数据中心 GPU 上，镜像会为 535、570 等旧驱动自动启用 CUDA 13 向前兼容库，不替换宿主机驱动。旧的带版本 CUDA 12 镜像仍可使用。构建选项、驱动兼容说明及旧镜像选择方式见 [Docker 指南](https://github.com/THUDM/slime/blob/main/docker/README.md)。
 
 GPU CI 主要覆盖 H100/H200。使用其他平台时，请先核对具体训练配方的硬件和并行配置要求。
 
@@ -24,7 +24,7 @@ GPU CI 主要覆盖 H100/H200。使用其他平台时，请先核对具体训练
 在 Linux x86_64 GPU 主机上准备 Git、Docker、兼容的 NVIDIA 驱动，并配置好 [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)。在**宿主机上**执行以下命令，拉取镜像、克隆 slime 并启动容器：
 
 ```shell
-SLIME_IMAGE=slimerl/slime:latest-cu129
+SLIME_IMAGE=slimerl/slime:latest-cu130
 docker pull "$SLIME_IMAGE"
 git clone https://github.com/THUDM/slime.git
 cd slime
@@ -49,9 +49,9 @@ python -c "import slime, sglang, megatron.core; import torch; print('GPUs:', tor
 (conda)=
 ## Conda / micromamba
 
-[build_conda.sh](https://github.com/THUDM/slime/blob/main/build_conda.sh) 会安装 micromamba，创建使用 Python 3.12 和 CUDA 12.9 的 `slime` 环境，构建 Megatron、SGLang 及原生依赖，安装 slime 并应用仓库的配套补丁。首次构建会比启动预置镜像更久。
+[build_conda.sh](https://github.com/THUDM/slime/blob/main/build_conda.sh) 会安装 micromamba，创建使用 Python 3.12 和 CUDA 13.0 的 `slime` 环境，构建 Megatron、SGLang 及原生依赖，安装 slime 并应用仓库的配套补丁。首次构建会比启动预置镜像更久。
 
-适用于 Linux x86_64 NVIDIA 机器，需要 Bash、Git、curl、patch、C/C++ 编译工具及兼容的 GPU 驱动。当前脚本会写入 `/root`（包括 `/root/.cargo`），需要相应权限；以下命令使用脚本默认的 `/root` 源码目录。B200/B300 请使用 CUDA 13 Docker 镜像。
+适用于 Linux x86_64 NVIDIA 机器，需要 Bash、Git、curl、patch、C/C++ 编译工具及兼容的 GPU 驱动。当前脚本会写入 `/root`（包括 `/root/.cargo`），需要相应权限；以下命令使用脚本默认的 `/root` 源码目录。脚本会安装与 Docker 镜像相同的 CUDA 兼容库。
 
 在 Bash 中执行：
 

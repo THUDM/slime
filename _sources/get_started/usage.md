@@ -406,7 +406,7 @@ To enable distributed fully async rollout with straw, add:
 
 All nodes must mount the directory at the same absolute path and have
 `straw-queue` installed. The standard slime installation includes it; for an
-existing environment, run `pip install 'straw-queue>=0.1.2'`. Configure the JuiceFS
+existing environment, run `pip install 'straw-queue>=0.1.3'`. Configure the JuiceFS
 storage profile and deployment declaration as described in the
 [straw guide](../advanced/straw.md#enable-it). Selecting straw alone uses the
 synchronous rollout entrypoint. For a fresh run, omitting `--rollout-data-dir`

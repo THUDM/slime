@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="Oct 15, 2026"/>
+    <meta name="docbuild:last-update" content="Oct 16, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -452,7 +452,7 @@
             <nav aria-label="Page">
                 <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#requirements">Requirements</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#conda-and-cuda-12-docker-images">Conda and CUDA 12 Docker Images</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#current-cuda-13-builds">Current CUDA 13 builds</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#gb10-image">GB10 Image</a></li>
 </ul>
             </nav>
@@ -481,19 +481,19 @@
 <li><p>The same FlashQLA installation on every training node.</p></li>
 </ul>
 </section>
-<section id="conda-and-cuda-12-docker-images">
-<h2>Conda and CUDA 12 Docker Images<a class="headerlink" href="#conda-and-cuda-12-docker-images" title="Link to this heading">#</a></h2>
-<p><code class="docutils literal notranslate"><span class="pre">build_conda.sh</span></code> and the standard CUDA 12 Docker image install FlashQLA with TileLang 0.1.9. For a local environment, run:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bash<span class="w"> </span>build_conda.sh
+<section id="current-cuda-13-builds">
+<h2>Current CUDA 13 builds<a class="headerlink" href="#current-cuda-13-builds" title="Link to this heading">#</a></h2>
+<p>SGLang v0.5.21 requires TileLang 0.1.12. The FlashQLA revision used by the
+older CUDA 12 images requires TileLang 0.1.9, so the current Docker and conda
+builds use the default FLA backend.</p>
+<p>For the historical CUDA 12/FlashQLA environment, use a versioned CUDA 12 image
+or build the previous checkout, whose Docker and conda scripts retain those
+pins:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>worktree<span class="w"> </span>add<span class="w"> </span>../slime-cu12<span class="w"> </span>2f4280e3
+<span class="nb">cd</span><span class="w"> </span>../slime-cu12
+docker<span class="w"> </span>build<span class="w"> </span>-f<span class="w"> </span>docker/Dockerfile<span class="w"> </span>.<span class="w"> </span>-t<span class="w"> </span>slime:flashqla-cu12
 </pre></div>
 </div>
-<p>To build the CUDA 12 image:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>docker<span class="w"> </span>build<span class="w"> </span>-f<span class="w"> </span>docker/Dockerfile<span class="w"> </span>.<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--build-arg<span class="w"> </span><span class="nv">SGLANG_IMAGE_TAG</span><span class="o">=</span>v0.5.15.post1-cu129<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-t<span class="w"> </span>slime:flashqla
-</pre></div>
-</div>
-<p>The CUDA 13 image uses TileLang 0.1.11 for SGLang, which is incompatible with the current FlashQLA requirement. That image uses the default FLA backend.</p>
 </section>
 <section id="gb10-image">
 <h2>GB10 Image<a class="headerlink" href="#gb10-image" title="Link to this heading">#</a></h2>
@@ -555,7 +555,7 @@
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#requirements">Requirements</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#conda-and-cuda-12-docker-images">Conda and CUDA 12 Docker Images</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#current-cuda-13-builds">Current CUDA 13 builds</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#gb10-image">GB10 Image</a></li>
 </ul>
   </nav></div>
@@ -590,7 +590,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Oct 15, 2026.
+  Last updated on Oct 16, 2026.
   <br/>
 </p>
   </div>

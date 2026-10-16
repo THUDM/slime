@@ -15,23 +15,21 @@ The default backend is FLA.
 - NVIDIA SM90 or newer GPUs.
 - The same FlashQLA installation on every training node.
 
-## Conda and CUDA 12 Docker Images
+## Current CUDA 13 builds
 
-`build_conda.sh` and the standard CUDA 12 Docker image install FlashQLA with TileLang 0.1.9. For a local environment, run:
+SGLang v0.5.21 requires TileLang 0.1.12. The FlashQLA revision used by the
+older CUDA 12 images requires TileLang 0.1.9, so the current Docker and conda
+builds use the default FLA backend.
+
+For the historical CUDA 12/FlashQLA environment, use a versioned CUDA 12 image
+or build the previous checkout, whose Docker and conda scripts retain those
+pins:
 
 ```bash
-bash build_conda.sh
+git worktree add ../slime-cu12 2f4280e3
+cd ../slime-cu12
+docker build -f docker/Dockerfile . -t slime:flashqla-cu12
 ```
-
-To build the CUDA 12 image:
-
-```bash
-docker build -f docker/Dockerfile . \
-  --build-arg SGLANG_IMAGE_TAG=v0.5.15.post1-cu129 \
-  -t slime:flashqla
-```
-
-The CUDA 13 image uses TileLang 0.1.11 for SGLang, which is incompatible with the current FlashQLA requirement. That image uses the default FLA backend.
 
 ## GB10 Image
 
