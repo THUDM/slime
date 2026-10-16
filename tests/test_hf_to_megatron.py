@@ -23,6 +23,7 @@ from slime.backends.megatron_utils.hf_to_megatron import _LOADERS
 from slime.backends.megatron_utils.hf_to_megatron.common import SafetensorReader
 from slime.backends.megatron_utils.hf_to_megatron.deepseek import deepseek_hf_tensor
 from slime.backends.megatron_utils.hf_to_megatron.glm import glm4_hf_tensor, glm4_moe_hf_tensor
+from slime.backends.megatron_utils.hf_to_megatron.glm5_next import glm5_next_hf_tensor
 from slime.backends.megatron_utils.hf_to_megatron.qwen import (
     mimo_hf_tensor,
     minimax_m2_hf_tensor,
@@ -34,6 +35,7 @@ from slime.backends.megatron_utils.megatron_to_hf import _convert_to_hf_core, co
 from slime.backends.megatron_utils.megatron_to_hf.deepseekv3 import convert_deepseekv3_to_hf
 from slime.backends.megatron_utils.megatron_to_hf.glm4 import convert_glm4_to_hf
 from slime.backends.megatron_utils.megatron_to_hf.glm4moe import convert_glm4moe_to_hf
+from slime.backends.megatron_utils.megatron_to_hf.glm5_next import convert_glm5_next_to_hf
 from slime.backends.megatron_utils.megatron_to_hf.mimo import convert_mimo_to_hf
 from slime.backends.megatron_utils.megatron_to_hf.minimax_m2 import convert_minimax_m2_to_hf
 from slime.backends.megatron_utils.megatron_to_hf.qwen2 import convert_qwen2_to_hf
@@ -41,6 +43,54 @@ from slime.backends.megatron_utils.megatron_to_hf.qwen3_next import convert_qwen
 from slime.backends.megatron_utils.megatron_to_hf.qwen3moe import convert_qwen3moe_to_hf
 
 NUM_GPUS = 0
+
+
+def test_direct_hf_load_preserves_fp32_expert_bias(tmp_path, monkeypatch):
+    from slime.backends.megatron_utils.hf_to_megatron import common
+
+    expected = torch.tensor([4.015285, -8.030753, 0.100123], dtype=torch.float32)
+    key = "model.layers.3.mlp.gate.e_score_correction_bias"
+    save_file({key: expected}, tmp_path / "model.safetensors")
+    router = torch.nn.Module()
+    router.register_buffer("expert_bias", torch.zeros_like(expected))
+    router.bfloat16()
+    name = "module.module.decoder.layers.3.mlp.router.expert_bias"
+    runtime = types.ModuleType("slime.backends.megatron_utils.update_weight.common")
+    runtime.named_params_and_buffers = lambda args, model: iter([(name, router.expert_bias)])
+    monkeypatch.setitem(sys.modules, runtime.__name__, runtime)
+    monkeypatch.setattr(common, "shard_mcore_tensor", lambda name, tensor, parameter: tensor)
+
+    common.load_model_hf_weights(_EXPORT_ARGS, [router], tmp_path, _config("deepseek_v3"), deepseek_hf_tensor)
+
+    assert router.expert_bias.dtype == torch.float32
+    torch.testing.assert_close(router.expert_bias, expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize(
+    "name,shape",
+    [
+        ("self_attention.q_conv1d.weight", (8, 1, 4)),
+        ("self_attention.A_log", (4,)),
+        ("self_attention.f_a_proj.weight", (4, 8)),
+        ("self_attention.indexer.index_kpool_compress_ape", (4, 128)),
+        ("self_attention.indexer.index_kpool_compress_gate", (128, 8)),
+        ("self_attention.indexer.wq_b.weight", (128, 8)),
+        ("self_attention.kv_b_proj.weight", (16, 8)),
+        ("hc_attn_fn", (24, 32)),
+        ("hc_ffn_base", (24,)),
+        ("mlp.experts.linear_fc1.weight287", (16, 8)),
+        ("pre_mlp_layernorm.weight", (8,)),
+    ],
+)
+def test_glm5_next_conditional_checkpoint_roundtrip(name, shape):
+    parameter = torch.arange(torch.tensor(shape).prod().item(), dtype=torch.float32).reshape(shape)
+    full_name = f"module.module.language_model.decoder.layers.43.{name}"
+    exported = convert_glm5_next_to_hf(_EXPORT_ARGS, full_name, parameter)
+    assert all(key.startswith("model.language_model.layers.43.") for key, _ in exported)
+    tensors = dict(exported)
+    config = types.SimpleNamespace(text_config=_config("glm5_next_text"))
+    restored = glm5_next_hf_tensor(full_name, Reader(**tensors), config)
+    torch.testing.assert_close(restored, parameter, rtol=0, atol=0)
 
 
 class Reader:
@@ -371,6 +421,7 @@ def test_loader_scope_stays_explicit():
         "glm4",
         "glm4_moe",
         "glm4_moe_lite",
+        "glm5_next",
         "glm_moe_dsa",
         "kimi_k2",
         "llama",

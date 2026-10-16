@@ -306,6 +306,14 @@ jobs:
               "test_file": "test_sglang_top_p_copy.py"
             },
             {
+              "num_gpus": 1,
+              "test_file": "test_glm5_next_gpu.py"
+            },
+            {
+              "num_gpus": 4,
+              "test_file": "test_glm5_next_cp.py"
+            },
+            {
               "enable_eval": "0",
               "num_gpus": 8,
               "test_file": "test_moonlight_16B_A3B.py"
@@ -1166,6 +1174,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_glm5_next_ops.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_model_provider_freeze.py"
             },
             {
@@ -1508,6 +1520,14 @@ jobs:
             {
               "num_gpus": 1,
               "test_file": "test_sglang_top_p_copy.py"
+            },
+            {
+              "num_gpus": 1,
+              "test_file": "test_glm5_next_gpu.py"
+            },
+            {
+              "num_gpus": 4,
+              "test_file": "test_glm5_next_cp.py"
             },
             {
               "enable_eval": "0",

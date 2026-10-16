@@ -13,7 +13,7 @@ Current build configuration:
 
 - sglang v0.5.21 (e00930c5489053f26d86b179cee0d087f846acbb), Megatron Core v0.19.2 (4b4acac9a1d28ea6829c8d4f566d75698a21249d)
 - Base: `lmsysorg/sglang:v0.5.21`, CUDA 13.0.3, PyTorch 2.13.0.
-- Build version: `nightly-dev-20261016a` in `docker/version.txt` (Slime `0.4.0`).
+- Build version: `nightly-dev-20261016b` in `docker/version.txt` (Slime `0.4.0`).
 
 Previous build configurations:
 
@@ -37,7 +37,7 @@ just build
 Or from the repository root:
 
 ```bash
-docker build -f docker/Dockerfile . -t slimerl/slime:nightly-dev-20261016a-cu130
+docker build -f docker/Dockerfile . -t slimerl/slime:nightly-dev-20261016b-cu130
 ```
 
 The local checkout is installed into the image. The existing
@@ -70,7 +70,7 @@ not need to change to 13.0 when compatibility is active.
 Run commands through the image's default entrypoint:
 
 ```bash
-docker run --rm --gpus all --ipc=host slimerl/slime:nightly-dev-20261016a-cu130 \
+docker run --rm --gpus all --ipc=host slimerl/slime:nightly-dev-20261016b-cu130 \
   python -c 'import torch; print(torch.__version__, torch.version.cuda); print(torch.ones(1, device="cuda"))'
 ```
 
@@ -89,6 +89,12 @@ The following components are pinned in the image:
 - Megatron-LM / NVIDIA Megatron Core `0.19.2`
   (`4b4acac9a1d28ea6829c8d4f566d75698a21249d`), plus
   `docker/patch/<version>/megatron.patch` and `megatron-sglang-aligned.patch`.
+  The `latest` and `v0.5.21` patches refresh all HybridDeviceOptimizer copies
+  after model checkpoint loading, including parameters that are already FP32
+  and offloaded to CPU. This prevents the first optimizer step from replacing
+  loaded GLM5-next mHC/KDA parameters with their initial values. Optimizer-state
+  restore uses the same complete parameter mapping, avoiding a KeyError for
+  already-FP32 parameters when resuming training.
 - Transformer Engine `2.18.0`: the official CUDA core wheel matching the base
   image, with PyTorch bindings compiled locally. Optional NCCL EP bindings are
   disabled; Slime uses DeepEP.
