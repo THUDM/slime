@@ -208,7 +208,7 @@ pip install -e . --no-deps
 
 # int4_qat kernel (matches Dockerfile)
 cd "$SLIME_DIR/slime/backends/megatron_utils/kernels/int4_qat"
-pip install . --no-build-isolation
+pip install . --no-build-isolation --no-deps
 
 pip install "numpy==2.3.5" "scipy==1.18.1" "pyarrow==25.0.1"
 # kernels 0.15.x trips a ValueError("Either a revision or a version must be
@@ -273,9 +273,6 @@ for patch_name in megatron.patch megatron-sglang-aligned.patch; do
     fi
   fi
 done
-
-# Compile patched native kernels as well as the editable Python sources.
-pip install -v --no-build-isolation --no-deps "$BASE_DIR/sglang/python/sglang/kernels/aot"
 
 cd "$BASE_DIR"
 if [ ! -d DeepGEMM ]; then
