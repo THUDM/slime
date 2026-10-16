@@ -1,23 +1,26 @@
-ARG SGLANG_IMAGE_TAG=v0.5.15.post1-cu129
-FROM slimerl/sglang:${SGLANG_IMAGE_TAG} AS sglang
+ARG SGLANG_IMAGE_TAG=v0.5.21
+ARG SGLANG_IMAGE=lmsysorg/sglang
+FROM ${SGLANG_IMAGE}:${SGLANG_IMAGE_TAG} AS sglang
 
 # ======================================== Arguments =============================================
 
-ARG PATCH_VERSION=v0.5.15.post1
+ARG PATCH_VERSION=v0.5.21
 ARG MEGATRON_COMMIT=4b4acac9a1d28ea6829c8d4f566d75698a21249d
-ARG DEEPGEMM_COMMIT=b38a77cd193cf38f670caae192310521d24343be
+ARG DEEPGEMM_COMMIT=8965e4a5cded4041c8dbbe8d35b0be31fd8da90b
 ARG DEEPEP_COMMIT=6845ffd9d59126ec0030c13e0e155935a61e5b5a
-ARG DEEPEP_CUDA_ARCH_LIST=
-ARG FLASH_QLA_COMMIT=821fd9d37ede18fdc2a4e707fefe3770bfc32e58
+ARG DEEPEP_CUDA_ARCH_LIST="9.0 10.0 10.3"
 ARG TRANSFORMER_ENGINE_VERSION=2.18.0
-ARG NCCL_VERSION=2.30.7
-ARG TMS_COMMIT=4d525cf378fdbfe7eb044909b8e66e112a508624
+ARG SLIME_NCCL_VERSION=2.30.7
+ARG MOONCAKE_VERSION=0.3.11.post1
+ARG CUDA_COMPAT_VERSION=580.178.04-1ubuntu1
+ARG TMS_COMMIT=ac3aaced57ce1f710b9a2ad95151ea152098df66
 
 ARG TMS_CUDA_MAJOR=
 ARG MAX_JOBS=16
 ENV MAX_JOBS=${MAX_JOBS} CMAKE_BUILD_PARALLEL_LEVEL=${MAX_JOBS}
+ENV TORCH_CUDA_ARCH_LIST="9.0 10.0 10.3"
 # Resolve NCCL consistently for PyTorch, SGLang and the official TE core wheel.
-ENV LD_LIBRARY_PATH=/usr/local/lib/python3.12/dist-packages/nvidia/nccl/lib:${LD_LIBRARY_PATH}
+ENV LD_LIBRARY_PATH=/opt/sglang/lib/python3.12/site-packages/nvidia/nccl/lib:${LD_LIBRARY_PATH}
 
 # ======================================== Setup =============================================
 
@@ -25,31 +28,22 @@ WORKDIR /root/
 
 # ======================================== Apt dependencies =============================================
 
-RUN apt update
-RUN apt install -y nvtop rsync dnsutils prometheus
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      nvtop rsync dnsutils prometheus libdw-dev libelf-dev "cuda-compat-13-0=${CUDA_COMPAT_VERSION}" && \
+    rm -rf /var/lib/apt/lists/*
+COPY docker/cuda-compat.sh docker/entrypoint.sh /opt/slime/
+RUN chmod +x /opt/slime/entrypoint.sh
+ENTRYPOINT ["/opt/slime/entrypoint.sh"]
 
 # ====================================== Python dependencies ============================================
 
-# TE 2.18 supports FA2 through 2.8.3. These wheels match Python 3.12,
-# PyTorch 2.11 and CUDA 12; FA3 comes from the official PyTorch wheel index.
-# On CUDA 13, keep the base image's FA4 kernels for Blackwell.
-RUN if [ "$(python -c 'import torch; print(torch.version.cuda.split(".")[0])')" = "12" ]; then \
-      pip uninstall -y flash-attn-4 flash_attn_4 || true; \
-      pip install --no-deps --force-reinstall \
-        "https://github.com/lesj0610/flash-attention/releases/download/v2.8.3-cu12-torch2.11/flash_attn-2.8.3%2Bcu12torch2.11cxx11abiTRUE-cp312-cp312-linux_x86_64.whl" \
-        "https://download.pytorch.org/whl/cu129/flash_attn_3-3.0.0-cp39-abi3-manylinux_2_28_x86_64.whl"; \
-    fi
-
-RUN pip install flash-linear-attention==0.5.2
-# FlashQLA currently requires TileLang 0.1.9, while SGLang 0.5.15.post1 on
-# CUDA 13 requires 0.1.11.  Keep the existing CUDA 12 installation and use
-# the default FLA backend on CUDA 13 instead of downgrading SGLang's runtime.
-RUN if [ "$(python -c 'import torch; print(torch.version.cuda.split(".")[0])')" = "12" ]; then \
-      pip install \
-        git+https://github.com/QwenLM/FlashQLA.git@${FLASH_QLA_COMMIT} \
-        --no-build-isolation; \
-      pip install tilelang==0.1.9 -f https://tile-ai.github.io/whl/nightly/cu128/; \
-    fi
+# Preserve SGLang's CUDA 13/PyTorch stack during later resolving installs.
+RUN python -c 'import importlib.metadata as m; packages = ("torch", "torchvision", "torchaudio", "cuda-python", "cuda-bindings", "sglang-kernel", "sgl-deep-gemm", "flashinfer-python", "flashinfer-cubin", "transformers"); open("/opt/slime/constraints.txt", "w").write("".join(f"{p}=={m.version(p)}\n" for p in packages) + "pyarrow==25.0.1\n")'
+ENV PIP_CONSTRAINT=/opt/slime/constraints.txt
+RUN pip install flash-linear-attention==0.5.2 tilelang==0.1.12 scikit-build-core
+# Keep FA4 for Blackwell and add FA3 for Hopper MLA/context-parallel training.
+RUN pip install --no-deps flash-attn-3==3.0.0 --index-url https://download.pytorch.org/whl/cu130
+# Use the FLA GDN backend on CUDA 13.
 
 # Use the official TE core wheel; only its PyTorch bindings need compilation.
 # Slime uses DeepEP, so leave the optional NCCL EP bindings disabled.
@@ -83,29 +77,18 @@ RUN git clone https://github.com/zhuzilin/DeepGEMM.git --recursive && \
     pip install --force-reinstall --no-deps dist/sgl_deep_gemm-*.whl && \
     cd /root/ && rm -rf DeepGEMM
 
-# DeepEP low-latency alignment fork.  CUDA 13 relocated the CCCL/libcu++ headers
-# (<cuda/std/*>) under include/cccl, which nvshmem_tensor.h includes, so add that
-# directory to the compile search path (nvcc + host compiler) when it exists.
-RUN git clone https://github.com/zhuzilin/DeepEP.git /root/DeepEP && \
-    cd /root/DeepEP && git checkout ${DEEPEP_COMMIT} && \
-    CUDA_ARCHS="${DEEPEP_CUDA_ARCH_LIST:-9.0}" && \
-    if [ -d /usr/local/cuda/include/cccl ]; then \
-      export CPATH="/usr/local/cuda/include/cccl${CPATH:+:$CPATH}"; \
-      export NVCC_PREPEND_FLAGS="-I/usr/local/cuda/include/cccl ${NVCC_PREPEND_FLAGS:-}"; \
-    fi && \
-    TORCH_CUDA_ARCH_LIST="${CUDA_ARCHS}" python setup.py bdist_wheel && \
-    pip install --force-reinstall --no-deps dist/deep_ep-*.whl && \
-    cd /root/ && rm -rf DeepEP
-
 RUN pip install "nvidia-modelopt[torch]>=0.37.0" --no-build-isolation
 
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --ignore-installed PyJWT && \
-    pip install -r /tmp/requirements.txt
+    pip install -r /tmp/requirements.txt "sglang==$(python -c 'import importlib.metadata as m; print(m.version("sglang"))')"
 
-# Megatron currently requires NumPy 1.x, while SciPy 1.18+ requires NumPy 2.x.
-# Pin both packages together so downgrading NumPy does not leave an incompatible SciPy.
-RUN pip install "numpy==1.26.4" "scipy==1.17.1" "kernels<0.15.0"
+# Match the base scientific Python stack; CuPy's CUDA 13 wheel requires NumPy 2.
+RUN pip install "numpy==2.3.5" "scipy==1.18.1" "pyarrow==25.0.1" "kernels<0.15.0"
+
+# 0.3.13 can report success with a corrupt RDMA payload after KV memory is
+# remapped by torch_memory_saver. Keep the version validated by the PD tests.
+RUN pip install --no-deps --force-reinstall "mooncake-transfer-engine-cuda13==${MOONCAKE_VERSION}"
 
 # requirements.txt installs sglang-router and its dependencies above. Replace
 # only the router with the fork wheel; re-resolving its unbounded dependencies
@@ -155,21 +138,40 @@ RUN if [ "$ENABLE_SGLANG_PATCH" = "1" ]; then \
     fi; \
     git apply "$patch" || exit 1; \
   done && \
-  rm sglang*.patch; \
+  rm sglang*.patch && \
+  pip install -v --no-build-isolation --no-deps ./python/sglang/kernels/aot; \
 fi
 
 # ====================================== Install main package ============================================
 
-ARG SLIME_COMMIT=main
-RUN git clone https://github.com/THUDM/slime.git /root/slime && \
-    cd /root/slime && \
-    git checkout ${SLIME_COMMIT} && \
-    pip install -e . --no-deps
+ARG SLIME_COMMIT=local
+COPY . /root/slime/
+RUN if [ "$SLIME_COMMIT" != "local" ]; then \
+      rm -rf /root/slime && \
+      git clone https://github.com/THUDM/slime.git /root/slime && \
+      git -C /root/slime checkout "$SLIME_COMMIT"; \
+    fi && pip install -e /root/slime --no-deps
 
 RUN cd /root/slime/slime/backends/megatron_utils/kernels/int4_qat && \
     pip install . --no-build-isolation
 
+# DeepEP low-latency alignment fork.  CUDA 13 relocated the CCCL/libcu++ headers
+# (<cuda/std/*>) under include/cccl, which nvshmem_tensor.h includes, so add that
+# directory to the compile search path (nvcc + host compiler) when it exists.
+# Install after resolving dependencies: sgl-deep-ep shares the deep_ep namespace.
+RUN pip uninstall -y sgl-deep-ep deep-ep && \
+    git clone https://github.com/zhuzilin/DeepEP.git /root/DeepEP && \
+    cd /root/DeepEP && git checkout ${DEEPEP_COMMIT} && \
+    CUDA_ARCHS="${DEEPEP_CUDA_ARCH_LIST}" && \
+    if [ -d /usr/local/cuda/include/cccl ]; then \
+      export CPATH="/usr/local/cuda/include/cccl${CPATH:+:$CPATH}"; \
+      export NVCC_PREPEND_FLAGS="-I/usr/local/cuda/include/cccl ${NVCC_PREPEND_FLAGS:-}"; \
+    fi && \
+    TORCH_CUDA_ARCH_LIST="${CUDA_ARCHS}" python setup.py bdist_wheel && \
+    pip install --force-reinstall --no-deps dist/deep_ep-*.whl && \
+    cd /root/ && rm -rf DeepEP
+
 # PyTorch's dependency metadata pins older NCCL. Restore the tested runtime
 # after all resolving installs, without changing PyTorch or other packages.
 RUN CUDA_MAJOR="$(python -c 'import torch; print(torch.version.cuda.split(".")[0])')" && \
-    pip install --no-deps --force-reinstall "nvidia-nccl-cu${CUDA_MAJOR}==${NCCL_VERSION}"
+    pip install --no-deps --force-reinstall "nvidia-nccl-cu${CUDA_MAJOR}==${SLIME_NCCL_VERSION}"

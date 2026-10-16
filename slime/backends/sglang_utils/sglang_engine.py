@@ -37,14 +37,25 @@ def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
     os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
     os.environ.pop("PYTORCH_ALLOC_CONF", None)
 
-    if getattr(server_args, "encoder_only", False):
-        from sglang.srt.disaggregation.encode_server import launch_server_process as sglang_launch_server_process
+    # Mooncake's default RPC range (15000-17000) overlaps our HTTP port
+    # allocation. Its workers can bind a port before another server starts.
+    # Preserve explicit ranges, including the legacy PRC spelling.
+    if not any(f"MC_{bound}_{spelling}_PORT" in os.environ for bound in ("MIN", "MAX") for spelling in ("RPC", "PRC")):
+        os.environ["MC_MIN_PRC_PORT"] = "27000"
+        os.environ["MC_MAX_PRC_PORT"] = "28000"
 
-        return sglang_launch_server_process(
-            server_args,
-            start_method="spawn",
-            wait_for_server=True,
-        )
+    if getattr(server_args, "encoder_only", False):
+        try:
+            from sglang.srt.disaggregation.encode_server import launch_server_process as sglang_launch_server_process
+        except ModuleNotFoundError as exc:
+            if exc.name != "sglang.srt.disaggregation.encode_server":
+                raise
+        else:
+            return sglang_launch_server_process(
+                server_args,
+                start_method="spawn",
+                wait_for_server=True,
+            )
 
     multiprocessing.set_start_method("spawn", force=True)
     server_args.host = server_args.host.strip("[]")
@@ -64,7 +75,10 @@ def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
 
 
 def _launch_server(server_args, parent_pid):
-    from sglang.srt.entrypoints.http_server import launch_server
+    if getattr(server_args, "encoder_only", False):
+        from sglang.srt.disaggregation.encoder.http_server import launch_server
+    else:
+        from sglang.srt.entrypoints.http_server import launch_server
     from sglang.srt.utils import kill_itself_when_parent_died
 
     # A wedged actor cannot run shutdown(). Its server must still release GPUs
@@ -601,19 +615,37 @@ def _compute_server_args(
         kwargs["dtype"] = "float16"
     external_engine_need_check_fields = [k for k in kwargs.keys() if k not in _EXTERNAL_ENGINE_SKIP_CHECK_FIELDS]
 
-    server_arg_fields = dataclasses.fields(ServerArgs)
-    server_arg_field_names = {attr.name for attr in server_arg_fields}
+    if dataclasses.is_dataclass(ServerArgs):
+        server_arg_field_names = {field.name for field in dataclasses.fields(ServerArgs)}
+    else:
+        # SGLang 0.5.21 represents ServerArgs as a msgspec Struct.
+        server_arg_field_names = set(ServerArgs.__struct_fields__)
     unused_keys = set(kwargs.keys())
-    for attr in server_arg_fields:
-        if worker_type == "decode" and attr.name == "enable_hierarchical_cache":
+    for name in server_arg_field_names:
+        if worker_type == "decode" and name == "enable_hierarchical_cache":
             continue
-        if hasattr(args, f"sglang_{attr.name}") and attr.name not in kwargs:
-            kwargs[attr.name] = getattr(args, f"sglang_{attr.name}")
-        unused_keys.discard(attr.name)
+        if hasattr(args, f"sglang_{name}") and name not in kwargs:
+            kwargs[name] = getattr(args, f"sglang_{name}")
+        unused_keys.discard(name)
 
     # Per-server-group overrides from --sglang-config YAML.
     # Applied after base args so they take highest priority.
     if sglang_overrides:
+        renamed_fields = {
+            "cuda_graph_max_bs": "cuda_graph_max_bs_decode",
+            "cuda_graph_bs": "cuda_graph_bs_decode",
+            "piecewise_cuda_graph_tokens": "cuda_graph_bs_prefill",
+            "piecewise_cuda_graph_max_tokens": "cuda_graph_max_bs_prefill",
+            "piecewise_cuda_graph_compiler": "cuda_graph_tc_compiler",
+            "nsa_prefill_backend": "dsa_prefill_backend",
+            "nsa_decode_backend": "dsa_decode_backend",
+            "mamba_scheduler_strategy": "mamba_radix_cache_strategy",
+        }
+        prefill_backend_flags = {
+            "enable_breakable_cuda_graph": "breakable",
+            "disable_piecewise_cuda_graph": "disabled",
+            "enforce_piecewise_cuda_graph": "tc_piecewise",
+        }
         for key, value in sglang_overrides.items():
             normalized_key = key.replace("-", "_")
             if normalized_key != key:
@@ -621,6 +653,17 @@ def _compute_server_args(
                     f"sglang_overrides key '{key}' normalized to '{normalized_key}' (rank={rank}). "
                     "Please use underscore style in YAML overrides."
                 )
+            if normalized_key not in server_arg_field_names:
+                renamed_key = renamed_fields.get(normalized_key)
+                if renamed_key in server_arg_field_names:
+                    normalized_key = renamed_key
+                elif (
+                    normalized_key in prefill_backend_flags and "cuda_graph_backend_prefill" in server_arg_field_names
+                ):
+                    if not value:
+                        continue
+                    value = prefill_backend_flags[normalized_key]
+                    normalized_key = "cuda_graph_backend_prefill"
             if normalized_key in kwargs:
                 logger.info(
                     f"sglang_overrides: overriding {normalized_key}={kwargs[normalized_key]} -> {value} (rank={rank})"

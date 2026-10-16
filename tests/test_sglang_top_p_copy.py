@@ -1,7 +1,5 @@
 """SGLang top-p metadata must survive overlapped result copies and the next forward."""
 
-from types import SimpleNamespace
-
 import pytest
 import torch
 
@@ -17,6 +15,7 @@ NUM_GPUS = 1
     ],
 )
 def test_top_p_copy_preserves_values_after_source_release(field, dtype, expected, replacement):
+    from sglang.srt.layers.logits_processor import LogitsProcessorOutput
     from sglang.srt.managers.utils import GenerationBatchResult
 
     forward = torch.cuda.Stream()
@@ -24,16 +23,7 @@ def test_top_p_copy_preserves_values_after_source_release(field, dtype, expected
     for _ in range(32):
         with torch.cuda.stream(forward):
             rows = [torch.full((128,), expected, dtype=dtype, device="cuda") for _ in range(16)]
-            logits = SimpleNamespace(
-                next_token_logprobs=None,
-                input_token_logprobs=None,
-                next_token_top_logprobs_val=None,
-                next_token_top_logprobs_idx=None,
-                next_token_token_ids_logprobs_val=None,
-                next_token_top_p_token_ids=None,
-                next_token_top_p_log_probs=None,
-                hidden_states=None,
-            )
+            logits = LogitsProcessorOutput(next_token_logits=None)
             setattr(logits, field, rows)
             result = GenerationBatchResult(
                 logits_output=logits,

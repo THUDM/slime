@@ -580,7 +580,7 @@
         generator: source('docs/_static/js/experiment-engine.js')},
       recipe: source(recipe), modelConfig: source(model),
       environment: {recipeVersions: build.environment || null,
-        suggestedImageTag: s.hardware === 'unspecified' ? null : 'slimerl/slime:latest-' + (s.hardware === 'blackwell' ? 'cu130' : 'cu129'),
+        suggestedImageTag: s.hardware === 'unspecified' ? null : 'slimerl/slime:latest-cu130',
         imageDigest: null, installedCommit: null},
       checkpoint: {id: models[s.model].repo, revision: null},
       staticChecksPassed: validate(s).errors.length === 0,

@@ -17,7 +17,7 @@ install it in an existing environment, run this on every rollout and training
 node, using the same version throughout the job:
 
 ```bash
-pip install 'straw-queue>=0.1.2'
+pip install 'straw-queue>=0.1.3'
 ```
 
 Add these arguments to your training command:

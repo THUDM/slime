@@ -1,29 +1,18 @@
 diff --git a/python/sglang/srt/disaggregation/decode.py b/python/sglang/srt/disaggregation/decode.py
-index 50e13ffa5d..a1eb645e34 100644
+index 1e550f2f..0a815ba0 100644
 --- a/python/sglang/srt/disaggregation/decode.py
 +++ b/python/sglang/srt/disaggregation/decode.py
-@@ -670,9 +670,7 @@ class DecodePreallocQueue(DecodeHiCachePreallocMixin):
-                 continue
-
-             if poll == KVPoll.Bootstrapping:
--                entry_time = (
--                    decode_req.req.time_stats.decode_prealloc_queue_entry_time
--                )
-+                entry_time = decode_req.req.time_stats.decode_prealloc_queue_entry_time
-                 if entry_time > 0 and now - entry_time > bootstrap_timeout:
-                     error_message = (
-                         f"Decode prealloc timeout for request rank={self.tp_rank} "
-@@ -1550,6 +1548,9 @@ class DecodeTransferQueue(DecodeHiCacheTransferMixin):
-             output_token_logprobs_idx,
-             output_top_logprobs_val,
-             output_top_logprobs_idx,
+@@ -2452,6 +2452,9 @@ class DecodeTransferQueue(DecodeHiCacheTransferMixin):
+             output_token_sampling_mask_len,
+             output_token_sampling_mask_idx,
+             output_token_sampling_logprobs,
 +            output_top_p_token_ids_len,
 +            output_top_p_token_ids,
 +            output_top_p_log_probs,
              output_topk_p,
              output_topk_index,
              output_hidden_states,
-@@ -1653,6 +1654,15 @@ class DecodeTransferQueue(DecodeHiCacheTransferMixin):
+@@ -2587,6 +2590,16 @@ class DecodeTransferQueue(DecodeHiCacheTransferMixin):
                      : decode_req.req.logprob.top_logprobs_num
                  ].tolist()
              )
@@ -36,33 +25,34 @@ index 50e13ffa5d..a1eb645e34 100644
 +                decode_req.req.logprob.output_top_p_log_probs.append(
 +                    output_top_p_log_probs[:top_p_token_ids_len].tolist()
 +                )
- 
-         decode_req.kv_receiver.clear()
-         decode_req.kv_receiver = None
++
+         if decode_req.req.return_sampling_mask and not replayed_boundary:
+             assert output_token_sampling_mask_idx is not None, (
+                 "sampling mask buffer disabled on decode side"
 diff --git a/python/sglang/srt/disaggregation/utils.py b/python/sglang/srt/disaggregation/utils.py
-index e6ca3bd580..2e89d16648 100644
+index 859f01b9..21b83abf 100644
 --- a/python/sglang/srt/disaggregation/utils.py
 +++ b/python/sglang/srt/disaggregation/utils.py
 @@ -1,5 +1,6 @@
  from __future__ import annotations
- 
+
 +import logging
- import os
  import random
  from collections import deque
-@@ -32,6 +33,8 @@ if TYPE_CHECKING:
+ from contextlib import nullcontext
+@@ -47,6 +48,8 @@ if is_npu():
+ # Constants & Enums
  #########################
  FAKE_BOOTSTRAP_HOST = "2.2.2.2"
- _IS_HIP = is_hip()
 +MAX_PD_TOP_P_TOKEN_IDS = 4096
 +logger = logging.getLogger(__name__)
- 
- 
- def get_dsa_seed_metadata_dim(hf_config) -> int:
-@@ -276,6 +279,15 @@ class MetadataBuffers:
-             self.output_top_logprobs_idx = torch.zeros(
-                 (size, max_top_logprobs_num), dtype=torch.int32, device=device
-             )
+
+
+ def poll_and_all_reduce_pp(
+@@ -358,6 +361,15 @@ class MetadataBuffers:
+                     dtype=torch.float32,
+                     device=device,
+                 )
 +            self.output_top_p_token_ids_len = torch.zeros(
 +                (size, 16), dtype=torch.int32, device=device
 +            )
@@ -75,47 +65,27 @@ index e6ca3bd580..2e89d16648 100644
              # For PD + spec decode
              self.output_topk_p = torch.zeros(
                  (size, 16), dtype=torch.float32, device=device
-@@ -308,6 +320,9 @@ class MetadataBuffers:
-             self.output_token_logprobs_idx.data_ptr(),
-             self.output_top_logprobs_val.data_ptr(),
-             self.output_top_logprobs_idx.data_ptr(),
-+            self.output_top_p_token_ids_len.data_ptr(),
-+            self.output_top_p_token_ids.data_ptr(),
-+            self.output_top_p_log_probs.data_ptr(),
-             self.output_topk_p.data_ptr(),
-             self.output_topk_index.data_ptr(),
-             self.output_hidden_states.data_ptr(),
-@@ -320,6 +335,9 @@ class MetadataBuffers:
-             self.output_token_logprobs_idx.nbytes,
-             self.output_top_logprobs_val.nbytes,
-             self.output_top_logprobs_idx.nbytes,
-+            self.output_top_p_token_ids_len.nbytes,
-+            self.output_top_p_token_ids.nbytes,
-+            self.output_top_p_log_probs.nbytes,
-             self.output_topk_p.nbytes,
-             self.output_topk_index.nbytes,
-             self.output_hidden_states.nbytes,
-@@ -332,6 +350,9 @@ class MetadataBuffers:
-             self.output_token_logprobs_idx[0].nbytes,
-             self.output_top_logprobs_val[0].nbytes,
-             self.output_top_logprobs_idx[0].nbytes,
-+            self.output_top_p_token_ids_len[0].nbytes,
-+            self.output_top_p_token_ids[0].nbytes,
-+            self.output_top_p_log_probs[0].nbytes,
-             self.output_topk_p[0].nbytes,
-             self.output_topk_index[0].nbytes,
-             self.output_hidden_states[0].nbytes,
-@@ -351,6 +372,9 @@ class MetadataBuffers:
-             self.output_token_logprobs_idx[idx].clone(),
-             self.output_top_logprobs_val[idx].clone(),
-             self.output_top_logprobs_idx[idx].clone(),
+@@ -413,6 +425,9 @@ class MetadataBuffers:
+             self.output_token_sampling_mask_len,
+             self.output_token_sampling_mask_idx,
+             self.output_token_sampling_logprobs,
++            self.output_top_p_token_ids_len,
++            self.output_top_p_token_ids,
++            self.output_top_p_log_probs,
+             self.output_topk_p,
+             self.output_topk_index,
+             self.output_hidden_states,
+@@ -451,6 +466,9 @@ class MetadataBuffers:
+                 if self.enable_sampling_mask
+                 else None
+             ),
 +            self.output_top_p_token_ids_len[idx].clone(),
 +            self.output_top_p_token_ids[idx].clone(),
 +            self.output_top_p_log_probs[idx].clone(),
              self.output_topk_p[idx].clone(),
              self.output_topk_index[idx].clone(),
              self.output_hidden_states[idx].clone(),
-@@ -383,6 +407,7 @@ class MetadataBuffers:
+@@ -483,6 +501,7 @@ class MetadataBuffers:
          self.cached_tokens[req.metadata_buffer_index][4] = image_t
          self.cached_tokens[req.metadata_buffer_index][5] = audio_t
          self.cached_tokens[req.metadata_buffer_index][6] = video_t
@@ -123,7 +93,7 @@ index e6ca3bd580..2e89d16648 100644
          if req.return_logprob:
              if req.logprob.output_token_logprobs_val:  # not none or empty list
                  self.output_token_logprobs_val[req.metadata_buffer_index][0] = (
-@@ -409,6 +434,40 @@ class MetadataBuffers:
+@@ -517,6 +536,41 @@ class MetadataBuffers:
                      dtype=torch.int32,
                      device="cpu",
                  )
@@ -161,53 +131,168 @@ index e6ca3bd580..2e89d16648 100644
 +                self.output_top_p_token_ids_len[req.metadata_buffer_index][1] = len(
 +                    values
 +                )
-         # For PD + spec decode
-         if req.hidden_states_tensor is not None:
-             # speculative_eagle_topk should not be greater than 16 currently
++
+         if req.return_sampling_mask:
+             # Prefill streams a request only once its KV transfer ends or it aborts,
+             # so the first token's row is the only one queued here.
 diff --git a/python/sglang/srt/layers/logits_processor.py b/python/sglang/srt/layers/logits_processor.py
-index 45dc18463e..cd410fb068 100644
+index 77b47df9..165480fa 100644
 --- a/python/sglang/srt/layers/logits_processor.py
 +++ b/python/sglang/srt/layers/logits_processor.py
-@@ -173,6 +173,9 @@ class LogitsProcessorOutput:
-         List[Union[List[float], torch.Tensor]]
-     ] = None
-     next_token_token_ids_logprobs_idx: Optional[List] = None
+@@ -238,6 +238,9 @@ class LogitsProcessorOutput:
+     next_token_sampling_mask_idx: Optional[List[Optional[np.ndarray]]] = None
+     next_token_sampling_logprobs: Optional[List[Optional[np.ndarray]]] = None
+     next_token_sampling_mask_status: Optional[List[Optional[int]]] = None
 +    # The kept token ids used by rollout top-p replay. One tensor/list per sampled row.
 +    next_token_top_p_token_ids: Optional[List[Optional[torch.Tensor]]] = None
 +    next_token_top_p_log_probs: Optional[List[Optional[torch.Tensor]]] = None
- 
+
      ## Part 3: Prefill-only. This part will be assigned in python/sglang/srt/layers/logits_processor.py::LogitsProcessor
      # The logprobs of input tokens.        shape: [#token]
+diff --git a/python/sglang/srt/layers/logprob_processor.py b/python/sglang/srt/layers/logprob_processor.py
+index 9d5690a7..831e3fd9 100644
+--- a/python/sglang/srt/layers/logprob_processor.py
++++ b/python/sglang/srt/layers/logprob_processor.py
+@@ -1,5 +1,7 @@
+ from __future__ import annotations
+
++from sglang.srt.layers.utils.top_p import attach_top_p_log_probs, get_top_p_token_ids_from_probs, renorm_logprob_over_top_p
++
+ import bisect
+ import dataclasses
+ import logging
+@@ -390,6 +392,7 @@ def compute_spec_logprobs(
+     *,
+     accept_index: Optional[torch.Tensor] = None,
+     chain_stride: Optional[int] = None,
++    accept_lens: Optional[torch.Tensor] = None,
+ ):
+     assert (accept_index is None) != (chain_stride is None), (
+         "pass exactly one of accept_index / chain_stride"
+@@ -414,6 +417,7 @@ def compute_spec_logprobs(
+         gathered_logits = next_token_logits
+         accepted_token_ids = predict
+
++    temperatures = None
+     if batch.sampling_info.is_all_greedy or envs.SGLANG_RETURN_ORIGINAL_LOGPROB.get():
+         gathered_logprobs = torch.nn.functional.log_softmax(gathered_logits, dim=-1)
+     else:
+@@ -431,6 +435,92 @@ def compute_spec_logprobs(
+         1, accepted_token_ids.long().view(-1, 1)
+     ).view(bs, max_accept)
+
++    if batch.sampling_info.need_return_top_p_token_ids:
++        device = gathered_logits.device
++        valid_accept_mask = (
++            torch.arange(max_accept, device=device).view(1, -1)
++            < accept_lens.view(-1, 1) if accept_lens is not None else torch.ones((bs, max_accept), dtype=torch.bool, device=device)
++        ).reshape(-1)
++        request_mask = (
++            torch.repeat_interleave(
++                batch.sampling_info.return_top_p_token_ids, max_accept
++            )
++            & valid_accept_mask
++        )
++
++        if batch.sampling_info.is_all_greedy:
++            logits_output.next_token_top_p_token_ids = [
++                (
++                    accepted_token_ids[i : i + 1].to(torch.int32)
++                    if bool(request_mask[i].item())
++                    else None
++                )
++                for i in range(bs * max_accept)
++            ]
++        else:
++            if temperatures is None:
++                temperatures = torch.repeat_interleave(
++                    batch.sampling_info.temperatures,
++                    max_accept,
++                    dim=0,
++                )
++            probs = torch.softmax(gathered_logits / temperatures, dim=-1)
++            expanded_top_ks = torch.repeat_interleave(
++                batch.sampling_info.top_ks, max_accept
++            )
++            expanded_top_ps = torch.repeat_interleave(
++                batch.sampling_info.top_ps, max_accept
++            )
++            expanded_min_ps = torch.repeat_interleave(
++                batch.sampling_info.min_ps, max_accept
++            )
++            top_p_token_ids = get_top_p_token_ids_from_probs(
++                probs=probs,
++                top_ks=expanded_top_ks,
++                top_ps=expanded_top_ps,
++                min_ps=expanded_min_ps,
++                need_top_p_sampling=batch.sampling_info.need_top_p_sampling,
++                need_min_p_sampling=False,
++                request_mask=request_mask,
++            )
++            if top_p_token_ids is not None:
++                logits_output.next_token_top_p_token_ids = top_p_token_ids
++
++            renorm_logprobs = renorm_logprob_over_top_p(
++                probs=probs,
++                top_ks=expanded_top_ks,
++                top_ps=expanded_top_ps,
++                min_ps=expanded_min_ps,
++                need_top_p_sampling=batch.sampling_info.need_top_p_sampling,
++                need_min_p_sampling=False,
++                request_mask=request_mask,
++                # Force-keep the accepted token: a small fraction of
++                # speculatively accepted tokens land outside their own top-p
++                # nucleus, which would give a -inf renormalized logprob.
++                # Force-keeping makes the denominator ``nucleus ∪ {accepted}``,
++                # matching the trainer which also force-keeps the target token,
++                # so these tokens stay finite and on-policy.
++                force_keep_token_ids=accepted_token_ids.long(),
++            )
++            if renorm_logprobs is not None:
++                idx = torch.arange(bs * max_accept, device=device)
++                renorm_token_logprobs = renorm_logprobs[idx, accepted_token_ids.long()]
++                renorm_token_logprobs.clamp_(
++                    min=torch.finfo(renorm_token_logprobs.dtype).min
++                )
++                logits_output.next_token_logprobs = renorm_token_logprobs.reshape(
++                    bs, max_accept
++                )
++                attach_top_p_log_probs(
++                    logits_output,
++                    renorm_logprobs,
++                    accepted_token_ids,
++                    torch.repeat_interleave(
++                        batch.sampling_info.return_top_p_log_probs, max_accept
++                    )
++                    & valid_accept_mask,
++                )
++
+     if batch.top_logprobs_nums and any(x > 0 for x in batch.top_logprobs_nums):
+         top_logprobs_nums_expanded = [
+             num for num in batch.top_logprobs_nums for _ in range(max_accept)
 diff --git a/python/sglang/srt/layers/sampler.py b/python/sglang/srt/layers/sampler.py
-index e83e4157fa..56dd093635 100644
+index c1dae6ef..753f608c 100644
 --- a/python/sglang/srt/layers/sampler.py
 +++ b/python/sglang/srt/layers/sampler.py
-@@ -12,7 +12,13 @@ from sglang.srt.layers.dp_attention import (
+@@ -20,6 +20,7 @@ from sglang.srt.layers.logprob_processor import (
+     OutputLogprobProcessor,
  )
- from sglang.srt.layers.logits_processor import LogitsProcessorOutput
- from sglang.srt.layers.utils.hash import murmur_hash32
--from sglang.srt.layers.utils.logprob import get_token_ids_logprobs, get_top_logprobs
-+from sglang.srt.layers.utils.logprob import (
-+    attach_top_p_log_probs,
-+    get_token_ids_logprobs,
-+    get_top_logprobs,
-+    get_top_p_token_ids_from_probs,
-+    renorm_logprob_over_top_p,
-+)
- from sglang.srt.runtime_context import get_flags
+ from sglang.srt.runtime_context import get_exec, get_parallel, get_server_args
++from sglang.srt.layers.utils.top_p import (attach_top_p_log_probs, get_top_p_token_ids_from_probs, renorm_logprob_over_top_p)
  from sglang.srt.sampling.sampling_batch_info import SamplingBatchInfo
  from sglang.srt.sampling.sampling_params import TOP_K_ALL
-@@ -127,6 +133,9 @@ class Sampler(nn.Module):
+ from sglang.srt.utils.async_probe import sanitize_nan_logits
+@@ -191,6 +192,9 @@ class Sampler(nn.Module):
                  _aiter_greedy_sample(batch_next_token_ids, logits)
              else:
                  batch_next_token_ids = torch.argmax(logits, -1)
 +            self._attach_greedy_top_p_token_ids_to_output(
 +                logits_output, batch_next_token_ids, sampling_info
 +            )
-             if return_logprob:
-                 original_logprobs = logprobs = torch.nn.functional.log_softmax(
-                     logits, dim=-1
-@@ -157,6 +166,7 @@ class Sampler(nn.Module):
+             _trace_e2e_sampler(
+                 "greedy_returned", output_shape=tuple(batch_next_token_ids.shape)
+             )
+@@ -224,6 +228,7 @@ class Sampler(nn.Module):
              if self.use_ascend_backend:
                  # Ascend backend: sample from logits directly.
                  batch_next_token_ids, logprobs = self._forward_ascend_backend(
@@ -215,18 +300,21 @@ index e83e4157fa..56dd093635 100644
                      logits,
                      sampling_info,
                      simple_sampling_case,
-@@ -184,15 +194,45 @@ class Sampler(nn.Module):
+@@ -266,6 +271,12 @@ class Sampler(nn.Module):
                  logits[:] = torch.softmax(logits, dim=-1)
                  probs = logits
- 
+
 +                self._attach_top_p_token_ids_to_output(
 +                    logits_output,
 +                    probs,
 +                    sampling_info,
 +                    simple_sampling_case,
 +                )
-                 batch_next_token_ids = self._sample_from_probs(
-                     probs, sampling_info, positions, simple_sampling_case
+                 batch_next_token_ids, sampling_mask_capture = self._sample_from_probs(
+                     probs,
+                     sampling_info,
+@@ -273,16 +284,44 @@ class Sampler(nn.Module):
+                     simple_sampling_case,
                  )
                  if return_logprob and not SGLANG_RETURN_ORIGINAL_LOGPROB:
 -                    logprobs = (
@@ -264,17 +352,26 @@ index e83e4157fa..56dd093635 100644
 +                            else torch.log(probs)
 +                        )
                  del probs
- 
-         # Attach logprobs to logits_output (in-place modification)
-@@ -321,6 +361,7 @@ class Sampler(nn.Module):
- 
+
+         if return_logprob:
+             if SGLANG_RETURN_ORIGINAL_LOGPROB:
+                 logprobs = original_logprobs
++            if sampling_info.return_top_p_log_probs is not None and bool(sampling_info.return_top_p_log_probs.any().item()):
++                if SGLANG_RETURN_ORIGINAL_LOGPROB or self.use_ascend_backend:
++                    raise ValueError("Exact top-p score centering requires post-truncation sampler logprobs")
++                attach_top_p_log_probs(logits_output, logprobs, batch_next_token_ids, sampling_info.return_top_p_log_probs)
+             logprob_result = self.output_logprob_processor.compute_logprobs(
+                 logprobs,
+                 top_logprobs_nums,
+@@ -649,6 +688,7 @@ class Sampler(nn.Module):
+
      def _forward_ascend_backend(
          self,
 +        logits_output: LogitsProcessorOutput,
          logits: torch.Tensor,
          sampling_info: SamplingBatchInfo,
          simple_sampling_case: bool,
-@@ -337,6 +378,15 @@ class Sampler(nn.Module):
+@@ -665,6 +705,15 @@ class Sampler(nn.Module):
              when return_logprob is False or SGLANG_RETURN_ORIGINAL_LOGPROB is set.
          """
          logits.div_(sampling_info.temperatures)
@@ -290,10 +387,10 @@ index e83e4157fa..56dd093635 100644
          batch_next_token_ids = self._sample_from_logits(
              logits, sampling_info, simple_sampling_case, positions
          )
-@@ -345,6 +395,51 @@ class Sampler(nn.Module):
+@@ -673,6 +722,51 @@ class Sampler(nn.Module):
              logprobs = torch.log_softmax(logits, dim=-1)
          return batch_next_token_ids, logprobs
- 
+
 +    def _attach_greedy_top_p_token_ids_to_output(
 +        self,
 +        logits_output: LogitsProcessorOutput,
@@ -339,47 +436,22 @@ index e83e4157fa..56dd093635 100644
 +        if top_p_token_ids is not None:
 +            logits_output.next_token_top_p_token_ids = top_p_token_ids
 +
-     def _attach_logprobs_to_output(
-         self,
-         logits_output: LogitsProcessorOutput,
-@@ -357,6 +452,21 @@ class Sampler(nn.Module):
-         # clamp to avoid -inf values
-         logprobs.clamp_(min=torch.finfo(logprobs.dtype).min)
-
-+        if (
-+            sampling_info.return_top_p_log_probs is not None
-+            and bool(sampling_info.return_top_p_log_probs.any().item())
-+        ):
-+            if SGLANG_RETURN_ORIGINAL_LOGPROB or self.use_ascend_backend:
-+                raise ValueError(
-+                    "Exact top-p score centering requires post-truncation sampler logprobs"
-+                )
-+            attach_top_p_log_probs(
-+                logits_output,
-+                logprobs,
-+                batch_next_token_ids,
-+                sampling_info.return_top_p_log_probs,
-+            )
+     def _sync_token_ids_across_tp(
+         self, batch_next_token_ids: torch.Tensor, sampling_info: SamplingBatchInfo
+     ):
+diff --git a/python/sglang/srt/layers/utils/top_p.py b/python/sglang/srt/layers/utils/top_p.py
+new file mode 100644
+index 00000000..9665cef9
+--- /dev/null
++++ b/python/sglang/srt/layers/utils/top_p.py
+@@ -0,0 +1,132 @@
++from typing import List, Optional
 +
-         # Attach logprobs to logits_output (in-place modification)
-         if any(x > 0 for x in top_logprobs_nums):
-             (
-diff --git a/python/sglang/srt/layers/utils/logprob.py b/python/sglang/srt/layers/utils/logprob.py
-index fde20e211a..95b274e8d2 100644
---- a/python/sglang/srt/layers/utils/logprob.py
-+++ b/python/sglang/srt/layers/utils/logprob.py
-@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, List, Optional
- import torch
- 
- from sglang.srt.environ import envs
++import torch
++
 +from sglang.srt.sampling.sampling_params import TOP_K_ALL
- 
- if TYPE_CHECKING:
-     from sglang.srt.layers.logits_processor import LogitsMetadata
-@@ -85,6 +86,133 @@ def get_top_logprobs(
-     )
- 
- 
++
++
 +def _top_p_filter_rows(
 +    top_ks: torch.Tensor,
 +    top_ps: torch.Tensor,
@@ -505,146 +577,24 @@ index fde20e211a..95b274e8d2 100644
 +        supports[row] = ids.to(torch.int32)
 +        output.append(logprobs[row, ids])
 +    logits_output.next_token_top_p_log_probs = output
-+
-+
- def get_token_ids_logprobs_raw(
-     logprobs: torch.Tensor,
-     token_ids_logprobs_list: List[Optional[List[int]]],
-@@ -297,13 +425,14 @@ def compute_spec_v2_logprobs(
-     logits_output,
-     predict: torch.Tensor,
-     accept_index: torch.Tensor,
-+    accept_lens: torch.Tensor,
-     speculative_num_steps: int,
- ):
-     """Compute logprobs for accepted tokens after spec v2 verify sampling.
- 
-     Gathers logits at accepted positions, applies log_softmax (temperature-scaled
--    if not greedy), and populates logits_output.next_token_logprobs (plus optional
--    top-k / token-ids logprobs) so they flow through copy_to_cpu().
-+    if not greedy), and populates logits_output.next_token_logprobs plus optional
-+    top-k / token-ids / top-p replay metadata so they flow through copy_to_cpu().
-     """
-     bs = len(batch.seq_lens)
-     max_accept = speculative_num_steps + 1
-@@ -311,6 +440,7 @@ def compute_spec_v2_logprobs(
- 
-     flat_accept_idx = accept_index.long().reshape(-1)
-     gathered_logits = logits_output.next_token_logits[flat_accept_idx]
-+    temperatures = None
- 
-     if batch.sampling_info.is_all_greedy or envs.SGLANG_RETURN_ORIGINAL_LOGPROB.get():
-         gathered_logprobs = torch.nn.functional.log_softmax(gathered_logits, dim=-1)
-@@ -332,6 +462,91 @@ def compute_spec_v2_logprobs(
-     ]
-     logits_output.next_token_logprobs = token_logprobs.reshape(bs, max_accept)
- 
-+    if batch.sampling_info.need_return_top_p_token_ids:
-+        valid_accept_mask = (
-+            torch.arange(max_accept, device=device).view(1, -1)
-+            < accept_lens.view(-1, 1)
-+        ).reshape(-1)
-+        request_mask = (
-+            torch.repeat_interleave(
-+                batch.sampling_info.return_top_p_token_ids, max_accept
-+            )
-+            & valid_accept_mask
-+        )
-+
-+        if batch.sampling_info.is_all_greedy:
-+            logits_output.next_token_top_p_token_ids = [
-+                (
-+                    accepted_token_ids[i : i + 1].to(torch.int32)
-+                    if bool(request_mask[i].item())
-+                    else None
-+                )
-+                for i in range(bs * max_accept)
-+            ]
-+        else:
-+            if temperatures is None:
-+                temperatures = torch.repeat_interleave(
-+                    batch.sampling_info.temperatures,
-+                    max_accept,
-+                    dim=0,
-+                )
-+            probs = torch.softmax(gathered_logits / temperatures, dim=-1)
-+            expanded_top_ks = torch.repeat_interleave(
-+                batch.sampling_info.top_ks, max_accept
-+            )
-+            expanded_top_ps = torch.repeat_interleave(
-+                batch.sampling_info.top_ps, max_accept
-+            )
-+            expanded_min_ps = torch.repeat_interleave(
-+                batch.sampling_info.min_ps, max_accept
-+            )
-+            top_p_token_ids = get_top_p_token_ids_from_probs(
-+                probs=probs,
-+                top_ks=expanded_top_ks,
-+                top_ps=expanded_top_ps,
-+                min_ps=expanded_min_ps,
-+                need_top_p_sampling=batch.sampling_info.need_top_p_sampling,
-+                need_min_p_sampling=False,
-+                request_mask=request_mask,
-+            )
-+            if top_p_token_ids is not None:
-+                logits_output.next_token_top_p_token_ids = top_p_token_ids
-+
-+            renorm_logprobs = renorm_logprob_over_top_p(
-+                probs=probs,
-+                top_ks=expanded_top_ks,
-+                top_ps=expanded_top_ps,
-+                min_ps=expanded_min_ps,
-+                need_top_p_sampling=batch.sampling_info.need_top_p_sampling,
-+                need_min_p_sampling=False,
-+                request_mask=request_mask,
-+                # Force-keep the accepted token: a small fraction of
-+                # speculatively accepted tokens land outside their own top-p
-+                # nucleus, which would give a -inf renormalized logprob.
-+                # Force-keeping makes the denominator ``nucleus ∪ {accepted}``,
-+                # matching the trainer which also force-keeps the target token,
-+                # so these tokens stay finite and on-policy.
-+                force_keep_token_ids=accepted_token_ids.long(),
-+            )
-+            if renorm_logprobs is not None:
-+                idx = torch.arange(bs * max_accept, device=device)
-+                renorm_token_logprobs = renorm_logprobs[idx, accepted_token_ids.long()]
-+                renorm_token_logprobs.clamp_(
-+                    min=torch.finfo(renorm_token_logprobs.dtype).min
-+                )
-+                logits_output.next_token_logprobs = renorm_token_logprobs.reshape(
-+                    bs, max_accept
-+                )
-+                attach_top_p_log_probs(
-+                    logits_output,
-+                    renorm_logprobs,
-+                    accepted_token_ids,
-+                    torch.repeat_interleave(
-+                        batch.sampling_info.return_top_p_log_probs, max_accept
-+                    )
-+                    & valid_accept_mask,
-+                )
-+
-     if batch.top_logprobs_nums and any(x > 0 for x in batch.top_logprobs_nums):
-         top_logprobs_nums_expanded = [
-             num for num in batch.top_logprobs_nums for _ in range(max_accept)
 diff --git a/python/sglang/srt/managers/detokenizer_manager.py b/python/sglang/srt/managers/detokenizer_manager.py
-index fa9a1d262f..850a4160a4 100644
+index 00236933..301bafc6 100644
 --- a/python/sglang/srt/managers/detokenizer_manager.py
 +++ b/python/sglang/srt/managers/detokenizer_manager.py
-@@ -441,6 +441,8 @@ class DetokenizerManager(MultiHttpWorkerDetokenizerMixin):
+@@ -493,6 +493,8 @@ class DetokenizerManager(MultiHttpWorkerDetokenizerMixin):
              input_token_ids_logprobs_idx=recv_obj.input_token_ids_logprobs_idx,
              output_token_ids_logprobs_val=recv_obj.output_token_ids_logprobs_val,
              output_token_ids_logprobs_idx=recv_obj.output_token_ids_logprobs_idx,
 +            output_top_p_token_ids=recv_obj.output_top_p_token_ids,
 +            output_top_p_log_probs=recv_obj.output_top_p_log_probs,
              output_token_entropy_val=recv_obj.output_token_entropy_val,
+             output_token_sampling_mask=recv_obj.output_token_sampling_mask,
              output_hidden_states=recv_obj.output_hidden_states,
-             routed_experts=routed_experts,
 diff --git a/python/sglang/srt/managers/io_struct.py b/python/sglang/srt/managers/io_struct.py
-index 17aab81733..9e6ac5db6e 100644
+index 771128e1..1fac82ef 100644
 --- a/python/sglang/srt/managers/io_struct.py
 +++ b/python/sglang/srt/managers/io_struct.py
-@@ -1189,6 +1189,7 @@ TopLogprobValues = Optional[List[Optional[List[Optional[List[float]]]]]]
+@@ -1485,6 +1485,7 @@ TopLogprobValues = Optional[List[Optional[List[Optional[List[float]]]]]]
  TopLogprobIndices = Optional[List[Optional[List[Optional[List[int]]]]]]
  TokenIdsLogprobValues = Optional[List[Optional[List[Optional[List[float]]]]]]
  TokenIdsLogprobIndices = Optional[List[Optional[List[Optional[List[int]]]]]]
@@ -652,29 +602,29 @@ index 17aab81733..9e6ac5db6e 100644
  HiddenStateChunk = List[Optional[Union[float, List[float]]]]
  OutputHiddenStates = Optional[List[Optional[List[HiddenStateChunk]]]]
  CachedTokensDetails = Dict[str, Union[int, str]]
-@@ -1229,6 +1230,8 @@ class BatchTokenIDOutput(BaseBatchReq, kw_only=True):
+@@ -1558,6 +1559,8 @@ class BatchTokenIDOutput(BaseBatchReq, kw_only=True):
      input_token_ids_logprobs_idx: TokenIdsLogprobIndices
      output_token_ids_logprobs_val: TokenIdsLogprobValues
      output_token_ids_logprobs_idx: TokenIdsLogprobIndices
 +    output_top_p_token_ids: TopPTokenIds
 +    output_top_p_log_probs: Optional[List[List[List[float]]]]
      output_token_entropy_val: Optional[List[Optional[float]]]
- 
-     # Hidden states
-@@ -1305,6 +1308,8 @@ class BatchStrOutput(BaseBatchReq, kw_only=True):
+     output_token_sampling_mask: Optional[List[Optional[SamplingMaskChunk]]]
+
+@@ -1653,6 +1656,8 @@ class BatchStrOutput(BaseBatchReq, kw_only=True):
      input_token_ids_logprobs_idx: TokenIdsLogprobIndices
      output_token_ids_logprobs_val: TokenIdsLogprobValues
      output_token_ids_logprobs_idx: TokenIdsLogprobIndices
 +    output_top_p_token_ids: TopPTokenIds
 +    output_top_p_log_probs: Optional[List[List[List[float]]]]
      output_token_entropy_val: Optional[List[Optional[float]]]
- 
-     # Hidden states
+     output_token_sampling_mask: Optional[List[Optional[SamplingMaskChunk]]]
+
 diff --git a/python/sglang/srt/managers/multi_tokenizer_mixin.py b/python/sglang/srt/managers/multi_tokenizer_mixin.py
-index 94f5895171..d284d33d32 100644
+index 48cb012c..20af20f8 100644
 --- a/python/sglang/srt/managers/multi_tokenizer_mixin.py
 +++ b/python/sglang/srt/managers/multi_tokenizer_mixin.py
-@@ -220,6 +220,9 @@ def _handle_output_by_index(output, i):
+@@ -241,6 +241,9 @@ def _handle_output_by_index(output, i):
              output_token_ids_logprobs_idx=_extract_field_by_index(
                  output, "output_token_ids_logprobs_idx", i, check_length=False
              ),
@@ -684,7 +634,7 @@ index 94f5895171..d284d33d32 100644
              output_token_entropy_val=_extract_field_by_index(
                  output, "output_token_entropy_val", i, check_length=False
              ),
-@@ -313,6 +316,9 @@ def _handle_output_by_index(output, i):
+@@ -359,6 +362,9 @@ def _handle_output_by_index(output, i):
              output_token_ids_logprobs_idx=_extract_field_by_index(
                  output, "output_token_ids_logprobs_idx", i, check_length=False
              ),
@@ -695,32 +645,32 @@ index 94f5895171..d284d33d32 100644
                  output, "output_token_entropy_val", i, check_length=False
              ),
 diff --git a/python/sglang/srt/managers/schedule_batch.py b/python/sglang/srt/managers/schedule_batch.py
-index 99a45d9cab..fce8ac5326 100755
+index f1b4f39d..38fb7ab0 100755
 --- a/python/sglang/srt/managers/schedule_batch.py
 +++ b/python/sglang/srt/managers/schedule_batch.py
-@@ -661,6 +661,8 @@ class ReqLogprob:
+@@ -922,6 +922,8 @@ class ReqLogprob:
          None
      )
      output_token_ids_logprobs_idx: Optional[list] = None
 +    output_top_p_token_ids: Optional[list] = None
 +    output_top_p_log_probs: Optional[list] = None
- 
- 
- class Req(ReqDllmMixin):
-@@ -916,6 +918,8 @@ class Req(ReqDllmMixin):
+
+
+ @dataclasses.dataclass(slots=True, kw_only=True)
+@@ -1272,6 +1274,8 @@ class Req(ReqDllmMixin):
              # Can contain either lists or GPU tensors (delayed copy optimization for prefill-only scoring)
              self.logprob.output_token_ids_logprobs_val = []
              self.logprob.output_token_ids_logprobs_idx = []
 +            self.logprob.output_top_p_token_ids = []
 +            self.logprob.output_top_p_log_probs = []
-         self.hidden_states: List[List[float]] = []
-         self.hidden_states_tensor = None  # Note: use tensor instead of list to transfer hidden_states when PD + MTP
-         self.output_topk_p = None
+         self.sampling_mask_rows: Optional[SamplingMaskRows] = (
+             SamplingMaskRows() if return_sampling_mask else None
+         )
 diff --git a/python/sglang/srt/managers/scheduler_components/batch_result_processor.py b/python/sglang/srt/managers/scheduler_components/batch_result_processor.py
-index 6e20e65328..b0e09e2f6e 100644
+index e0f922fe..57ab9fc7 100644
 --- a/python/sglang/srt/managers/scheduler_components/batch_result_processor.py
 +++ b/python/sglang/srt/managers/scheduler_components/batch_result_processor.py
-@@ -386,6 +386,16 @@ class SchedulerBatchResultProcessor:
+@@ -539,6 +539,16 @@ class SchedulerBatchResultProcessor:
                  logits_output.next_token_token_ids_logprobs_val = [
                      v.tolist() for v in logits_output.next_token_token_ids_logprobs_val
                  ]
@@ -734,10 +684,10 @@ index 6e20e65328..b0e09e2f6e 100644
 +                    v.tolist() if torch.is_tensor(v) else v
 +                    for v in logits_output.next_token_top_p_log_probs
 +                ]
- 
+
      def _apply_prefill_logprobs(
          self,
-@@ -766,6 +776,16 @@ class SchedulerBatchResultProcessor:
+@@ -1113,6 +1123,16 @@ class SchedulerBatchResultProcessor:
                  logits_output.next_token_token_ids_logprobs_val = [
                      v.tolist() for v in logits_output.next_token_token_ids_logprobs_val
                  ]
@@ -752,9 +702,9 @@ index 6e20e65328..b0e09e2f6e 100644
 +                    for v in logits_output.next_token_top_p_log_probs
 +                ]
          return next_token_ids, next_token_logprobs
- 
+
      def _apply_decode_logprobs(
-@@ -808,6 +828,22 @@ class SchedulerBatchResultProcessor:
+@@ -1155,6 +1175,22 @@ class SchedulerBatchResultProcessor:
                  req.logprob.output_token_ids_logprobs_idx.append(
                      logits_output.next_token_token_ids_logprobs_idx[flat_idx]
                  )
@@ -774,17 +724,17 @@ index 6e20e65328..b0e09e2f6e 100644
 +                    if torch.is_tensor(row_top_p_log_probs):
 +                        row_top_p_log_probs = row_top_p_log_probs.tolist()
 +                    req.logprob.output_top_p_log_probs.append(row_top_p_log_probs)
- 
-     def _handle_finish_state_updated_req(
+
+     def add_sampling_mask_return_values(
          self,
 diff --git a/python/sglang/srt/managers/scheduler_components/logprob_result_processor.py b/python/sglang/srt/managers/scheduler_components/logprob_result_processor.py
-index d97d9ae801..5ea17392c7 100644
+index e55906c4..e287e19f 100644
 --- a/python/sglang/srt/managers/scheduler_components/logprob_result_processor.py
 +++ b/python/sglang/srt/managers/scheduler_components/logprob_result_processor.py
-@@ -314,6 +314,19 @@ class SchedulerLogprobResultProcessor:
+@@ -372,6 +372,19 @@ class SchedulerLogprobResultProcessor:
                  output.next_token_token_ids_logprobs_idx[i]
              )
- 
+
 +        if output.next_token_top_p_token_ids:
 +            row_top_p_token_ids = output.next_token_top_p_token_ids[i]
 +            if row_top_p_token_ids is not None:
@@ -799,31 +749,31 @@ index d97d9ae801..5ea17392c7 100644
 +                req.logprob.output_top_p_log_probs.append(row_top_p_log_probs)
 +
          return num_input_logprobs
- 
+
      def _initialize_empty_logprob_containers(self, req: Req) -> None:
 diff --git a/python/sglang/srt/managers/scheduler_components/output_streamer.py b/python/sglang/srt/managers/scheduler_components/output_streamer.py
-index 6b691d84eb..91c2d9c1fe 100644
+index 752d456b..bcd558ac 100644
 --- a/python/sglang/srt/managers/scheduler_components/output_streamer.py
 +++ b/python/sglang/srt/managers/scheduler_components/output_streamer.py
-@@ -297,6 +297,8 @@ class _GenerationStreamAccumulator:
-     input_token_ids_logprobs_idx: Optional[list] = None
-     output_token_ids_logprobs_val: Optional[list] = None
-     output_token_ids_logprobs_idx: Optional[list] = None
+@@ -382,6 +382,8 @@ class _GenerationStreamAccumulator:
+     # output tokens itself and never consumes the scheduler's incremental-detok
+     # offsets (decode_ids / read_offset), so that per-step bookkeeping is skipped.
+     rust_server_mode: bool = False
 +    output_top_p_token_ids: Optional[list] = None
 +    output_top_p_log_probs: Optional[list] = None
- 
+
      def __post_init__(self) -> None:
          if self.return_hidden_states:
-@@ -319,6 +321,8 @@ class _GenerationStreamAccumulator:
+@@ -407,6 +409,8 @@ class _GenerationStreamAccumulator:
              self.input_token_ids_logprobs_idx = []
              self.output_token_ids_logprobs_val = []
              self.output_token_ids_logprobs_idx = []
 +            self.output_top_p_token_ids = []
 +            self.output_top_p_log_probs = []
- 
-     def accept(self, *, req: Req) -> None:
-         if req.finished():
-@@ -472,6 +476,16 @@ class _GenerationStreamAccumulator:
+         if self.return_sampling_mask:
+             self.output_token_sampling_mask = []
+
+@@ -614,6 +618,16 @@ class _GenerationStreamAccumulator:
                          send_output_token_logprobs_offset:logprob_end
                      ]
                  )
@@ -840,37 +790,29 @@ index 6b691d84eb..91c2d9c1fe 100644
                  req.send_output_token_logprobs_offset = logprob_end
              else:
                  self.output_token_logprobs_val.append([])
-@@ -480,6 +494,8 @@ class _GenerationStreamAccumulator:
+@@ -622,6 +636,8 @@ class _GenerationStreamAccumulator:
                  self.output_top_logprobs_idx.append([])
                  self.output_token_ids_logprobs_val.append([])
                  self.output_token_ids_logprobs_idx.append([])
 +                self.output_top_p_token_ids.append([])
 +                self.output_top_p_log_probs.append([])
- 
-         if self.return_hidden_states:
-             if req.return_hidden_states:
-@@ -558,6 +574,8 @@ class _GenerationStreamAccumulator:
+
+         if self.return_sampling_mask:
+             if req.return_sampling_mask:
+@@ -734,6 +750,8 @@ class _GenerationStreamAccumulator:
              input_token_ids_logprobs_idx=self.input_token_ids_logprobs_idx,
              output_token_ids_logprobs_val=self.output_token_ids_logprobs_val,
              output_token_ids_logprobs_idx=self.output_token_ids_logprobs_idx,
 +            output_top_p_token_ids=self.output_top_p_token_ids,
 +            output_top_p_log_probs=self.output_top_p_log_probs,
              output_token_entropy_val=None,
+             output_token_sampling_mask=self.output_token_sampling_mask,
              output_hidden_states=self.output_hidden_states,
-             routed_experts=self.routed_experts,
 diff --git a/python/sglang/srt/managers/tokenizer_manager.py b/python/sglang/srt/managers/tokenizer_manager.py
-index f4331b64b4..78cfab533d 100644
+index f4407df8..4c702e83 100644
 --- a/python/sglang/srt/managers/tokenizer_manager.py
 +++ b/python/sglang/srt/managers/tokenizer_manager.py
-@@ -36,6 +36,7 @@ from http import HTTPStatus
- from typing import Any, Awaitable, Dict, Iterable, List, Optional, Tuple, Union
-
- import fastapi
-+import numpy as np
- import pybase64
- import torch
- import uvloop
-@@ -212,6 +213,8 @@ class ReqState:
+@@ -314,6 +314,8 @@ class ReqState:
      output_top_logprobs: List[Any] = dataclasses.field(default_factory=list)
      input_token_ids_logprobs: List[Any] = dataclasses.field(default_factory=list)
      output_token_ids_logprobs: List[Any] = dataclasses.field(default_factory=list)
@@ -879,10 +821,10 @@ index f4331b64b4..78cfab533d 100644
      customized_info_accumulated: Dict[str, List[Any]] = dataclasses.field(
          default_factory=dict
      )
-@@ -233,6 +236,21 @@ def _slice_streaming_output_meta_info(
-         meta_info[key] = meta_info[key][last_output_offset:]
- 
- 
+@@ -399,6 +401,21 @@ def _build_flat_input_top_logprobs_fields_from_arrays(
+     return fields
+
+
 +def _b64_encode_int32(values: List[int]) -> str:
 +    int32_values = array("i", values)
 +    assert int32_values.itemsize == 4
@@ -900,66 +842,26 @@ index f4331b64b4..78cfab533d 100644
 +
  class InputFormat(Enum):
      """Input format types for tokenization handling."""
- 
-@@ -2177,17 +2195,44 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
-                         return_text_in_logprobs,
+
+@@ -2785,6 +2802,14 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
                      )
                  )
--            if len(state.output_top_logprobs_val) > len(state.output_top_logprobs):
--                state.output_top_logprobs.extend(
--                    self.detokenize_top_logprobs_tokens(
--                        state.output_top_logprobs_val[len(state.output_top_logprobs) :],
--                        state.output_top_logprobs_idx[len(state.output_top_logprobs) :],
--                        return_text_in_logprobs,
--                    )
--                )
--
-             meta_info["input_top_logprobs"] = state.input_top_logprobs
--            meta_info["output_top_logprobs"] = state.output_top_logprobs
-+            if not return_text_in_logprobs:
-+                # Preserve full-distribution probabilities and return fixed-width
-+                # heads as binary, like the existing top-p/R3 metadata.
-+                # Non-streaming requests only consume final metadata. Encoding
-+                # the cumulative head every decode step would be quadratic.
-+                if meta_info.get("finish_reason") is not None or state.obj.stream:
-+                    ids = np.asarray(
-+                        state.output_top_logprobs_idx, dtype="<i4"
-+                    ).reshape(-1, top_logprobs_num)
-+                    logps = np.asarray(
-+                        state.output_top_logprobs_val, dtype="<f4"
-+                    ).reshape(-1, top_logprobs_num)
-+                    if ids.shape != logps.shape:
-+                        raise ValueError(
-+                            "Sampler top-k ids/logprobs have different shapes"
-+                        )
-+                    meta_info["output_topk_token_ids"] = pybase64.b64encode(
-+                        ids.tobytes()
-+                    ).decode("ascii")
-+                    meta_info["output_topk_log_probs"] = pybase64.b64encode(
-+                        logps.tobytes()
-+                    ).decode("ascii")
-+                    meta_info["output_topk_shape"] = list(ids.shape)
-+            else:
-+                if len(state.output_top_logprobs_val) > len(state.output_top_logprobs):
-+                    state.output_top_logprobs.extend(
-+                        self.detokenize_top_logprobs_tokens(
-+                            state.output_top_logprobs_val[
-+                                len(state.output_top_logprobs) :
-+                            ],
-+                            state.output_top_logprobs_idx[
-+                                len(state.output_top_logprobs) :
-+                            ],
-+                            return_text_in_logprobs,
-+                        )
-+                    )
-+                meta_info["output_top_logprobs"] = state.output_top_logprobs
+             meta_info["output_top_logprobs"] = state.output_top_logprobs
++            if not return_text_in_logprobs and (meta_info.get("finish_reason") is not None or state.obj.stream):
++                ids = np.asarray(state.output_top_logprobs_idx, dtype="<i4").reshape(-1, top_logprobs_num)
++                logps = np.asarray(state.output_top_logprobs_val, dtype="<f4").reshape(-1, top_logprobs_num)
++                if ids.shape != logps.shape:
++                    raise ValueError("Sampler top-k ids/logprobs have different shapes")
++                meta_info["output_topk_token_ids"] = pybase64.b64encode(ids.tobytes()).decode("ascii")
++                meta_info["output_topk_log_probs"] = pybase64.b64encode(logps.tobytes()).decode("ascii")
++                meta_info["output_topk_shape"] = list(ids.shape)
 
          # 3. Handle token_ids_logprob
          if token_ids_logprob is not None:
-@@ -2223,6 +2268,23 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
+@@ -2820,6 +2845,23 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
              meta_info["input_token_ids_logprobs"] = state.input_token_ids_logprobs
              meta_info["output_token_ids_logprobs"] = state.output_token_ids_logprobs
- 
+
 +        if state.output_top_p_token_ids and meta_info.get("finish_reason") is not None:
 +            token_ids, offsets = _encode_top_p_token_ids(state.output_top_p_token_ids)
 +            meta_info["top_p_token_ids"] = token_ids
@@ -980,10 +882,10 @@ index f4331b64b4..78cfab533d 100644
      def convert_logprob_style(
          self,
          meta_info: dict,
-@@ -2283,6 +2345,19 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
-                 recv_obj.output_token_ids_logprobs_idx[recv_obj_index]
-             )
- 
+@@ -2899,6 +2941,19 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
+                     recv_obj.output_token_ids_logprobs_idx[recv_obj_index]
+                 )
+
 +        output_top_p_token_ids = getattr(recv_obj, "output_top_p_token_ids", None)
 +        if (
 +            output_top_p_token_ids is not None
@@ -1001,10 +903,10 @@ index f4331b64b4..78cfab533d 100644
              meta_info,
              state,
 diff --git a/python/sglang/srt/managers/utils.py b/python/sglang/srt/managers/utils.py
-index 87fbb35ded..7784f70ed5 100644
+index ed40ce36..3125c275 100644
 --- a/python/sglang/srt/managers/utils.py
 +++ b/python/sglang/srt/managers/utils.py
-@@ -121,6 +121,16 @@ class GenerationBatchResult:
+@@ -180,6 +180,16 @@ class GenerationBatchResult:
                      _async_d2h(v) if torch.is_tensor(v) else v
                      for v in self.logits_output.next_token_token_ids_logprobs_val
                  ]
@@ -1021,19 +923,19 @@ index 87fbb35ded..7784f70ed5 100644
          if return_hidden_states and self.logits_output.hidden_states is not None:
              self.logits_output.hidden_states = _async_d2h(
                  self.logits_output.hidden_states
-@@ -207,6 +217,8 @@ def get_logprob_dict_from_result(result: GenerationBatchResult) -> dict:
-         "next_token_top_logprobs_idx": result.logits_output.next_token_top_logprobs_idx,
-         "next_token_token_ids_logprobs_val": result.logits_output.next_token_token_ids_logprobs_val,
-         "next_token_token_ids_logprobs_idx": result.logits_output.next_token_token_ids_logprobs_idx,
+@@ -312,6 +322,8 @@ def get_logprob_dict_from_result(result: GenerationBatchResult) -> dict:
+         "sampling_mask_statuses": (
+             None if sampling_mask_output is None else sampling_mask_output.statuses
+         ),
 +        "next_token_top_p_token_ids": result.logits_output.next_token_top_p_token_ids,
 +        "next_token_top_p_log_probs": result.logits_output.next_token_top_p_log_probs,
          "input_token_logprobs": result.logits_output.input_token_logprobs,
          "input_top_logprobs_val": result.logits_output.input_top_logprobs_val,
          "input_top_logprobs_idx": result.logits_output.input_top_logprobs_idx,
-@@ -231,6 +243,12 @@ def get_logprob_from_pp_outputs(
-         next_token_token_ids_logprobs_idx=next_pp_outputs[
+@@ -347,6 +359,12 @@ def get_logprob_from_pp_outputs(
              "next_token_token_ids_logprobs_idx"
          ],
+         sampling_mask_output=sampling_mask_output,
 +        next_token_top_p_token_ids=next_pp_outputs.tensors.get(
 +            "next_token_top_p_token_ids", None
 +        ),
@@ -1044,11 +946,11 @@ index 87fbb35ded..7784f70ed5 100644
          input_top_logprobs_val=next_pp_outputs["input_top_logprobs_val"],
          input_top_logprobs_idx=next_pp_outputs["input_top_logprobs_idx"],
 diff --git a/python/sglang/srt/sampling/sampling_batch_info.py b/python/sglang/srt/sampling/sampling_batch_info.py
-index cfb22d8419..c535113c53 100644
+index 2472f76a..3a7ac4da 100644
 --- a/python/sglang/srt/sampling/sampling_batch_info.py
 +++ b/python/sglang/srt/sampling/sampling_batch_info.py
-@@ -42,6 +42,12 @@ class SamplingBatchInfo:
- 
+@@ -70,6 +70,12 @@ class SamplingBatchInfo:
+
      # Masking tensors for grammar-guided structured outputs
      vocab_size: int
 +
@@ -1057,10 +959,10 @@ index cfb22d8419..c535113c53 100644
 +    need_return_top_p_token_ids: bool = False
 +    return_top_p_log_probs: Optional[torch.Tensor] = None
 +
-     grammars: Optional[List] = None
+     grammars: Optional[List[Optional[BaseGrammarObject]]] = None
      rids_int: Optional[torch.Tensor] = None
      bootstrap_room_ids_int: Optional[torch.Tensor] = None
-@@ -105,6 +111,29 @@ class SamplingBatchInfo:
+@@ -140,6 +146,29 @@ class SamplingBatchInfo:
              dtype=torch.float,
              pin_memory=_pin,
          ).to(device, non_blocking=True)
@@ -1090,17 +992,17 @@ index cfb22d8419..c535113c53 100644
          sampling_seed = (
              torch.tensor(
                  [
-@@ -191,6 +220,9 @@ class SamplingBatchInfo:
-             need_top_p_sampling=any(r.sampling_params.top_p != 1.0 for r in reqs),
-             need_top_k_sampling=any(r.sampling_params.top_k != TOP_K_ALL for r in reqs),
-             need_min_p_sampling=any(r.sampling_params.min_p > 0 for r in reqs),
+@@ -258,6 +287,9 @@ class SamplingBatchInfo:
+             npu_top_k_top_p_eligible=all(
+                 1 <= r.sampling_params.top_k <= 1024 for r in reqs
+             ),
 +            return_top_p_token_ids=return_top_p_token_ids,
 +            return_top_p_log_probs=return_top_p_log_probs,
 +            need_return_top_p_token_ids=any(return_top_p_token_ids_cpu),
              vocab_size=vocab_size,
              penalizer_orchestrator=penalizer_orchestrator,
              has_custom_logit_processor=has_custom_logit_processor,
-@@ -293,6 +325,8 @@ class SamplingBatchInfo:
+@@ -423,6 +455,8 @@ class SamplingBatchInfo:
              "top_ps",
              "top_ks",
              "min_ps",
@@ -1109,7 +1011,7 @@ index cfb22d8419..c535113c53 100644
              "sampling_seed",
          ]:
              value = getattr(self, item, None)
-@@ -401,6 +435,8 @@ class SamplingBatchInfo:
+@@ -546,6 +580,8 @@ class SamplingBatchInfo:
              "top_ps",
              "top_ks",
              "min_ps",
@@ -1118,59 +1020,36 @@ index cfb22d8419..c535113c53 100644
              "sampling_seed",
          ]:
              self_val = getattr(self, item, None)
-@@ -412,6 +448,7 @@ class SamplingBatchInfo:
-         self.need_top_p_sampling |= other.need_top_p_sampling
+@@ -559,6 +595,7 @@ class SamplingBatchInfo:
          self.need_top_k_sampling |= other.need_top_k_sampling
          self.need_min_p_sampling |= other.need_min_p_sampling
+         self.npu_top_k_top_p_eligible &= other.npu_top_k_top_p_eligible
 +        self.need_return_top_p_token_ids |= other.need_return_top_p_token_ids
- 
+
          self.adjusted_merge_batch(other)
- 
-diff --git a/python/sglang/srt/speculative/eagle_worker_v2.py b/python/sglang/srt/speculative/eagle_worker_v2.py
-index baa3674964..b647980572 100644
---- a/python/sglang/srt/speculative/eagle_worker_v2.py
-+++ b/python/sglang/srt/speculative/eagle_worker_v2.py
-@@ -1678,7 +1678,12 @@ class EAGLEWorkerV2(BaseSpecWorker):
- 
-         if batch.return_logprob and not batch.forward_mode.is_idle():
-             compute_spec_v2_logprobs(
--                batch, logits_output, predict, accept_index, self.speculative_num_steps
-+                batch,
-+                logits_output,
-+                predict,
-+                accept_index,
-+                accept_lens,
-+                self.speculative_num_steps,
-             )
- 
-         if not batch.forward_mode.is_idle() and self.topk > 1:
-diff --git a/python/sglang/srt/speculative/multi_layer_eagle_worker_v2.py b/python/sglang/srt/speculative/multi_layer_eagle_worker_v2.py
-index 5361342c41..7d07cf33b9 100644
---- a/python/sglang/srt/speculative/multi_layer_eagle_worker_v2.py
-+++ b/python/sglang/srt/speculative/multi_layer_eagle_worker_v2.py
-@@ -837,7 +837,12 @@ class MultiLayerEagleWorkerV2(BaseSpecWorker):
- 
-         if batch.return_logprob and not batch.forward_mode.is_idle():
-             compute_spec_v2_logprobs(
--                batch, logits_output, predict, accept_index, self.speculative_num_steps
-+                batch,
-+                logits_output,
-+                predict,
-+                accept_index,
-+                accept_lens,
-+                self.speculative_num_steps,
-             )
- 
-         next_draft_input = EagleDraftInput(bonus_tokens=bonus_tokens)
+
+diff --git a/python/sglang/srt/speculative/eagle_worker_common.py b/python/sglang/srt/speculative/eagle_worker_common.py
+index 0c2c5308..3fd7852f 100644
+--- a/python/sglang/srt/speculative/eagle_worker_common.py
++++ b/python/sglang/srt/speculative/eagle_worker_common.py
+@@ -638,7 +638,7 @@ def run_eagle_verify(
+         bonus_tokens = torch.empty((0,), device=device, dtype=torch.int32)
+
+     if batch.return_logprob and not batch.forward_mode.is_idle():
+-        compute_spec_logprobs(batch, logits_output, predict, accept_index=accept_index)
++        compute_spec_logprobs(batch, logits_output, predict, accept_index=accept_index, accept_lens=accept_lens)
+
+     if finalize_tree_path and not batch.forward_mode.is_idle() and topk > 1:
+         # topk == 1 needs nothing here: the accepted path is already the front
 diff --git a/python/sglang/srt/speculative/ngram_worker.py b/python/sglang/srt/speculative/ngram_worker.py
-index 4cbcb7f0ef..acda994c85 100644
+index c31157ac..ca004907 100644
 --- a/python/sglang/srt/speculative/ngram_worker.py
 +++ b/python/sglang/srt/speculative/ngram_worker.py
-@@ -463,6 +463,7 @@ class NGRAMWorker(BaseSpecWorker):
+@@ -507,6 +507,7 @@ class NGRAMWorker(BaseSpecWorker):
                      logits_output,
                      predict,
-                     accept_index,
-+                    accept_lens,
-                     self.draft_token_num - 1,
+                     accept_index=accept_index,
++                    accept_lens=accept_lens,
                  )
- 
+
+             if on_publish is not None:

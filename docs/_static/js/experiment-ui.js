@@ -557,7 +557,7 @@
     renderRepairs();
     renderSource();
     if (state.hardware !== 'unspecified') {
-      $('install-image').value = state.hardware === 'blackwell' ? 'slimerl/slime:latest-cu130' : 'slimerl/slime:latest-cu129';
+      $('install-image').value = 'slimerl/slime:latest-cu130';
       $('install-image-value').textContent = $('install-image').value;
     }
     $('run-steps').innerHTML =
