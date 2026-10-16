@@ -553,6 +553,7 @@ async def generate_rollout_async(
                 all_data.append(group)
 
             dynamic_filter_output = call_dynamic_filter(dynamic_filter, args, group)
+            metric_gatherer.on_group_completed(dynamic_filter_output)
             if should_drop_dynamic_filter_output(
                 dynamic_filter_output,
                 remaining_batch_size=state.remaining_batch_size,

@@ -6,10 +6,61 @@ import pytest
 import torch
 
 from slime.observability.rollout_metrics import _compute_agent_compaction_metrics, _compute_top_p_kept_vocab_metrics
+from slime.rollout.filter_hub.base_types import DynamicFilterOutput, MetricGatherer, call_dynamic_filter
 from slime.utils.misc import decode_int32_meta_array
 from slime.utils.types import Sample
 
 NUM_GPUS = 0
+
+
+def test_raw_reward_before_filters_counts_rejected_trajectories_once_before_mutation():
+    args = Namespace(reward_key="score", rollout_sample_filter_path=None)
+    shared_verdict = DynamicFilterOutput(keep=True)
+
+    def mutate(args, group, *, keep):
+        for trajectory in group:
+            for sample in trajectory if isinstance(trajectory, list) else [trajectory]:
+                sample.reward = {"score": 99.0}
+        shared_verdict.keep = keep
+        return shared_verdict
+
+    failed = Sample(reward={"score": 0.0}, status=Sample.Status.COMPLETED)
+    success = Sample(reward={"score": 1.0}, status=Sample.Status.TRUNCATED)
+    rejected = call_dynamic_filter(mutate, args, [[failed] * 3, [success]], keep=False)
+    accepted = call_dynamic_filter(mutate, args, [Sample(reward={"score": 1.0})], keep=True)
+    gatherer = MetricGatherer()
+    gatherer.on_group_completed(rejected)
+    gatherer.on_dynamic_filter_drop("test")
+    gatherer.on_group_completed(accepted)
+    assert rejected.keep is False
+    assert shared_verdict.raw_reward_stats is None
+    assert gatherer.collect() == {
+        "rollout/dynamic_filter/drop_test": 1,
+        "rollout/raw_reward_before_filters": pytest.approx(2 / 3),
+    }
+
+
+@pytest.mark.parametrize("missing", ["recovered", "unscored"])
+def test_raw_reward_before_filters_omits_incomplete_candidate_statistics(missing):
+    args = Namespace(reward_key=None, rollout_sample_filter_path=None)
+    gatherer = MetricGatherer()
+    gatherer.on_group_completed(call_dynamic_filter(lambda *a: True, args, [Sample(reward=1.0)]))
+    output = (
+        DynamicFilterOutput(keep=True)
+        if missing == "recovered"
+        else call_dynamic_filter(lambda *a: True, args, [Sample(reward=None)])
+    )
+    gatherer.on_group_completed(output)
+    assert "rollout/raw_reward_before_filters" not in gatherer.collect()
+
+
+@pytest.mark.parametrize("batch_filter", [None, "example.batch_filter"])
+def test_raw_reward_before_filters_only_needs_one_value_when_filtering_is_enabled(batch_filter):
+    args = Namespace(reward_key=None, rollout_sample_filter_path=batch_filter)
+    gatherer = MetricGatherer()
+    gatherer.on_group_completed(call_dynamic_filter(None, args, [Sample(reward=0.0)]))
+    expected = {"rollout/raw_reward_before_filters": 0.0} if batch_filter else {}
+    assert gatherer.collect() == expected
 
 
 def test_compaction_count_is_one_mean_per_trajectory():
