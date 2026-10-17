@@ -54,6 +54,24 @@ slime 支持将训练部分和推理部分分开进行调试，从而实现：
 
    version 2 payload 对标 rollout debug dump：顶层 `samples` 列表每项是一个训练样本的 dict（含 `sample_index`、`data_parallel_rank` 以及 `tokens`、`log_probs`、`advantages` 等 per-sample 字段），并按 `sample_index` 排序，从而和 rollout dump 的 `samples` 一一对齐（用 `sample_index` ↔ rollout 侧的 `index` 来 join）。并列的 `dp_shards` key 保留 DP/micro-batch 排布——每项记录 `rank`、`data_parallel_rank`、该分片的 `sample_indices`，以及 DP-local 调度（`micro_batch_indices`、`num_microbatches`、`global_batch_sizes`）——且不重复存储任何 per-sample tensor。`raw_reward` 等整批字段在顶层只存一份。若某些样本没有 `sample_index`（自定义 rollout 新建 `Sample` 时会是 `None`），则 samples 保持 DP-gather 顺序并打印一条 warning。开启或关闭 CP 时，response-token 字段都是相同的完整 response 格式。在跳过 actor log-prob 单独重算的配置下（`can_reuse_log_probs_in_loss` 或 `--use-rollout-logprobs`），actor 的 `log_probs` 会直接从训练前向里快照下来（按 rollout position 归位，无额外前向），所以 dump 里依然会带上它。
 
+## colocate 下 rollout 结束后训练第一步“卡死”
+
+colocate 任务 rollout 正常结束，随后停在 `Timer actor_train start` 不动：sglang 的 health check 还在刷，训练侧没有任何输出，NCCL watchdog 在 600 秒时报错、或者干脆什么都不报——这通常不是通信死锁。先看各 rank 在做什么，再看 NCCL：
+
+```bash
+py-spy dump --pid <某个 MegatronTrainRayActor 的 pid>   # 每个节点、每个 pipeline stage 各抓一个
+```
+
+绝大多数这类“卡死”是下面两种栈之一：
+
+1. **一个 pipeline stage 在编译，下一个 stage 在等它。** 第一个 stage 停在 `triton/.../compiler.py`，调用链来自某个 Triton kernel，例如 `fla/ops/gated_delta_rule`（Qwen3.5 / Qwen3.6 这类 GDN 模型）；下一个 stage 停在 `recv_forward` → `_communicate_shapes` → `torch.cuda.synchronize`。这是 JIT 编译加 autotune，不是死锁。Triton 缓存在容器内的 `~/.triton/cache`，每台新机器都是冷启动——单机冒烟跑过一遍、多机就“正常”了，原因正在这里。在 slime 的一个 fork 上用 Qwen3.6-35B-A3B、2×8 H20 实测：冷缓存的第一次 `actor_train` 639 秒（之前的 log-prob 前向 394 秒）；缓存热了以后同样两步是 60 秒和 13 秒。多机启动前先预热缓存，或把 `--distributed-timeout-minutes` 设到能覆盖第一步。
+
+缓存放在哪里是一个真实的权衡。把 `TRITON_CACHE_DIR` 钉到节点本地，可以让编译完全不碰共享文件系统——一些大规模 recipe 正是因为见过"多进程冷编译时 NFS 默认路径跨节点竞争"才钉到 `/tmp`——代价是每台新机器都要重编一遍。指到共享存储则相反：第一次编译更慢、还要承受并发争用，之后几乎零成本。针对节点本地方案所要防的那个场景，我们做过一次实测：两个节点共 16 个 rank 同时把同一批 GDN kernel 编译进同一个 NFS 目录，**没有复现出竞争**——全程无报错；随后两机再各跑一遍，直接读回，单次 0.7 秒而不是 145 秒，缓存条目一个没增。这只是一种文件系统、一套 kernel，共享之前请在自己的环境上先量一遍。
+
+2. **你设的超时不是实际生效的超时。** colocate 每次 rollout→train 切换都会在 `sleep()` 里销毁全部进程组、在 `wake_up()` 里重建。#2208（v0.3.1 起包含）之前，重建用的是 `new_group(ranks, backend="nccl")`，把 `timeout`、`pg_options`、`group_desc` 全丢了——第一次 offload 之后所有进程组都退回默认的 10 分钟超时，`--distributed-timeout-minutes` 形同虚设。老版本上“无视超时参数、整 600 秒挂掉”的现象就是它叠加慢的第一步，不是死锁。升级即可；要验证的话，写一个双进程探针，在 `destroy_process_groups()` / `reload_process_groups()` 前后读 `pg._get_backend(device).options._timeout` 对比。
+
+如果两种栈都不是——所有 rank 都在某个集合通信里、没有谁在编译——那才是真正的集合通信不匹配：开着 `NCCL_DEBUG=INFO` 和 flight recorder（`TORCH_NCCL_DUMP_ON_TIMEOUT=1 TORCH_NCCL_TRACE_BUFFER_SIZE=2000`），把每个 rank 的栈贴到 issue 里。
+
 ## INT4 / Compressed-Tensors 量化 Checkpoint 问题
 
 使用 INT4 量化模型（如 `compressed-tensors` 的 `W4A16`）时，checkpoint 的 `config.json` 中有一个 `quantization_config.ignore` 列表，指定哪些参数**不**做量化。在线权重更新（Megatron → SGLang）时，slime 也会读取这个 ignore list 来决定哪些参数需要 INT4 量化。ignore list 不正确会导致静默错误：
