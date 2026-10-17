@@ -167,9 +167,11 @@ class SunabakoSandbox:
             except ValueError:
                 raise error from None
             missing = "No such file or directory (os error 2)"
+            file_error = f'file operation: "{missing}"'
             if isinstance(response, dict) and response.get("error") in (
                 f'sandbox: "{missing}"',
-                f'file operation: "{missing}"',
+                file_error,
+                f"sandbox: {json.dumps(file_error)}",
             ):
                 return ""
             raise

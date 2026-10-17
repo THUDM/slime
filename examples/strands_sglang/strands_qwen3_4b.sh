@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Qwen3-4B-Instruct-2507 Training with Strands-SGLang
+# Note: 8B model requires ~2x memory of 4B, adjusted settings accordingly
+
 # for rerun the task
 pkill -9 sglang
 sleep 3
@@ -9,7 +12,6 @@ pkill -9 python
 sleep 3
 pkill -9 ray
 pkill -9 python
-pkill -9 redis
 
 set -ex
 
@@ -24,52 +26,49 @@ else
 fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-source "${SCRIPT_DIR}/models/moonlight.sh"
+source "/root/slime/scripts/models/qwen3-4B-Instruct-2507.sh"
+
+# Generate timestamp suffix for save path
+TIMESTAMP_SUFFIX=$(date +%Y%m%d_%H%M%S)
 
 CKPT_ARGS=(
-   --hf-checkpoint /root/Moonlight-16B-A3B
-   --ref-load /root/Moonlight-16B-A3B_torch_dist
-   --load /root/Moonlight-16B-A3B_slime/
-   --save /root/Moonlight-16B-A3B_slime/
+   --hf-checkpoint /root/models/Qwen/Qwen3-4B-Instruct-2507
+   --ref-load /root/models/Qwen/Qwen3-4B-Instruct-2507_torch_dist
+   # --load Qwen3-4B-Instruct-2507_strands_dapo
+   --save /root/models/Qwen/Qwen3-4B-Instruct-2507_strands_dapo_${TIMESTAMP_SUFFIX}
    --save-interval 20
 )
 
 ROLLOUT_ARGS=(
-   --prompt-data /root/dapo-math-17k/dapo-math-17k.jsonl
+   --prompt-data /root/data/dapo-math-17k.jsonl
    --input-key prompt
    --label-key label
-   --apply-chat-template
    --rollout-shuffle
-   --rm-type math
+   # --reward-key score
    --num-rollout 3000
-   --rollout-batch-size 128
+   --rollout-batch-size 16  # Reduced from 32 for 8B model memory
    --n-samples-per-prompt 8
-   --rollout-max-response-len 4096
+   --rollout-max-response-len 131072
    --rollout-temperature 1
 
-   --over-sampling-batch-size 256
-   --dynamic-sampling-filter-path slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std
-
-   --num-steps-per-rollout 4
-   # --global-batch-size 256
-   --balance-data   
+   --global-batch-size 128  # Reduced from 256 for 8B model memory
+   --balance-data
 )
 
 EVAL_ARGS=(
    --eval-interval 20
-   --eval-prompt-data aime /root/aime-2024/aime-2024.jsonl
-   --n-samples-per-eval-prompt 8
-   --eval-max-response-len 4096
+   --eval-prompt-data aime  /root/data/aime-2024.jsonl
+   --n-samples-per-eval-prompt 16
+   --eval-max-response-len 131072
    --eval-top-p 1
 )
 
 PERF_ARGS=(
-   --tensor-model-parallel-size 4
+   --tensor-model-parallel-size 2
    --sequence-parallel
    --pipeline-model-parallel-size 1
-   --context-parallel-size 1
-   --expert-model-parallel-size 8
+   --context-parallel-size 2
+   --expert-model-parallel-size 1
    --expert-tensor-parallel-size 1
 
    --recompute-granularity full
@@ -78,7 +77,8 @@ PERF_ARGS=(
 
    # --micro-batch-size 1
    --use-dynamic-batch-size
-   --max-tokens-per-gpu 8192
+   --log-probs-chunk-size 1024
+   --max-tokens-per-gpu 18432
 )
 
 GRPO_ARGS=(
@@ -92,29 +92,29 @@ GRPO_ARGS=(
 )
 
 OPTIMIZER_ARGS=(
+   --optimizer-cpu-offload
+   --overlap-cpu-optimizer-d2h-h2d
+   --use-precision-aware-optimizer
    --optimizer adam
    --lr 1e-6
    --lr-decay-style constant
    --weight-decay 0.1
    --adam-beta1 0.9
    --adam-beta2 0.98
-
-   --optimizer-cpu-offload
-   --overlap-cpu-optimizer-d2h-h2d
-   --use-precision-aware-optimizer
 )
 
 WANDB_ARGS=(
-   # --use-wandb
-   # --wandb-project slime-dev
-   # --wandb-group moomlight-16B-A3B-test
-   # --wandb-key ${WANDB_KEY}
+   --use-wandb
+   --wandb-project strands-slime
+   --wandb-group Qwen3-4B-Instruct-2507-strands-dapo
+   --wandb-key ${WANDB_KEY}
 )
 
 SGLANG_ARGS=(
-   --rollout-num-gpus-per-engine 8
-   --sglang-mem-fraction-static 0.7
-   --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256)
+   --rollout-num-gpus-per-engine 2
+   --sglang-mem-fraction-static 0.4
+   # Note: strands-sglang handles tool parsing internally (HermesToolCallParser)
+   # No need for --sglang-tool-call-parser
 )
 
 MISC_ARGS=(
@@ -125,11 +125,12 @@ MISC_ARGS=(
    --accumulate-allreduce-grads-in-fp32
    --attention-softmax-in-fp32
    # need to comment this when using model with MLA
-   # --attention-backend flash
+   --attention-backend flash
+)
 
-   # use deepep for megatron
-   --moe-enable-deepep
-   --moe-token-dispatcher-type flex
+CUSTOM_ARGS=(
+   --custom-generate-function-path examples.strands_sglang.generate_with_strands.generate
+   --custom-rm-path examples.strands_sglang.generate_with_strands.reward_func
 )
 
 # launch the master node of ray in container
@@ -139,9 +140,8 @@ ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 8 --disable-usage-s
 # Build the runtime environment JSON with proper variable substitution
 RUNTIME_ENV_JSON="{
   \"env_vars\": {
-    \"PYTHONPATH\": \"/root/Megatron-LM/\",
+    \"PYTHONPATH\": \"/root/Megatron-LM/:${SCRIPT_DIR}:/root/slime\",
     \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
-    \"NVSHMEM_DISABLE_NCCL\": \"1\",
     \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\"
   }
 }"
@@ -161,4 +161,5 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${PERF_ARGS[@]} \
    ${EVAL_ARGS[@]} \
    ${SGLANG_ARGS[@]} \
-   ${MISC_ARGS[@]}
+   ${MISC_ARGS[@]} \
+   ${CUSTOM_ARGS[@]}

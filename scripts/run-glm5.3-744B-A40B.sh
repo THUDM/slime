@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# GLM-5.2 744B-A40B RL training on 32 nodes / 256 H100 GPUs with PD disaggregation.
+# GLM-5.3 744B-A40B RL training on 32 nodes / 256 H100 GPUs with PD disaggregation.
 
 # for rerun the task
 pkill -9 sglang
@@ -17,15 +17,8 @@ set -ex
 export PYTHONUNBUFFERED=1
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
 
-NVLINK_COUNT=$(nvidia-smi topo -m 2>/dev/null | grep -o 'NV[0-9][0-9]*' | wc -l)
-if [ "$NVLINK_COUNT" -gt 0 ]; then
-    HAS_NVLINK=1
-else
-    HAS_NVLINK=0
-fi
-echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
-
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
+# GLM-5.3 shares the GLM-5.2 architecture; index sharing comes from the HF config.
 source "${SCRIPT_DIR}/models/glm5.2-744B-A40B.sh"
 
 if [ -z "${BASE_DIR:-}" ]; then
@@ -36,10 +29,10 @@ fi
 SOCKET_IFNAME=${SOCKET_IFNAME:-eth0}
 
 CKPT_ARGS=(
-   --hf-checkpoint $BASE_DIR/GLM-5.2-FP8
-   --ref-load $BASE_DIR/GLM-5.2_torch_dist
-   --load $BASE_DIR/GLM-5.2_slime
-   --save $BASE_DIR/GLM-5.2_slime
+   --hf-checkpoint $BASE_DIR/GLM-5.3-FP8
+   --ref-load $BASE_DIR/GLM-5.3_torch_dist
+   --load $BASE_DIR/GLM-5.3_slime
+   --save $BASE_DIR/GLM-5.3_slime
    --save-interval 20
 )
 
@@ -55,7 +48,7 @@ ROLLOUT_ARGS=(
    --num-rollout 3000
    --rollout-batch-size 8
    --n-samples-per-prompt 8
-   --rollout-max-response-len 65536
+   --rollout-max-response-len 262144
    --rollout-temperature 1.0
 
    --global-batch-size 64
@@ -92,13 +85,16 @@ PERF_ARGS=(
 
 GRPO_ARGS=(
    --advantage-estimator grpo
+   --use-score-centering
+   --score-centering-top-k 128
+   --pg-loss-type reinforce
+   --disable-grpo-std-normalization
+   --calculate-per-token-loss
+   --use-rollout-routing-replay
    --kl-loss-coef 0.00
    --kl-loss-type low_var_kl
    --kl-coef 0.00
    --entropy-coef 0.00
-   --eps-clip 0.2
-   --eps-clip-high 0.28
-
    --use-tis
    --tis-clip-low 0.5
    --tis-clip 2.0
@@ -119,10 +115,10 @@ OPTIMIZER_ARGS=(
 WANDB_ARGS=(
    # --use-wandb
    # --wandb-project slime-dev
-   # --wandb-group glm5.2-744B-A40B
+   # --wandb-group glm5.3-744B-A40B
 )
 
-SGLANG_CONFIG_FILE=$(mktemp /tmp/sglang_glm52_744B_A40B_XXXXXX.yaml)
+SGLANG_CONFIG_FILE=$(mktemp /tmp/sglang_glm53_744B_A40B_XXXXXX.yaml)
 # PD disaggregation: 1 prefill engine (64 GPU) + 3 decode engines (192 GPU) = 256.
 # Each engine spans 64 GPUs (EP=64, within DeepEP's supported rank set). Prefill
 # uses the auto DeepEP path; decode uses low_latency + deep_gemm for throughput.
@@ -175,9 +171,9 @@ SGLANG_ARGS=(
 
    --sglang-page-size 64
    --sglang-kv-cache-dtype fp8_e4m3
-   --sglang-nsa-decode-backend flashmla_kv
-   --sglang-nsa-prefill-backend flashmla_sparse
-   --sglang-attention-backend nsa
+   --sglang-dsa-decode-backend flashmla_kv
+   --sglang-dsa-prefill-backend flashmla_sparse
+   --sglang-attention-backend dsa
    --sglang-cuda-graph-max-bs 8
    --sglang-disable-overlap-schedule
 
@@ -190,13 +186,13 @@ SGLANG_ARGS=(
    --sglang-config "${SGLANG_CONFIG_FILE}"
 
    # MTP / EAGLE speculative decoding using the model's own next-token-prediction
-   # layer (the GLM-5.2 checkpoint ships an MTP layer), so no separate draft model
+   # layer (the GLM-5.3 checkpoint ships an MTP layer), so no separate draft model
    # is needed.
    --sglang-speculative-algorithm EAGLE
    --sglang-speculative-num-steps 4
    --sglang-speculative-eagle-topk 1
    --sglang-speculative-num-draft-tokens 5
-   --sglang-speculative-draft-attention-backend nsa
+   --sglang-speculative-draft-attention-backend dsa
 )
 
 MISC_ARGS=(

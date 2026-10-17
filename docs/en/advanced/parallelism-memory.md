@@ -4,18 +4,16 @@ Open **Placement** in the {ref}`interactive lab <lab>` to explore the diagrams. 
 
 ## Starting GPU allocations
 
-The lab assumes eight GPUs per training node and starts from repository recipes for H100/H200-class servers with fast interconnects. These are recipe-based starting points, not measured minimums or guarantees for every GPU in that class. The short experiment uses a 4,096-token response limit, eight prompts and eight responses per prompt. Prompt length still counts toward memory. MoE and Qwen profiles enable CPU Adam and recomputation.
+The lab assumes eight GPUs per training node and starts from repository recipes for H100/H200-class servers with fast interconnects. These are recipe-based starting points, not measured minimums or guarantees for every GPU in that class. Model profiles default to a 131,072-token (128K) response limit (GLM-5.3: 262,144 / 256K), with context parallelism enabled, eight prompts and eight responses per prompt. Prompt length still counts toward memory. MoE and Qwen profiles enable CPU Adam and recomputation.
 
 | Model | Training GPUs | TP / PP / CP / EP | GPUs per serving engine | Source |
 |---|---:|---|---:|---|
-| GLM-4-9B | 8 | 2 / 1 / 2 / 1 | 2 | [9B](https://github.com/THUDM/slime/blob/main/scripts/run-glm4-9B.sh) |
-| GLM-4.7-Flash | 8 | 2 / 2 / 2 / 4 | 8 | [Flash](https://github.com/THUDM/slime/blob/main/scripts/run-glm4.7-30B-A3B.sh) |
+| GLM-4.7-Flash | 8 | 2 / 1 / 4 / 8 | 8 | [Flash](https://github.com/THUDM/slime/blob/main/scripts/run-glm4.7-30B-A3B.sh) |
 | GLM-4.7 | 64 | 8 / 4 / 2 / 16 | 32 | [355B](https://github.com/THUDM/slime/blob/main/scripts/run-glm4.7-355B-A32B.sh) |
-| GLM-5.3 | 256 | 4 / 8 / 8 / 32 | 64 | [744B](https://github.com/THUDM/slime/blob/main/scripts/run-glm5.2-744B-A40B.sh) |
-| DeepSeek-R1 | 128 | 8 / 4 / 4 / 32 | 64 | [R1](https://github.com/THUDM/slime/blob/main/scripts/run-deepseek-r1.sh) |
+| GLM-5.3 | 256 | 4 / 8 / 8 / 32 | 64 | [744B](https://github.com/THUDM/slime/blob/main/scripts/run-glm5.3-744B-A40B.sh) |
 | Qwen3.8-27B | 32 | 4 / 2 / 4 / 1 | 2 | [Matching architecture](https://github.com/THUDM/slime/blob/main/scripts/run-qwen3.5-27B.sh) |
 
-The Flash lab profile uses EP4 so EP × PP fits eight GPUs. Qwen3.8 reuses a matching architecture configuration; this documentation change has not GPU-validated its checkpoint. Start with 9B or Flash to learn the loop, then measure peak memory on your target model before reserving a long job.
+Flash uses TP2 / CP4 / EP8 and one pipeline stage to spread 128K sequences across more GPUs. Exported recipes use `--log-probs-chunk-size 1024` to reduce temporary memory for log-prob and SC computation. Qwen3.8 reuses a matching architecture configuration; this documentation change has not GPU-validated its checkpoint. Start with 9B or Flash to learn the loop, then measure peak memory on your target model before reserving a long job.
 
 Colocation reserves one pool; separate placement reserves training plus rollout GPUs. PD divides the rollout pool into whole prefill/decode engines. External serving capacity is outside the trainer's Ray allocation. Adding GPUs without changing model parallelism can simply add replicas rather than reducing per-GPU model memory.
 

@@ -128,10 +128,9 @@ RUNTIME_ENV_JSON="{
 
 3. 启动 example：
 
-```bash
-# Moonlight-16B-A3B INT4 training
-bash scripts/low_precision/run-moonlight-16B-A3B-int4.sh
+Qwen3 启动脚本使用原生 256K 上下文的 Instruct-2507 checkpoint，默认 128K 回复上限并启用 CP。量化与训练格式转换必须使用同一个 checkpoint；旧版 Qwen3 权重的 RoPE 配置不同。
 
+```bash
 # Qwen3-30B-A3B INT4 training
 bash scripts/low_precision/run-qwen3-30B-A3B-int4.sh
 

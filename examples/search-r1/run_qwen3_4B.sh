@@ -16,13 +16,13 @@ set -ex
 export PYTHONUNBUFFERED=1
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-source "${SCRIPT_DIR}/../../scripts/models/qwen2.5-3B.sh"
+source "${SCRIPT_DIR}/../../scripts/models/qwen3-4B-Instruct-2507.sh"
 
 CKPT_ARGS=(
-   --hf-checkpoint /root/Qwen2.5-3B/
-   --ref-load /root/Qwen2.5-3B_torch_dist/
-   # --load /root/Qwen2.5-3B_slime/
-   # --save /root/Qwen2.5-3B_slime/
+   --hf-checkpoint /root/Qwen3-4B-Instruct-2507/
+   --ref-load /root/Qwen3-4B-Instruct-2507_torch_dist/
+   # --load /root/Qwen3-4B-Instruct-2507_slime/
+   # --save /root/Qwen3-4B-Instruct-2507_slime/
    # --save-interval 20
 )
 
@@ -35,7 +35,7 @@ ROLLOUT_ARGS=(
    --num-rollout 3000
    --rollout-batch-size 32
    --n-samples-per-prompt 8
-   --rollout-max-response-len 512
+   --rollout-max-response-len 131072
    --rollout-temperature 1
 
    # eval args
@@ -54,7 +54,7 @@ PERF_ARGS=(
    --tensor-model-parallel-size 2
    --sequence-parallel
    --pipeline-model-parallel-size 1
-   --context-parallel-size 1
+   --context-parallel-size 2
    --expert-model-parallel-size 1
    --expert-tensor-parallel-size 1
 
@@ -64,6 +64,7 @@ PERF_ARGS=(
 
    # --micro-batch-size 1
    --use-dynamic-batch-size
+   --log-probs-chunk-size 1024
    --max-tokens-per-gpu 9216
 )
 
@@ -81,6 +82,9 @@ GRPO_ARGS=(
 )
 
 OPTIMIZER_ARGS=(
+   --optimizer-cpu-offload
+   --overlap-cpu-optimizer-d2h-h2d
+   --use-precision-aware-optimizer
    --optimizer adam
    --lr 1e-6
    --lr-decay-style constant

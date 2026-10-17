@@ -24,14 +24,15 @@ fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-source "/root/slime/scripts/models/qwen3-30B-A3B.sh"
+MODEL_ARGS_ROTARY_BASE=10000000 source "/root/slime/scripts/models/qwen3-30B-A3B.sh"
 
+# Use the 256K-context Instruct-2507 checkpoint and its converted training weights.
 CKPT_ARGS=(
-   --hf-checkpoint /root/Qwen3-30B-A3B
-   #--hf-checkpoint /root/Qwen3-30B-A3B-FP8
-   --ref-load /root/Qwen3-30B-A3B_torch_dist
-   --load /root/Qwen3-4B_slime/
-   --save /root/Qwen3-4B_slime/
+   --hf-checkpoint /root/Qwen3-30B-A3B-Instruct-2507
+   #--hf-checkpoint /root/Qwen3-30B-A3B-Instruct-2507-FP8
+   --ref-load /root/Qwen3-30B-A3B-Instruct-2507_torch_dist
+   --load /root/Qwen3-30B-A3B-Instruct-2507_slime/
+   --save /root/Qwen3-30B-A3B-Instruct-2507_slime/
    --save-interval 20
 )
 
@@ -46,8 +47,8 @@ ROLLOUT_ARGS=(
    --num-rollout 3000
    --rollout-batch-size 32
    --n-samples-per-prompt 8
-   --rollout-max-context-len 16384
-   --rollout-max-response-len 8192
+   --rollout-max-context-len 262144
+   --rollout-max-response-len 131072
    --rollout-temperature 1
 
    --global-batch-size 256
@@ -59,7 +60,7 @@ EVAL_ARGS=(
 #    --eval-interval 20
 #    --eval-prompt-data aime /root/aime-2024/aime-2024.jsonl
    --n-samples-per-eval-prompt 16
-   --eval-max-response-len 16384
+   --eval-max-response-len 131072
    --eval-top-p 1
 )
 
@@ -67,7 +68,7 @@ PERF_ARGS=(
    --tensor-model-parallel-size 4
    --sequence-parallel
    --pipeline-model-parallel-size 1
-   --context-parallel-size 1
+   --context-parallel-size 2
    --expert-model-parallel-size 8
    --expert-tensor-parallel-size 1
 
@@ -77,6 +78,7 @@ PERF_ARGS=(
 
    # --micro-batch-size 1
    --use-dynamic-batch-size
+   --log-probs-chunk-size 1024
    --max-tokens-per-gpu 20480
 )
 

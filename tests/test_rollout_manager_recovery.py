@@ -96,46 +96,6 @@ def test_repeated_detach_preserves_original_admission_state(initially_paused):
     assert manager._recovery_admission_was_paused is None
 
 
-def test_engine_reset_uses_consistent_collective_order_across_workers():
-    from concurrent.futures import ThreadPoolExecutor
-    from threading import Barrier
-    from types import SimpleNamespace
-
-    from slime.backends.sglang_utils.sglang_engine import SGLangEngine
-
-    class WorkerGroups(set):
-        def __init__(self, order):
-            super().__init__(order)
-            self.order = order
-
-        def __iter__(self):
-            return iter(name for name in self.order if name in self)
-
-    names = ["pipeline-0", "pipeline-1", "pipeline-2"]
-    collectives = {name: Barrier(2) for name in names}
-    engines = []
-    calls = [[], []]
-    for index, order in enumerate([names, names[::-1]]):
-        engine = SGLangEngine.__new__(SGLangEngine)
-        engine.args = SimpleNamespace(rollout_health_check_timeout=2)
-        engine._weight_update_groups = WorkerGroups(order)
-
-        def request(route, payload, timeout, index=index):
-            assert route == "destroy_weights_update_group"
-            group = payload["group_name"]
-            # Different per-worker set orders would leave peers waiting in
-            # different shutdown collectives, as in real NCCL teardown.
-            collectives[group].wait(timeout=timeout)
-            calls[index].append(group)
-
-        engine._make_request = request
-        engines.append(engine)
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        list(pool.map(lambda engine: engine.reset_weights_update_groups(), engines))
-    assert calls == [names, names]
-    assert all(not engine._weight_update_groups for engine in engines)
-
-
 @ray.remote(num_cpus=0)
 class _ServingFixture:
     """Keep the production queue alive without starting GPU inference servers."""

@@ -133,6 +133,16 @@ def test_manifest_failure_does_not_leak_new_sandbox(monkeypatch, tmp_path):
         ('{"error":"No such file or directory (os error 2)"}', False),
         (json.dumps({"error": 'sandbox: "No such file or directory (os error 2)"'}), True),
         (json.dumps({"error": 'file operation: "No such file or directory (os error 2)"'}), True),
+        (
+            json.dumps(
+                {"error": "sandbox: " + json.dumps('file operation: "No such file or directory (os error 2)"')}
+            ),
+            True,
+        ),
+        (
+            json.dumps({"error": "sandbox: " + json.dumps('file operation: "Permission denied (os error 13)"')}),
+            False,
+        ),
         ('{"error":"sandbox must be running"}', False),
         ('{"error":"Permission denied (os error 13)"}', False),
         ("Transport timed out", False),

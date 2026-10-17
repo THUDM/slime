@@ -1,11 +1,10 @@
 #!/bin/bash
-# Tiny end-to-end fully-async GRPO example using Qwen2.5-0.5B-Instruct on the
-# dapo-math-17k dataset. Designed to run on a single 4-GPU node in a few
-# minutes — the same script the CI uses for ``test_qwen2.5_0.5B_fully_async_short``.
+# Fully-async GRPO example using Qwen3-4B-Instruct-2507 on the
+# dapo-math-17k dataset. Uses a single 8-GPU node, CP=4 and a 128K response limit.
 #
 # Prerequisites:
-#   /root/models/Qwen2.5-0.5B-Instruct/             (HF checkpoint)
-#   /root/models/Qwen2.5-0.5B-Instruct_torch_dist/  (from tools/convert_hf_to_torch_dist.py)
+#   /root/models/Qwen3-4B-Instruct-2507/             (HF checkpoint)
+#   /root/models/Qwen3-4B-Instruct-2507_torch_dist/  (from tools/convert_hf_to_torch_dist.py)
 #   /root/datasets/dapo-math-17k/dapo-math-17k.jsonl
 
 # clean any leftover ray/sglang
@@ -24,9 +23,9 @@ HAS_NVLINK=$([ "$NVLINK_COUNT" -gt 0 ] && echo 1 || echo 0)
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-source "${SCRIPT_DIR}/../../scripts/models/qwen2.5-0.5B.sh"
+source "${SCRIPT_DIR}/../../scripts/models/qwen3-4B-Instruct-2507.sh"
 
-MODEL_DIR=${MODEL_DIR:-/root/models/Qwen2.5-0.5B-Instruct}
+MODEL_DIR=${MODEL_DIR:-/root/models/Qwen3-4B-Instruct-2507}
 DATA_PATH=${DATA_PATH:-/root/datasets/dapo-math-17k/dapo-math-17k.jsonl}
 
 CKPT_ARGS=(
@@ -51,7 +50,7 @@ ROLLOUT_ARGS=(
    --num-rollout 3
    --rollout-batch-size 8
    --n-samples-per-prompt 4
-   --rollout-max-response-len 1024
+   --rollout-max-response-len 131072
    --rollout-temperature 1
 
    --global-batch-size 32
@@ -62,25 +61,35 @@ PERF_ARGS=(
    --tensor-model-parallel-size 1
    --sequence-parallel
    --pipeline-model-parallel-size 1
-   --context-parallel-size 1
+   --context-parallel-size 4
    --expert-model-parallel-size 1
    --expert-tensor-parallel-size 1
 
    --use-dynamic-batch-size
+   --log-probs-chunk-size 1024
    --max-tokens-per-gpu 4096
 )
 
 GRPO_ARGS=(
    --advantage-estimator grpo
+   --use-score-centering
+   --score-centering-top-k 128
+   --pg-loss-type reinforce
+   --use-tis
+   --tis-clip-low 0
+   --tis-clip 2
+   --disable-grpo-std-normalization
+   --calculate-per-token-loss
    --use-kl-loss
    --kl-loss-coef 0.00
    --kl-loss-type low_var_kl
    --entropy-coef 0.00
-   --eps-clip 0.2
-   --eps-clip-high 0.28
 )
 
 OPTIMIZER_ARGS=(
+   --optimizer-cpu-offload
+   --overlap-cpu-optimizer-d2h-h2d
+   --use-precision-aware-optimizer
    --optimizer adam
    --lr 1e-6
    --lr-decay-style constant
@@ -103,7 +112,7 @@ MISC_ARGS=(
 )
 
 # launch the master node of ray in container
-NUM_GPUS=${NUM_GPUS:-4}
+NUM_GPUS=${NUM_GPUS:-8}
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
 ray start --head --node-ip-address "${MASTER_ADDR}" --num-gpus "${NUM_GPUS}" --disable-usage-stats
 
@@ -116,7 +125,7 @@ RUNTIME_ENV_JSON="{
 }"
 
 # fully-async splits actor / rollout onto disjoint GPUs (no colocation).
-ACTOR_GPUS=${ACTOR_GPUS:-1}
+ACTOR_GPUS=${ACTOR_GPUS:-4}
 ROLLOUT_GPUS=${ROLLOUT_GPUS:-$((NUM_GPUS - ACTOR_GPUS))}
 
 ray job submit --address="http://127.0.0.1:8265" \
