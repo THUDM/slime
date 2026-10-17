@@ -108,8 +108,8 @@ The following components are pinned in the image:
 - FlashAttention 4 from the SGLang base, FlashAttention 3 `3.0.0` from the
   PyTorch CUDA 13 index for Hopper MLA/context-parallel training, and TileLang `0.1.12`.
   CUDA 13 uses the FLA GDN backend; FlashQLA's older TileLang pin is omitted.
-- torch_memory_saver `ac3aaced57ce1f710b9a2ad95151ea152098df66` from
-  `zhuzilin/torch_memory_saver`, rebuilt with CUDA hooks and a registered-host
+- torch_memory_saver `bdab8c55f490a00a746ec34e301391617f5ca878` from
+  `zhuzilin/torch_memory_saver`, rebuilt with CUDA hooks, registered-host and pageable-host
   memory fallback for failed pinned CPU backup allocations.
 - Apex `10417aceddd7d5d05d7cbf7b0fc2daad1105f8b4`, rebuilt with C++ and CUDA
   extensions for fused weight gradients and GLM RoPE.

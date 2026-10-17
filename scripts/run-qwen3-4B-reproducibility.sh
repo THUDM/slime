@@ -16,11 +16,11 @@ set -ex
 export PYTHONUNBUFFERED=1
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-source "${SCRIPT_DIR}/scripts/models/qwen2.5-0.5B.sh"
+source "${SCRIPT_DIR}/models/qwen3-4B-Instruct-2507.sh"
 
 CKPT_ARGS=(
-   --hf-checkpoint /root/Qwen2.5-0.5B-Instruct/
-   --ref-load /root/Qwen2.5-0.5B-Instruct_torch_dist/
+   --hf-checkpoint /root/Qwen3-4B-Instruct-2507/
+   --ref-load /root/Qwen3-4B-Instruct-2507_torch_dist/
 )
 
 ROLLOUT_ARGS=(
@@ -33,7 +33,7 @@ ROLLOUT_ARGS=(
    --num-rollout 100
    --rollout-batch-size 32
    --n-samples-per-prompt 8
-   --rollout-max-response-len 1024
+   --rollout-max-response-len 131072
    --rollout-temperature 1
 
    --global-batch-size 256
@@ -43,7 +43,7 @@ EVAL_ARGS=(
    --eval-interval 20
    --eval-prompt-data gsm8k /root/gsm8k/test.parquet
    --n-samples-per-eval-prompt 1
-   --eval-max-response-len 1024
+   --eval-max-response-len 131072
    --eval-top-k 1
 )
 
@@ -51,26 +51,35 @@ PERF_ARGS=(
    --tensor-model-parallel-size 1
    --sequence-parallel
    --pipeline-model-parallel-size 1
-   --context-parallel-size 1
+   --context-parallel-size 4
    --expert-model-parallel-size 1
    --expert-tensor-parallel-size 1
 
    --use-dynamic-batch-size
+   --log-probs-chunk-size 1024
    --max-tokens-per-gpu 9216
 )
 
 GRPO_ARGS=(
    --advantage-estimator grpo
+   --use-score-centering
+   --score-centering-top-k 128
+   --pg-loss-type reinforce
+   --use-tis
+   --tis-clip-low 0
+   --tis-clip 2
+   --disable-grpo-std-normalization
    --use-kl-loss
    --kl-loss-coef 0.00
    --kl-loss-type low_var_kl
    --kl-coef 0.00
    --entropy-coef 0.00
-   --eps-clip 0.2
-   --eps-clip-high 0.28
 )
 
 OPTIMIZER_ARGS=(
+   --optimizer-cpu-offload
+   --overlap-cpu-optimizer-d2h-h2d
+   --use-precision-aware-optimizer
    --optimizer adam
    --lr 1e-6
    --lr-decay-style constant

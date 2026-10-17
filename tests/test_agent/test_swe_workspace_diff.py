@@ -46,6 +46,9 @@ def test_patch_uses_actual_image_baseline_without_changing_git_index(
     git(repo, "init", "-q")
     git(repo, "config", "user.name", "Test")
     git(repo, "config", "user.email", "test@example.invalid")
+    # Copy a stable fixture; modern Git may otherwise remove maintenance.lock
+    # in the background while copytree is traversing .git.
+    git(repo, "config", "maintenance.auto", "false")
     (repo / "source.py").write_text("result = 0\n")
     (repo / "deleted.py").write_text("obsolete = True\n")
     if ignore_harness:

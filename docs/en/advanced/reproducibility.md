@@ -24,32 +24,32 @@ Also set the following environment variables:
      }
 ```
 
-We provide a fully deterministic GSM8K training script for Qwen2.5-0.5B.
+The GSM8K example enables deterministic training for Qwen3-4B-Instruct-2507, with CP=4 and a 128K response limit.
 
 Use the following commands to initialize the training data and checkpoint:
 
 ```bash
 # download
 hf download --repo-type dataset zhuzilin/gsm8k --local-dir /root/gsm8k
-hf download Qwen/Qwen2.5-0.5B-Instruct --local-dir /root/Qwen2.5-0.5B-Instruct
+hf download Qwen/Qwen3-4B-Instruct-2507 --local-dir /root/Qwen3-4B-Instruct-2507
 
 # convert ckpt
 cd slime/
-source scripts/models/qwen2.5-0.5B.sh
+source scripts/models/qwen3-4B-Instruct-2507.sh
 PYTHONPATH=/root/Megatron-LM/ python \
    tools/convert_hf_to_torch_dist.py \
    ${MODEL_ARGS[@]} \
-   --hf-checkpoint /root/Qwen2.5-0.5B-Instruct \
-   --save /root/Qwen2.5-0.5B-Instruct_torch_dist/
+   --hf-checkpoint /root/Qwen3-4B-Instruct-2507 \
+   --save /root/Qwen3-4B-Instruct-2507_torch_dist/
 ```
 
 Run training with:
 
 ```bash
-bash scripts/run-qwen2.5-0.5B-reproducibility.sh
+bash scripts/run-qwen3-4B-reproducibility.sh
 ```
 
-The wandb screenshots are recorded in [pull#370](https://github.com/THUDM/slime/pull/370).
+Historical Qwen2.5-0.5B wandb screenshots are recorded in [pull#370](https://github.com/THUDM/slime/pull/370).
 
 ## Train/rollout log-prob alignment (GLM-5)
 

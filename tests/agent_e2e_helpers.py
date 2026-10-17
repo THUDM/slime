@@ -173,9 +173,9 @@ async def generate(args, sample, sampling_params, evaluation=False):
     assert samples, "Agent returned no training segments"
     assert {branch.reward for branch in samples} in ({0.0}, {1.0}), "One trajectory must have one real outcome"
     for branch in samples:
+        assert not branch.remove_sample, branch.metadata
         assert branch.group_index == sample.group_index and branch.index == sample.index
         assert branch.rollout_id == (sample.rollout_id if sample.rollout_id is not None else sample.index)
-        assert not branch.remove_sample, branch.metadata
         assert branch.metadata["agent_exit_code"] == 0, branch.metadata
         assert branch.response_length == len(branch.loss_mask) == len(branch.rollout_log_probs)
         assert sum(branch.loss_mask) > 0, "Agent segment contains no sampled training tokens"

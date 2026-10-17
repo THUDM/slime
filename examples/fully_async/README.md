@@ -8,20 +8,19 @@ directory is just the launch script + CI test.
 
 ## Files
 
-* `run-qwen2.5-0.5B-fully_async.sh` — single-node, 4-GPU, three-rollout demo
-  with Qwen2.5-0.5B-Instruct on dapo-math-17k. Fast enough to be the CI
-  smoke test for the fully-async path.
+* `run-qwen3-4B-fully_async.sh` — single-node, 8-GPU, three-rollout demo
+  with Qwen3-4B-Instruct-2507 on dapo-math-17k, CP=4 and a 128K response limit.
 * `run-qwen3.5-9B-fully_async.sh` — single-node, 8-GPU, three-rollout demo
   with Qwen3.5-9B on dapo-math-17k.
 
-The same script doubles as `tests/test_qwen2.5_0.5B_fully_async_short.py` in
-CI.
+CI keeps a separate short Qwen2.5-0.5B regression in
+`tests/test_qwen2.5_0.5B_fully_async_short.py`.
 
 ## Prerequisites
 
 ```
-/root/models/Qwen2.5-0.5B-Instruct/            # HF checkpoint
-/root/models/Qwen2.5-0.5B-Instruct_torch_dist/ # tools/convert_hf_to_torch_dist.py
+/root/models/Qwen3-4B-Instruct-2507/            # HF checkpoint
+/root/models/Qwen3-4B-Instruct-2507_torch_dist/ # tools/convert_hf_to_torch_dist.py
 /root/datasets/dapo-math-17k/dapo-math-17k.jsonl
 ```
 
@@ -29,7 +28,7 @@ CI.
 
 ```bash
 cd slime
-bash examples/fully_async/run-qwen2.5-0.5B-fully_async.sh
+bash examples/fully_async/run-qwen3-4B-fully_async.sh
 ```
 
 You should see:

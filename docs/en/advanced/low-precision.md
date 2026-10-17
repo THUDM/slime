@@ -128,10 +128,9 @@ RUNTIME_ENV_JSON="{
 
 3. Launch an example:
 
-```bash
-# Moonlight-16B-A3B INT4 training
-bash scripts/low_precision/run-moonlight-16B-A3B-int4.sh
+The Qwen3 launchers use Instruct-2507 checkpoints (256K context) with a 128K response limit and CP. Quantize and convert that same checkpoint; older Qwen3 weights use different RoPE settings.
 
+```bash
 # Qwen3-30B-A3B INT4 training
 bash scripts/low_precision/run-qwen3-30B-A3B-int4.sh
 

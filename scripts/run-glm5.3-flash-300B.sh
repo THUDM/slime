@@ -74,18 +74,18 @@ ray job submit --address="${RAY_DASHBOARD:-http://127.0.0.1:8265}" \
     --rm-type "${RM_TYPE:-deepscaler}" \
     --num-rollout "${NUM_ROLLOUT:-3}" --rollout-batch-size 16 --n-samples-per-prompt 8 \
     --global-batch-size 128 --micro-batch-size 1 \
-    --rollout-max-response-len "${RESPONSE_LENGTH:-32768}" \
+    --rollout-max-response-len "${RESPONSE_LENGTH:-262144}" \
     --rollout-temperature 1.0 --rollout-top-p 0.95 \
     --use-rollout-routing-replay --use-score-centering --pg-loss-type reinforce \
-    --advantage-estimator grpo \
+    --advantage-estimator grpo --disable-grpo-std-normalization --calculate-per-token-loss \
     --use-tis --tis-clip-low 0.5 --tis-clip 2.0 \
     --tensor-model-parallel-size 1 --pipeline-model-parallel-size 4 \
     --decoder-first-pipeline-num-layers 12 --decoder-last-pipeline-num-layers 11 \
-    --context-parallel-size "${CP_SIZE:-2}" --expert-model-parallel-size 16 --expert-tensor-parallel-size 1 \
+    --context-parallel-size "${CP_SIZE:-8}" --expert-model-parallel-size 16 --expert-tensor-parallel-size 1 \
     --allgather-cp \
     --moe-token-dispatcher-type alltoall \
     --recompute-granularity full --recompute-method uniform --recompute-num-layers 1 \
-    --seq-length 65536 --max-position-embeddings 65536 \
+    --seq-length 524288 --max-position-embeddings 524288 \
     --use-dynamic-batch-size --max-tokens-per-gpu 2048 --data-pad-size-multiplier 128 \
     --log-probs-chunk-size 256 \
     --optimizer adam --lr 1e-6 --lr-decay-style constant \
@@ -98,7 +98,7 @@ ray job submit --address="${RAY_DASHBOARD:-http://127.0.0.1:8265}" \
     --sglang-enable-dp-lm-head --sglang-moe-dense-tp-size 1 \
     --sglang-mm-enable-dp-encoder --sglang-disable-shared-experts-fusion \
     --sglang-dsa-prefill-backend fa3 --sglang-dsa-decode-backend fa3 \
-    --sglang-mem-fraction-static 0.75 --sglang-context-length 65536 \
+    --sglang-mem-fraction-static 0.75 --sglang-context-length 524288 \
     --sglang-max-running-requests 32 --sglang-chunked-prefill-size 4096 \
     --sglang-disable-overlap-schedule --sglang-cuda-graph-max-bs-decode 8 \
     --sglang-mamba-ssm-dtype float32 --sglang-page-size 64 \

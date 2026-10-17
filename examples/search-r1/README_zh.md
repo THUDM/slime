@@ -43,19 +43,19 @@ python $WORK_DIR/scripts/data_process/qa_search_test_merge.py \
 
 **注意：** 如果您计划使用本地搜索后端，请参阅[附录](#附录配置本地检索器)了解如何设置本地检索服务器。
 
-初始化 Qwen2.5-3B 模型：
+初始化 Qwen3-4B-Instruct-2507 模型：
 
 ```bash
 # hf checkpoint
-hf download Qwen/Qwen2.5-3B --local-dir /root/Qwen2.5-3B
+hf download Qwen/Qwen3-4B-Instruct-2507 --local-dir /root/Qwen3-4B-Instruct-2507
 
 # mcore checkpoint
 cd /root/slime
-source scripts/models/qwen2.5-3B.sh
+source scripts/models/qwen3-4B-Instruct-2507.sh
 PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
     ${MODEL_ARGS[@]} \
-    --hf-checkpoint /root/Qwen2.5-3B \
-    --save /root/Qwen2.5-3B_torch_dist
+    --hf-checkpoint /root/Qwen3-4B-Instruct-2507 \
+    --save /root/Qwen3-4B-Instruct-2507_torch_dist
 ```
 
 ## 配置说明
@@ -121,7 +121,7 @@ SEARCH_R1_CONFIGS = {
 }
 ```
 
-**2. 在 `run_qwen2.5_3B.sh` 中：**
+**2. 在 `run_qwen3_4B.sh` 中：**
 
 在 `GRPO_ARGS` 中取消注释 TIS 相关参数：
 ```bash
@@ -160,7 +160,7 @@ CUSTOM_ARGS=(
 
 ```bash
 cd slime/
-bash examples/search-r1/run_qwen2.5_3B.sh
+bash examples/search-r1/run_qwen3_4B.sh
 ```
 
 ## 代码结构
@@ -287,7 +287,7 @@ export WANDB_KEY="your_wandb_key_here"
 # rm -rf /root/.*
 
 # 运行训练脚本
-bash /root/slime/examples/search-r1/run_qwen2.5_3B.sh
+bash /root/slime/examples/search-r1/run_qwen3_4B.sh
 ```
 
 ### 故障排查
