@@ -14,6 +14,27 @@ const E = globalThis.SlimeExperiment;
 const repo = path.resolve(__dirname, '../..');
 const shell = state => E.generate(state).files['experiment.sh'];
 
+test('maintained recipes default to SC and replay only MoE routes', () => {
+  for (const model of Object.keys(E.models)) {
+    const state = E.change(E.defaults, 'model', model);
+    assert.equal(state.sc, true);
+    assert.equal(state.response, E.models[model].response ?? 131072);
+    assert.ok(E.models[model].cp > 1);
+    assert.match(shell(state), /--log-probs-chunk-size 1024/);
+    assert.ok(shell(state).includes(`--rollout-max-response-len ${state.response}`));
+    assert.ok(E.validate({...state, response: 262144}).errors.some(e => e.includes('context')) === (model !== 'glm5'));
+    assert.match(shell(state), new RegExp(`--context-parallel-size ${E.models[model].cp}\\b`));
+    assert.equal(state.r3, E.models[model].moe);
+    assert.match(shell(state), /--use-score-centering/);
+    assert.equal(shell(state).includes('--use-rollout-routing-replay'), E.models[model].moe);
+    assert.doesNotMatch(shell({...state, sc: false, r3: false}), /--use-score-centering|--use-rollout-routing-replay/);
+  }
+  for (const model of ['dense', 'deepseek']) {
+    assert(!Object.hasOwn(E.models, model));
+    assert.deepEqual(E.sanitize({model, hf: '/old/model', train: '/old/checkpoint', nodes: 16}), E.defaults);
+  }
+});
+
 test('A/B comparison includes dependency changes and validates both sides without mutating snapshots', () => {
   const a = E.sanitize({...E.defaults, hf: '/private/baseline'});
   const saved = JSON.stringify(a);
@@ -88,8 +109,8 @@ test('provenance describes generation, preserves unknown runtime facts and accep
   assert.deepEqual(modified.provenance.runtimeEvidence, []);
   assert.equal(E.generate(E.defaults).provenance.page.commit, null);
   assert.equal(E.generate(E.defaults, 'en', {...build, dirty: true}).provenance.page.dirty, true);
-  assert.deepEqual(E.sanitize({schema: 1, choices: {model: 'dense'}}), E.sanitize({model: 'dense'}));
-  assert.equal(E.sanitize({model: 'dense'}).hardware, 'unspecified');
+  assert.deepEqual(E.sanitize({schema: 1, choices: {model: 'qwen38'}}), E.sanitize({model: 'qwen38'}));
+  assert.equal(E.sanitize({model: 'qwen38'}).hardware, 'unspecified');
   assert.equal(E.generate(E.defaults, 'en', {commit: 'bad\ncommand'}).provenance.page.commit, null);
 });
 
@@ -228,7 +249,7 @@ test('SC uses current-policy REINFORCE with compatible sampling and composes wit
 
 test('dense R3, async determinism, missing hooks and transport requirements are explained', () => {
   assert.ok(E.validate({
-    ...E.change(E.defaults, 'model', 'dense'),
+    ...E.change(E.defaults, 'model', 'qwen38'),
     r3: true
   }).errors.some(s => s.includes('MoE')));
   assert.ok(E.validate({
@@ -326,7 +347,7 @@ test('hybrid attention KV and recurrent state export independently to each engin
   }).mambaDtype, 'auto');
   const conventional = E.sanitize({
     ...hybrid,
-    model: 'dense',
+    model: 'flash',
     mambaDtype: 'bfloat16',
     mambaRatio: '1.5'
   });
@@ -357,12 +378,12 @@ test('EAGLE exports a separate draft head or a supported checkpoint MTP head', (
   const glm = {...E.change(separate, 'model', 'glm5'), speculative: true};
   assert.equal(glm.draft, '');
   assert.equal(glm.draftSource, 'builtin');
-  assert.match(shell(glm), /--sglang-speculative-draft-attention-backend nsa/);
+  assert.match(shell(glm), /--sglang-speculative-draft-attention-backend dsa/);
   assert.doesNotMatch(shell(glm), /--sglang-speculative-draft-model-path/);
-  assert.doesNotMatch(shell({...glm, draftSource: 'external', draft: 'org/compatible-eagle'}), /--sglang-speculative-draft-attention-backend nsa/);
-  const dense = E.change(separate, 'model', 'dense');
-  assert.equal(dense.draftSource, 'external');
-  assert.ok(E.generate({...dense, draftSource: 'builtin'}).validation.errors.some(e => e.includes('MTP')));
+  assert.doesNotMatch(shell({...glm, draftSource: 'external', draft: 'org/compatible-eagle'}), /--sglang-speculative-draft-attention-backend dsa/);
+  const dense = E.change(separate, 'model', 'qwen38');
+  assert.equal(dense.draftSource, 'builtin');
+  assert.deepEqual(E.generate(dense).validation.errors, []);
   assert.deepEqual(E.generate({...separate, pd: true, rollout: 16, layout: 'separate', ib: 'mlx5_0'}).validation.errors, []);
 });
 
@@ -415,7 +436,7 @@ test('all generated recipe variants are syntactically valid bash', () => {
               count++;
             }
         }
-  assert.equal(count, 288);
+  assert.equal(count, Object.keys(E.models).length * 48);
 });
 
 test('shared choices are schema-limited and restore paths for the selected model', () => {

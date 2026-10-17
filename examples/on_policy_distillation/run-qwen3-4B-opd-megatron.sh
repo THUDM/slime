@@ -21,14 +21,14 @@ else
 fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
-source "/root/slime/scripts/models/qwen3-8B.sh"
+source "/root/slime/scripts/models/qwen3-4B-Instruct-2507.sh"
 
 
 CKPT_ARGS=(
-   --hf-checkpoint /root/Qwen3-8B
-   --ref-load /root/Qwen3-8B_torch_dist
-   --load /root/Qwen3-8B_slime/
-   --save /root/Qwen3-8B_slime/
+   --hf-checkpoint /root/Qwen3-4B-Instruct-2507
+   --ref-load /root/Qwen3-4B-Instruct-2507_torch_dist
+   --load /root/Qwen3-4B-Instruct-2507_slime/
+   --save /root/Qwen3-4B-Instruct-2507_slime/
    --save-interval 20
 )
 
@@ -40,7 +40,7 @@ ROLLOUT_ARGS=(
    --num-rollout 300
    --rollout-batch-size 16
    --n-samples-per-prompt 4
-   --rollout-max-response-len 16384
+   --rollout-max-response-len 131072
    --rollout-temperature 1
 
    --global-batch-size 64
@@ -55,15 +55,14 @@ EVAL_ARGS=(
    # --eval-interval 20
    # --eval-prompt-data aime ${DATA_DIR}/aime-2024/aime-2024.jsonl
    # --n-samples-per-eval-prompt 16
-   # --eval-max-response-len 16384
+   # --eval-max-response-len 131072
    # --eval-top-p 1
 )
 
 PERF_ARGS=(
-   --tensor-model-parallel-size 2
-   --sequence-parallel
+   --tensor-model-parallel-size 1
    --pipeline-model-parallel-size 1
-   --context-parallel-size 1
+   --context-parallel-size 4
    --expert-model-parallel-size 1
    --expert-tensor-parallel-size 1
 
@@ -73,6 +72,7 @@ PERF_ARGS=(
 
    # --micro-batch-size 1
    --use-dynamic-batch-size
+   --log-probs-chunk-size 1024
    --max-tokens-per-gpu 16384
 )
 
@@ -84,7 +84,7 @@ GRPO_ARGS=(
    --opd-type megatron                                # Use Megatron forward for teacher
    --opd-kl-coef 1.0                                  # CHANGE THIS: KL penalty coefficient
    # Teacher model configuration (CHANGE THIS to a stronger model!)
-   --opd-teacher-load /root/Qwen3-8B_torch_dist      # Teacher model path
+   --opd-teacher-load /root/Qwen3-4B-Instruct-2507_torch_dist      # Teacher model path
    
    --use-kl-loss
    --kl-loss-coef 0.00
@@ -93,6 +93,9 @@ GRPO_ARGS=(
 )
 
 OPTIMIZER_ARGS=(
+   --optimizer-cpu-offload
+   --overlap-cpu-optimizer-d2h-h2d
+   --use-precision-aware-optimizer
    --optimizer adam
    --lr 1e-6
    --lr-decay-style constant
@@ -139,7 +142,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    }' \
    -- python3 train.py \
    --actor-num-nodes 1 \
-   --actor-num-gpus-per-node 2 \
+   --actor-num-gpus-per-node 4 \
    --rollout-num-gpus 4 \
    ${MODEL_ARGS[@]} \
    ${CKPT_ARGS[@]} \

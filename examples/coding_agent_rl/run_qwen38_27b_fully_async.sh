@@ -20,8 +20,8 @@ GPUS_PER_NODE=${GPUS_PER_NODE:-8}
 ROLLOUT_NUM_GPUS=${ROLLOUT_NUM_GPUS:-24}
 ROLLOUT_GPUS_PER_ENGINE=${ROLLOUT_GPUS_PER_ENGINE:-2}
 SERVER_CONCURRENCY=${SERVER_CONCURRENCY:-14}
-MAX_CONTEXT_LEN=${MAX_CONTEXT_LEN:-131072}
-MAX_RESPONSE_LEN=${MAX_RESPONSE_LEN:-8192}
+MAX_CONTEXT_LEN=${MAX_CONTEXT_LEN:-262144}
+MAX_RESPONSE_LEN=${MAX_RESPONSE_LEN:-131072}
 FLUSH_CACHE_INTERVAL=${FLUSH_CACHE_INTERVAL:-3}
 SAVE_INTERVAL=${SAVE_INTERVAL:-0}
 
@@ -181,6 +181,7 @@ ray job submit --address="$RAY_DASHBOARD_ADDRESS" --runtime-env="$RUNTIME_ENV" -
     --recompute-granularity full --recompute-method uniform --recompute-num-layers 1 \
     --use-dynamic-batch-size --max-tokens-per-gpu "${MAX_TOKENS_PER_GPU:-32768}" \
     --log-probs-chunk-size 1024 --balance-data --use-distributed-optimizer \
+    --pg-loss-type reinforce --disable-grpo-std-normalization --calculate-per-token-loss \
     --advantage-estimator grpo --kl-loss-coef 0 --kl-coef 0 --entropy-coef 0 \
     --optimizer adam --lr 1e-6 --lr-decay-style constant --weight-decay 0.1 --adam-beta1 0.9 --adam-beta2 0.98 \
     --optimizer-cpu-offload --optimizer-offload-fraction 1 --overlap-cpu-optimizer-d2h-h2d \

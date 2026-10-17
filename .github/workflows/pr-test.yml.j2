@@ -354,13 +354,15 @@ jobs:
             python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
           fi
 <% else %>
-          SLIME_CI_CONTAINER_DIR=$(mktemp -d)
+          # Checkpoints and Ray spill files can exceed the runner's root disk.
+          mkdir -p /mnt/nvme0n1/slime_ci
+          SLIME_CI_CONTAINER_DIR=$(mktemp -d /mnt/nvme0n1/slime_ci/run.XXXXXX)
+          mkdir -m 1777 "$SLIME_CI_CONTAINER_DIR/tmp"
           cleanup_ci_container() {
             if [ -s "$SLIME_CI_CONTAINER_DIR/container.cid" ]; then
               docker rm -f "$(cat "$SLIME_CI_CONTAINER_DIR/container.cid")" >/dev/null 2>&1 || true
             fi
-            rm -f "$SLIME_CI_CONTAINER_DIR/container.cid"
-            rmdir "$SLIME_CI_CONTAINER_DIR"
+            rm -rf -- "$SLIME_CI_CONTAINER_DIR"
           }
           trap cleanup_ci_container EXIT
           trap 'exit 130' INT
@@ -397,6 +399,7 @@ jobs:
             -e SLIME_AGENT_TEST_RUN_DIR=/workspace/.agent-e2e/run \
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
             -v "$GITHUB_WORKSPACE:/workspace" \
+            -v "$SLIME_CI_CONTAINER_DIR/tmp:/tmp" \
             -v /mnt/nvme0n1/slime_ci:/data/slime_ci \
             -v /mnt/nvme0n1/slime_ci/models:/root/models \
             -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets \
@@ -425,12 +428,19 @@ jobs:
               fi
             '
 <% endif %>
+      - name: Package agent E2E evidence
+        if: always() && matrix.info.test_file == 'test_agent_sunabako_codex_e2e.py'
+        run: |
+          if [ -d .agent-e2e/run ]; then
+            # Node state contains sandbox rootfs trees and host mount symlinks.
+            tar -czf .agent-e2e/evidence.tar.gz --exclude='./node' -C .agent-e2e/run .
+          fi
       - name: Upload agent E2E evidence
         if: always() && matrix.info.test_file == 'test_agent_sunabako_codex_e2e.py'
         uses: actions/upload-artifact@v4
         with:
           name: agent-e2e-<< job_name >>
-          path: ${{ github.workspace }}/.agent-e2e/
+          path: ${{ github.workspace }}/.agent-e2e/evidence.tar.gz
           include-hidden-files: true
           if-no-files-found: ignore
 <% endfor %>
@@ -499,13 +509,15 @@ jobs:
       - name: Execute
         shell: bash
         run: |
-          SLIME_CI_CONTAINER_DIR=$(mktemp -d)
+          # Checkpoints and Ray spill files can exceed the runner's root disk.
+          mkdir -p /mnt/nvme0n1/slime_ci
+          SLIME_CI_CONTAINER_DIR=$(mktemp -d /mnt/nvme0n1/slime_ci/run.XXXXXX)
+          mkdir -m 1777 "$SLIME_CI_CONTAINER_DIR/tmp"
           cleanup_ci_container() {
             if [ -s "$SLIME_CI_CONTAINER_DIR/container.cid" ]; then
               docker rm -f "$(cat "$SLIME_CI_CONTAINER_DIR/container.cid")" >/dev/null 2>&1 || true
             fi
-            rm -f "$SLIME_CI_CONTAINER_DIR/container.cid"
-            rmdir "$SLIME_CI_CONTAINER_DIR"
+            rm -rf -- "$SLIME_CI_CONTAINER_DIR"
           }
           trap cleanup_ci_container EXIT
           trap 'exit 130' INT
@@ -542,6 +554,7 @@ jobs:
             -e SLIME_AGENT_TEST_RUN_DIR=/workspace/.agent-e2e/run \
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
             -v "$GITHUB_WORKSPACE:/workspace" \
+            -v "$SLIME_CI_CONTAINER_DIR/tmp:/tmp" \
             -v /mnt/nvme0n1/slime_ci:/data/slime_ci \
             -v /mnt/nvme0n1/slime_ci/models:/root/models \
             -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets \
@@ -569,11 +582,18 @@ jobs:
                 python tests/ci/gpu_lock_exec.py --count "$NUM_GPUS" -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
               fi
             '
+      - name: Package agent E2E evidence
+        if: always() && endsWith(matrix.info.test_file, 'test_agent_sunabako_codex_e2e.py')
+        run: |
+          if [ -d .agent-e2e/run ]; then
+            # Node state contains sandbox rootfs trees and host mount symlinks.
+            tar -czf .agent-e2e/evidence.tar.gz --exclude='./node' -C .agent-e2e/run .
+          fi
       - name: Upload agent E2E evidence
         if: always() && endsWith(matrix.info.test_file, 'test_agent_sunabako_codex_e2e.py')
         uses: actions/upload-artifact@v4
         with:
           name: agent-e2e-changed
-          path: ${{ github.workspace }}/.agent-e2e/
+          path: ${{ github.workspace }}/.agent-e2e/evidence.tar.gz
           include-hidden-files: true
           if-no-files-found: ignore
