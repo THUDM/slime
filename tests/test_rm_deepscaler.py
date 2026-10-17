@@ -36,6 +36,30 @@ def test_response_split_on_response_marker_grades_tail():
 
 
 @pytest.mark.unit
+def test_response_split_on_response_marker_grades_last_segment():
+    """When ``###Response`` appears more than once, the *final* segment is the
+    answer — same rule the ``</think>`` branch already follows with ``[-1]``.
+    A model that echoes the ``###Response`` marker inside its scratch work
+    (then emits the real answer after the last one) must still be graded on
+    that last segment. The earlier ``[1]`` indexing graded the *second*
+    segment instead, silently scoring a correct answer as 0."""
+    response = r"reasoning \boxed{1}###Response\boxed{2}###Response\boxed{42}"
+    assert get_deepscaler_rule_based_reward(response, "42") == 1
+    # The wrong intermediate answer in the second segment must not be graded.
+    assert get_deepscaler_rule_based_reward(response, "2") == 0
+
+
+@pytest.mark.unit
+def test_think_and_response_markers_agree_on_last_segment():
+    """The two marker branches must pick the same (final) segment so the
+    reward does not depend on which separator the chat template emits."""
+    think = r"junk \boxed{0}</think>mid \boxed{1}</think>\boxed{42}"
+    resp = r"junk \boxed{0}###Response mid \boxed{1}###Response\boxed{42}"
+    assert get_deepscaler_rule_based_reward(think, "42") == 1
+    assert get_deepscaler_rule_based_reward(resp, "42") == 1
+
+
+@pytest.mark.unit
 def test_response_without_any_marker_returns_zero():
     """No ``</think>`` AND no ``###Response`` → fall through to 0
     immediately (deepscaler.py:9-10). This is the silent-failure pole —
