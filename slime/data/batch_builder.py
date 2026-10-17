@@ -212,6 +212,11 @@ class BatchBuilder:
             return self.custom_reward_post_process_func(self.args, samples)
 
         raw_rewards = [sample.get_reward_value(self.args) for sample in samples]
+        if self.args.advantage_estimator == "flash_reinforce" and self.args.rewards_normalization:
+            # One baseline for the whole rollout batch (n_samples_per_prompt=1 has no prompt group); no std.
+            rewards = torch.tensor(raw_rewards, dtype=torch.float)
+            return raw_rewards, (rewards - rewards.mean()).tolist()
+
         if (
             self.args.advantage_estimator in ["grpo", "gspo", "cispo", "reinforce_plus_plus_baseline"]
             and self.args.rewards_normalization
