@@ -4,18 +4,16 @@
 
 ## 从多少张卡起步？
 
-实验室按每节点 8 GPU，参考 H100/H200 级别、高速互联服务器的仓库配方。这些是配方起步值，不是实测最小值，也不保证这一档所有硬件均能直接运行。短实验限制回复为 4,096 tokens，每轮 8 个 prompt、各采样 8 次；prompt 长度仍计入显存。MoE 和 Qwen 默认启用 CPU Adam 与重计算。
+实验室按每节点 8 GPU，参考 H100/H200 级别、高速互联服务器的仓库配方。这些是配方起步值，不是实测最小值，也不保证这一档所有硬件均能直接运行。模型配方默认回复上限为 131,072 tokens（128K），GLM-5.3 为 262,144（256K），均启用 CP，每轮 8 个 prompt、各采样 8 次；prompt 长度仍计入显存。MoE 和 Qwen 默认启用 CPU Adam 与重计算。
 
 | 模型 | 训练卡数 | TP / PP / CP / EP | 每个推理引擎卡数 | 来源 |
 |---|---:|---|---:|---|
-| GLM-4-9B | 8 | 2 / 1 / 2 / 1 | 2 | [9B](https://github.com/THUDM/slime/blob/main/scripts/run-glm4-9B.sh) |
-| GLM-4.7-Flash | 8 | 2 / 2 / 2 / 4 | 8 | [Flash](https://github.com/THUDM/slime/blob/main/scripts/run-glm4.7-30B-A3B.sh) |
+| GLM-4.7-Flash | 8 | 2 / 1 / 4 / 8 | 8 | [Flash](https://github.com/THUDM/slime/blob/main/scripts/run-glm4.7-30B-A3B.sh) |
 | GLM-4.7 | 64 | 8 / 4 / 2 / 16 | 32 | [355B](https://github.com/THUDM/slime/blob/main/scripts/run-glm4.7-355B-A32B.sh) |
-| GLM-5.3 | 256 | 4 / 8 / 8 / 32 | 64 | [744B](https://github.com/THUDM/slime/blob/main/scripts/run-glm5.2-744B-A40B.sh) |
-| DeepSeek-R1 | 128 | 8 / 4 / 4 / 32 | 64 | [R1](https://github.com/THUDM/slime/blob/main/scripts/run-deepseek-r1.sh) |
+| GLM-5.3 | 256 | 4 / 8 / 8 / 32 | 64 | [744B](https://github.com/THUDM/slime/blob/main/scripts/run-glm5.3-744B-A40B.sh) |
 | Qwen3.8-27B | 32 | 4 / 2 / 4 / 1 | 2 | [匹配的架构](https://github.com/THUDM/slime/blob/main/scripts/run-qwen3.5-27B.sh) |
 
-Flash 在实验室使用 EP4，使 EP × PP 能放进 8 卡。Qwen3.8 复用匹配架构配置，此次文档修改尚未对新 checkpoint 做 GPU 验证。第一次建议用 9B 或 Flash 理解循环，再对目标模型做短实验，测量峰值显存后分配长任务资源。
+Flash 使用 TP2 / CP4 / EP8 和单流水线阶段，将 128K 序列分散到更多卡上。导出的配方启用 `--log-probs-chunk-size 1024`，降低 log-prob 与 SC 计算的临时显存。Qwen3.8 复用匹配架构配置，此次文档修改尚未对新 checkpoint 做 GPU 验证。第一次建议用 9B 或 Flash 理解循环，再对目标模型做短实验，测量峰值显存后分配长任务资源。
 
 同卡训推分配一个池；训推分离需训练卡数加 rollout 卡数。PD 将 rollout 池分为完整 prefill/decode 引擎；外部推理资源不计入训练 Ray 集群。只增加卡数而不调整模型并行，可能只是增加副本，并不减少每卡模型显存。
 

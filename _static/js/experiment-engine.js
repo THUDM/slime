@@ -3,6 +3,7 @@
   'use strict';
   const models = {
     qwen38: {
+      context: 262144,
       name: 'Qwen3.8-27B',
       mtp: true,
       size: '27B · Hybrid Dense',
@@ -26,25 +27,8 @@
       maxTokens: 8192,
       extra: ['--decoder-last-pipeline-num-layers 30']
     },
-    deepseek: {
-      name: 'DeepSeek-R1',
-      mtp: true,
-      size: '671B · A37B · MoE',
-      repo: 'deepseek-ai/DeepSeek-R1',
-      model: 'deepseek-v3',
-      recipe: 'deepseek-r1',
-      nodes: 16,
-      engine: 64,
-      tp: 8,
-      pp: 4,
-      cp: 4,
-      ep: 32,
-      dp: 8,
-      moe: true,
-      maxTokens: 8192,
-      extra: ['--decoder-last-pipeline-num-layers 13']
-    },
     flash: {
+      context: 202752,
       name: 'GLM-4.7-Flash',
       mtp: true,
       size: '30B · A3B · MoE',
@@ -54,32 +38,16 @@
       nodes: 1,
       engine: 8,
       tp: 2,
-      pp: 2,
-      cp: 2,
-      ep: 4,
+      pp: 1,
+      cp: 4,
+      ep: 8,
       dp: 8,
       moe: true,
       maxTokens: 8192,
-      extra: ['--decoder-last-pipeline-num-layers 23']
-    },
-    dense: {
-      name: 'GLM-4-9B',
-      size: '9B · Dense',
-      repo: 'THUDM/GLM-Z1-9B-0414',
-      model: 'glm4-9B',
-      recipe: 'glm4-9B',
-      nodes: 1,
-      engine: 2,
-      tp: 2,
-      pp: 1,
-      cp: 2,
-      ep: 1,
-      dp: 1,
-      moe: false,
-      maxTokens: 4608,
       extra: []
     },
     glm47: {
+      context: 202752,
       name: 'GLM-4.7',
       mtp: true,
       size: '355B · A32B · MoE',
@@ -98,12 +66,14 @@
       extra: []
     },
     glm5: {
+      context: 1048576,
+      response: 262144,
       name: 'GLM-5.3',
       mtp: true,
       size: '744B · A40B · MoE',
       repo: 'zai-org/GLM-5.3',
       model: 'glm5.2-744B-A40B',
-      recipe: 'glm5.2-744B-A40B',
+      recipe: 'glm5.3-744B-A40B',
       nodes: 32,
       engine: 64,
       tp: 4,
@@ -114,7 +84,7 @@
       moe: true,
       maxTokens: 8192,
       extra: ['--decoder-first-pipeline-num-layers 14', '--decoder-last-pipeline-num-layers 16',
-        '--data-pad-size-multiplier 1024', '--log-probs-chunk-size 16384'
+        '--data-pad-size-multiplier 1024'
       ]
     },
   };
@@ -137,8 +107,8 @@
     mambaDtype: 'auto',
     mambaRatio: '',
     correction: 'tis',
-    r3: false,
-    sc: false,
+    r3: true,
+    sc: true,
     deterministic: false,
     pd: false,
     hicache: false,
@@ -150,7 +120,7 @@
     rollout: 8,
     prefill: 8,
     concurrency: 128,
-    response: 4096,
+    response: 131072,
     rounds: 3,
     transport: 'nccl',
     hf: '/data/GLM-4.7-Flash',
@@ -184,7 +154,7 @@
     rollout: [1, 8192],
     prefill: [1, 8192],
     concurrency: [1, 8192],
-    response: [128, 131072],
+    response: [128, 262144],
     rounds: [1, 100000],
     specSteps: [1, 8],
     step: [0, 5]
@@ -196,12 +166,16 @@
 
   function sanitize(input) {
     if (input?.schema === 1 && input.choices) input = input.choices;
+    // Retired recipes must not leave their checkpoint paths on the default model.
+    if (['dense', 'deepseek'].includes(input?.model)) input = {};
     const s = {
       ...defaults
     };
     if (input && Object.hasOwn(models, input.model)) {
       const m = models[input.model];
       Object.assign(s, {
+        r3: m.moe,
+        response: m.response ?? defaults.response,
         nodes: m.nodes,
         rollout: m.nodes * 8,
         prefill: m.engine,
@@ -248,8 +222,9 @@
       s.draftSource = m.mtp ? 'builtin' : 'external';
       s.draft = '';
       s.specSteps = value === 'glm5' ? 4 : 3;
-      if (!m.moe) s.r3 = false;
-      if (value === 'glm5' || value === 'deepseek') {
+      s.r3 = m.moe;
+      s.response = m.response ?? defaults.response;
+      if (value === 'glm5') {
         s.precision = 'fp8';
         s.kv = 'fp8';
       }
@@ -302,6 +277,9 @@
       errors.push(message);
       issues.push({code, message, fields, actions});
     };
+    if (s.response >= m.context) reject('response-context', t(
+      `The response limit must leave room for the prompt within this checkpoint's ${m.context}-token context.`,
+      `回复上限需在此 checkpoint 的 ${m.context} token 上下文内为 prompt 留出空间。`), ['response']);
     const total = s.nodes * 8,
       rollout = s.layout === 'colocate' ? total : s.rollout;
     if (total % (m.tp * m.pp * m.cp) !== 0 || total % (m.ep * m.pp) !== 0) errors.push(t(
@@ -457,28 +435,23 @@
       args = [`--rollout-num-gpus-per-engine ${m.engine}`, '--sglang-mem-fraction-static 0.7'];
     if (m.dp > 1) args.push('--sglang-enable-dp-attention', `--sglang-dp-size ${m.dp}`, '--sglang-enable-dp-lm-head',
       '--sglang-moe-dense-tp-size 1');
-    if (['glm47', 'glm5', 'deepseek'].includes(s.model)) args.push(`--sglang-ep-size ${m.engine}`);
+    if (['glm47', 'glm5'].includes(s.model)) args.push(`--sglang-ep-size ${m.engine}`);
     if (m.hybrid) {
-      args.push('--sglang-mamba-scheduler-strategy extra_buffer');
       if (s.mambaDtype !== 'auto') args.push(`--sglang-mamba-ssm-dtype ${s.mambaDtype}`);
       if (s.mambaRatio) args.push(`--sglang-mamba-full-memory-ratio ${quote(s.mambaRatio)}`);
     }
-    if (s.model === 'deepseek') args.push('--sglang-moe-a2a-backend deepep', '--sglang-deepep-mode auto');
     if (s.model === 'glm5') args.push('--sglang-moe-a2a-backend deepep', '--sglang-deepep-mode auto',
-      '--sglang-page-size 64', '--sglang-nsa-decode-backend flashmla_kv',
-      '--sglang-nsa-prefill-backend flashmla_sparse', '--sglang-attention-backend nsa',
+      '--sglang-page-size 64', '--sglang-dsa-decode-backend flashmla_kv',
+      '--sglang-dsa-prefill-backend flashmla_sparse', '--sglang-attention-backend dsa',
       '--sglang-disable-overlap-schedule');
     if (s.kv === 'fp8') args.push('--sglang-kv-cache-dtype fp8_e4m3');
     if (s.speculative) {
       args.push('--sglang-speculative-algorithm EAGLE', `--sglang-speculative-num-steps ${s.specSteps}`,
         '--sglang-speculative-eagle-topk 1', `--sglang-speculative-num-draft-tokens ${s.specSteps + 1}`);
       if (s.draftSource === 'external') args.push(`--sglang-speculative-draft-model-path ${quote(s.draft)}`);
-      else if (s.model === 'glm5') args.push('--sglang-speculative-draft-attention-backend nsa');
+      else if (s.model === 'glm5') args.push('--sglang-speculative-draft-attention-backend dsa');
     }
-    if (s.deterministic) {
-      args.push('--sglang-enable-deterministic-inference');
-      if (s.model === 'dense') args.push('--sglang-attention-backend flashinfer');
-    }
+    if (s.deterministic) args.push('--sglang-enable-deterministic-inference');
     if (s.hicache) args.push('--sglang-enable-hierarchical-cache', '--sglang-hicache-ratio 2');
     if (s.pd) args.push('--sglang-disaggregation-transfer-backend mooncake',
       `--sglang-disaggregation-ib-device ${quote(s.ib)}`);
@@ -633,7 +606,7 @@
       `--context-parallel-size ${m.cp}`, `--expert-model-parallel-size ${m.ep}`, '--expert-tensor-parallel-size 1',
       ...m.extra, ...(s.recompute ? ['--recompute-granularity full', '--recompute-method uniform',
         '--recompute-num-layers 1'
-      ] : []), '--use-dynamic-batch-size', `--max-tokens-per-gpu ${m.maxTokens}`);
+      ] : []), '--use-dynamic-batch-size', `--max-tokens-per-gpu ${m.maxTokens}`, '--log-probs-chunk-size 1024');
     arg.push('--optimizer adam', '--lr 1e-6', '--lr-decay-style constant', '--weight-decay 0.1', '--adam-beta1 0.9',
       '--adam-beta2 0.98');
     if (s.cpuAdam) arg.push('--optimizer-cpu-offload', '--overlap-cpu-optimizer-d2h-h2d',
@@ -668,16 +641,14 @@
     const config = yaml(s);
     const header =
       `#!/usr/bin/env bash\n# Generated by slime experiment lab. Run from the slime repository root.\n# Recipe basis: scripts/run-${m.recipe}.sh\n# ${m.name} | ${s.layout} | ${s.schedule} | ${s.precision} | ${s.correction}\n# Allocated Ray GPUs: ${v.localGpus}. Memory fit depends on your GPU and context.\n# Usage: bash experiment.sh prepare | convert | check | train\nset -euo pipefail\n\nHF_MODEL=${quote(s.hf)}\nTRAIN_CHECKPOINT=${quote(s.train)}\nPROMPT_DATA=${quote(s.data)}\nSAVE_DIR=${quote(s.save)}\nMEGATRON_DIR=${quote(s.megatron)}\nROLLOUT_MODEL="$HF_MODEL${s.precision==='bf16'?'':s.precision==='int4'?'-int4':'-fp8'}"\n# Same repository and data paths must be accessible on every participating node.\nexport PYTHONPATH="$PWD:$MEGATRON_DIR\${PYTHONPATH:+:$PYTHONPATH}"\nsource ${quote('scripts/models/'+m.model+'.sh')}\n\n`;
-    const conversionNodes = ['glm5', 'glm47', 'deepseek'].includes(s.model) ? 4 : 1;
+    const conversionNodes = ['glm5', 'glm47'].includes(s.model) ? 4 : 1;
     const conversionArgs = s.model === 'glm5' ?
       '--tensor-model-parallel-size 8 --pipeline-model-parallel-size 2 --decoder-last-pipeline-num-layers 40 --expert-model-parallel-size 16 --expert-tensor-parallel-size 1' :
-      s.model === 'deepseek' ?
-      '--tensor-model-parallel-size 1 --pipeline-model-parallel-size 8 --decoder-first-pipeline-num-layers 7 --decoder-last-pipeline-num-layers 6 --expert-model-parallel-size 4 --expert-tensor-parallel-size 1' :
       s.model === 'glm47' ?
       '--tensor-model-parallel-size 8 --pipeline-model-parallel-size 4 --expert-model-parallel-size 8 --expert-tensor-parallel-size 1' :
       '';
     const prep =
-      `if [[ "\${1:-check}" == prepare ]]; then\n  # Run once on the shared filesystem. Conversion is a separate distributed step.\n${['deepseek','glm5'].includes(s.model)?`  hf download ${quote(m.repo)} --local-dir "$HF_MODEL-source-fp8"\n  python tools/fp8_cast_bf16.py --input-fp8-hf-path "$HF_MODEL-source-fp8" --output-bf16-hf-path "$HF_MODEL"\n  python - "$HF_MODEL/config.json" <<'SLIME_BF16_CONFIG'\nimport json, sys\nfrom pathlib import Path\np = Path(sys.argv[1])\ncfg = json.loads(p.read_text())\ncfg.pop('quantization_config', None)\np.write_text(json.dumps(cfg, indent=2))\nSLIME_BF16_CONFIG\n`:`  hf download ${quote(m.repo)} --local-dir "$HF_MODEL"\n`}${s.task==='math'?'  hf download --repo-type dataset zhuzilin/dapo-math-17k --local-dir "$(dirname -- "$PROMPT_DATA")"\n':'  # Supply your prompt JSONL and importable custom hooks before training.\n'}${s.precision==='bf16'?'':s.precision==='int4'?'  python tools/convert_hf_to_int4_direct.py --model-dir "$HF_MODEL" --save-dir "$ROLLOUT_MODEL"\n':'  python tools/convert_hf_to_fp8.py --model-dir "$HF_MODEL" --save-dir "$ROLLOUT_MODEL" \\\n    --strategy block --block-size 128 128 --max-workers 4\n'}  printf '%s\\n' 'Next: run bash experiment.sh convert on ${conversionNodes} node(s), 8 GPUs each.'\n  exit 0\nfi\n\nif [[ "\${1:-check}" == convert ]]; then\n${conversionNodes>1?'  : "\${CONVERT_MASTER_ADDR:?Set the conversion head IP on all 4 nodes}"\n  : "\${CONVERT_NODE_RANK:?Set this node rank: 0, 1, 2, or 3}"\n':''}  torchrun --nproc-per-node 8 ${conversionNodes===1?'--standalone':'--nnodes 4 --node-rank "$CONVERT_NODE_RANK" --master-addr "$CONVERT_MASTER_ADDR" --master-port 12345'} \\\n    tools/convert_hf_to_torch_dist.py "\${MODEL_ARGS[@]}" \\\n    ${conversionArgs?conversionArgs+' \\\n    ':''}--hf-checkpoint "$HF_MODEL" --save "$TRAIN_CHECKPOINT"\n  exit 0\nfi\n\nfor path in "$ROLLOUT_MODEL/config.json" "$TRAIN_CHECKPOINT/latest_checkpointed_iteration.txt" "$PROMPT_DATA"${s.straw?' '+quote(s.declaration):''}; do\n  if [[ ! -f "$path" ]]; then\n    printf 'Missing input: %s\\nRun prepare and convert, or edit the paths at the top of this script.\\n' "$path" >&2\n    exit 1\n  fi\ndone\n\nif [[ "\${1:-check}" == check ]]; then\n  printf '%s\\n' 'Input files exist. Verify Ray capacity, serving dependencies, and the selected model recipe before training.'\n  exit 0\nfi\nif [[ "\${1:-}" != train ]]; then\n  printf '%s\\n' 'Usage: bash experiment.sh prepare | convert | check | train' >&2\n  exit 1\nfi\n\n`;
+      `if [[ "\${1:-check}" == prepare ]]; then\n  # Run once on the shared filesystem. Conversion is a separate distributed step.\n${s.model === 'glm5'?`  hf download ${quote(m.repo)} --local-dir "$HF_MODEL-source-fp8"\n  python tools/fp8_cast_bf16.py --input-fp8-hf-path "$HF_MODEL-source-fp8" --output-bf16-hf-path "$HF_MODEL"\n  python - "$HF_MODEL/config.json" <<'SLIME_BF16_CONFIG'\nimport json, sys\nfrom pathlib import Path\np = Path(sys.argv[1])\ncfg = json.loads(p.read_text())\ncfg.pop('quantization_config', None)\np.write_text(json.dumps(cfg, indent=2))\nSLIME_BF16_CONFIG\n`:`  hf download ${quote(m.repo)} --local-dir "$HF_MODEL"\n`}${s.task==='math'?'  hf download --repo-type dataset zhuzilin/dapo-math-17k --local-dir "$(dirname -- "$PROMPT_DATA")"\n':'  # Supply your prompt JSONL and importable custom hooks before training.\n'}${s.precision==='bf16'?'':s.precision==='int4'?'  python tools/convert_hf_to_int4_direct.py --model-dir "$HF_MODEL" --save-dir "$ROLLOUT_MODEL"\n':'  python tools/convert_hf_to_fp8.py --model-dir "$HF_MODEL" --save-dir "$ROLLOUT_MODEL" \\\n    --strategy block --block-size 128 128 --max-workers 4\n'}  printf '%s\\n' 'Next: run bash experiment.sh convert on ${conversionNodes} node(s), 8 GPUs each.'\n  exit 0\nfi\n\nif [[ "\${1:-check}" == convert ]]; then\n${conversionNodes>1?'  : "\${CONVERT_MASTER_ADDR:?Set the conversion head IP on all 4 nodes}"\n  : "\${CONVERT_NODE_RANK:?Set this node rank: 0, 1, 2, or 3}"\n':''}  torchrun --nproc-per-node 8 ${conversionNodes===1?'--standalone':'--nnodes 4 --node-rank "$CONVERT_NODE_RANK" --master-addr "$CONVERT_MASTER_ADDR" --master-port 12345'} \\\n    tools/convert_hf_to_torch_dist.py "\${MODEL_ARGS[@]}" \\\n    ${conversionArgs?conversionArgs+' \\\n    ':''}--hf-checkpoint "$HF_MODEL" --save "$TRAIN_CHECKPOINT"\n  exit 0\nfi\n\nfor path in "$ROLLOUT_MODEL/config.json" "$TRAIN_CHECKPOINT/latest_checkpointed_iteration.txt" "$PROMPT_DATA"${s.straw?' '+quote(s.declaration):''}; do\n  if [[ ! -f "$path" ]]; then\n    printf 'Missing input: %s\\nRun prepare and convert, or edit the paths at the top of this script.\\n' "$path" >&2\n    exit 1\n  fi\ndone\n\nif [[ "\${1:-check}" == check ]]; then\n  printf '%s\\n' 'Input files exist. Verify Ray capacity, serving dependencies, and the selected model recipe before training.'\n  exit 0\nfi\nif [[ "\${1:-}" != train ]]; then\n  printf '%s\\n' 'Usage: bash experiment.sh prepare | convert | check | train' >&2\n  exit 1\nfi\n\n`;
     const runtime = JSON.stringify({
       env_vars: env
     }, null, 2);

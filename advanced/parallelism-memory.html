@@ -419,7 +419,7 @@ window.runMermaid = runMermaid;</script>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="Oct 16, 2026"/>
+    <meta name="docbuild:last-update" content="Oct 17, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -840,7 +840,7 @@ window.runMermaid = runMermaid;</script>
 <p>Open <strong>Placement</strong> in the <a class="reference internal" href="../index.html#lab"><span class="std std-ref">interactive lab</span></a> to explore the diagrams. First establish that each phase fits and learns correctly, then optimize useful samples per second.</p>
 <section id="starting-gpu-allocations">
 <h2>Starting GPU allocations<a class="headerlink" href="#starting-gpu-allocations" title="Link to this heading">#</a></h2>
-<p>The lab assumes eight GPUs per training node and starts from repository recipes for H100/H200-class servers with fast interconnects. These are recipe-based starting points, not measured minimums or guarantees for every GPU in that class. The short experiment uses a 4,096-token response limit, eight prompts and eight responses per prompt. Prompt length still counts toward memory. MoE and Qwen profiles enable CPU Adam and recomputation.</p>
+<p>The lab assumes eight GPUs per training node and starts from repository recipes for H100/H200-class servers with fast interconnects. These are recipe-based starting points, not measured minimums or guarantees for every GPU in that class. Model profiles default to a 131,072-token (128K) response limit (GLM-5.3: 262,144 / 256K), with context parallelism enabled, eight prompts and eight responses per prompt. Prompt length still counts toward memory. MoE and Qwen profiles enable CPU Adam and recomputation.</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>Model</p></th>
@@ -851,35 +851,23 @@ window.runMermaid = runMermaid;</script>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>GLM-4-9B</p></td>
+<tr class="row-even"><td><p>GLM-4.7-Flash</p></td>
 <td class="text-right"><p>8</p></td>
-<td><p>2 / 1 / 2 / 1</p></td>
-<td class="text-right"><p>2</p></td>
-<td><p><a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-glm4-9B.sh">9B</a></p></td>
-</tr>
-<tr class="row-odd"><td><p>GLM-4.7-Flash</p></td>
-<td class="text-right"><p>8</p></td>
-<td><p>2 / 2 / 2 / 4</p></td>
+<td><p>2 / 1 / 4 / 8</p></td>
 <td class="text-right"><p>8</p></td>
 <td><p><a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-glm4.7-30B-A3B.sh">Flash</a></p></td>
 </tr>
-<tr class="row-even"><td><p>GLM-4.7</p></td>
+<tr class="row-odd"><td><p>GLM-4.7</p></td>
 <td class="text-right"><p>64</p></td>
 <td><p>8 / 4 / 2 / 16</p></td>
 <td class="text-right"><p>32</p></td>
 <td><p><a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-glm4.7-355B-A32B.sh">355B</a></p></td>
 </tr>
-<tr class="row-odd"><td><p>GLM-5.3</p></td>
+<tr class="row-even"><td><p>GLM-5.3</p></td>
 <td class="text-right"><p>256</p></td>
 <td><p>4 / 8 / 8 / 32</p></td>
 <td class="text-right"><p>64</p></td>
-<td><p><a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-glm5.2-744B-A40B.sh">744B</a></p></td>
-</tr>
-<tr class="row-even"><td><p>DeepSeek-R1</p></td>
-<td class="text-right"><p>128</p></td>
-<td><p>8 / 4 / 4 / 32</p></td>
-<td class="text-right"><p>64</p></td>
-<td><p><a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-deepseek-r1.sh">R1</a></p></td>
+<td><p><a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-glm5.3-744B-A40B.sh">744B</a></p></td>
 </tr>
 <tr class="row-odd"><td><p>Qwen3.8-27B</p></td>
 <td class="text-right"><p>32</p></td>
@@ -890,7 +878,7 @@ window.runMermaid = runMermaid;</script>
 </tbody>
 </table>
 </div>
-<p>The Flash lab profile uses EP4 so EP × PP fits eight GPUs. Qwen3.8 reuses a matching architecture configuration; this documentation change has not GPU-validated its checkpoint. Start with 9B or Flash to learn the loop, then measure peak memory on your target model before reserving a long job.</p>
+<p>Flash uses TP2 / CP4 / EP8 and one pipeline stage to spread 128K sequences across more GPUs. Exported recipes use <code class="docutils literal notranslate"><span class="pre">--log-probs-chunk-size</span> <span class="pre">1024</span></code> to reduce temporary memory for log-prob and SC computation. Qwen3.8 reuses a matching architecture configuration; this documentation change has not GPU-validated its checkpoint. Start with 9B or Flash to learn the loop, then measure peak memory on your target model before reserving a long job.</p>
 <p>Colocation reserves one pool; separate placement reserves training plus rollout GPUs. PD divides the rollout pool into whole prefill/decode engines. External serving capacity is outside the trainer’s Ray allocation. Adding GPUs without changing model parallelism can simply add replicas rather than reducing per-GPU model memory.</p>
 </section>
 <section id="the-memory-ledger">
@@ -1076,7 +1064,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Oct 16, 2026.
+  Last updated on Oct 17, 2026.
   <br/>
 </p>
   </div>

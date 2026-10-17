@@ -391,7 +391,7 @@
     const m = E.models[state.model],
       gpus = m.nodes * 8,
       total = E.validate(state).localGpus;
-    return `<div class="resource-card"><div><small>${t('RECIPE STARTING POINT','配方起步参考')}</small><strong>${gpus} GPU <span>/ ${m.nodes} × 8</span></strong></div><p>${t(`Train TP${m.tp} · PP${m.pp} · EP${m.ep} · CP${m.cp}. Serving: ${m.engine} GPUs per engine.`,`训练 TP${m.tp} · PP${m.pp} · EP${m.ep} · CP${m.cp}。推理每引擎 ${m.engine} 张卡。`)}</p><p>${t('Based on repository H100/H200 recipes, with a short response budget; not a minimum or a capacity guarantee.','基于仓库 H100/H200 配方，以短回复起步；不是最小卡数或容量保证。')} <a href="advanced/parallelism-memory.html">${t('See assumptions →','看推荐依据 →')}</a></p><div class="resource-total">${t('Your local reservation','当前本地资源总量')} <b>${total} GPU</b></div></div>`;
+    return `<div class="resource-card"><div><small>${t('RECIPE STARTING POINT','配方起步参考')}</small><strong>${gpus} GPU <span>/ ${m.nodes} × 8</span></strong></div><p>${t(`Train TP${m.tp} · PP${m.pp} · EP${m.ep} · CP${m.cp}. Serving: ${m.engine} GPUs per engine.`,`训练 TP${m.tp} · PP${m.pp} · EP${m.ep} · CP${m.cp}。推理每引擎 ${m.engine} 张卡。`)}</p><p>${t('Based on repository H100/H200 recipes, with a 128K response limit (GLM-5.3: 256K) and context parallelism; not a minimum or a capacity guarantee.','基于仓库 H100/H200 配方，默认 128K 回复上限（GLM-5.3 为 256K）并启用 CP；不是最小卡数或容量保证。')} <a href="advanced/parallelism-memory.html">${t('See assumptions →','看推荐依据 →')}</a></p><div class="resource-total">${t('Your local reservation','当前本地资源总量')} <b>${total} GPU</b></div></div>`;
   }
 
   function parallelPanel() {
@@ -556,10 +556,6 @@
     renderComparison();
     renderRepairs();
     renderSource();
-    if (state.hardware !== 'unspecified') {
-      $('install-image').value = 'slimerl/slime:latest-cu130';
-      $('install-image-value').textContent = $('install-image').value;
-    }
     $('run-steps').innerHTML =
       `<li><strong>${t('Prepare weights & data.','准备模型与数据。')}</strong> ${t('Use the','先准备')} <a href="#install">${t('environment above','上方的运行环境')}</a>${t(', save experiment.sh in the slime checkout, then run ', '，将 experiment.sh 保存到 slime 仓库根目录，然后运行 ')}<code>bash experiment.sh prepare</code> → <code>bash experiment.sh convert</code>${t('. Existing BF16 / torch_dist paths can be used directly.', '。也可直接填写已有 BF16 / torch_dist 路径。')}</li><li><strong>${t('Connect the cluster.','连接集群。')}</strong> ${t(`Make ${v.localGpus} Ray GPUs available. Start the head with ray start --head; join workers with ray start --address=HEAD:6379. Use the same repo and paths on all nodes.`, `准备 ${v.localGpus} 张 Ray GPU。主节点执行 ray start --head；worker 使用 ray start --address=HEAD:6379 加入。各节点保持相同仓库和路径。`)} ${state.layout==='external'?t('Deploy engines using serving-reference.sh first.','先参照 serving-reference.sh 部署引擎。'):''}</li><li><strong>${t('Run & inspect.','启动并观察。')}</strong> <code>bash experiment.sh check</code> → <code>bash experiment.sh train</code>. ${t('Then check reward and train_rollout_logprob_abs_diff. Add a held-out evaluation before a long run.','观察 reward 与 train_rollout_logprob_abs_diff；长时间训练前添加独立验证集。')} <a href="${generated.provenance.recipe.url || 'https://github.com/THUDM/slime/blob/main/scripts/run-' + E.models[state.model].recipe + '.sh'}">${t('Recipe source ↗','配方源码 ↗')}</a></li>`;
   }
@@ -925,20 +921,13 @@
     $('install-docker').hidden = e.target.value !== 'docker';
     $('install-conda').hidden = e.target.value !== 'conda';
   });
-  $('install-image').addEventListener('change', e => {
-    $('install-image-value').textContent = e.target.value;
-    commit(E.change(state, 'hardware', e.target.value.endsWith('cu130') ? 'blackwell' : 'hopper'),
-      t('Hardware context carried into the builder. Model and GPU counts are unchanged.', '硬件条件已带入配置器，模型和 GPU 数量保持不变。'));
-  });
   document.querySelectorAll('[data-install-copy]').forEach(button => {
     button.hidden = false;
     button.addEventListener('click', () => copy($(button.dataset.installCopy).textContent));
   });
   $('install-docker').hidden = !document.querySelector('[name="install-method"][value="docker"]').checked;
   $('install-conda').hidden = !document.querySelector('[name="install-method"][value="conda"]').checked;
-  $('install-image-value').textContent = $('install-image').value;
   $('install-methods').hidden = false;
-  $('install-image-control').hidden = false;
   $('copy').addEventListener('click', () => copy(generated.files[artifact]));
   $('load-experiment').addEventListener('click', () => $('import-experiment').click());
   $('import-experiment').addEventListener('change', async event => {

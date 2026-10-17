@@ -694,22 +694,7 @@ html[lang=zh-CN] h1 {
   overflow-wrap: anywhere;
 }
 
-.install-image-control {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px 14px;
-  margin: 20px 0;
-  font-size: 16px;
-}
 
-.install-image-control select {
-  max-width: 100%;
-  padding: 9px;
-  background: var(--paper);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-}
 
 .install-terminal {
   margin: 16px 0;
@@ -3747,9 +3732,6 @@ button,
     line-height: 1.6;
   }
 
-  .install-image-control {
-    margin-block: 12px;
-  }
 
   .install-terminal {
     margin-block: 12px;

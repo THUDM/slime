@@ -419,7 +419,7 @@ window.runMermaid = runMermaid;</script>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="2026 年 10 月 16 日"/>
+    <meta name="docbuild:last-update" content="2026 年 10 月 17 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -840,7 +840,7 @@ window.runMermaid = runMermaid;</script>
 <p>在<a class="reference internal" href="../index.html#lab"><span class="std std-ref">交互实验室</span></a>的「布局」步骤中逐个点击图示。先确认各阶段能放下且学习正确，再优化每秒有效样本数。</p>
 <section id="id2">
 <h2>从多少张卡起步？<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
-<p>实验室按每节点 8 GPU，参考 H100/H200 级别、高速互联服务器的仓库配方。这些是配方起步值，不是实测最小值，也不保证这一档所有硬件均能直接运行。短实验限制回复为 4,096 tokens，每轮 8 个 prompt、各采样 8 次；prompt 长度仍计入显存。MoE 和 Qwen 默认启用 CPU Adam 与重计算。</p>
+<p>实验室按每节点 8 GPU，参考 H100/H200 级别、高速互联服务器的仓库配方。这些是配方起步值，不是实测最小值，也不保证这一档所有硬件均能直接运行。模型配方默认回复上限为 131,072 tokens（128K），GLM-5.3 为 262,144（256K），均启用 CP，每轮 8 个 prompt、各采样 8 次；prompt 长度仍计入显存。MoE 和 Qwen 默认启用 CPU Adam 与重计算。</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>模型</p></th>
@@ -851,35 +851,23 @@ window.runMermaid = runMermaid;</script>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>GLM-4-9B</p></td>
+<tr class="row-even"><td><p>GLM-4.7-Flash</p></td>
 <td class="text-right"><p>8</p></td>
-<td><p>2 / 1 / 2 / 1</p></td>
-<td class="text-right"><p>2</p></td>
-<td><p><a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-glm4-9B.sh">9B</a></p></td>
-</tr>
-<tr class="row-odd"><td><p>GLM-4.7-Flash</p></td>
-<td class="text-right"><p>8</p></td>
-<td><p>2 / 2 / 2 / 4</p></td>
+<td><p>2 / 1 / 4 / 8</p></td>
 <td class="text-right"><p>8</p></td>
 <td><p><a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-glm4.7-30B-A3B.sh">Flash</a></p></td>
 </tr>
-<tr class="row-even"><td><p>GLM-4.7</p></td>
+<tr class="row-odd"><td><p>GLM-4.7</p></td>
 <td class="text-right"><p>64</p></td>
 <td><p>8 / 4 / 2 / 16</p></td>
 <td class="text-right"><p>32</p></td>
 <td><p><a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-glm4.7-355B-A32B.sh">355B</a></p></td>
 </tr>
-<tr class="row-odd"><td><p>GLM-5.3</p></td>
+<tr class="row-even"><td><p>GLM-5.3</p></td>
 <td class="text-right"><p>256</p></td>
 <td><p>4 / 8 / 8 / 32</p></td>
 <td class="text-right"><p>64</p></td>
-<td><p><a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-glm5.2-744B-A40B.sh">744B</a></p></td>
-</tr>
-<tr class="row-even"><td><p>DeepSeek-R1</p></td>
-<td class="text-right"><p>128</p></td>
-<td><p>8 / 4 / 4 / 32</p></td>
-<td class="text-right"><p>64</p></td>
-<td><p><a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-deepseek-r1.sh">R1</a></p></td>
+<td><p><a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-glm5.3-744B-A40B.sh">744B</a></p></td>
 </tr>
 <tr class="row-odd"><td><p>Qwen3.8-27B</p></td>
 <td class="text-right"><p>32</p></td>
@@ -890,7 +878,7 @@ window.runMermaid = runMermaid;</script>
 </tbody>
 </table>
 </div>
-<p>Flash 在实验室使用 EP4，使 EP × PP 能放进 8 卡。Qwen3.8 复用匹配架构配置，此次文档修改尚未对新 checkpoint 做 GPU 验证。第一次建议用 9B 或 Flash 理解循环，再对目标模型做短实验，测量峰值显存后分配长任务资源。</p>
+<p>Flash 使用 TP2 / CP4 / EP8 和单流水线阶段，将 128K 序列分散到更多卡上。导出的配方启用 <code class="docutils literal notranslate"><span class="pre">--log-probs-chunk-size</span> <span class="pre">1024</span></code>，降低 log-prob 与 SC 计算的临时显存。Qwen3.8 复用匹配架构配置，此次文档修改尚未对新 checkpoint 做 GPU 验证。第一次建议用 9B 或 Flash 理解循环，再对目标模型做短实验，测量峰值显存后分配长任务资源。</p>
 <p>同卡训推分配一个池；训推分离需训练卡数加 rollout 卡数。PD 将 rollout 池分为完整 prefill/decode 引擎；外部推理资源不计入训练 Ray 集群。只增加卡数而不调整模型并行，可能只是增加副本，并不减少每卡模型显存。</p>
 </section>
 <section id="id3">
@@ -1076,7 +1064,7 @@ window.runMermaid = runMermaid;</script>
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 10 月 16 日.
+  最后更新于 2026 年 10 月 17 日.
   <br/>
 </p>
   </div>

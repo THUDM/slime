@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="Oct 16, 2026"/>
+    <meta name="docbuild:last-update" content="Oct 17, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -621,10 +621,8 @@ bash<span class="w"> </span>scripts/low_precision/run-qwen3-30b-a3b-fp8.sh
 <ol class="arabic simple" start="3">
 <li><p>Launch an example:</p></li>
 </ol>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Moonlight-16B-A3B INT4 training</span>
-bash<span class="w"> </span>scripts/low_precision/run-moonlight-16B-A3B-int4.sh
-
-<span class="c1"># Qwen3-30B-A3B INT4 training</span>
+<p>The Qwen3 launchers use Instruct-2507 checkpoints (256K context) with a 128K response limit and CP. Quantize and convert that same checkpoint; older Qwen3 weights use different RoPE settings.</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Qwen3-30B-A3B INT4 training</span>
 bash<span class="w"> </span>scripts/low_precision/run-qwen3-30B-A3B-int4.sh
 
 <span class="c1"># Qwen3-235B-A22B INT4 training (8 nodes)</span>
@@ -732,7 +730,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Oct 16, 2026.
+  Last updated on Oct 17, 2026.
   <br/>
 </p>
   </div>

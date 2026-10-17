@@ -43,19 +43,19 @@ python $WORK_DIR/scripts/data_process/qa_search_test_merge.py \
 
 **Note:** If you plan to use local search backend, see the [Appendix](README.md#appendix-setting-up-local-retriever) for instructions on setting up the local retrieval server.
 
-Initialize the Qwen2.5-3B model:
+Initialize the Qwen3-4B-Instruct-2507 model:
 
 ```bash
 # hf checkpoint
-hf download Qwen/Qwen2.5-3B --local-dir /root/Qwen2.5-3B
+hf download Qwen/Qwen3-4B-Instruct-2507 --local-dir /root/Qwen3-4B-Instruct-2507
 
 # mcore checkpoint
 cd /root/slime
-source scripts/models/qwen2.5-3B.sh
+source scripts/models/qwen3-4B-Instruct-2507.sh
 PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
     ${MODEL_ARGS[@]} \
-    --hf-checkpoint /root/Qwen2.5-3B \
-    --save /root/Qwen2.5-3B_torch_dist
+    --hf-checkpoint /root/Qwen3-4B-Instruct-2507 \
+    --save /root/Qwen3-4B-Instruct-2507_torch_dist
 ```
 
 ## Configuration
@@ -121,7 +121,7 @@ SEARCH_R1_CONFIGS = {
 }
 ```
 
-**2. In `run_qwen2.5_3B.sh`:**
+**2. In `run_qwen3_4B.sh`:**
 
 Uncomment the TIS-related arguments in `GRPO_ARGS`:
 ```bash
@@ -160,7 +160,7 @@ CUSTOM_ARGS=(
 
 ```bash
 cd slime/
-bash examples/search-r1/run_qwen2.5_3B.sh
+bash examples/search-r1/run_qwen3_4B.sh
 ```
 
 ## Code Structure
@@ -287,7 +287,7 @@ export WANDB_KEY="your_wandb_key_here"
 # rm -rf /root/.*
 
 # Run the training script
-bash /root/slime/examples/search-r1/run_qwen2.5_3B.sh
+bash /root/slime/examples/search-r1/run_qwen3_4B.sh
 ```
 
 ### Troubleshooting

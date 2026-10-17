@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="Oct 16, 2026"/>
+    <meta name="docbuild:last-update" content="Oct 17, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -492,7 +492,7 @@
                   
   <section class="tex2jax_ignore mathjax_ignore" id="on-policy-distillation-example">
 <h1>On-Policy Distillation Example<a class="headerlink" href="#on-policy-distillation-example" title="Link to this heading">#</a></h1>
-<p>This example shows how to run <strong>on-policy distillation (OPD)</strong> using slime. A small student (Qwen3-8B) is aligned to imitate a larger teacher (Qwen3-32B) by training only on the student’s own rollouts and matching the teacher’s token-level log-probabilities.</p>
+<p>This example shows how to run <strong>on-policy distillation (OPD)</strong> using slime. A small student (Qwen3-4B-Instruct-2507) is aligned to imitate a larger teacher (Qwen3-30B-A3B-Instruct-2507) by training only on the student’s own rollouts and matching the teacher’s token-level log-probabilities.</p>
 <section id="key-features">
 <h2>Key Features<a class="headerlink" href="#key-features" title="Link to this heading">#</a></h2>
 <ul class="simple">
@@ -564,19 +564,22 @@
 <li><p><code class="docutils literal notranslate"><span class="pre">post_process_rewards</span></code> trims the teacher logprobs to the generated response span and writes the tensors back to each <code class="docutils literal notranslate"><span class="pre">Sample</span></code> to compute advantages.</p></li>
 </ul>
 </li>
-<li><p><code class="docutils literal notranslate"><span class="pre">run-qwen3-8B-opd.sh</span></code> launches an SGLang teacher server, then submits a Ray job that runs <code class="docutils literal notranslate"><span class="pre">train.py</span></code>.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">run-qwen3-8B-opd-megatron.sh</span></code> uses Megatron-loaded teacher model (no external server needed).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">run-qwen3-4B-opd.sh</span></code> launches an SGLang teacher server, then submits a Ray job that runs <code class="docutils literal notranslate"><span class="pre">train.py</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">run-qwen3-4B-opd-megatron.sh</span></code> uses Megatron-loaded teacher model (no external server needed).</p></li>
 </ul>
 </section>
 <section id="running-the-example">
 <h2>Running the example<a class="headerlink" href="#running-the-example" title="Link to this heading">#</a></h2>
 <section id="using-sglang-teacher-external-server">
 <h3>Using SGLang Teacher (External Server)<a class="headerlink" href="#using-sglang-teacher-external-server" title="Link to this heading">#</a></h3>
+<p>The 8-GPU example reserves GPUs 6–7 for the TP2 teacher; Ray uses GPUs 0–5
+for four training GPUs (CP4) and two rollout GPUs. The response limit is 128K,
+and both checkpoints have a native 256K context window.</p>
 <ol class="arabic simple">
 <li><p>Download or prepare the required checkpoints and data.</p></li>
 </ol>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen3-32B<span class="w"> </span>--local-dir<span class="w"> </span>/root/Qwen3-32B
-hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen3-8B<span class="w"> </span>--local-dir<span class="w"> </span>/root/Qwen3-8B
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen3-30B-A3B-Instruct-2507<span class="w"> </span>--local-dir<span class="w"> </span>/root/Qwen3-30B-A3B-Instruct-2507
+hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen3-4B-Instruct-2507<span class="w"> </span>--local-dir<span class="w"> </span>/root/Qwen3-4B-Instruct-2507
 hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class="w"> </span>dataset<span class="w"> </span>zhuzilin/dapo-math-17k<span class="w"> </span>--local-dir<span class="w"> </span>/root/dapo-math-17k
 </pre></div>
 </div>
@@ -584,18 +587,18 @@ hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class
 <li><p>Run the hf to mcore for student model conversion:</p></li>
 </ol>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
-<span class="nb">source</span><span class="w"> </span>scripts/models/qwen3-8B.sh
+<span class="nb">source</span><span class="w"> </span>scripts/models/qwen3-4B-Instruct-2507.sh
 
 <span class="nv">PYTHONPATH</span><span class="o">=</span>/root/Megatron-LM<span class="w"> </span>python<span class="w"> </span>tools/convert_hf_to_torch_dist.py<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span><span class="si">${</span><span class="nv">MODEL_ARGS</span><span class="p">[@]</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--hf-checkpoint<span class="w"> </span>/root/Qwen3-8B<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--save<span class="w"> </span>/root/Qwen3-8B_torch_dist
+<span class="w">    </span>--hf-checkpoint<span class="w"> </span>/root/Qwen3-4B-Instruct-2507<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--save<span class="w"> </span>/root/Qwen3-4B-Instruct-2507_torch_dist
 </pre></div>
 </div>
 <ol class="arabic simple" start="3">
 <li><p>Run on-policy distillation:</p></li>
 </ol>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bash<span class="w"> </span>examples/on_policy_distillation/run-qwen3-8B-opd.sh
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bash<span class="w"> </span>examples/on_policy_distillation/run-qwen3-4B-opd.sh
 </pre></div>
 </div>
 </section>
@@ -608,7 +611,7 @@ hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># This example uses the same model as both student and teacher (for demonstration only)</span>
 <span class="c1"># In practice, use a different (stronger) model as the teacher!</span>
 <span class="nb">cd</span><span class="w"> </span>/root/slime
-<span class="nb">source</span><span class="w"> </span>scripts/models/qwen3-8B.sh<span class="w">  </span><span class="c1"># Or your teacher model config</span>
+<span class="nb">source</span><span class="w"> </span>scripts/models/qwen3-4B-Instruct-2507.sh<span class="w">  </span><span class="c1"># Or your teacher model config</span>
 
 <span class="nv">PYTHONPATH</span><span class="o">=</span>/root/Megatron-LM<span class="w"> </span>python<span class="w"> </span>tools/convert_hf_to_torch_dist.py<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span><span class="si">${</span><span class="nv">MODEL_ARGS</span><span class="p">[@]</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
@@ -617,7 +620,7 @@ hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class
 </pre></div>
 </div>
 <ol class="arabic simple" start="3">
-<li><p>Edit <code class="docutils literal notranslate"><span class="pre">run-qwen3-8B-opd-megatron.sh</span></code> to update paths:</p>
+<li><p>Edit <code class="docutils literal notranslate"><span class="pre">run-qwen3-4B-opd-megatron.sh</span></code> to update paths:</p>
 <ul class="simple">
 <li><p>Change <code class="docutils literal notranslate"><span class="pre">--opd-teacher-load</span></code> to your teacher model path</p></li>
 <li><p>Adjust <code class="docutils literal notranslate"><span class="pre">--opd-kl-coef</span></code> based on your task</p></li>
@@ -625,7 +628,7 @@ hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class
 </li>
 <li><p>Run:</p></li>
 </ol>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bash<span class="w"> </span>examples/on_policy_distillation/run-qwen3-8B-opd-megatron.sh
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bash<span class="w"> </span>examples/on_policy_distillation/run-qwen3-4B-opd-megatron.sh
 </pre></div>
 </div>
 </section>
@@ -784,7 +787,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Oct 16, 2026.
+  Last updated on Oct 17, 2026.
   <br/>
 </p>
   </div>

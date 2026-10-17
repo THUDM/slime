@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="Oct 16, 2026"/>
+    <meta name="docbuild:last-update" content="Oct 17, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -532,17 +532,17 @@ python<span class="w"> </span><span class="nv">$WORK_DIR</span>/scripts/data_pro
 </pre></div>
 </div>
 <p><strong>Note:</strong> If you plan to use local search backend, see the <a class="reference internal" href="#appendix-setting-up-local-retriever"><span class="std std-ref">Appendix</span></a> for instructions on setting up the local retrieval server.</p>
-<p>Initialize the Qwen2.5-3B model:</p>
+<p>Initialize the Qwen3-4B-Instruct-2507 model:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># hf checkpoint</span>
-hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen2.5-3B<span class="w"> </span>--local-dir<span class="w"> </span>/root/Qwen2.5-3B
+hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen3-4B-Instruct-2507<span class="w"> </span>--local-dir<span class="w"> </span>/root/Qwen3-4B-Instruct-2507
 
 <span class="c1"># mcore checkpoint</span>
 <span class="nb">cd</span><span class="w"> </span>/root/slime
-<span class="nb">source</span><span class="w"> </span>scripts/models/qwen2.5-3B.sh
+<span class="nb">source</span><span class="w"> </span>scripts/models/qwen3-4B-Instruct-2507.sh
 <span class="nv">PYTHONPATH</span><span class="o">=</span>/root/Megatron-LM<span class="w"> </span>python<span class="w"> </span>tools/convert_hf_to_torch_dist.py<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span><span class="si">${</span><span class="nv">MODEL_ARGS</span><span class="p">[@]</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--hf-checkpoint<span class="w"> </span>/root/Qwen2.5-3B<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--save<span class="w"> </span>/root/Qwen2.5-3B_torch_dist
+<span class="w">    </span>--hf-checkpoint<span class="w"> </span>/root/Qwen3-4B-Instruct-2507<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--save<span class="w"> </span>/root/Qwen3-4B-Instruct-2507_torch_dist
 </pre></div>
 </div>
 </section>
@@ -610,7 +610,7 @@ hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen2.5-3B<span c
 <span class="p">}</span>
 </pre></div>
 </div>
-<p><strong>2. In <code class="docutils literal notranslate"><span class="pre">run_qwen2.5_3B.sh</span></code>:</strong></p>
+<p><strong>2. In <code class="docutils literal notranslate"><span class="pre">run_qwen3_4B.sh</span></code>:</strong></p>
 <p>Uncomment the TIS-related arguments in <code class="docutils literal notranslate"><span class="pre">GRPO_ARGS</span></code>:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">GRPO_ARGS</span><span class="o">=(</span>
 <span class="w">   </span>--advantage-estimator<span class="w"> </span>grpo
@@ -648,7 +648,7 @@ hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen2.5-3B<span c
 <section id="running-the-script">
 <h2>Running the Script<a class="headerlink" href="#running-the-script" title="Link to this heading">#</a></h2>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>slime/
-bash<span class="w"> </span>examples/search-r1/run_qwen2.5_3B.sh
+bash<span class="w"> </span>examples/search-r1/run_qwen3_4B.sh
 </pre></div>
 </div>
 </section>
@@ -769,7 +769,7 @@ python<span class="w"> </span>/root/slime/examples/search-r1/local_dense_retriev
 <span class="c1"># rm -rf /root/.*</span>
 
 <span class="c1"># Run the training script</span>
-bash<span class="w"> </span>/root/slime/examples/search-r1/run_qwen2.5_3B.sh
+bash<span class="w"> </span>/root/slime/examples/search-r1/run_qwen3_4B.sh
 </pre></div>
 </div>
 </section>
@@ -898,7 +898,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Oct 16, 2026.
+  Last updated on Oct 17, 2026.
   <br/>
 </p>
   </div>

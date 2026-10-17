@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="Oct 16, 2026"/>
+    <meta name="docbuild:last-update" content="Oct 17, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -489,27 +489,27 @@
 <span class="w">     </span><span class="o">}</span>
 </pre></div>
 </div>
-<p>We provide a fully deterministic GSM8K training script for Qwen2.5-0.5B.</p>
+<p>The GSM8K example enables deterministic training for Qwen3-4B-Instruct-2507, with CP=4 and a 128K response limit.</p>
 <p>Use the following commands to initialize the training data and checkpoint:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># download</span>
 hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class="w"> </span>dataset<span class="w"> </span>zhuzilin/gsm8k<span class="w"> </span>--local-dir<span class="w"> </span>/root/gsm8k
-hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen2.5-0.5B-Instruct<span class="w"> </span>--local-dir<span class="w"> </span>/root/Qwen2.5-0.5B-Instruct
+hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen3-4B-Instruct-2507<span class="w"> </span>--local-dir<span class="w"> </span>/root/Qwen3-4B-Instruct-2507
 
 <span class="c1"># convert ckpt</span>
 <span class="nb">cd</span><span class="w"> </span>slime/
-<span class="nb">source</span><span class="w"> </span>scripts/models/qwen2.5-0.5B.sh
+<span class="nb">source</span><span class="w"> </span>scripts/models/qwen3-4B-Instruct-2507.sh
 <span class="nv">PYTHONPATH</span><span class="o">=</span>/root/Megatron-LM/<span class="w"> </span>python<span class="w"> </span><span class="se">\</span>
 <span class="w">   </span>tools/convert_hf_to_torch_dist.py<span class="w"> </span><span class="se">\</span>
 <span class="w">   </span><span class="si">${</span><span class="nv">MODEL_ARGS</span><span class="p">[@]</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
-<span class="w">   </span>--hf-checkpoint<span class="w"> </span>/root/Qwen2.5-0.5B-Instruct<span class="w"> </span><span class="se">\</span>
-<span class="w">   </span>--save<span class="w"> </span>/root/Qwen2.5-0.5B-Instruct_torch_dist/
+<span class="w">   </span>--hf-checkpoint<span class="w"> </span>/root/Qwen3-4B-Instruct-2507<span class="w"> </span><span class="se">\</span>
+<span class="w">   </span>--save<span class="w"> </span>/root/Qwen3-4B-Instruct-2507_torch_dist/
 </pre></div>
 </div>
 <p>Run training with:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bash<span class="w"> </span>scripts/run-qwen2.5-0.5B-reproducibility.sh
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bash<span class="w"> </span>scripts/run-qwen3-4B-reproducibility.sh
 </pre></div>
 </div>
-<p>The wandb screenshots are recorded in <a class="reference external" href="https://github.com/THUDM/slime/pull/370">pull#370</a>.</p>
+<p>Historical Qwen2.5-0.5B wandb screenshots are recorded in <a class="reference external" href="https://github.com/THUDM/slime/pull/370">pull#370</a>.</p>
 <section id="train-rollout-log-prob-alignment-glm-5">
 <h2>Train/rollout log-prob alignment (GLM-5)<a class="headerlink" href="#train-rollout-log-prob-alignment-glm-5" title="Link to this heading">#</a></h2>
 <p>Beyond single-side bitwise reproduction, slime can align the training log-probs with the rollout (inference) log-probs. This is currently supported only for the <strong>GLM-5 structure</strong> (MLA + DSA sparse attention), and requires the deterministic SGLang / batch-invariant DeepGEMM / DeepEP build plus the <code class="docutils literal notranslate"><span class="pre">megatron-sglang-aligned.patch</span></code> Megatron.</p>
@@ -617,7 +617,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Oct 16, 2026.
+  Last updated on Oct 17, 2026.
   <br/>
 </p>
   </div>
