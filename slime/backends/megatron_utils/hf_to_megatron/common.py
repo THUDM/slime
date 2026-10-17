@@ -44,16 +44,20 @@ class SafetensorReader:
             scale_file = self.weight_map[scale_name]
             if scale_file not in self._files:
                 self._files[scale_file] = safe_open(self.path / scale_file, framework="pt", device="cpu")
-            scale = self._files[scale_file].get_tensor(scale_name).to(torch.bfloat16)
+            # SGLang block_quant_dequant multiplies in FP32. Casting the HF
+            # scale_inv to BF16 first is lossy for typical FP8-experts
+            # checkpoints and shows up as ~1e-2 fc1 error after DeepGEMM requant.
+            scale = self._files[scale_file].get_tensor(scale_name).to(torch.float32)
             rows, columns = tensor.shape
             block_rows, block_columns = scale.shape
             tensor = F.pad(
-                tensor.to(torch.bfloat16),
+                tensor.to(torch.float32),
                 (0, block_columns * 128 - columns, 0, block_rows * 128 - rows),
             )
             tensor = tensor.view(block_rows, 128, block_columns, 128)
-            tensor.mul_(scale[:, None, :, None])
+            tensor = tensor * scale[:, None, :, None]
             tensor = tensor.reshape(block_rows * 128, block_columns * 128)[:rows, :columns]
+            tensor = tensor.to(torch.bfloat16)
         return tensor
 
 

@@ -18,6 +18,7 @@ from slime.observability.trace_utils import build_sglang_meta_trace_attrs, trace
 from slime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput, finalize_rollout_groups
 from slime.rollout.filter_hub.base_types import MetricGatherer, call_dynamic_filter, should_drop_dynamic_filter_output
 from slime.rollout.sample_hooks import apply_rollout_sample_hooks
+from slime.rollout.sampling_seed import training_sample_seed
 from slime.utils.async_utils import AsyncPacer, run
 from slime.utils.data import Dataset
 from slime.utils.eval_config import EvalDatasetConfig
@@ -421,7 +422,12 @@ async def generate_and_rm_group(
             continue
         current_sampling_params = sampling_params.copy()
         if getattr(args, "sglang_enable_deterministic_inference", False):
-            seed = state.group_sampling_seeds[idx]
+            if getattr(args, "deterministic_sampling_seed_mode", "group") == "sample":
+                # Assigned before scheduling, retained on retries, and saved by
+                # RolloutDataSource with the dataset position for continuation.
+                seed = training_sample_seed(args.rollout_seed, sample.index)
+            else:
+                seed = state.group_sampling_seeds[idx]
             current_sampling_params["sampling_seed"] = seed
         tasks[idx] = asyncio.create_task(generate_and_rm(args, sample, current_sampling_params, evaluation=evaluation))
 

@@ -114,4 +114,12 @@ def convert_qwen3moe_to_hf(args, name, param):
         elif rest == "self_attention.k_layernorm.weight":
             return [(f"model.layers.{layer_idx}.self_attn.k_norm.weight", param)]
 
+        # qwen3_moe_aligned plugin: plain-input_layernorm + head_dim q_norm/k_norm
+        elif rest == "input_layernorm.weight":
+            return [(f"model.layers.{layer_idx}.input_layernorm.weight", param)]
+        elif rest == "self_attention.q_norm.weight":
+            return [(f"model.layers.{layer_idx}.self_attn.q_norm.weight", param)]
+        elif rest == "self_attention.k_norm.weight":
+            return [(f"model.layers.{layer_idx}.self_attn.k_norm.weight", param)]
+
     raise ValueError(f"Unknown parameter name: {name}")
