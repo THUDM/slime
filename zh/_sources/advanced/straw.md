@@ -84,7 +84,7 @@ GC 失败会通过后续队列操作和关闭流程报告。容量耗尽时需�
 
 ### 续跑或选择 step
 
-使用相同的逻辑目录恢复最近一次完整 checkpoint：
+使用相同目录恢复最近一次完整 checkpoint：
 
 ```bash
 --rollout-data-transport straw \
@@ -95,28 +95,31 @@ GC 失败会通过后续队列操作和关闭流程报告。容量耗尽时需�
 
 设置 `--save` 时，Megatron 要求同时指定正数的 `--save-interval`。示例每轮 rollout 保存一次，可按实际需求调整间隔。
 
-如需恢复 rollout 7 结束后的状态，添加 `--ckpt-step 7`，下一轮从 rollout 8 开始。Dataset、模型/tokenizer 配置、straw run ID、storage profile 和 fully async worker 拓扑应与 checkpoint 一致。训练恢复需要保留 optimizer 和训练 RNG 状态。
+例如加载 step 16 后继续训练 step 17：
 
-恢复时创建独立队列，共享 checkpoint 中的不可变载荷。Pending/partial 输入和 ready group 顺序来自该 checkpoint，dataset 游标恢复到保存的位置；不会混入原任务在此之后产生的 sample。后续写入不会修改原 checkpoint。
+```bash
+--load /shared/checkpoints/run \
+--save /shared/checkpoints/run \
+--ckpt-step 16
+```
 
-当 `--save` 已包含任务时，输出写入独立的 `branches/<id>` 目录，由 `rollout/current.json` 记录当前分支。以后重启可以继续使用相同的逻辑 `--load` 和 `--save`。省略 `--load` 且 `--save` 存在当前分支时，也会自动续跑。启动日志会显示实际路径。不可变的 `.straw.json` debug 归档需要为每次运行指定新的输出路径。
+恢复直接使用原保存目录和原队列。Step 17 及之后的 Straw 队列记录、source/builder checkpoint 和当前配置路径下的 debug 归档会清理，下一轮重新 rollout。Checkpoint 中预取但尚未训练的 ready group 和 partial response 也会丢弃生成结果，保留 prompt、sample ID 和 dataset 游标后重新生成。旧租约失效，旧结果不会进入新一轮训练。
 
-| 选择方式 | 参数 |
-|---|---|
-| 当前分支历史中的某一步 | `--load /shared/checkpoints/run --ckpt-step 7` |
-| 指定分支 | `--load /shared/checkpoints/run/branches/<id> --ckpt-step 7` |
-| 指定完整 checkpoint | `--load /shared/checkpoints/run/rollout/committed_7.json` |
-| 单独的输出目录 | `--save /shared/checkpoints/another-run` |
+Step 16 及之前的 checkpoint 保留，后续 step 可以在原路径重新保存。开启 GC 时释放被清理记录的存储所有权；pack 只有在不再被任何保留的 checkpoint 或归档引用时才会删除。模型权重文件不会由 Straw 清理。
 
-也可以修改逻辑 save 目录或当前分支中的 `latest_checkpointed_iteration.txt`，选择更早的 step。显式 `--ckpt-step` 或具体提交文件优先。自动选择只使用完整的模型与队列 checkpoint，不会跟随更晚但未完成的模型保存。沿父分支查找时只追溯到各分支起点；如需加载其他分支已放弃的后续历史，请指定具体提交文件。
+也可以修改保存目录中的 `latest_checkpointed_iteration.txt` 选择更早的 step，或用 `--load /shared/checkpoints/run/rollout/committed_16.json` 指定完整 checkpoint。显式 `--ckpt-step` 或提交文件优先。自动续跑选择最近的完整模型与队列 checkpoint，不会采用更晚但未完成的模型保存。
+
+Dataset、模型/tokenizer 配置、Straw run ID 和 storage profile 应与 checkpoint 一致；训练恢复需要保留 optimizer 和训练 RNG 状态。Fully async worker 会重新启动，不沿用旧 ready 队列。
 
 ### 缺失状态与恢复限制
 
-如果模型存在但没有保存队列快照，则从空队列开始。存在 `rollout/global_dataset_state_dict_<step>.pt` 时恢复其中的 dataset 游标，否则从 offset 0 开始并打印警告。不会从其他 step 借用 pending、partial 或 ready 数据。模型缺失、快照不完整或损坏、载荷缺失、快照版本不受支持等情况会报错，不会静默退化成空队列。
+队列快照缺失、损坏、版本不受支持或引用的数据丢失时，会打印 warning 并从空队列重新 rollout。优先使用快照中仍可读取的 dataset 游标，其次读取单独保存的 `rollout/global_dataset_state_dict_<step>.pt`；游标也不可用时，从数据集开头读。模型仍从指定 step 续训，不复用其他 step 的生成结果。每次保存队列 checkpoint 时都会单独保存 dataset 游标。
+
+模型 checkpoint 损坏、缺少必要的 optimizer/RNG 状态或配置不匹配时仍会报错。
 
 尚无模型 checkpoint 时，使用相同 `--save` 和模型/输入配置重启原任务，可以恢复已持久化的 rollout 工作，但仅限于第一个训练 batch 尚未开始规划的阶段。之后恢复需要匹配的模型/optimizer 和 rollout checkpoint。
 
-恢复依赖原 straw 存储池，单独复制 checkpoint 目录不会复制载荷。恢复边界是完成的 rollout 训练 batch，不是 optimizer microstep。GPU KV cache 和生成 RNG 状态不会恢复，新生成的 token 和随机 hook 结果可能不同。
+完整恢复队列需要原 straw 存储池；单独复制 checkpoint 目录不会复制载荷，载荷不可用时按上述规则回退到 dataset 游标。恢复边界是完成的 rollout 训练 batch，不是 optimizer microstep。GPU KV cache 和生成 RNG 状态不会恢复，新生成的 token 和随机 hook 结果可能不同。
 
 增大 `--num-rollout` 时，如需沿用保存的 optimizer schedule，可使用 Megatron 的 `--use-checkpoint-opt-param-scheduler`。队列恢复不会覆盖 optimizer 设置。
 

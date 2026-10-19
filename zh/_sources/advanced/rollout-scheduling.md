@@ -93,6 +93,6 @@ $$K=\left\lfloor\frac{CE}{G}\right\rfloor$$
 
 各节点安装同版本 `straw-queue`，将经过验证的存储挂载到相同绝对路径。声明文件记录挂载和 durability 属性，不负责创建挂载。straw 保存 prompt tasks、partial/ready 组、训练 batch 与打包张量；租约使失联 worker 的未完成工作可再次被领取。R3 与 SC 张量记录可以在阶段间复用，不必复制字节。
 
-straw 短配方每轮保存。恢复需要完成的**模型/优化器与 rollout 状态共同 checkpoint**，以及引用的数据池。它不恢复 GPU KV cache，也不保证后续随机生成完全相同。数据集、tokenizer、run ID、存储设置和 fully async worker 拓扑需与 checkpoint 兼容。整任务重启前停止上一任务，coordinator 不会自动 failover；保留 serving 的恢复见[故障容错](fault-tolerance.md)。完整设置、leases、GC、分支与回退语义见 [straw 指南](straw.md)及[文件系统契约](https://github.com/zhuzilin/straw/blob/main/docs/FILESYSTEM.md)。
+straw 短配方每轮保存。整任务恢复时，加载指定的**模型/优化器 checkpoint**，并从保存的输入重新 rollout。Rollout 状态缺失或不可读时会打印 warning，回退到可读的 dataset 游标；游标也不可用时从数据集开头读。它不恢复 GPU KV cache，也不保证后续随机生成完全相同。数据集、tokenizer、run ID 和存储设置需与 checkpoint 兼容。整任务重启前停止上一任务，coordinator 不会自动 failover；保留 serving 的恢复见[故障容错](fault-tolerance.md)。完整设置、leases、GC、回退行为见 [straw 指南](straw.md)及[文件系统契约](https://github.com/zhuzilin/straw/blob/main/docs/FILESYSTEM.md)。
 
 连续异步路径不支持内联评估与 `--rollout-all-samples-process-path`，请独立评估。straw 不支持 `--buffer-filter-path`，采用自己的持久排序。Replay 见[调试](../developer_guide/debug.md)，改变并发前先做 [profiling](../developer_guide/profiling.md)。

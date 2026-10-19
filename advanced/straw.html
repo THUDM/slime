@@ -634,7 +634,7 @@ the <a class="reference internal" href="fault-tolerance.html"><span class="std s
 the serving cluster and queue controller.</p>
 <section id="resume-or-select-a-step">
 <h3>Resume or select a step<a class="headerlink" href="#resume-or-select-a-step" title="Link to this heading">#</a></h3>
-<p>To resume the latest completed checkpoint, use the same logical directories:</p>
+<p>To resume the latest completed checkpoint, use the same directories:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--rollout-data-transport<span class="w"> </span>straw<span class="w"> </span><span class="se">\</span>
 --load<span class="w"> </span>/shared/checkpoints/run<span class="w"> </span><span class="se">\</span>
 --save<span class="w"> </span>/shared/checkpoints/run<span class="w"> </span><span class="se">\</span>
@@ -643,62 +643,46 @@ the serving cluster and queue controller.</p>
 </div>
 <p>Whenever <code class="docutils literal notranslate"><span class="pre">--save</span></code> is set, Megatron requires a positive <code class="docutils literal notranslate"><span class="pre">--save-interval</span></code>.
 The example saves after each rollout; choose the interval for your workload.</p>
-<p>To restore the state saved after rollout 7, add <code class="docutils literal notranslate"><span class="pre">--ckpt-step</span> <span class="pre">7</span></code>. The next rollout
-is 8. Keep the dataset, model/tokenizer configuration, straw run ID, storage
-profile and fully async worker topology consistent with the checkpoint.
-Optimizer and training RNG state must be present for training recovery.</p>
-<p>Restoration creates an isolated queue sharing the checkpoint’s immutable
-payloads. Pending/partial inputs and ready-group order come from that checkpoint,
-with the dataset cursor restored to the saved position. Later samples from the
-source run are excluded. Further writes leave the source checkpoint intact.</p>
-<p>When <code class="docutils literal notranslate"><span class="pre">--save</span></code> already contains a run, outputs go to a unique <code class="docutils literal notranslate"><span class="pre">branches/&lt;id&gt;</span></code>
-directory. <code class="docutils literal notranslate"><span class="pre">rollout/current.json</span></code> tracks the active branch, so subsequent restarts
-can keep using the same logical <code class="docutils literal notranslate"><span class="pre">--load</span></code> and <code class="docutils literal notranslate"><span class="pre">--save</span></code>. If <code class="docutils literal notranslate"><span class="pre">--load</span></code> is omitted and
-<code class="docutils literal notranslate"><span class="pre">--save</span></code> has an active branch, it is resumed automatically. Startup logs the
-resolved paths. Give each run a fresh path for immutable <code class="docutils literal notranslate"><span class="pre">.straw.json</span></code> debug archives.</p>
-<div class="pst-scrollable-table-container"><table class="table">
-<thead>
-<tr class="row-odd"><th class="head"><p>Selection</p></th>
-<th class="head"><p>Arguments</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>Step in the current branch’s history</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--load</span> <span class="pre">/shared/checkpoints/run</span> <span class="pre">--ckpt-step</span> <span class="pre">7</span></code></p></td>
-</tr>
-<tr class="row-odd"><td><p>A particular branch</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--load</span> <span class="pre">/shared/checkpoints/run/branches/&lt;id&gt;</span> <span class="pre">--ckpt-step</span> <span class="pre">7</span></code></p></td>
-</tr>
-<tr class="row-even"><td><p>An exact checkpoint</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--load</span> <span class="pre">/shared/checkpoints/run/rollout/committed_7.json</span></code></p></td>
-</tr>
-<tr class="row-odd"><td><p>Separate output directory</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--save</span> <span class="pre">/shared/checkpoints/another-run</span></code></p></td>
-</tr>
-</tbody>
-</table>
+<p>For example, load step 16 and resume training at step 17:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--load<span class="w"> </span>/shared/checkpoints/run<span class="w"> </span><span class="se">\</span>
+--save<span class="w"> </span>/shared/checkpoints/run<span class="w"> </span><span class="se">\</span>
+--ckpt-step<span class="w"> </span><span class="m">16</span>
+</pre></div>
 </div>
-<p>You can also edit <code class="docutils literal notranslate"><span class="pre">latest_checkpointed_iteration.txt</span></code> in the logical save
-directory or current branch to select an earlier step. Explicit <code class="docutils literal notranslate"><span class="pre">--ckpt-step</span></code>
-or an exact commit file takes precedence. Automatic selection uses completed
-model-and-queue checkpoints and does not follow a newer incomplete model save.
-It follows branch ancestry only up to each branch point; select an exact commit
-file to load an abandoned future from another branch.</p>
+<p>Recovery uses the same output directory and queue. It removes later Straw queue
+records, source/builder checkpoints, and debug archives matching the configured
+output path. Rollout starts again at step 17. Prefetched ready groups and partial
+responses saved in the checkpoint are regenerated from their inputs; their old
+outputs are discarded. Prompt identities and the dataset cursor are preserved,
+and old leases cannot submit results to the restored queue.</p>
+<p>Checkpoints through step 16 remain available. Later steps can be saved again at
+the original paths. With GC enabled, cleanup releases storage ownership and
+removes packs that no retained checkpoint or archive references. Straw cleanup
+does not delete model weight files.</p>
+<p>You can also edit <code class="docutils literal notranslate"><span class="pre">latest_checkpointed_iteration.txt</span></code> to select an earlier step,
+or use <code class="docutils literal notranslate"><span class="pre">--load</span> <span class="pre">/shared/checkpoints/run/rollout/committed_16.json</span></code>. An explicit
+<code class="docutils literal notranslate"><span class="pre">--ckpt-step</span></code> or commit file takes precedence. Automatic selection uses the
+latest completed model-and-queue checkpoint, ignoring newer incomplete saves.</p>
+<p>Keep the dataset, model/tokenizer configuration, Straw run ID and storage profile
+consistent with the checkpoint. Training recovery requires optimizer and training
+RNG state. Fully async workers restart with newly generated results.</p>
 </section>
 <section id="missing-state-and-recovery-limits">
 <h3>Missing state and recovery limits<a class="headerlink" href="#missing-state-and-recovery-limits" title="Link to this heading">#</a></h3>
-<p>If the model exists but no queue snapshot was saved, recovery starts an empty
-queue. When <code class="docutils literal notranslate"><span class="pre">rollout/global_dataset_state_dict_&lt;step&gt;.pt</span></code> exists, its dataset
-cursor is restored; otherwise the dataset starts at offset 0 with a warning.
-No pending, partial or ready data is taken from another step. Missing models,
-incomplete or corrupt snapshots, missing payloads and unsupported snapshot
-versions raise errors instead of silently starting empty.</p>
+<p>Missing, corrupt or unsupported queue snapshots and missing payloads produce a
+warning and start an empty queue. Recovery uses a readable dataset cursor from
+the snapshot, then <code class="docutils literal notranslate"><span class="pre">rollout/global_dataset_state_dict_&lt;step&gt;.pt</span></code>, then offset 0
+if neither cursor is usable. Each queue checkpoint also saves this independent
+cursor file. The model still resumes from the selected step; outputs from other
+steps are not reused. Invalid model checkpoints, missing required optimizer/RNG
+state and configuration mismatches still raise errors.</p>
 <p>Before any model checkpoint exists, restarting the original run with the same
 <code class="docutils literal notranslate"><span class="pre">--save</span></code> and model/input configuration can recover persisted rollout work, but
 only before the first training batch has been planned. After batch planning,
 recovery requires a matching model/optimizer and rollout checkpoint.</p>
-<p>Recovery uses the original straw pool; copying a checkpoint directory alone
-does not copy its payloads. The recovery boundary is a completed rollout
+<p>Full queue recovery uses the original straw pool; copying a checkpoint directory
+alone does not copy its payloads. Unavailable payloads trigger the dataset-cursor
+fallback above. The recovery boundary is a completed rollout
 training batch, not an optimizer microstep. GPU KV caches and generation RNG
 state are not restored, so newly generated tokens and random hooks may differ.</p>
 <p>When extending <code class="docutils literal notranslate"><span class="pre">--num-rollout</span></code>, use Megatron’s
