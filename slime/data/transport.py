@@ -160,8 +160,6 @@ class DiskPayloadRef:
 class RolloutGroupRef(DiskPayloadRef):
     index: int
     receipt: CommitReceipt | None = None
-    # A fork reuses the payload but supplies positions in its own accepted log.
-    source_positions: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -217,9 +215,7 @@ def inherit_queue_context(source, output):
         "_queue_receipt",
         "_queue_source_positions",
         "_queue_resume_origin",
-        "_queue_generation_start",
-        "_queue_branch",
-        "queue_policy_segments",
+        "_queue_original_input",
         "queue_generation_requests",
     )
     for sample in iter_samples(output):
@@ -234,28 +230,6 @@ def inherit_queue_context(source, output):
     return output
 
 
-def record_generation_provenance(group):
-    from slime.rollout.base_types import iter_samples
-
-    for sample in iter_samples(group):
-        start = getattr(sample, "_queue_generation_start", None)
-        branch = getattr(sample, "_queue_branch", None)
-        if start is not None and branch is not None and len(sample.tokens) > start:
-            segments = list(getattr(sample, "queue_policy_segments", []))
-            if not segments and start:
-                segments.append({"start": 0, "stop": start, "branch": None, "reported_versions": None})
-            segments.append(
-                {
-                    "start": start,
-                    "stop": len(sample.tokens),
-                    "branch": branch,
-                    "reported_versions": sample.weight_versions or None,
-                }
-            )
-            sample.queue_policy_segments = segments
-            sample._queue_generation_start = len(sample.tokens)
-
-
 def pack_rollout_group(group, args, rollout_id, *, controller=None):
     if getattr(args, "rollout_data_transport", "object-store") != "straw":
         return group
@@ -263,7 +237,6 @@ def pack_rollout_group(group, args, rollout_id, *, controller=None):
 
     first = next(iter_samples(group))
     lease = group_lease(group)
-    record_generation_provenance(group)
     metadata = {"task_id": lease.task_id, "attempt_id": lease.attempt_id} if lease else {}
     ref = pack_rollout_payload(
         group, args, rollout_id, metadata=metadata, submission_id=f"group:{lease.attempt_id}" if lease else None
@@ -338,8 +311,6 @@ def load_rollout_samples(value):
             group = expanded
         if isinstance(reference, RolloutGroupRef) and reference.receipt:
             for sample in iter_samples(group):
-                if reference.source_positions is not None:
-                    sample._queue_source_positions = list(reference.source_positions)
                 sample.__dict__.pop("_queue_lease", None)
                 sample._queue_receipt = asdict(reference.receipt)
         return group

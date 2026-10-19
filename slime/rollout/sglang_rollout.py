@@ -321,7 +321,6 @@ async def generate_and_rm(
                 "generate_function": sample.generate_function_path or args.custom_generate_function_path,
                 "input_index": sample.index,
                 "input_group_index": sample.group_index,
-                "branch": getattr(sample, "_queue_branch", None),
             }
         ]
 

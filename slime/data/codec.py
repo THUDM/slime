@@ -202,7 +202,6 @@ class SampleCodec:
                     extra = {
                         "index": value.index,
                         "receipt": (dataclasses.asdict(value.receipt) if value.receipt else None),
-                        "source_positions": value.source_positions,
                     }
                 elif isinstance(value, RawRolloutRef):
                     extra = {
@@ -392,6 +391,8 @@ class SampleCodec:
                 if node[1] not in classes:
                     raise UnsupportedSchema(f"Unknown rollout reference type: {node[1]}")
                 extra = visit(node[3])
+                if node[1] == "RolloutGroupRef":
+                    extra.pop("source_positions", None)
                 if extra.get("receipt"):
                     extra["receipt"] = CommitReceipt.from_dict(extra["receipt"])
                 ref = dependency(node[2])

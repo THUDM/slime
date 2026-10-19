@@ -74,9 +74,9 @@ def test_debug_only_modes_do_not_replay_training(args, mode):
     assert not training_recovery_enabled(args)
 
 
-def test_session_identity_survives_checkpoint_branch_and_parallelism_changes(args):
+def test_session_identity_survives_output_directory_and_parallelism_changes(args):
     name = training_session_name(args)
-    args.save += "/branches/new"
+    args.save += "/new-output"
     args.tensor_model_parallel_size = 8
     args.actor_num_gpus_per_node = 16
     assert training_session_name(args) == name
@@ -501,8 +501,7 @@ def test_manager_restart_before_initial_model_load(args):
     recovery.persist()
 
     restarted = TrainingRecovery(args, RestorePlan())
-    restarted.reconcile_collection(None, "branch")
-    # The model checkpoint, loaded later, still determines where training starts.
+    restarted.reconcile_collection(None, "execution")
     restarted.initial_load_completed(7)
     assert restarted.checkpoint.start_rollout_id == 7
     assert not restarted.batches
@@ -544,11 +543,42 @@ def test_new_serving_owner_uses_cold_checkpoint_handoff(args):
     recovery.initial_load_completed(0)
     recovery.remember_raw(0, pack_rollout_payload([], args, 0))
     recovery.remember_converted(0, global_train_data(), "batch-0")
-    rebuilt = TrainingRecovery(args, RestorePlan(mode="snapshot"), retained_serving=False)
+    recovery.source_state = pack_rollout_payload({"metadata": "old source"}, args, 0)
+    recovery.persist()
+    (Path(args.rollout_data_dir) / recovery.source_state.manifest.manifest.segment.path).unlink()
+    rebuilt = TrainingRecovery(args, RestorePlan(mode="rewind"), retained_serving=False)
     assert not rebuilt.loaded and not rebuilt.batches
     assert rebuilt.source_state is None
-    assert rebuilt.restore_plan.mode == "snapshot"
+    assert rebuilt.restore_plan.mode == "rewind"
     assert rebuilt.incarnation != recovery.incarnation
+
+
+def test_cold_recovery_does_not_revalidate_unusable_initial_rollout(args, tmp_path):
+    from slime.data.checkpoint import commit_checkpoint
+
+    args.load = args.save = str(tmp_path / "checkpoint")
+    args.ckpt_step, args.start_rollout_id = 16, 17
+    root = Path(args.save)
+    (root / "rollout").mkdir(parents=True)
+
+    def save(step):
+        model = root / f"iter_{step:07d}"
+        model.mkdir()
+        (model / "weights.pt").write_bytes(b"model-and-optimizer")
+        for name in ("queue_state", "builder_state"):
+            (root / "rollout" / f"{name}_{step}.json").write_text("{}")
+        commit_checkpoint(args, step, model_args=[args])
+
+    save(16)
+    (root / "rollout/queue_state_16.json").unlink()
+    recovery = TrainingRecovery(args, RestorePlan(mode="empty"), retained_serving=False)
+    recovery.reconcile_checkpoint()  # Must wait for the selected model/source load.
+    recovery.initial_load_completed(17)
+    recovery.reconcile_checkpoint()  # The damaged initial source was already discarded.
+    assert recovery.checkpoint.ckpt_step == 16
+    save(17)
+    recovery.reconcile_checkpoint()
+    assert recovery.checkpoint_step == 17 and recovery.checkpoint.start_rollout_id == 18
 
 
 def test_committed_checkpoint_survives_lost_manager_notification(args, tmp_path):
@@ -746,7 +776,7 @@ def test_checkpoint_selection_does_not_rewrite_user_paths(args, tmp_path):
     resolved, plan = resolve_checkpoint(args)
     assert plan.mode == "empty"
     assert resolved.start_rollout_id == 3
-    assert resolved.save != args.save
+    assert resolved.save == args.save
     assert vars(args) == before
 
 

@@ -144,7 +144,7 @@ GitHub Actions 在成功或失败后都会上传这些产物。
 - R3：`test_qwen3_30B_A3B_r3.py` 和 `test_moonlight_16B_A3B_r3.py`。
 - SC：`test_qwen2.5_0.5B_score_centering.py`，分别检查 top-k 和 top-p 数据。
 - 全异步 rollout、fanout、PPO、MTP、PD/Mooncake、分布式 SGLang、混合显存卸载后的故障恢复、调试数据重放，以及释放训练资源后继续 rollout。
-- Checkpoint 保存与加载：不同阶段共用 straw 存储池，检查队列和训练状态能否恢复。`test_straw_checkpoint_fork.py` 还检查指定恢复步骤、多次回退、自动选择分支和调试数据重放。
+- Checkpoint 保存与加载：不同阶段共用 straw 存储池，检查队列和训练状态能否恢复。`test_straw_checkpoint_rewind.py` 还检查指定恢复步骤、原目录多次回退、重新生成和调试数据重放。
 
 R3、SC 和全异步测试同时开启在线 GC。普通 straw 测试使用独立的临时目录，并在结束后清理。单机 GPU 测试使用本地文件系统配置；多机 JuiceFS 的持久性需要单独验证。其他端到端测试继续覆盖 Ray object-store 和 NIXL 传输。
 
