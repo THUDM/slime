@@ -495,19 +495,22 @@
 <tr class="row-odd"><td class="text-left"><p>slime should still launch engines, but you need PD disaggregation, multi-model serving, heterogeneous server groups, or per-group overrides</p></td>
 <td class="text-left"><p><a class="reference internal" href="sglang-config.html"><span class="std std-doc">SGLang Config</span></a></p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p>Trainer and external engines can form an NCCL group</p></td>
+<tr class="row-even"><td class="text-left"><p>slime should launch engines using a separate Python or activated conda environment</p></td>
+<td class="text-left"><p><a class="reference internal" href="sglang-config.html#independent-sglang-python-environment"><span class="std std-ref"><code class="docutils literal notranslate"><span class="pre">--sglang-python-executable</span></code></span></a></p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p>Trainer and external engines can form an NCCL group</p></td>
 <td class="text-left"><p>Default <code class="docutils literal notranslate"><span class="pre">--update-weight-mode</span> <span class="pre">full</span> <span class="pre">--update-weight-transport</span> <span class="pre">nccl</span></code></p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p>Trainer and external engines cannot form an NCCL group, but can see the same filesystem path</p></td>
+<tr class="row-even"><td class="text-left"><p>Trainer and external engines cannot form an NCCL group, but can see the same filesystem path</p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">--update-weight-mode</span> <span class="pre">full</span> <span class="pre">--update-weight-transport</span> <span class="pre">disk</span></code></p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p>Full checkpoints are too heavy for large-model cross-cluster or cross-DC sync</p></td>
+<tr class="row-odd"><td class="text-left"><p>Full checkpoints are too heavy for large-model cross-cluster or cross-DC sync</p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">--update-weight-mode</span> <span class="pre">delta</span> <span class="pre">--update-weight-transport</span> <span class="pre">disk</span></code></p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p>Rollout serving can use an independent SGLang environment, or even different GPU models/vendors</p></td>
+<tr class="row-even"><td class="text-left"><p>Rollout serving can use an independent SGLang environment, or even different GPU models/vendors</p></td>
 <td class="text-left"><p>external engines + disk transport</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p>You need frozen reference, reward, or tool-side models</p></td>
+<tr class="row-odd"><td class="text-left"><p>You need frozen reference, reward, or tool-side models</p></td>
 <td class="text-left"><p>Prefer <code class="docutils literal notranslate"><span class="pre">update_weights:</span> <span class="pre">false</span></code> in <a class="reference internal" href="sglang-config.html#multi-model-serving"><span class="std std-ref">SGLang Config</span></a></p></td>
 </tr>
 </tbody>

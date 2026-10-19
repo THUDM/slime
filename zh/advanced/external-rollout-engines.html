@@ -492,22 +492,25 @@
 <tr class="row-even"><td class="text-left"><p>engine 已经由外部系统启动，只想让 slime 连接并做 rollout</p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">--rollout-external-engine-addrs</span></code></p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p>engine 仍由 slime 启动，但需要 PD 分离、多模型、异构 server group 或 per-group overrides</p></td>
+<tr class="row-odd"><td class="text-left"><p>希望 slime 使用独立 Python 或激活后的 conda 环境启动 engine</p></td>
+<td class="text-left"><p><a class="reference internal" href="sglang-config.html#sglang-python"><span class="std std-ref"><code class="docutils literal notranslate"><span class="pre">--sglang-python-executable</span></code></span></a></p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p>engine 仍由 slime 启动，但需要 PD 分离、多模型、异构 server group 或 per-group overrides</p></td>
 <td class="text-left"><p><a class="reference internal" href="sglang-config.html"><span class="std std-doc">SGLang Config</span></a></p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p>训练器和 external engine 可以建立 NCCL group</p></td>
+<tr class="row-odd"><td class="text-left"><p>训练器和 external engine 可以建立 NCCL group</p></td>
 <td class="text-left"><p>默认的 <code class="docutils literal notranslate"><span class="pre">--update-weight-mode</span> <span class="pre">full</span> <span class="pre">--update-weight-transport</span> <span class="pre">nccl</span></code></p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p>训练器和 external engine 不能建立 NCCL group，但能共享同一路径的文件系统</p></td>
+<tr class="row-even"><td class="text-left"><p>训练器和 external engine 不能建立 NCCL group，但能共享同一路径的文件系统</p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">--update-weight-mode</span> <span class="pre">full</span> <span class="pre">--update-weight-transport</span> <span class="pre">disk</span></code></p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p>大模型跨集群或跨数据中心同步，full checkpoint 太重</p></td>
+<tr class="row-odd"><td class="text-left"><p>大模型跨集群或跨数据中心同步，full checkpoint 太重</p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">--update-weight-mode</span> <span class="pre">delta</span> <span class="pre">--update-weight-transport</span> <span class="pre">disk</span></code></p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p>rollout serving 想使用独立 SGLang 环境，甚至不同型号或不同厂家的 GPU</p></td>
+<tr class="row-even"><td class="text-left"><p>rollout serving 想使用独立 SGLang 环境，甚至不同型号或不同厂家的 GPU</p></td>
 <td class="text-left"><p>external engine + disk transport</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p>需要 reference、reward、tool-side model 等冻结模型</p></td>
+<tr class="row-odd"><td class="text-left"><p>需要 reference、reward、tool-side model 等冻结模型</p></td>
 <td class="text-left"><p>优先用 <a class="reference internal" href="sglang-config.html#id8"><span class="std std-ref">SGLang Config</span></a> 的 <code class="docutils literal notranslate"><span class="pre">update_weights:</span> <span class="pre">false</span></code></p></td>
 </tr>
 </tbody>

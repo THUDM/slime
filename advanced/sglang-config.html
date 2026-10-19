@@ -458,6 +458,7 @@
             <nav aria-label="Page">
                 <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#architecture-overview">Architecture Overview</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#independent-sglang-python-environment">Independent SGLang Python Environment</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#config-format">Config Format</a><ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#field-reference">Field Reference</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#model-level-fields">Model-Level Fields</a></li>
@@ -523,6 +524,34 @@
 </ul>
 </section>
 <hr class="docutils" />
+<section id="independent-sglang-python-environment">
+<h2>Independent SGLang Python Environment<a class="headerlink" href="#independent-sglang-python-environment" title="Link to this heading">#</a></h2>
+<p>Set <code class="docutils literal notranslate"><span class="pre">--sglang-python-executable</span></code> to launch slime-managed SGLang servers with a different Python environment from Megatron:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--sglang-python-executable<span class="w"> </span>/path/to/sglang-env/bin/python<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>...
+</pre></div>
+</div>
+<p>Ray control actors and the router continue to use the training environment. Only the SGLang server and its workers use the selected executable, with server arguments passed as JSON. This works with the default deployment and <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code>, including PD and multi-node engines. Omitting the option keeps the existing multiprocessing launch path.</p>
+<p>Both environments must be able to import the same slime checkout, through an installation or the job’s <code class="docutils literal notranslate"><span class="pre">PYTHONPATH</span></code>. The training environment still needs SGLang’s Python helpers and the router package; keep the SGLang version consistent so argument schemas and weight-update protocols match. The serving environment needs its own SGLang dependencies, but does not need Megatron. Each environment can retain its own PyTorch, Triton, CUDA libraries, and compiled extensions. Avoid adding another environment’s entire <code class="docutils literal notranslate"><span class="pre">site-packages</span></code> directory to <code class="docutils literal notranslate"><span class="pre">PYTHONPATH</span></code>.</p>
+<p>For a conda environment, create your own wrapper, such as <code class="docutils literal notranslate"><span class="pre">serve-python.sh</span></code>, replacing the placeholders with your conda installation and environment:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="ch">#!/usr/bin/env bash</span>
+<span class="nb">set</span><span class="w"> </span>-e
+<span class="nb">source</span><span class="w"> </span>/path/to/miniconda/etc/profile.d/conda.sh
+conda<span class="w"> </span>activate<span class="w"> </span>your-serving-env
+<span class="nb">exec</span><span class="w"> </span>python<span class="w"> </span><span class="s2">"</span><span class="nv">$@</span><span class="s2">"</span>
+</pre></div>
+</div>
+<p>Make it executable and pass its path to slime:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>chmod<span class="w"> </span>+x<span class="w"> </span>/path/to/serve-python.sh
+python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--sglang-python-executable<span class="w"> </span>/path/to/serve-python.sh<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>...
+</pre></div>
+</div>
+<p>Use <code class="docutils literal notranslate"><span class="pre">exec</span> <span class="pre">python</span> <span class="pre">&quot;$&#64;&quot;</span></code> to forward Python arguments and preserve process ownership. The wrapper, conda installation, and serving environment must be available at the configured paths on every rollout node.</p>
+<p>Environment selection does not change weight synchronization: CUDA IPC and NCCL still require compatible libraries and hardware. Use disk transport when those requirements cannot be met; see <a class="reference internal" href="external-rollout-engines.html#environment-and-hardware-decoupling"><span class="std std-ref">External Rollout Engines</span></a>.</p>
+</section>
 <section id="config-format">
 <h2>Config Format<a class="headerlink" href="#config-format" title="Link to this heading">#</a></h2>
 <p>The config file is a YAML document with a top-level <code class="docutils literal notranslate"><span class="pre">sglang</span></code> key containing a list of model definitions:</p>
@@ -1075,6 +1104,7 @@ to it.</p>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#architecture-overview">Architecture Overview</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#independent-sglang-python-environment">Independent SGLang Python Environment</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#config-format">Config Format</a><ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#field-reference">Field Reference</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#model-level-fields">Model-Level Fields</a></li>

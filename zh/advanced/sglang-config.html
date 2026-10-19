@@ -458,6 +458,7 @@
             <nav aria-label="Page">
                 <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">架构概览</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-python">独立的 SGLang Python 环境</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">配置格式</a><ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">字段参考</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">模型级字段</a></li>
@@ -523,6 +524,34 @@
 </ul>
 </section>
 <hr class="docutils" />
+<section id="sglang-python">
+<h2>独立的 SGLang Python 环境<a class="headerlink" href="#sglang-python" title="Link to this heading">#</a></h2>
+<p>通过 <code class="docutils literal notranslate"><span class="pre">--sglang-python-executable</span></code>，可以让 slime 管理的 SGLang 服务使用与 Megatron 不同的 Python 环境：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--sglang-python-executable<span class="w"> </span>/path/to/sglang-env/bin/python<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>...
+</pre></div>
+</div>
+<p>Ray 控制 actor 和 router 继续使用训练环境，只有 SGLang 服务及其 worker 使用指定的 executable，服务参数通过 JSON 传递。默认部署和 <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> 均支持该选项，包括 PD 分离和多节点引擎。不设置该选项时，继续使用原来的 multiprocessing 启动方式。</p>
+<p>两个环境都需要能导入同一份 slime checkout，可通过安装或作业的 <code class="docutils literal notranslate"><span class="pre">PYTHONPATH</span></code> 提供。训练环境仍需 SGLang 的 Python 辅助模块及 router 包；两个环境应使用一致的 SGLang 版本，以匹配参数定义和权重更新协议。推理环境需要自身的 SGLang 依赖，但不需要 Megatron。两个环境可以各自保留 PyTorch、Triton、CUDA 库和编译扩展，不要把另一个环境的整个 <code class="docutils literal notranslate"><span class="pre">site-packages</span></code> 加入 <code class="docutils literal notranslate"><span class="pre">PYTHONPATH</span></code>。</p>
+<p>使用 conda 环境时，可以自行编写 wrapper，例如 <code class="docutils literal notranslate"><span class="pre">serve-python.sh</span></code>，将占位符替换为你自己的 conda 安装路径和环境名称：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="ch">#!/usr/bin/env bash</span>
+<span class="nb">set</span><span class="w"> </span>-e
+<span class="nb">source</span><span class="w"> </span>/path/to/miniconda/etc/profile.d/conda.sh
+conda<span class="w"> </span>activate<span class="w"> </span>your-serving-env
+<span class="nb">exec</span><span class="w"> </span>python<span class="w"> </span><span class="s2">"</span><span class="nv">$@</span><span class="s2">"</span>
+</pre></div>
+</div>
+<p>为脚本添加可执行权限，并将其路径传给 slime：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>chmod<span class="w"> </span>+x<span class="w"> </span>/path/to/serve-python.sh
+python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--sglang-python-executable<span class="w"> </span>/path/to/serve-python.sh<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>...
+</pre></div>
+</div>
+<p>通过 <code class="docutils literal notranslate"><span class="pre">exec</span> <span class="pre">python</span> <span class="pre">&quot;$&#64;&quot;</span></code> 透传 Python 参数并保留进程归属关系。每个 rollout 节点上都须能通过配置的路径访问 wrapper、conda 安装和推理环境。</p>
+<p>环境选择不会改变权重同步方式：CUDA IPC 和 NCCL 仍需满足库和硬件兼容性要求；无法满足时使用 disk transport，详见<a class="reference internal" href="external-rollout-engines.html#id2"><span class="std std-ref">外部 rollout 引擎</span></a>。</p>
+</section>
 <section id="id2">
 <h2>配置格式<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
 <p>配置文件是一个 YAML 文档，顶层 <code class="docutils literal notranslate"><span class="pre">sglang</span></code> 键包含一个模型定义列表：</p>
@@ -1074,6 +1103,7 @@ slime 会自己启动 router，并把这些外部引擎注册进去。</p>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">架构概览</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-python">独立的 SGLang Python 环境</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">配置格式</a><ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">字段参考</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">模型级字段</a></li>
