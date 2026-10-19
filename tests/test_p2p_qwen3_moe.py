@@ -103,7 +103,7 @@ def check_rollout(rollout_id, args, samples, extra_metrics, rollout_time):
 def execute(directory, *, pd=False, offload_rollout=False):
     import ray
 
-    from slime.utils.p2p.mooncake import MooncakeTransport
+    from slime.weight_sync.p2p.mooncake import MooncakeTransport
 
     # Fail before starting expensive model processes on a runner without RDMA.
     transport = MooncakeTransport("127.0.0.1", device="cuda:0")

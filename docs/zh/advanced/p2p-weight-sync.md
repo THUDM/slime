@@ -65,7 +65,7 @@ TCP 传输 JSON 描述符、序号和确认消息，张量通过注册的 GPU �
 
 全部训练和推理 worker 完成加载后，才进行权重后处理、提交版本并恢复生成。部分更新无法回滚。加载或提交版本失败时保持生成暂停，更新器拒绝重试；需要重启相关训练和推理进程，再执行完整同步。如果对端失败会阻塞训练 TP collective，监控线程会中止相关训练通信组。仍可能被 DMA 访问的缓冲保留到进程退出。
 
-实现位于 `slime/utils/p2p/`：`stream.py` 管理协议，`buffers.py` 管理注册存储，`mooncake.py` 实现 `transport.py` 定义的数据传输接口。Megatron 权重归属、转换和 SGLang 原生加载适配分别保留在各自后端。
+共享实现位于 `slime/weight_sync/p2p/`：`stream.py` 管理协议，`buffers.py` 管理注册存储，`mooncake.py` 实现 `transport.py` 定义的数据传输接口。Megatron 权重归属、转换和 SGLang 原生加载适配分别保留在各自后端。
 
 ## 验证
 

@@ -7,7 +7,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from slime.utils.p2p.mooncake import MooncakeTransport
+from slime.weight_sync.p2p.mooncake import MooncakeTransport
 
 NUM_GPUS = 0
 

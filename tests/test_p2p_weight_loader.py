@@ -21,7 +21,7 @@ def test_optional_dependency_is_only_required_when_using_mooncake(monkeypatch):
     importlib.reload(p2p)
     # Ordinary imports and control-plane serialization need no optional package.
     p2p.encode_manifest(manifest())
-    from slime.utils.p2p.transport import create_transport
+    from slime.weight_sync.p2p.transport import create_transport
 
     with pytest.raises(ImportError, match="requires Mooncake Transfer Engine"):
         create_transport("127.0.0.1", device="cpu")
@@ -72,7 +72,7 @@ def test_native_loader_can_retain_tensors_across_receive_buffers(monkeypatch, du
         def __exit__(self, *exc):
             closed.append(True)
 
-    from slime.utils import p2p as transport
+    from slime.weight_sync import p2p as transport
 
     monkeypatch.setattr(transport, "Receiver", Receiver)
     monkeypatch.setattr(

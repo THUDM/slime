@@ -62,7 +62,7 @@ def encode_manifest(manifest):
 def load_weights(model, named_tensors):
     import torch
 
-    from slime.utils import p2p
+    from slime.weight_sync import p2p
 
     if len(named_tensors) != 1 or named_tensors[0][0] != _MANIFEST:
         raise ValueError("Expected one P2P transfer manifest")

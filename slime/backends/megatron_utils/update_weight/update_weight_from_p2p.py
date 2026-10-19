@@ -12,9 +12,9 @@ from megatron.core import mpu
 
 from slime.backends.sglang_utils.p2p import encode_manifest
 from slime.utils.distributed_utils import get_gloo_group
-from slime.utils.p2p import BufferPool, Publisher
 from slime.utils.reloadable_process_group import ReloadableProcessGroup
 from slime.utils.weight_sync import should_flush_cache
+from slime.weight_sync.p2p import BufferPool, Publisher
 
 from ..megatron_to_hf import convert_to_hf
 from .common import all_gather_param, named_params_and_buffers

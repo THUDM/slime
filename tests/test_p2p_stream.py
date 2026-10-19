@@ -10,8 +10,8 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from slime.utils.p2p import BufferPool, Publisher, Receiver
-from slime.utils.p2p.stream import _recv, _send
+from slime.weight_sync.p2p import BufferPool, Publisher, Receiver
+from slime.weight_sync.p2p.stream import _recv, _send
 
 NUM_GPUS = 0
 
@@ -419,7 +419,7 @@ def test_growing_sources_keep_their_buffers_when_connection_order_changes():
 
 
 def test_native_read_failure_retains_destination_until_process_exit():
-    from slime.utils.p2p.stream import _QUARANTINED
+    from slime.weight_sync.p2p.stream import _QUARANTINED
 
     class FailedRead(MemoryTransport):
         def read(self, *args):
@@ -447,7 +447,7 @@ def test_native_read_failure_retains_destination_until_process_exit():
 
 @pytest.mark.parametrize("cuda_failure", [False, True])
 def test_early_loader_exit_does_not_release_buffers_before_cuda_finishes(monkeypatch, cuda_failure):
-    from slime.utils.p2p.stream import _QUARANTINED
+    from slime.weight_sync.p2p.stream import _QUARANTINED
 
     sender = Publisher("127.0.0.1", version=1, consumers=["a"], device="cpu", transport=MemoryTransport(), capacity=64)
     transport = MemoryTransport()

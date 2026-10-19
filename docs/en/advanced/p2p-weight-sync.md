@@ -65,7 +65,7 @@ Generation is paused during synchronization. Cache handling follows `--flush-cac
 
 All trainers and serving workers must finish loading before weight post-processing and version commit; generation resumes afterward. A partial update is not rolled back. If loading or version commit fails, generation stays paused and the updater rejects retries. Restart affected trainers and engines, then perform a fresh full sync. Training TP groups are aborted when a peer failure would otherwise strand a collective. Buffers that may still be accessed by DMA are retained until process exit.
 
-The implementation is in `slime/utils/p2p/`: `stream.py` owns the protocol, `buffers.py` owns registered storage, and `mooncake.py` implements the data-plane contract in `transport.py`. Megatron ownership/conversion and the SGLang native-loader adapter remain in their respective backends.
+The shared implementation is in `slime/weight_sync/p2p/`: `stream.py` owns the protocol, `buffers.py` owns registered storage, and `mooncake.py` implements the data-plane contract in `transport.py`. Megatron ownership/conversion and the SGLang native-loader adapter remain in their respective backends.
 
 ## Verification
 
