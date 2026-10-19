@@ -45,6 +45,12 @@ def add_sglang_arguments(parser):
     parser = add_sglang_router_arguments(parser)
     parser.set_defaults(router_balance_abs_threshold=10, router_balance_rel_threshold=1.2)
     parser.add_argument("--sglang-server-concurrency", type=int, default=512)
+    parser.add_argument(
+        "--sglang-python-executable",
+        default=None,
+        help="Python executable or activation wrapper used to start SGLang server subprocesses. "
+        "Must exist on every rollout node. Ray actors remain in the training environment.",
+    )
 
     old_add_argument = parser.add_argument
 

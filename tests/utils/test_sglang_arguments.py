@@ -7,6 +7,14 @@ from slime.backends.sglang_utils.arguments import add_sglang_arguments, validate
 NUM_GPUS = 0
 
 
+def test_sglang_python_executable_is_a_launcher_option():
+    parser = ArgumentParser()
+    add_sglang_arguments(parser)
+    assert parser.parse_args([]).sglang_python_executable is None
+    executable = "/path with spaces/serve-python.sh"
+    assert parser.parse_args(["--sglang-python-executable", executable]).sglang_python_executable == executable
+
+
 def test_validate_args_canonicalizes_moe_data_parallel_size():
     args = Namespace(
         sglang_data_parallel_size=8,

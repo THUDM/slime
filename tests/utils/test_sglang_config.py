@@ -670,12 +670,46 @@ def test_spawned_server_selects_current_entrypoint(monkeypatch, encoder_only):
     module.launch_server = lambda args: calls.append(args)
     monkeypatch.setitem(sys.modules, module_name, module)
     monkeypatch.setattr(sglang.srt.utils, "kill_itself_when_parent_died", lambda: None)
+    monkeypatch.setattr(sglang_engine, "_prepare_server_stdin", lambda: None)
     monkeypatch.setattr(sglang_engine.os, "getppid", lambda: 123)
     args = Namespace(encoder_only=encoder_only)
     sglang_engine._launch_server(args, parent_pid=123)
     assert calls == [args]
     sglang_engine._launch_server(args, parent_pid=456)
     assert calls == [args]
+
+
+@pytest.mark.parametrize("node_rank", [0, 1])
+def test_isolated_server_launch_waits_for_node_zero_before_registering(monkeypatch, node_rank):
+    from slime.backends.sglang_utils import sglang_engine
+
+    executable = "/path with spaces/serve-python.sh"
+    engine = sglang_engine.SGLangEngine(Namespace(sglang_python_executable=executable), rank=node_rank)
+    engine.node_rank = node_rank
+    engine.server_host = "[::1]"
+    engine.server_port = 15000
+    engine._register_to_router = Mock()
+    process = Mock()
+    process.poll.return_value = None
+    launch = Mock(return_value=process)
+    health = Mock()
+    monkeypatch.setattr(sglang_engine, "launch_server_subprocess", launch)
+    monkeypatch.setattr(sglang_engine, "_wait_server_healthy", health)
+    monkeypatch.setattr(sglang_engine, "sglang_model_config_overrides", lambda path, overrides: overrides)
+    # The control environment must not construct a serving-side ServerArgs.
+    monkeypatch.setattr(sglang_engine, "ServerArgs", Mock(side_effect=AssertionError("wrong Python environment")))
+    args = {"model_path": "/checkpoint", "api_key": "secret"}
+    engine._init_normal(args)
+    launch.assert_called_once_with(executable, args)
+    if node_rank == 0:
+        assert health.call_args.kwargs["base_url"] == "http://[::1]:15000"
+        assert health.call_args.kwargs["api_key"] == "secret"
+        assert health.call_args.kwargs["is_process_alive"]()
+        process.poll.return_value = 1
+        assert not health.call_args.kwargs["is_process_alive"]()
+    else:
+        health.assert_not_called()
+    engine._register_to_router.assert_called_once_with(args)
 
 
 if __name__ == "__main__":

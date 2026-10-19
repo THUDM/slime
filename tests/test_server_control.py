@@ -13,6 +13,40 @@ from slime.utils import http_utils
 NUM_GPUS = 0
 
 
+@pytest.mark.parametrize("shutdown_fails", [False, True])
+def test_colocated_engine_retirement_waits_for_gpu_release(monkeypatch, shutdown_fails):
+    from slime.backends.sglang_utils import engine_group
+
+    engine = SimpleNamespace(shutdown=SimpleNamespace(remote=lambda: "shutdown"))
+    group = engine_group.ServerGroup(
+        args=SimpleNamespace(num_gpus_per_node=1),
+        pg=None,
+        all_engines=[engine],
+        num_gpus_per_engine=1,
+        num_new_engines=0,
+        worker_type="encoder",
+        needs_offload=True,
+    )
+    events = []
+
+    def get(refs, *, timeout):
+        assert refs == ["shutdown"] and timeout == 0.1
+        events.append("wait for shutdown")
+        if shutdown_fails:
+            raise TimeoutError("server still holds GPUs")
+
+    monkeypatch.setattr(engine_group.ray, "get", get)
+    monkeypatch.setattr(engine_group.ray, "kill", lambda actor, **kw: events.append("kill actor"))
+    if shutdown_fails:
+        with pytest.raises(TimeoutError, match="server still holds GPUs"):
+            group.retire_engine(0, timeout=0.1)
+        assert group.all_engines == [engine]
+    else:
+        group.retire_engine(0, timeout=0.1)
+        assert group.all_engines == [None]
+    assert events == ["wait for shutdown", "kill actor"]
+
+
 @pytest.mark.parametrize("failure", ["connection", "timeout", "status"])
 def test_rollout_boundary_prunes_failed_router_workers(monkeypatch, failure):
     calls = []
