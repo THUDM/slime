@@ -1,4 +1,4 @@
-"""Commit and validate model/source boundaries for straw checkpoint forks."""
+"""Commit and validate model/source boundaries for in-place Straw recovery."""
 
 from __future__ import annotations
 
@@ -20,10 +20,10 @@ if TYPE_CHECKING:
 class RestorePlan:
     """Startup decisions, separate from CLI configuration and live queue state."""
 
-    mode: Literal["new", "resume", "snapshot", "empty"] = "new"
+    mode: Literal["new", "resume", "rewind", "empty"] = "new"
     root: str | None = None
-    expected_current: str | None = None
-    branch: dict | None = None
+    expected_session: str | None = None
+    session: dict | None = None
     queue_id: str | None = None
     dataset_cursor: str | None = None
 
@@ -32,11 +32,11 @@ class RestorePlan:
 class SourceRestore:
     """Result of restoring a source, consumed by the training batch builder."""
 
-    new_queue: bool = False
+    queue_reset: bool = False
     source_ref: RecordSetRef | None = None
 
 
-def save_checkpoint(args, rollout_id, actor_model, critic_model, rollout_manager, *, actor_trains, restore_plan=None):
+def save_checkpoint(args, rollout_id, actor_model, critic_model, rollout_manager, *, actor_trains):
     """Save training and rollout state, publishing a joint boundary for straw."""
     import ray
 
@@ -65,16 +65,14 @@ def save_checkpoint(args, rollout_id, actor_model, critic_model, rollout_manager
         if args.use_critic:
             model_args.append(critic_model.args)
         weight_version = ray.get(rollout_manager.get_weight_version.remote())
-        commit_checkpoint(
-            args, rollout_id, model_args=model_args, restore_plan=restore_plan, weight_version=weight_version
-        )
+        commit_checkpoint(args, rollout_id, model_args=model_args, weight_version=weight_version)
     if actor_trains and recoverable:
         # Notify recovery last. Any model, rollout, or joint-commit failure above
         # must leave the previous boundary and its replay batches intact.
         ray.get(rollout_manager.checkpoint_committed.remote(rollout_id))
 
 
-def commit_checkpoint(args, rollout_id, *, model_args, restore_plan=None, weight_version=None):
+def commit_checkpoint(args, rollout_id, *, model_args, weight_version=None):
     """Publish the boundary after synchronous model saves and rollout snapshots.
 
     The driver waits for those calls; a save exception prevents this call.
@@ -140,74 +138,74 @@ def commit_checkpoint(args, rollout_id, *, model_args, restore_plan=None, weight
             "run_id": getattr(args, "rollout_queue_run_id", None) or "rollout",
         },
     )
-    # Mirror the active branch's committed step at the logical root. Publish the
-    # tracker first: a crash before the pointer update still selects this valid
-    # commit, rather than mistaking the previous step for a user rollback.
-    if restore_plan is not None and restore_plan.root is not None:
-        logical_root = Path(restore_plan.root)
-        current = logical_root / "rollout/current.json"
-        value = json.loads(current.read_text())
-        if Path(value["directory"]) != root:
-            raise RuntimeError("Current branch changed while saving its checkpoint")
-        write_report(logical_root / "latest_checkpointed_iteration.txt", rollout_id)
-        value["tracker"] = str(rollout_id)
-        write_report(current, value)
+    write_report(root / "latest_checkpointed_iteration.txt", rollout_id)
 
 
-def _read_checkpoint(root, step):
+def _read_checkpoint(root, step, *, allow_missing_rollout=False):
     """Validate the joint commit, never infer completion from the model tracker."""
     path = root / "rollout" / f"committed_{step}.json"
     value = json.loads(path.read_text())
     if value.get("version") != 1 or value["rollout_id"] != step or not value["resumable"]:
         raise ValueError("Checkpoint is incompatible or omitted optimizer/RNG state")
+    queue_state = f"rollout/queue_state_{step}.json"
+    dataset_cursor = f"rollout/global_dataset_state_dict_{step}.pt"
+    builder_state = f"rollout/builder_state_{step}.json"
+    rollout_valid = True
     for name, expected in value["files"].items():
         item = (root / name).resolve()
-        if not item.is_relative_to(root) or item.stat().st_size != expected["size"]:
-            raise ValueError(f"Checkpoint component missing or changed: {name}")
-        if "sha256" in expected and hashlib.sha256(item.read_bytes()).hexdigest() != expected["sha256"]:
-            raise ValueError(f"Checkpoint component changed: {name}")
-    return value
+        if not item.is_relative_to(root):
+            raise ValueError(f"Checkpoint component outside save directory: {name}")
+        try:
+            if item.stat().st_size != expected["size"]:
+                raise ValueError(f"Checkpoint component missing or changed: {name}")
+            if "sha256" in expected and hashlib.sha256(item.read_bytes()).hexdigest() != expected["sha256"]:
+                raise ValueError(f"Checkpoint component changed: {name}")
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            if not allow_missing_rollout or name not in {queue_state, dataset_cursor, builder_state}:
+                raise
+            logging.getLogger(__name__).warning("Cannot restore rollout checkpoint %s: %s", item, error)
+            rollout_valid = False
+    source_kind = value.get("source_kind")
+    if source_kind is None:
+        source_kind = "queue" if queue_state in value["files"] else "dataset_cursor"
+    source = queue_state if source_kind == "queue" else dataset_cursor
+    if (
+        source_kind not in {"queue", "dataset_cursor"}
+        or source not in value["files"]
+        or builder_state not in value["files"]
+    ):
+        if not allow_missing_rollout:
+            raise ValueError("Checkpoint source/builder metadata is missing or invalid")
+        logging.getLogger(__name__).warning("Rollout checkpoint metadata is incomplete at %s step %s", root, step)
+        rollout_valid = False
+    return {**value, "source_kind": source_kind if rollout_valid else None}
 
 
 def _read_empty_checkpoint(root, step):
-    """Allow absent queue state, but never downgrade a broken saved snapshot."""
-    for name in ("queue_state", "builder_state"):
-        if (root / "rollout" / f"{name}_{step}.json").exists():
-            raise ValueError("Queue snapshot exists without a complete joint commit; refusing empty-queue fallback")
+    """Require model files even when rollout state cannot be restored."""
     model = root / f"iter_{step:07d}"
     if not model.is_dir() or not any(path.is_file() for path in model.rglob("*")):
         raise FileNotFoundError(f"Requested model checkpoint does not exist: {model}")
 
 
-def _select_checkpoint(directory, step, *, allow_empty=False):
-    """Follow the current branch and its ancestors, excluding abandoned futures."""
-    root = directory
-    current = root / "rollout/current.json"
-    if current.exists():
-        root = Path(json.loads(current.read_text())["directory"]).resolve()
-    visited = set()
-    while root not in visited:
-        visited.add(root)
-        commits = list((root / "rollout").glob("committed_*.json"))
-        if step is None and commits:
-            step = max(int(path.stem.split("_")[-1]) for path in commits)
-        if step is not None and (root / "rollout" / f"committed_{step}.json").exists():
-            return root, step, _read_checkpoint(root, step)
-        if step is not None and allow_empty and (root / f"iter_{step:07d}").exists():
-            _read_empty_checkpoint(root, step)
-            return root, step, None
-        branch = root / "rollout/branch.json"
-        if not branch.exists():
-            break
-        parent = json.loads(branch.read_text()).get("parent")
-        if parent is None:
-            break
-        if step is not None and step > parent["step"]:
-            break
-        step = parent["step"] if step is None else step
-        allow_empty = allow_empty or not parent.get("queue_snapshot", True)
-        root = Path(parent["directory"]).resolve()
-    raise ValueError(f"No committed model/source checkpoint for step {step} in {directory}'s branch history")
+def _select_checkpoint(root, step):
+    """Honor an explicit step or older tracker; ignore incomplete later saves."""
+    tracker = root / "latest_checkpointed_iteration.txt"
+    commits = {int(path.stem.split("_")[-1]) for path in (root / "rollout").glob("committed_*.json")}
+    if not tracker.exists():
+        if step is not None or commits:
+            raise FileNotFoundError(f"Missing model checkpoint tracker: {root}")
+        return None  # Initial model load, before Slime has saved a checkpoint.
+    if step is None:
+        step = int(tracker.read_text().strip())
+        if commits:
+            step = min(step, max(commits))
+    if step in commits:
+        return root, step, _read_checkpoint(root, step, allow_missing_rollout=True)
+    if commits and not (root / f"iter_{step:07d}").exists():
+        raise ValueError(f"No committed model/source checkpoint for step {step} in {root}")
+    _read_empty_checkpoint(root, step)
+    return root, step, None
 
 
 def _initial_configuration(args):
@@ -235,12 +233,11 @@ def _initial_configuration(args):
 
 
 def resolve_checkpoint(args):
-    """Return a configuration copy and an isolated checkpoint branch plan.
+    """Select a model/source boundary without modifying any checkpoint files.
 
-    Each checkpoint restore gets fresh queue authority and output files. A small
-    current pointer lets callers keep using the same logical save directory.
-    Before the first checkpoint, the original run can instead recover its WAL.
-    Resolution never rewrites the caller's requested paths, even on failure.
+    A checkpoint restart rewinds the existing queue and writes to the requested
+    save directory. Before the first checkpoint, recover the original WAL.
+    Destructive cleanup is deferred until the controller holds the job lock.
     """
     args = copy.deepcopy(args)
     mode, dataset_cursor = "new", None
@@ -251,10 +248,11 @@ def resolve_checkpoint(args):
     if not getattr(args, "save", None):
         return args, RestorePlan()
     save_root = Path(args.save).resolve()
-    current_path = save_root / "rollout/current.json"
-    expected_current = current_path.read_text() if current_path.exists() else None
+    session_path = save_root / "rollout/session.json"
+    expected_session = session_path.read_text() if session_path.exists() else None
+    previous = json.loads(expected_session) if expected_session else None
     load = getattr(args, "load", None)
-    if load is None and expected_current is not None:
+    if load is None and previous is not None:
         load = str(save_root)
     root = Path(load).resolve() if load else None
     step = getattr(args, "ckpt_step", None)
@@ -264,93 +262,32 @@ def resolve_checkpoint(args):
         if step is not None and step != selected_step:
             raise ValueError("--ckpt-step differs from the explicit checkpoint marker")
         step, root = selected_step, root.parent.parent
-    is_checkpoint = root is not None and (
-        direct_commit
-        or (root / "rollout/current.json").exists()
-        or (root / "rollout/branch.json").exists()
-        or any((root / "rollout").glob("committed_*.json"))
-    )
-    selected = None
-    if is_checkpoint:
-        current = root / "rollout/current.json"
-        pointer = json.loads(current.read_text()) if current.exists() else None
-        active = Path(pointer["directory"]).resolve() if pointer else root
-        if not direct_commit and step is None:
-            tracker = root / "latest_checkpointed_iteration.txt"
-            commits = list((active / "rollout").glob("committed_*.json"))
-            if tracker.exists():
-                text = tracker.read_text()
-                tracked_step = int(text.strip())
-                latest = max((int(path.stem.split("_")[-1]) for path in commits), default=-1)
-                # A changed logical tracker is an explicit user selection; an
-                # older physical tracker also selects a rollback. A newer
-                # physical tracker may be an interrupted model save and cannot
-                # override the joint commit. The recorded value also supports
-                # an inherited tracker before the branch's first commit.
-                logical_edit = (
-                    pointer is not None
-                    and "tracker" in pointer
-                    and text.strip() != str(pointer["tracker"]).strip()
-                    and root != active
-                )
-                if logical_edit or tracked_step < latest:
-                    # An unchanged logical tracker may lag behind a child.
-                    if logical_edit or root == active:
-                        step = tracked_step
-            if step is None and root != active:
-                tracker = active / "latest_checkpointed_iteration.txt"
-                if tracker.exists() and commits:
-                    tracked_step = int(tracker.read_text().strip())
-                    if tracked_step < max(int(path.stem.split("_")[-1]) for path in commits):
-                        step = tracked_step
-        branch_path = active / "rollout/branch.json"
-        branch = json.loads(branch_path.read_text()) if branch_path.exists() else None
-        if (
-            not direct_commit
-            and step is None
-            and branch is not None
-            and branch["parent"] is None
-            and not any((active / "rollout").glob("committed_*.json"))
-        ):
-            if root != save_root:
-                raise ValueError("Before the first checkpoint, restart using the original --save directory")
-            if branch["initial_configuration"] != _initial_configuration(args):
+    if root == save_root and previous and previous.get("rewind_pending") and step is None and not direct_commit:
+        boundary = previous["restore"]
+        root, step = Path(boundary["directory"]), boundary["step"]
+    commits = list((root / "rollout").glob("committed_*.json")) if root else []
+    if root == save_root and previous and not commits and step is None:
+        if boundary := previous.get("restore"):
+            root, step = Path(boundary["directory"]), boundary["step"]
+        else:
+            if previous["initial_configuration"] != _initial_configuration(args):
                 raise ValueError("Initial model/input configuration differs from the interrupted run")
-            if args.rollout_data_dir is not None and Path(args.rollout_data_dir).resolve() != Path(branch["pool"]):
+            if args.rollout_data_dir is not None and Path(args.rollout_data_dir).resolve() != Path(previous["pool"]):
                 raise ValueError("Interrupted run requires its original straw pool")
-            args.load, args.save = branch["initial_load"], str(active)
-            args.rollout_data_dir = branch["pool"]
-            return args, RestorePlan("resume", str(save_root), expected_current, branch, branch["queue_id"])
-        selected = (
-            (root, step, _read_checkpoint(root, step))
-            if direct_commit
-            else _select_checkpoint(root, step, allow_empty=step is not None)
-        )
-    elif root is not None and (root / "latest_checkpointed_iteration.txt").exists():
-        if step is None:
-            step = int((root / "latest_checkpointed_iteration.txt").read_text().strip())
-        _read_empty_checkpoint(root, step)
-        selected = root, step, None
-    elif root is not None and step is not None:
-        raise FileNotFoundError(f"No model checkpoint tracker for requested step {step}: {root}")
+            args.load, args.save = previous["initial_load"], str(save_root)
+            args.rollout_data_dir = previous["pool"]
+            session = {**previous, "generation": uuid.uuid4().hex}
+            return args, RestorePlan("resume", str(save_root), expected_session, session, session["queue_id"])
+    selected = _select_checkpoint(root, step) if root is not None else None
 
-    if selected is not None and not (selected[0] / "latest_checkpointed_iteration.txt").exists():
-        raise FileNotFoundError(f"Model checkpoint tracker is missing: {selected[0]}")
-
-    # Never overwrite existing checkpoint files, including a partially written
-    # iteration without a commit marker. Repeated rollbacks use distinct paths.
-    occupied = (
-        expected_current is not None or any(save_root.glob("iter_*")) or (save_root / "rollout/branch.json").exists()
-    )
-    destination = (
-        save_root / "branches" / uuid.uuid4().hex if occupied or (selected and selected[0] == save_root) else save_root
-    )
-    branch = {
+    session = {
         "version": 1,
-        "parent": None,
+        "restore": None,
+        "rewind_pending": selected is not None,
+        "generation": uuid.uuid4().hex,
         "initial_load": getattr(args, "load", None),
         "initial_configuration": _initial_configuration(args),
-        "queue_id": f"run:{uuid.uuid4().hex}",
+        "queue_id": previous["queue_id"] if previous else f"run:{uuid.uuid4().hex}",
     }
     if selected is not None:
         root, step, value = selected
@@ -362,6 +299,9 @@ def resolve_checkpoint(args):
             raise ValueError("Checkpoint restoration requires model, scheduler, RNG and any stateful optimizer state")
         if args.start_rollout_id is not None and args.start_rollout_id != step + 1:
             raise ValueError("--start-rollout-id differs from the checkpoint")
+        queue_snapshot = False
+        cursor = root / "rollout" / f"global_dataset_state_dict_{step}.pt"
+        dataset_cursor = str(cursor) if cursor.exists() else None
         if value is not None:
             if (getattr(args, "rollout_queue_run_id", None) or "rollout") != value["run_id"]:
                 raise ValueError("Checkpoint belongs to another straw run")
@@ -371,13 +311,21 @@ def resolve_checkpoint(args):
             ):
                 raise ValueError("Checkpoint restoration requires the original shared straw pool")
             args.rollout_data_dir = value["rollout_data_dir"]
-            mode = "snapshot"
-        else:
-            mode = "empty"
-            cursor = root / "rollout" / f"global_dataset_state_dict_{step}.pt"
-            dataset_cursor = str(cursor) if cursor.exists() else None
+            queue_snapshot = value["source_kind"] == "queue"
+        source = root / "rollout" / f"queue_state_{step}.json"
+        if source.exists():
+            try:
+                queue_id = json.loads(source.read_text()).get("queue_id", "rollout")
+                if not isinstance(queue_id, str) or not queue_id:
+                    raise ValueError("Invalid queue identity")
+                session["queue_id"] = queue_id
+            except (OSError, ValueError, TypeError, AttributeError) as error:
+                logging.getLogger(__name__).warning("Cannot read queue checkpoint %s: %s", source, error)
+                queue_snapshot = False
+        mode = "rewind" if queue_snapshot else "empty"
+        if not queue_snapshot:
             logging.getLogger(__name__).warning(
-                "Model checkpoint %s step %s has no queue snapshot: starting a new empty queue; %s",
+                "Model checkpoint %s step %s has no usable queue snapshot: starting a new empty queue; %s",
                 root,
                 step,
                 (
@@ -389,6 +337,6 @@ def resolve_checkpoint(args):
         args.ckpt_step, args.start_rollout_id, args.load = step, step + 1, str(root)
         # Also seed the counter when an older model has no queue snapshot.
         args.update_weight_start_version = value["weight_version"] if value is not None else step + 1
-        branch["parent"] = {"directory": str(root), "step": step, "queue_snapshot": value is not None}
-    args.save = str(destination)
-    return args, RestorePlan(mode, str(save_root), expected_current, branch, branch["queue_id"], dataset_cursor)
+        session["restore"] = {"directory": str(root), "step": step}
+    args.save = str(save_root)
+    return args, RestorePlan(mode, str(save_root), expected_session, session, session["queue_id"], dataset_cursor)

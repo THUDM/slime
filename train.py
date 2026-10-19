@@ -80,7 +80,6 @@ def train(args, pgs, rollout_manager, num_rollout_per_epoch, restore_plan):
                 critic_model,
                 rollout_manager,
                 actor_trains=actor_trains,
-                restore_plan=restore_plan,
             )
 
         offload_train(actor_trains)

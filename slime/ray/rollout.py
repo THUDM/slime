@@ -108,7 +108,7 @@ class RolloutManager:
                     reader_generation=uuid.uuid4().hex if serving is not None else "",
                 )
                 if self.recovery is not None and self.recovery.source_state is not None:
-                    self.recovery.reconcile_collection(self.controller, self.data_source.branch_id)
+                    self.recovery.reconcile_collection(self.controller, self.data_source.execution_id)
                     # A dead manager's readers may have delivered these samples
                     # already. Exclude retained batches before fencing/replaying
                     # its readers, so each accepted sample is delivered once.
@@ -195,7 +195,7 @@ class RolloutManager:
                 # A queue commit can succeed while its RPC fails. Reconcile on
                 # live-manager retries too, before training can consume and GC
                 # a conversion missing from the checkpoint replay window.
-                self.recovery.reconcile_collection(self.controller, self.data_source.branch_id)
+                self.recovery.reconcile_collection(self.controller, self.data_source.execution_id)
         # The saved load boundary wins over new CLI settings, while trainer
         # parallelism and memory limits still come from the new attempt.
         weight_version = getattr(args, "update_weight_start_version", 0)

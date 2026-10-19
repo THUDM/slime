@@ -181,10 +181,7 @@ class BatchBuilder:
     def load(self, rollout_id, *, source_restore=None):
         if self.args.rollout_data_transport != "straw" or not self.args.load:
             return
-        if source_restore is not None and source_restore.new_queue:
-            # A fork is taken after training completion. Saved pending/ready
-            # groups were reintroduced with new receipts; old positions and
-            # finished batches belong exclusively to the parent queue.
+        if source_restore is not None and source_restore.queue_reset:
             self.raw_ref = self.batch_id = self._plan = None
             return
         from straw.protocol import RecordSetRef

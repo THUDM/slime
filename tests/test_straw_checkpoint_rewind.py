@@ -1,7 +1,7 @@
-"""Train three async steps, restore automatic/manual branches, and replay archives.
+"""Train three async steps, rewind in place, and replay debug archives.
 
 Uses four GPUs: one trains Qwen2.5-0.5B and three serve rollouts. Checkpoint
-IDs are zero based: save 0/1/2, load 1 into a new branch, and train 2 again.
+IDs are zero based: save 0/1/2, load 1 in the same directory, and train 2 again.
 The rollout hook checks restored state before any worker can advance it.
 """
 
@@ -42,9 +42,9 @@ def checked_rollout(args, rollout_id, data_source, evaluation=False):
     from slime.data.transport import DiskPayloadRef, rollout_store
     from slime.rollout.fully_async_rollout import generate_rollout_fully_async
 
-    if data_source.restore_plan.mode == "snapshot" and rollout_id == args.start_rollout_id:
+    if data_source.restore_plan.mode == "rewind" and rollout_id == args.start_rollout_id:
         assert rollout_id == args.ckpt_step + 1
-        assert data_source.restored_source.new_queue
+        assert data_source.restored_source.queue_reset
         assert not data_source.consumers, "Check the cursor before generation starts"
         saved = load_source_checkpoint(args.load, args.ckpt_step)
         expected = saved["reader"].load()["pending"].load()
@@ -58,34 +58,31 @@ def checked_rollout(args, rollout_id, data_source, evaluation=False):
         # Check all cursor fields, not just offset (which wraps at epoch end).
         assert actual["producer_cursor"] == expected["producer_cursor"]
         assert not actual["inflight"] and not expected["inflight"]
-        expected_tasks = {task["task_id"]: task for task in expected["tasks"]}
-        actual_tasks = {task["task_id"]: task for task in actual["tasks"]}
-        assert actual_tasks.keys() == expected_tasks.keys()
-        for task_id, task in actual_tasks.items():
-            original = expected_tasks[task_id]
-            assert task["input_ref"].manifest == original["input_ref"].manifest
-            assert task["priority"] == original["priority"]
-            assert task["metadata"] == {**original["metadata"], "source_positions": []}
+        from slime.data.transport import load_rollout_samples
+        from slime.rollout.base_types import iter_samples
+        from slime.utils.types import Sample
 
-        old_consumer = saved["consumers"]["fully_async"]
-        new_consumer = data_source._restored_consumers["fully_async"]
-        assert new_consumer["readers"] == old_consumer["readers"]
-        old_ready = old_consumer["scheduler"]["ready"]
-        new_ready = new_consumer["scheduler"]["ready"]
-        assert len(new_ready) == len(old_ready) >= args.rollout_batch_size
-        for (old, old_verdict), (new, new_verdict) in zip(old_ready, new_ready, strict=True):
-            assert old_verdict == new_verdict and old_verdict.keep
-            assert new.load().manifest == old.manifest, "COW must share the checkpoint payload"
-            assert new.receipt != old.receipt
-            assert new.receipt.task_id != old.receipt.task_id
-            assert new.source_positions == ()
-        assert data_source.data_config["queue_id"] != saved["configuration"]["queue_id"]
+        expected_ids = {
+            sample.index for task in expected["tasks"] for sample in iter_samples(task["input_ref"].load())
+        }
+        ready = saved["consumers"]["fully_async"]["scheduler"]["ready"]
+        for group, _ in ready:
+            if group is not None:
+                expected_ids.update(sample.index for sample in iter_samples(load_rollout_samples([group])[0]))
+        samples = [sample for task in actual["tasks"] for sample in iter_samples(task["input_ref"].load())]
+        assert {sample.index for sample in samples} == expected_ids
+        assert all(
+            sample.status == Sample.Status.PENDING and not sample.tokens and sample.reward is None
+            for sample in samples
+        )
+        assert not data_source._restored_consumers
+        assert data_source.data_config["queue_id"] == saved["configuration"]["queue_id"]
+        assert not (Path(args.save) / "rollout" / f"committed_{rollout_id}.json").exists()
         report = {
             "expected_cursor": expected["producer_cursor"],
             "restored_cursor": actual["producer_cursor"],
-            "pending_groups": len(actual_tasks),
-            "ready_groups": len(new_ready),
-            "worker_count": len(new_consumer["readers"]),
+            "pending_groups": len(actual["tasks"]),
+            "regenerated_ready_groups": len(ready),
         }
         Path(args.save).mkdir(parents=True, exist_ok=True)
         Path(args.save, "restored_source.json").write_text(json.dumps(report, indent=2))
@@ -109,7 +106,7 @@ def checked_rollout(args, rollout_id, data_source, evaluation=False):
 
 
 def sample_values(samples):
-    """Compare training input without comparing branch-specific queue authority."""
+    """Compare archived training input values."""
     from slime.data.tensor import materialize_tensor_refs
 
     keys = (
@@ -134,19 +131,18 @@ def execute(*, model_path=None, prompt_data=None, work_dir=None, num_gpus_per_no
     import torch
 
     from slime.data.archive import RolloutArchive
-    from slime.data.transport import load_rollout_samples
 
     model_path = model_path or f"/root/models/{MODEL_NAME}"
     prompt_data = prompt_data or "/root/datasets/gsm8k/train.parquet"
     # work_dir must be shared when the four GPUs live on different hosts.
-    with tempfile.TemporaryDirectory(prefix="slime_straw_fork_", dir=work_dir) as directory:
+    with tempfile.TemporaryDirectory(prefix="slime_straw_rewind_", dir=work_dir) as directory:
         root = Path(directory)
         common = (
             f"--hf-checkpoint {quote(str(model_path))} --ref-load {quote(str(model_path))} "
             f"--prompt-data {quote(str(prompt_data))} "
             "--input-key messages --label-key label --apply-chat-template --rollout-shuffle --rm-type math "
             "--rollout-data-transport straw --rollout-queue-online-gc "
-            "--rollout-function-path test_straw_checkpoint_fork.checked_rollout "
+            "--rollout-function-path test_straw_checkpoint_rewind.checked_rollout "
             "--rollout-batch-size 2 --n-samples-per-prompt 4 --global-batch-size 8 "
             "--rollout-max-response-len 128 --rollout-temperature 0.8 "
             "--pg-loss-type reinforce --advantage-estimator grpo --disable-grpo-std-normalization "
@@ -164,19 +160,19 @@ def execute(*, model_path=None, prompt_data=None, work_dir=None, num_gpus_per_no
             f"--actor-num-nodes 1 --actor-num-gpus-per-node 1 --num-gpus-per-node {num_gpus_per_node} "
             "--rollout-num-gpus 3 --save-interval 1 "
         )
-        parent, child = root / "parent", root / "child"
+        parent = root / "run"
+        child = parent
         outputs = root / "outputs"
         legacy = root / "legacy-model"
         phases = [
             ("parent", parent, f"--num-rollout 3 --rollout-data-dir {quote(str(root / 'pool'))}", [0, 1, 2]),
             # No queue lifecycle flags: use normal model checkpoint arguments.
-            ("child", child, f"--num-rollout 3 --load {quote(str(parent))} --ckpt-step 1", [2]),
-            # Same save directory, but an exact immutable marker overrides the
-            # current branch. Earlier child checkpoint files must survive.
+            ("rewind", child, f"--num-rollout 3 --load {quote(str(parent))} --ckpt-step 1", [2]),
+            # Select the same boundary again through an explicit marker.
             ("repeat", child, f"--num-rollout 3 --load {quote(str(parent / 'rollout/committed_1.json'))}", [2]),
             ("tracker", child, f"--num-rollout 3 --load {quote(str(child))}", [2]),
             # Extending num-rollout changes Megatron's default LR/WD horizon;
-            # keep the saved optimizer schedule while testing branch selection.
+            # keep the saved optimizer schedule while extending the run.
             (
                 "resume",
                 child,
@@ -197,22 +193,13 @@ def execute(*, model_path=None, prompt_data=None, work_dir=None, num_gpus_per_no
                 [0],
             ),
         ]
-        immutable_hashes = {}
-        expected_samples = None
-        previous_branch = None
+        checkpoint_hash = None
         for name, destination, options, steps in phases:
             output = outputs / name
             output.mkdir(parents=True)
             if name == "tracker":
                 # Edit the logical tracker without passing --ckpt-step.
                 (child / "latest_checkpointed_iteration.txt").write_text("1")
-            if name in {"child", "repeat", "tracker", "resume"}:
-                source, source_step = (previous_branch, 2) if name == "resume" else (parent, 1)
-                saved = load_source_checkpoint(source, source_step)
-                ready = saved["consumers"]["fully_async"]["scheduler"]["ready"]
-                assert len(ready) >= 2 and all(verdict.keep for _, verdict in ready)
-                groups = load_rollout_samples([group for group, _ in ready[:2]])
-                expected_samples = sample_values([sample for group in groups for sample in group])
             U.execute_train(
                 train_args=(
                     f"{common} {options} --save {quote(str(destination))} "
@@ -225,8 +212,9 @@ def execute(*, model_path=None, prompt_data=None, work_dir=None, num_gpus_per_no
                     "PYTHONPATH": f"{Path(__file__).resolve().parent}:{U.repo_base_dir}:/root/Megatron-LM/"
                 },
             )
-            current = destination / "rollout/current.json"
-            physical = Path(json.loads(current.read_text())["directory"]) if current.exists() else destination
+            physical = destination
+            assert not (destination / "branches").exists()
+            assert not (destination / "rollout/current.json").exists()
             gradients = sorted(output.glob("grad_*.pt"))
             assert len(gradients) == len(steps)
             norms = []
@@ -240,7 +228,8 @@ def execute(*, model_path=None, prompt_data=None, work_dir=None, num_gpus_per_no
                     marker = json.loads((physical / "rollout" / f"committed_{step}.json").read_text())
                     assert marker["rollout_id"] == step and marker["resumable"]
             if name == "parent":
-                assert json.loads(current.read_text())["tracker"].strip() == "2"
+                assert (parent / "latest_checkpointed_iteration.txt").read_text().strip() == "2"
+                checkpoint_hash = hashlib.sha256((parent / "rollout/committed_1.json").read_bytes()).hexdigest()
                 # Present a real model checkpoint with only the legacy dataset
                 # cursor: missing queue state must select an empty namespace.
                 legacy.mkdir()
@@ -255,22 +244,15 @@ def execute(*, model_path=None, prompt_data=None, work_dir=None, num_gpus_per_no
                     assert len(archive.load_samples(sample_key=sample_key)) == 1
                     assert len(archive.load_samples(task_key=task_key)) == 4
                     archive.export_pt(root / "legacy.pt")
-            elif name in {"child", "repeat", "tracker", "resume"}:
-                assert physical != previous_branch
+            elif name in {"rewind", "repeat", "tracker", "resume"}:
+                assert physical == parent
                 report = json.loads((physical / "restored_source.json").read_text())
                 assert report["expected_cursor"] == report["restored_cursor"]
-                assert report["ready_groups"] >= 2 and report["worker_count"] >= 1
-                if name != "resume":
-                    assert not (physical / "iter_0000001").exists()
-                with RolloutArchive(output / f"debug_{steps[0]}.straw.json") as archive:
-                    assert sample_values(archive.load_samples()) == expected_samples
-                if name != "resume":
-                    with RolloutArchive(outputs / "parent/debug_2.straw.json") as old, RolloutArchive(
-                        output / "debug_2.straw.json"
-                    ) as new:
-                        assert {task for _, task in old.keys()}.isdisjoint(task for _, task in new.keys())
-                previous_branch = physical
-                print(f"{name}: restored checkpoint before generation: {report}", flush=True)
+                assert report["regenerated_ready_groups"] >= 2
+                assert (
+                    hashlib.sha256((parent / "rollout/committed_1.json").read_bytes()).hexdigest() == checkpoint_hash
+                )
+                print(f"{name}: regenerated checkpoint inputs: {report}", flush=True)
             elif name == "empty":
                 report = json.loads((physical / "restored_source.json").read_text())
                 assert report["tasks"] == []
@@ -282,14 +264,6 @@ def execute(*, model_path=None, prompt_data=None, work_dir=None, num_gpus_per_no
                     output / "debug_0.straw.json"
                 ) as new:
                     assert sample_values(old.load_samples()) == sample_values(new.load_samples())
-            assert all(
-                hashlib.sha256(path.read_bytes()).hexdigest() == value for path, value in immutable_hashes.items()
-            )
-            # current.json is intentionally mutable; every committed index and
-            # prior debug archive remains immutable through repeated restores.
-            for path in list((physical / "rollout").glob("*.json")) + list(output.glob("*.json")):
-                if path.name not in {"current.json", "branch.json", "fork-active.json"}:
-                    immutable_hashes[path] = hashlib.sha256(path.read_bytes()).hexdigest()
             print(f"{name}: steps {steps}, gradient norms {norms}, archive checks passed", flush=True)
 
 

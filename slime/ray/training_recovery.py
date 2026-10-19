@@ -294,18 +294,24 @@ class TrainingRecovery:
 
     def reconcile_checkpoint(self):
         """A joint commit may have succeeded just before its manager RPC was lost."""
-        if self.args.rollout_data_transport != "straw" or not self.checkpoint.save:
+        if not self.loaded or self.args.rollout_data_transport != "straw" or not self.checkpoint.save:
             return
         from slime.data.checkpoint import _read_checkpoint
 
+        # Cold startup already selected its model boundary. Only adopt commits
+        # made after that boundary; its rollout data may have needed a reset.
+        restored_step = self.checkpoint_step
+        if restored_step is None:
+            restored_step = (self.checkpoint.start_rollout_id or 0) - 1
+
         root = Path(self.checkpoint.save)
         steps = [int(path.stem.removeprefix("committed_")) for path in (root / "rollout").glob("committed_*.json")]
-        if steps and (self.checkpoint_step is None or max(steps) > self.checkpoint_step):
+        if steps and max(steps) > restored_step:
             step = max(steps)
             _read_checkpoint(root, step)
             self.checkpoint_committed(step)
 
-    def reconcile_collection(self, controller, branch_id):
+    def reconcile_collection(self, controller, execution_id):
         """Recover a collection accepted just before the manager journal write."""
         if not self.loaded:
             # Model loading has not selected the first rollout yet, so this
@@ -317,7 +323,7 @@ class TrainingRecovery:
         # accepted without reaching remember_raw(). The queue owns that fact;
         # reuse its original receipt before fencing/replaying the old readers.
         rollout_id = max(self.batches, default=self.checkpoint.start_rollout_id - 1) + 1
-        task = ray.get(controller.status.remote(f"collection:{branch_id}:{rollout_id}"))
+        task = ray.get(controller.status.remote(f"collection:{execution_id}:{rollout_id}"))
         if task is not None and task["state"] == "completed":
             receipt = ray.get(controller.result.remote(Lease(**task["lease"])))
             self.remember_raw(rollout_id, RawRolloutRef(receipt.result_ref, self.args.rollout_data_dir, receipt))

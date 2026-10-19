@@ -436,7 +436,7 @@ jobs:
             {
               "num_gpus": 4,
               "straw": true,
-              "test_file": "test_straw_checkpoint_fork.py"
+              "test_file": "test_straw_checkpoint_rewind.py"
             },
             {
               "num_gpus": 4,
@@ -1696,7 +1696,7 @@ jobs:
             {
               "num_gpus": 4,
               "straw": true,
-              "test_file": "test_straw_checkpoint_fork.py"
+              "test_file": "test_straw_checkpoint_rewind.py"
             },
             {
               "num_gpus": 4,

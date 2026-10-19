@@ -158,7 +158,7 @@ the serving cluster and queue controller.
 
 ### Resume or select a step
 
-To resume the latest completed checkpoint, use the same logical directories:
+To resume the latest completed checkpoint, use the same directories:
 
 ```bash
 --rollout-data-transport straw \
@@ -170,52 +170,53 @@ To resume the latest completed checkpoint, use the same logical directories:
 Whenever `--save` is set, Megatron requires a positive `--save-interval`.
 The example saves after each rollout; choose the interval for your workload.
 
-To restore the state saved after rollout 7, add `--ckpt-step 7`. The next rollout
-is 8. Keep the dataset, model/tokenizer configuration, straw run ID, storage
-profile and fully async worker topology consistent with the checkpoint.
-Optimizer and training RNG state must be present for training recovery.
+For example, load step 16 and resume training at step 17:
 
-Restoration creates an isolated queue sharing the checkpoint's immutable
-payloads. Pending/partial inputs and ready-group order come from that checkpoint,
-with the dataset cursor restored to the saved position. Later samples from the
-source run are excluded. Further writes leave the source checkpoint intact.
+```bash
+--load /shared/checkpoints/run \
+--save /shared/checkpoints/run \
+--ckpt-step 16
+```
 
-When `--save` already contains a run, outputs go to a unique `branches/<id>`
-directory. `rollout/current.json` tracks the active branch, so subsequent restarts
-can keep using the same logical `--load` and `--save`. If `--load` is omitted and
-`--save` has an active branch, it is resumed automatically. Startup logs the
-resolved paths. Give each run a fresh path for immutable `.straw.json` debug archives.
+Recovery uses the same output directory and queue. It removes later Straw queue
+records, source/builder checkpoints, and debug archives matching the configured
+output path. Rollout starts again at step 17. Prefetched ready groups and partial
+responses saved in the checkpoint are regenerated from their inputs; their old
+outputs are discarded. Prompt identities and the dataset cursor are preserved,
+and old leases cannot submit results to the restored queue.
 
-| Selection | Arguments |
-|---|---|
-| Step in the current branch's history | `--load /shared/checkpoints/run --ckpt-step 7` |
-| A particular branch | `--load /shared/checkpoints/run/branches/<id> --ckpt-step 7` |
-| An exact checkpoint | `--load /shared/checkpoints/run/rollout/committed_7.json` |
-| Separate output directory | `--save /shared/checkpoints/another-run` |
+Checkpoints through step 16 remain available. Later steps can be saved again at
+the original paths. With GC enabled, cleanup releases storage ownership and
+removes packs that no retained checkpoint or archive references. Straw cleanup
+does not delete model weight files.
 
-You can also edit `latest_checkpointed_iteration.txt` in the logical save
-directory or current branch to select an earlier step. Explicit `--ckpt-step`
-or an exact commit file takes precedence. Automatic selection uses completed
-model-and-queue checkpoints and does not follow a newer incomplete model save.
-It follows branch ancestry only up to each branch point; select an exact commit
-file to load an abandoned future from another branch.
+You can also edit `latest_checkpointed_iteration.txt` to select an earlier step,
+or use `--load /shared/checkpoints/run/rollout/committed_16.json`. An explicit
+`--ckpt-step` or commit file takes precedence. Automatic selection uses the
+latest completed model-and-queue checkpoint, ignoring newer incomplete saves.
+
+Keep the dataset, model/tokenizer configuration, Straw run ID and storage profile
+consistent with the checkpoint. Training recovery requires optimizer and training
+RNG state. Fully async workers restart with newly generated results.
 
 ### Missing state and recovery limits
 
-If the model exists but no queue snapshot was saved, recovery starts an empty
-queue. When `rollout/global_dataset_state_dict_<step>.pt` exists, its dataset
-cursor is restored; otherwise the dataset starts at offset 0 with a warning.
-No pending, partial or ready data is taken from another step. Missing models,
-incomplete or corrupt snapshots, missing payloads and unsupported snapshot
-versions raise errors instead of silently starting empty.
+Missing, corrupt or unsupported queue snapshots and missing payloads produce a
+warning and start an empty queue. Recovery uses a readable dataset cursor from
+the snapshot, then `rollout/global_dataset_state_dict_<step>.pt`, then offset 0
+if neither cursor is usable. Each queue checkpoint also saves this independent
+cursor file. The model still resumes from the selected step; outputs from other
+steps are not reused. Invalid model checkpoints, missing required optimizer/RNG
+state and configuration mismatches still raise errors.
 
 Before any model checkpoint exists, restarting the original run with the same
 `--save` and model/input configuration can recover persisted rollout work, but
 only before the first training batch has been planned. After batch planning,
 recovery requires a matching model/optimizer and rollout checkpoint.
 
-Recovery uses the original straw pool; copying a checkpoint directory alone
-does not copy its payloads. The recovery boundary is a completed rollout
+Full queue recovery uses the original straw pool; copying a checkpoint directory
+alone does not copy its payloads. Unavailable payloads trigger the dataset-cursor
+fallback above. The recovery boundary is a completed rollout
 training batch, not an optimizer microstep. GPU KV caches and generation RNG
 state are not restored, so newly generated tokens and random hooks may differ.
 

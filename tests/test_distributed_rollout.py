@@ -98,10 +98,9 @@ def test_queue_readers_keep_connections_and_progress_out_of_args(source_factory)
     receipt = pack_rollout_group(group, reader.args, 0, controller=reader.controller).receipt
     assert receipt is not None
     # Plugin code can copy/serialize configuration without inheriting another
-    # component's actor connection, active branch or current progress.
+    # component's actor connection, execution identity or current progress.
     assert vars(reader.args) == original
     assert vars(source_factory.args) == original
-    assert group[0]._queue_branch == source_factory.controller.branch_id
 
 
 def test_task_claims_and_producer_cursor_survive_recovery(source_factory):
@@ -460,7 +459,6 @@ def test_older_pending_snapshot_restores_prefix_as_a_delivery(source_factory):
     restored = reader.get_samples(1)[0]
     assert all(sample.tokens == [1, 2] for sample in restored)
     assert all(sample._queue_source_positions == [accepted.receipt.position] for sample in restored)
-    assert all(sample._queue_generation_start == 2 for sample in restored)
     assert all(sample._queue_lease["task_id"] != accepted.receipt.task_id for sample in restored)
     assert source_factory.controller.queue.read_commits().cursor == 1
 
@@ -1590,10 +1588,10 @@ def _rollout_args(tmp_path, *, fanout=False, transport="straw"):
 
 
 @pytest.mark.parametrize(
-    "fanout,transport,fork",
+    "fanout,transport,rewind",
     [(False, "straw", False), (True, "straw", False), (True, "straw", True)],
 )
-def test_two_ray_nodes_generate_transfer_and_restore(tmp_path, fanout, transport, fork):
+def test_two_ray_nodes_generate_transfer_and_restore(tmp_path, fanout, transport, rewind):
     multiplier = 2 if fanout else 1
     import ray
     from ray.cluster_utils import Cluster
@@ -1794,9 +1792,8 @@ def test_two_ray_nodes_generate_transfer_and_restore(tmp_path, fanout, transport
         source.close()
         source = None
         args.load = args.save
-        plan_args = RestorePlan(mode="snapshot" if fork else "resume")
-        if fork:
-            args.save = str(tmp_path / "fork-checkpoint")
+        plan_args = RestorePlan(mode="rewind" if rewind else "resume")
+        args.ckpt_step = 0
         source = QueueDataSource(args, restore_plan=plan_args)
         source.data_config["n_samples_per_prompt"] += 1
         with pytest.raises(ValueError, match="n_samples_per_prompt"):
@@ -1810,7 +1807,10 @@ def test_two_ray_nodes_generate_transfer_and_restore(tmp_path, fanout, transport
         assert not source.consumers  # Execution state is restored when fully async starts.
         source.save(0)  # Saving before the first generate must preserve the restored queue.
         actual = fetch(1)
-        assert actual == expected
+        if not rewind:
+            assert actual == expected
+        else:
+            assert not first.keys() & actual.keys()
         restored_group = source.get_samples(1)[0]
         assert not {sample.index for sample in restored_group} & (first.keys() | actual.keys())
         manager.eval(1)
@@ -1833,7 +1833,7 @@ def test_two_ray_nodes_generate_transfer_and_restore(tmp_path, fanout, transport
                         assert time.monotonic() < deadline, "all workers should receive work"
                         runtime.condition.wait(timeout=0.01)
                 failed = 0
-                if fanout:
+                if fanout and not rewind:
                     node = next(node for node in cluster.list_all_nodes() if node != cluster.head_node)
                     nodes = sorted(
                         ray.nodes(),
@@ -2459,14 +2459,15 @@ def test_queue_fetch_finishing_after_pause_preserves_group_without_new_generatio
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("source_factory", [True], indirect=True)
+@pytest.mark.parametrize("source_factory", [False, True], indirect=True)
 @pytest.mark.parametrize("interrupt_import", [False, True])
-def test_checkpoint_fork_restores_partial_ready_and_producer_without_parent_mutation(
-    source_factory, tmp_path, monkeypatch, interrupt_import
+@pytest.mark.parametrize("legacy_inputs", [False, True])
+def test_checkpoint_rewind_regenerates_partial_and_ready_with_saved_producer(
+    source_factory, tmp_path, monkeypatch, interrupt_import, legacy_inputs
 ):
     from straw.protocol import Lease, RecordSetRef
 
-    from slime.data.transport import DiskPayloadRef, load_rollout_samples, pack_rollout_group
+    from slime.data.transport import DiskPayloadRef, pack_rollout_group
     from slime.rollout.filter_hub.base_types import DynamicFilterOutput
 
     parent = source_factory.controller
@@ -2480,13 +2481,20 @@ def test_checkpoint_fork_restores_partial_ready_and_producer_without_parent_muta
     source.data_config = parent.configuration()
     partial, ready = source.get_samples(2)
     old_lease = Lease(**partial[0]._queue_lease)
+    original_prompts = {sample.index: sample.prompt for sample in partial + ready}
+    if legacy_inputs:
+        for sample in partial + ready:
+            del sample._queue_original_input
     for sample in partial:
         sample.tokens = [1, 2, 3]
         sample.response_length = 2
         sample.status = Sample.Status.ABORTED
         sample.rollout_routed_experts = torch.arange(4).reshape(2, 1, 2)
+        sample.prompt = "mutated during generation"
+        sample.metadata["generated"] = True
     source.add_samples([partial])
     for sample in ready:
+        sample.metadata["generated"] = True
         sample.tokens = [4, 5]
         sample.response_length = 1
         sample.reward = 1
@@ -2500,86 +2508,79 @@ def test_checkpoint_fork_restores_partial_ready_and_producer_without_parent_muta
     checkpoint = RecordSetRef.from_dict(index["manifest"])
     cursor = copy.deepcopy(parent.queue.producer_state("dataset"))
     saved_pending = DiskPayloadRef(checkpoint, source.args.rollout_data_dir).load()["reader"].load()["pending"].load()
-    saved_partial = next(task for task in saved_pending["tasks"] if task["task_id"] == old_lease.task_id)
-    original_tensor = saved_partial["input_ref"].load()[0].rollout_routed_experts
-    # Advance the original branch beyond K, including a newer version of A.
+    # Advance past the checkpoint, including a changed partial and later inputs.
     [newer] = source.get_samples(1)
     for sample in newer:
         sample.tokens.append(99)
-        sample.response_length += 1
     source.add_samples([newer])
-    # Refill on the parent after K; the child must not adopt this newer cursor.
     source.get_samples(8)
     assert (
         parent.queue.producer_state("dataset")["cursor"]["sample_group_index"] > cursor["cursor"]["sample_group_index"]
     )
-    parent_status = copy.deepcopy(parent.queue.tasks)
+    source.close()
+    parent.close()
 
     args = copy.copy(source.args)
-    args.load, args.save = source.args.save, str(tmp_path / "fork-checkpoint")
-    plan_args = RestorePlan(mode="snapshot")
-    fork = RolloutQueueController(args, restore_plan=plan_args)
+    args.load, args.ckpt_step = args.save, 7
+    plan_args = RestorePlan(mode="rewind")
+    restored = RolloutQueueController(args, restore_plan=plan_args)
     try:
         if interrupt_import:
-            submit = fork.queue.submit_tasks
+            original_reset = restored._reset_queue
 
-            def fail_after_pending(request_id, tasks, **kwargs):
-                result = submit(request_id, tasks, **kwargs)
-                if request_id.startswith("fork-pending:"):
-                    raise RuntimeError("import interrupted after durable submission")
-                return result
+            def reset_with_failure():
+                original_reset()
+                submit = restored.queue.submit_tasks
+
+                def fail_after_inputs(request_id, tasks, **kwargs):
+                    result = submit(request_id, tasks, **kwargs)
+                    if request_id.startswith("rewind-inputs:"):
+                        raise RuntimeError("import interrupted after durable submission")
+                    return result
+
+                monkeypatch.setattr(restored.queue, "submit_tasks", fail_after_inputs)
 
             with monkeypatch.context() as patch:
-                patch.setattr(fork.queue, "submit_tasks", fail_after_pending)
+                patch.setattr(restored, "_reset_queue", reset_with_failure)
                 with pytest.raises(RuntimeError, match="import interrupted"):
-                    fork.fork_source(checkpoint)
-            fork.close()
-            fork = RolloutQueueController(args, restore_plan=plan_args)
-        restored = fork.fork_source(checkpoint)
-        assert fork.fork_source(checkpoint) == restored
-        assert fork.queue.producer_state("dataset") == cursor
-        [assignment] = fork.take("new-reader", 1).assignments
-        actual = fork.codec.load(assignment.task.input_ref)
-        assert actual[0].tokens == [1, 2, 3]
-        assert actual[0].rollout_routed_experts.record_ref == original_tensor.record_ref
-        assert assignment.lease.queue_id != old_lease.queue_id
-        assert fork.heartbeat([old_lease]) == ["StaleAttempt"]
-        consumers = fork.codec.load(restored)
-        group, verdict = consumers["fully_async"]["scheduler"]["ready"][0]
-        assert verdict.keep and group.load().manifest == ready_ref.manifest
-        assert group.receipt.task_id.startswith("prompt:fork-ready:")
-        assert group.receipt != ready_ref.receipt
-        samples = load_rollout_samples([group])[0]
-        assert all(sample._queue_source_positions == [] for sample in samples)
-        assert parent.queue.tasks == parent_status
-        assert not fork.queue.batches
-        fork.queue.collect_garbage()
-        parent.queue.collect_garbage()
-        assert actual[0].rollout_routed_experts.load().tolist() == [[[0, 1]], [[2, 3]]]
-        fork.release([assignment.lease])
+                    restored.rewind(checkpoint)
+            restored.close()
+            restored = RolloutQueueController(args, restore_plan=plan_args)
+        restored.rewind(checkpoint)
+        restored.rewind(checkpoint)  # An RPC retry cannot reset admitted work.
+        assert restored.queue.producer_state("dataset") == cursor
+        assert restored.queue.queue_id == old_lease.queue_id
+        assert restored.heartbeat([old_lease]) == ["StaleAttempt"]
+        assert not restored.queue.batches and not restored.queue.commits
+        tasks = restored.queue.pending_tasks(task_prefix="prompt:")
+        actual = [restored.codec.load(task.input_ref) for task in tasks]
+        expected_ids = {
+            sample.index for task in saved_pending["tasks"] for sample in iter_samples(task["input_ref"].load())
+        } | {sample.index for sample in ready}
+        assert {sample.index for sample in iter_samples(actual)} == expected_ids
+        assert all(sample.status == Sample.Status.PENDING for sample in iter_samples(actual))
+        assert all(
+            sample.tokens == [] and sample.response == "" and sample.reward is None for sample in iter_samples(actual)
+        )
+        assert all(sample.rollout_routed_experts is None for sample in iter_samples(actual))
+        for sample in iter_samples(actual):
+            assert "generated" not in sample.metadata
+            if sample.index in original_prompts:
+                assert sample.prompt == original_prompts[sample.index]
+        assert all(not hasattr(sample, "_queue_receipt") for sample in iter_samples(actual))
+        if args.rollout_queue_online_gc:
+            restored.queue.collect_garbage()
+        assert DiskPayloadRef(checkpoint, args.rollout_data_dir).load()["version"] == 2
     finally:
-        fork.close()
-    with pytest.raises(ValueError, match="already started"):
-        RolloutQueueController(args, restore_plan=plan_args)
-    # A stopped child can also resume its own WAL, without reopening the parent.
-    args.load = args.save
-    plan_args = RestorePlan(mode="resume")
-    resumed = RolloutQueueController(args, restore_plan=plan_args)
+        restored.close()
+    # A supervisor restart may continue the freshly rebuilt WAL.
+    resumed = RolloutQueueController(args, restore_plan=RestorePlan(mode="resume"))
     try:
-        assert resumed.queue.queue_id == assignment.lease.queue_id
+        assert resumed.queue.queue_id == old_lease.queue_id
         assert resumed.queue.producer_state("dataset") == cursor
-        assert resumed.codec.load(resumed.take("resumed-reader", 1).assignments[0].task.input_ref)[0].tokens == [
-            1,
-            2,
-            3,
-        ]
-        # Exhaust the restored pending inputs so take() must read the dataset
-        # again. Checking only the WAL cursor could miss a producer that still
-        # uses its initial or the parent's newer in-memory offset.
-        pending = len(resumed.queue.pending_tasks(task_prefix="prompt:"))
-        if pending:
-            assert len(resumed.take("drain-saved", pending).assignments) == pending
-        [fresh] = resumed.take("fresh-after-fork", 1).assignments
+        count = len(resumed.queue.pending_tasks(task_prefix="prompt:"))
+        assert len(resumed.take("drain-saved", count).assignments) == count
+        [fresh] = resumed.take("fresh-after-rewind", 1).assignments
         samples = resumed.codec.load(fresh.task.input_ref)
         saved_cursor = cursor["cursor"]
         order = list(range(7))
@@ -2587,7 +2588,6 @@ def test_checkpoint_fork_restores_partial_ready_and_producer_without_parent_muta
         assert [sample.prompt for sample in samples] == [f"prompt-{order[saved_cursor['sample_offset']]}"] * 2
         assert [sample.index for sample in samples] == [saved_cursor["sample_index"], saved_cursor["sample_index"] + 1]
         assert all(sample.group_index == saved_cursor["sample_group_index"] for sample in samples)
-        assert parent.queue.tasks == parent_status
     finally:
         resumed.close()
 
@@ -2614,6 +2614,7 @@ def test_automatic_empty_restore_reads_the_saved_dataset_offset(source_factory, 
     args, plan_args = resolve_checkpoint(args)
     controller = RolloutQueueController(args, restore_plan=plan_args)
     try:
+        controller.rewind()
         assert controller.queue.tasks == {}
         assert controller.queue.queue_id != source_factory.controller.queue.queue_id
         [task] = controller.take("new-reader", 1).assignments
@@ -2641,7 +2642,7 @@ def test_automatic_restart_before_first_checkpoint_recovers_the_same_queue(
     args.start_rollout_id = None
     args, plan_args = resolve_checkpoint(args)
     if not started:
-        # Fail after branch publication, before the native queue exists.
+        # Fail after session publication, before the native queue exists.
         from straw.coordinator import Coordinator
 
         def interrupted(*args, **kwargs):
@@ -2704,6 +2705,181 @@ def test_training_progress_keeps_only_unfinished_batches(source_factory):
         sizes.append(RecordSetRef.from_dict(controller.training_state()["state_ref"]).payload_bytes)
     assert max(sizes) - min(sizes) < 32
     assert not controller.queue.batches  # one accepted log, no second batch history
+
+
+@pytest.mark.parametrize("source_factory", [True], indirect=True)
+def test_rewind_deletes_future_checkpoints_archives_and_unowned_packs(source_factory, tmp_path):
+    from straw.protocol import RecordSetRef
+
+    from slime.data.archive import RolloutArchive
+    from slime.data.checkpoint import commit_checkpoint, resolve_checkpoint
+    from slime.data.transport import pack_rollout_group
+
+    parent = source_factory.controller
+    source = source_factory("owner")
+    source.__class__ = QueueDataSource
+    source.restore_plan = RestorePlan()
+    source.restored_source = SourceRestore()
+    source._owns_controller = False
+    source.args.save = str(tmp_path / "checkpoints")
+    source.args.save_debug_rollout_data = str(tmp_path / "debug_{rollout_id}.straw.json")
+    source.consumers, source._restored_consumers = {}, {}
+    source.data_config = parent.configuration()
+    source.update_metadata({"dataset_note": "preserve"})
+    source.save(16)
+    boundary = Path(source.args.save) / "rollout/queue_state_16.json"
+    original = boundary.read_bytes()
+    checkpoint = RecordSetRef.from_dict(json.loads(original)["manifest"])
+    parent.store.seal()
+    [group] = source.get_samples(1)
+    for sample in group:
+        sample.response = "discard this future"
+        sample.tokens = [1, 2]
+        sample.response_length = 1
+        sample.status = Sample.Status.COMPLETED
+        sample.reward = 1
+    future = pack_rollout_group(group, source.args, 17, controller=source.controller)
+    future_pack = parent.store.backend.root / future.manifest.manifest.segment.path
+    RolloutArchive.save(tmp_path / "debug_17.straw.json", group, rollout_id=17, args=source.args)
+    RolloutArchive.save(tmp_path / "debug_eval_17.straw.json", group, rollout_id=17, evaluation=True, args=source.args)
+    source.save(17)
+    rollout = Path(source.args.save) / "rollout"
+    for step in (16, 17):
+        model = Path(source.args.save) / f"iter_{step:07d}"
+        model.mkdir()
+        (model / "weights.pt").write_bytes(b"model and optimizer")
+        (rollout / f"builder_state_{step}.json").write_text("{}")
+        commit_checkpoint(source.args, step, model_args=[source.args])
+    source.close()
+    parent.close()
+    assert future_pack.exists()
+    args = copy.copy(source.args)
+    args.load, args.ckpt_step = args.save, 16
+    args.start_rollout_id = None
+    args, plan = resolve_checkpoint(args)
+    assert args.start_rollout_id == 17 and args.load == args.save
+    restored = RolloutQueueController(args, restore_plan=plan)
+    restored_source = QueueDataSource(
+        args, controller=_LocalHandle(restored), restore_plan=plan, reader_generation="resumed"
+    )
+    try:
+        assert restored_source.load(16).queue_reset
+        assert restored_source.get_metadata() == {"dataset_note": "preserve"}
+        assert not restored_source._restored_consumers
+        assert not json.loads((rollout / "session.json").read_text())["rewind_pending"]
+        assert boundary.read_bytes() == original
+        assert not list(rollout.glob("*_17.json"))
+        assert not (tmp_path / "debug_17.straw.json").exists()
+        assert not (tmp_path / "debug_eval_17.straw.json").exists()
+        assert not future_pack.exists()
+        assert not restored.queue.commits
+        assert restored.codec.load(checkpoint)["version"] == 2
+    finally:
+        restored_source.close()
+        restored.close()
+
+
+@pytest.mark.parametrize("source_factory", [False, True], indirect=True)
+@pytest.mark.parametrize("cursor_file", ["valid", "missing", "corrupt"])
+@pytest.mark.parametrize(
+    "damage", ["index", "late-index", "payload", "corrupt-payload", "input", "builder", "consumer"]
+)
+def test_unusable_snapshot_resumes_dataset_cursor(source_factory, tmp_path, caplog, cursor_file, damage):
+    from slime.data.checkpoint import commit_checkpoint, resolve_checkpoint
+    from slime.data.transport import DiskPayloadRef
+
+    parent = source_factory.controller
+    source = source_factory("owner")
+    source.__class__ = QueueDataSource
+    source.restore_plan = RestorePlan()
+    source.restored_source = SourceRestore()
+    source._owns_controller = False
+    source.args.save = str(tmp_path / "checkpoints")
+    source.consumers, source._restored_consumers = {}, {}
+    source.data_config = parent.configuration()
+    [group] = source.get_samples(1)
+    input_ref = group[0]._queue_original_input
+    source.add_samples([group])
+    parent.store.seal()  # Keep prompt inputs separate from the checkpoint records.
+    if damage == "consumer":
+        source._restored_consumers = {"unsupported": {}}
+    source.save(16)
+    root = Path(source.args.save)
+    rollout = root / "rollout"
+    index = rollout / "queue_state_16.json"
+    cursor_path = rollout / "global_dataset_state_dict_16.pt"
+    cursor = torch.load(cursor_path, weights_only=False)
+    assert cursor["sample_offset"] == 1 and cursor["epoch_id"] == 1
+    snapshot = json.loads(index.read_text())
+    model = root / "iter_0000016"
+    model.mkdir()
+    weights = model / "weights.pt"
+    weights.write_bytes(b"model-and-optimizer")
+    builder = rollout / "builder_state_16.json"
+    builder.write_text("{}")
+    commit_checkpoint(source.args, 16, model_args=[source.args], weight_version=25)
+    source.close()
+    parent.close()
+    if cursor_file == "missing":
+        cursor_path.unlink()
+    elif cursor_file == "corrupt":
+        cursor_path.write_bytes(b"broken cursor")
+    if damage == "index":
+        index.write_text("{")
+    elif damage == "builder":
+        builder.unlink()
+    elif damage in {"payload", "corrupt-payload"}:
+        from straw.protocol import RecordSetRef
+
+        ref = RecordSetRef.from_dict(snapshot["manifest"])
+        pack = Path(source.args.rollout_data_dir) / ref.manifest.segment.path
+        if damage == "payload":
+            pack.unlink()
+        else:
+            pack.write_bytes(b"corrupt pack")
+    elif damage == "input":
+        (Path(source.args.rollout_data_dir) / input_ref.manifest.manifest.segment.path).unlink()
+    args = copy.copy(source.args)
+    args.load, args.ckpt_step, args.start_rollout_id = args.save, 16, None
+    args, plan = resolve_checkpoint(args)
+    if damage == "late-index":
+        index.write_text("{")  # Also cover damage detected after startup selection.
+    # Corrupt future metadata must not prevent clearing the abandoned future.
+    future = rollout / "queue_state_17.json"
+    future.write_text("{")
+    restored = RolloutQueueController(args, restore_plan=plan)
+    reader = QueueDataSource(args, controller=_LocalHandle(restored), restore_plan=plan)
+    try:
+        result = reader.load(16)
+        assert result.queue_reset and result.source_ref is None
+        assert args.ckpt_step == 16 and args.start_rollout_id == 17
+        assert args.update_weight_start_version == 25
+        assert weights.read_bytes() == b"model-and-optimizer"
+        assert not future.exists() and not restored.queue.tasks and not restored.queue.commits
+        saved_cursor = damage == "consumer" or cursor_file == "valid"
+        expected = (
+            cursor
+            if saved_cursor
+            else dict(sample_offset=0, epoch_id=0, sample_group_index=0, sample_index=0, metadata={})
+        )
+        assert restored.queue.producer_state("dataset")["cursor"] == expected
+        [fresh] = reader.get_samples(1)
+        order = list(range(7))
+        random.Random(31 + expected["epoch_id"]).shuffle(order)
+        assert [sample.prompt for sample in fresh] == [f"prompt-{order[expected['sample_offset']]}"] * 2
+        assert fresh[0].index == expected["sample_index"]
+        assert all(sample.status == Sample.Status.PENDING for sample in fresh)
+        assert "empty" in caplog.text
+        reader.add_samples([fresh])
+        reader.save(17)  # The replacement checkpoint must be independently readable.
+        replacement = json.loads(future.read_text())
+        from straw.protocol import RecordSetRef
+
+        state = DiskPayloadRef(RecordSetRef.from_dict(replacement["manifest"]), replacement["root"]).load()
+        assert state["version"] == 2
+    finally:
+        reader.close()
+        restored.close()
 
 
 if __name__ == "__main__":

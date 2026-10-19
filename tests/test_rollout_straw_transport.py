@@ -932,7 +932,7 @@ def test_straw_debug_archive_uses_existing_train_only_conversion(args, tmp_path)
 
 
 @pytest.mark.parametrize("step", [0, 7])
-def test_fork_requires_committed_model_and_source_and_restores_weight_version(tmp_path, step):
+def test_restore_keeps_model_and_weight_version_when_source_is_corrupt(tmp_path, step, caplog):
     import json
 
     from slime.data.checkpoint import commit_checkpoint, resolve_checkpoint
@@ -963,8 +963,10 @@ def test_fork_requires_committed_model_and_source_and_restores_weight_version(tm
     assert restore.rollout_data_dir == args.rollout_data_dir
     assert not (tmp_path / "child").exists()  # Selection does not mutate the parent or create a job.
     (rollout / f"queue_state_{step}.json").write_text("changed")
-    with pytest.raises(ValueError, match="changed"):
-        restore, _ = resolve_checkpoint(restore)
+    restore, plan = resolve_checkpoint(restore)
+    assert plan.mode == "empty"
+    assert restore.ckpt_step == step and restore.update_weight_start_version == step + 1
+    assert "Cannot restore rollout checkpoint" in caplog.text
 
 
 @pytest.mark.parametrize("fail_at", [None, "actor", "critic", "rollout"])
@@ -1170,20 +1172,21 @@ def test_stateless_checkpoint_requires_scheduler_and_allows_optimizer_omission(t
     assert "iter_0000000/opt_param_scheduler.pt" in committed["files"]
     restored = _checkpoint_args(root, tmp_path / "child", step=0)
     restored.use_stateless_adam = restored.no_load_optim = True
-    assert resolve_checkpoint(restored)[1].mode == "snapshot"
+    restored, plan = resolve_checkpoint(restored)
+    assert plan.mode == "rewind"
     scheduler.unlink()
     with pytest.raises((FileNotFoundError, ValueError), match="opt_param_scheduler"):
         resolve_checkpoint(_checkpoint_args(root, tmp_path / "broken", step=0))
 
 
-def _checkpoint_fixture(root, step, pool, *, queue=True, restore_plan=None):
+def _checkpoint_fixture(root, step, pool, *, queue=True):
     """Write real joint-commit metadata around tiny model payload fixtures."""
     import json
 
     from slime.data.checkpoint import commit_checkpoint
 
     model = root / f"iter_{step:07d}"
-    model.mkdir(parents=True)
+    model.mkdir(parents=True, exist_ok=True)
     (model / "weights.pt").write_bytes(f"model-{root.name}-{step}".encode())
     (root / "latest_checkpointed_iteration.txt").write_text(str(step))
     rollout = root / "rollout"
@@ -1192,7 +1195,7 @@ def _checkpoint_fixture(root, step, pool, *, queue=True, restore_plan=None):
         for name in ("queue_state", "builder_state"):
             (rollout / f"{name}_{step}.json").write_text(json.dumps({"test": name}))
         args = SimpleNamespace(save=str(root), rollout_data_dir=str(pool), rollout_queue_run_id="rollout")
-        commit_checkpoint(args, step, model_args=[args], restore_plan=restore_plan)
+        commit_checkpoint(args, step, model_args=[args])
 
 
 def _checkpoint_args(load, save, *, step=None):
@@ -1206,58 +1209,76 @@ def _checkpoint_args(load, save, *, step=None):
     )
 
 
-def test_automatic_checkpoint_branches_repeat_save_and_resume_current(tmp_path):
-    import json
-
+def test_checkpoint_restart_keeps_directory_and_removes_future(tmp_path):
     from slime.data.checkpoint import resolve_checkpoint
+    from slime.data.rewind import discard_future
 
     root, pool = tmp_path / "run", tmp_path / "pool"
-    _checkpoint_fixture(root, 1, pool)
-    _checkpoint_fixture(root, 2, pool)
-    old_weight = (root / "iter_0000002/weights.pt").read_bytes()
-    branches = []
+    _checkpoint_fixture(root, 16, pool)
+    _checkpoint_fixture(root, 17, pool)
     for _ in range(2):
-        args = _checkpoint_args(root, root, step=1)
-        args, plan_args = resolve_checkpoint(args)
-        assert args.ckpt_step == 1 and args.start_rollout_id == 2
-        assert (plan_args.mode == "snapshot") and not (plan_args.mode == "resume")
-        destination = Path(args.save)
-        assert destination.parent == root / "branches" and destination not in branches
-        with closing(RolloutQueueController(args, restore_plan=plan_args)):
-            assert json.loads((root / "rollout/current.json").read_text())["directory"] == str(destination)
-            _checkpoint_fixture(destination, 2, pool)
-        branches.append(destination)
-    assert (root / "iter_0000002/weights.pt").read_bytes() == old_weight
-    # A newer but unfinished model write must not beat the last joint commit.
-    (branches[-1] / "iter_0000003").mkdir()
-    (branches[-1] / "latest_checkpointed_iteration.txt").write_text("3")
-    resumed = _checkpoint_args(root, root)
-    resumed, _ = resolve_checkpoint(resumed)
-    assert resumed.load == str(branches[-1]) and resumed.ckpt_step == 2
-    assert resumed.save not in map(str, branches)
-    assert resumed.rollout_data_dir == str(pool)
+        args, plan = resolve_checkpoint(_checkpoint_args(root, root, step=16))
+        assert args.ckpt_step == 16 and args.start_rollout_id == 17
+        assert plan.mode == "rewind" and args.save == args.load == str(root)
+        assert (root / "rollout/committed_17.json").exists()  # Resolution is read-only.
+        with closing(RolloutQueueController(args, restore_plan=plan)) as controller:
+            discard_future(args, controller.store, 16)
+            controller._finish_restore()
+            assert not (root / "rollout/committed_17.json").exists()
+            assert not (root / "rollout/queue_state_17.json").exists()
+            assert not (root / "rollout/builder_state_17.json").exists()
+            assert (root / "rollout/committed_16.json").exists()
+            assert (root / "latest_checkpointed_iteration.txt").read_text() == "16"
+            _checkpoint_fixture(root, 17, pool)
+        assert not (root / "branches").exists()
+        assert not (root / "rollout/current.json").exists()
+        assert not (root / "rollout/branch.json").exists()
+    (root / "latest_checkpointed_iteration.txt").write_text("18")
+    resumed, _ = resolve_checkpoint(_checkpoint_args(root, root))
+    assert resumed.load == resumed.save == str(root) and resumed.ckpt_step == 17
 
 
-def test_manual_branch_and_commit_selection_exclude_abandoned_future(tmp_path):
+def test_interrupted_cleanup_retries_selected_boundary_before_inspecting_future(tmp_path, monkeypatch):
+    from slime.data.checkpoint import resolve_checkpoint
+    from slime.data.rewind import discard_future
+
+    root, pool = tmp_path / "run", tmp_path / "pool"
+    _checkpoint_fixture(root, 16, pool)
+    _checkpoint_fixture(root, 17, pool)
+    args, plan = resolve_checkpoint(_checkpoint_args(root, root, step=16))
+    unlink = Path.unlink
+
+    def interrupt(path, *args, **kwargs):
+        unlink(path, *args, **kwargs)
+        if path.name == "builder_state_17.json":
+            raise OSError("cleanup interrupted")
+
+    with closing(RolloutQueueController(args, restore_plan=plan)) as controller:
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "unlink", interrupt)
+            with pytest.raises(OSError, match="cleanup interrupted"):
+                discard_future(args, controller.store, 16)
+    # The future marker now points at an incomplete checkpoint. Its contents
+    # must not override the durable rollback request on a plain restart.
+    resumed, plan = resolve_checkpoint(_checkpoint_args(root, root))
+    assert resumed.ckpt_step == 16 and resumed.start_rollout_id == 17
+    with closing(RolloutQueueController(resumed, restore_plan=plan)) as controller:
+        discard_future(resumed, controller.store, 16)
+        controller._finish_restore()
+    assert not (root / "rollout/committed_17.json").exists()
+    assert (root / "rollout/committed_16.json").exists()
+
+
+def test_explicit_commit_selection(tmp_path):
     from slime.data.checkpoint import resolve_checkpoint
 
     root, pool = tmp_path / "run", tmp_path / "pool"
     _checkpoint_fixture(root, 1, pool)
     _checkpoint_fixture(root, 3, pool)
-    fork = _checkpoint_args(root, root, step=1)
-    fork, plan_fork = resolve_checkpoint(fork)
-    with closing(RolloutQueueController(fork, restore_plan=plan_fork)):
-        _checkpoint_fixture(Path(fork.save), 2, pool)
-    with pytest.raises(ValueError, match="No committed"):
-        resolve_checkpoint(_checkpoint_args(root, tmp_path / "other", step=3))
-    exact = _checkpoint_args(root / "rollout/committed_3.json", tmp_path / "manual")
-    exact, _ = resolve_checkpoint(exact)
-    assert exact.load == str(root) and exact.ckpt_step == 3
-    branch = _checkpoint_args(fork.save, tmp_path / "branch", step=2)
-    branch, _ = resolve_checkpoint(branch)
-    assert branch.load == fork.save and branch.ckpt_step == 2
+    exact, _ = resolve_checkpoint(_checkpoint_args(root / "rollout/committed_3.json", root))
+    assert exact.load == exact.save == str(root) and exact.ckpt_step == 3
     with pytest.raises(ValueError, match="differs"):
-        resolve_checkpoint(_checkpoint_args(root / "rollout/committed_3.json", tmp_path / "bad", step=1))
+        resolve_checkpoint(_checkpoint_args(root / "rollout/committed_3.json", root, step=1))
 
 
 def test_edited_tracker_rolls_back_and_explicit_step_takes_precedence(tmp_path):
@@ -1267,35 +1288,13 @@ def test_edited_tracker_rolls_back_and_explicit_step_takes_precedence(tmp_path):
     for step in (0, 1, 2):
         _checkpoint_fixture(root, step, pool)
     (root / "latest_checkpointed_iteration.txt").write_text("0")
-    args = _checkpoint_args(root, root)
-    args, _ = resolve_checkpoint(args)
+    args, _ = resolve_checkpoint(_checkpoint_args(root, root))
     assert args.ckpt_step == 0 and args.start_rollout_id == 1
-    explicit = _checkpoint_args(root, root, step=1)
-    explicit, plan_explicit = resolve_checkpoint(explicit)
-    assert explicit.ckpt_step == 1
-    with closing(RolloutQueueController(explicit, restore_plan=plan_explicit)):
-        assert (root / "latest_checkpointed_iteration.txt").read_text() == "1"
-        _checkpoint_fixture(Path(explicit.save), 2, pool, restore_plan=plan_explicit)
-    assert (root / "latest_checkpointed_iteration.txt").read_text() == "2"
-    # A normal restart selects the child, without treating its parent's model
-    # tracker (at the same logical root) as an instruction to leave the branch.
-    resumed = _checkpoint_args(root, root)
-    resumed, _ = resolve_checkpoint(resumed)
-    assert resumed.ckpt_step == 2 and resumed.load == explicit.save
-    (root / "latest_checkpointed_iteration.txt").write_text("1")
-    edited = _checkpoint_args(root, root)
-    edited, _ = resolve_checkpoint(edited)
-    assert edited.ckpt_step == 1 and edited.load == str(root)
-    # Users can also edit a physical branch's tracker.
-    _checkpoint_fixture(Path(explicit.save), 3, pool, restore_plan=plan_explicit)
-    (Path(explicit.save) / "latest_checkpointed_iteration.txt").write_text("2")
-    physical = _checkpoint_args(explicit.save, tmp_path / "physical")
-    physical, _ = resolve_checkpoint(physical)
-    assert physical.ckpt_step == 2
+    explicit, _ = resolve_checkpoint(_checkpoint_args(root, root, step=1))
+    assert explicit.ckpt_step == 1 and explicit.save == str(root)
     (root / "latest_checkpointed_iteration.txt").write_text("3\n")
-    through_logical_root = _checkpoint_args(root, root)
-    through_logical_root, _ = resolve_checkpoint(through_logical_root)
-    assert through_logical_root.ckpt_step == 2 and through_logical_root.load == explicit.save
+    latest, _ = resolve_checkpoint(_checkpoint_args(root, root))
+    assert latest.ckpt_step == 2 and latest.load == str(root)
 
 
 def test_edited_tracker_with_missing_queue_snapshot_starts_empty(tmp_path):
@@ -1314,7 +1313,7 @@ def test_edited_tracker_with_missing_queue_snapshot_starts_empty(tmp_path):
         resolve_checkpoint(_checkpoint_args(root, root))
 
 
-def test_branch_without_first_commit_recovers_its_parent(tmp_path):
+def test_restart_before_first_new_commit_keeps_selected_checkpoint(tmp_path):
     from slime.data.checkpoint import resolve_checkpoint
 
     parent, child = tmp_path / "parent", tmp_path / "child"
@@ -1326,7 +1325,7 @@ def test_branch_without_first_commit_recovers_its_parent(tmp_path):
     again = _checkpoint_args(child, child)
     again, _ = resolve_checkpoint(again)
     assert again.load == str(parent) and again.ckpt_step == 7
-    assert Path(again.save).parent == child / "branches"
+    assert Path(again.save) == child
 
 
 def test_initial_run_recovers_wal_without_queue_flags(tmp_path):
@@ -1343,7 +1342,7 @@ def test_initial_run_recovers_wal_without_queue_flags(tmp_path):
         again = _checkpoint_args(load, root)
         again.hf_checkpoint = "initial-model"
         again, plan_again = resolve_checkpoint(again)
-        assert (plan_again.mode == "resume") and not (plan_again.mode == "snapshot")
+        assert (plan_again.mode == "resume") and not (plan_again.mode == "rewind")
         assert (plan_again.queue_id) == (plan_first.queue_id)
         assert again.load is None and again.save == first.save
         assert again.rollout_data_dir == first.rollout_data_dir
@@ -1367,7 +1366,7 @@ def test_checkpoint_directory_lock_and_stale_selection(tmp_path):
                 pytest.fail("Concurrent job acquired the save directory")
     with pytest.raises(RuntimeError, match="changed during startup"):
         with closing(RolloutQueueController(stale, restore_plan=plan_stale)):
-            pytest.fail("Stale selection replaced the current branch")
+            pytest.fail("Stale selection replaced the current session")
     # Both failed constructors must release their descriptors, even while their
     # exceptions may still be retained by the caller.
     again = _checkpoint_args(root, root)
@@ -1486,10 +1485,10 @@ def test_missing_queue_snapshot_starts_empty_without_touching_old_model(tmp_path
     before = (root / "iter_0000007/weights.pt").read_bytes()
     args = _checkpoint_args(root, root, step=7)
     args, plan_args = resolve_checkpoint(args)
-    assert (plan_args.mode == "empty") and not (plan_args.mode == "snapshot")
+    assert (plan_args.mode == "empty") and not (plan_args.mode == "rewind")
     assert plan_args.dataset_cursor == (str(cursor) if has_cursor else None)
     assert args.start_rollout_id == 8 and args.load == str(root)
-    assert Path(args.save).parent == root / "branches"
+    assert Path(args.save) == root
     assert "new empty queue" in caplog.text
     if not has_cursor:
         assert "offset 0" in caplog.text
@@ -1501,7 +1500,7 @@ def test_missing_queue_snapshot_starts_empty_without_touching_old_model(tmp_path
     assert (root / "iter_0000007/weights.pt").read_bytes() == before
 
 
-def test_missing_model_or_broken_queue_snapshot_never_falls_back(tmp_path):
+def test_broken_rollout_falls_back_but_missing_model_still_fails(tmp_path, caplog):
     from slime.data.checkpoint import resolve_checkpoint
 
     root = tmp_path / "legacy"
@@ -1511,12 +1510,16 @@ def test_missing_model_or_broken_queue_snapshot_never_falls_back(tmp_path):
     with pytest.raises(FileNotFoundError, match="model checkpoint"):
         resolve_checkpoint(_checkpoint_args(root, tmp_path / "missing", step=8))
     (root / "rollout/queue_state_7.json").write_text("{}")
-    with pytest.raises(ValueError, match="without a complete joint commit"):
-        resolve_checkpoint(_checkpoint_args(root, tmp_path / "broken", step=7))
+    _, plan = resolve_checkpoint(_checkpoint_args(root, tmp_path / "broken", step=7))
+    assert plan.mode == "empty"
     _checkpoint_fixture(root, 9, tmp_path / "pool")
     (root / "rollout/queue_state_9.json").unlink()
+    _, plan = resolve_checkpoint(_checkpoint_args(root, tmp_path / "lost", step=9))
+    assert plan.mode == "empty"
+    assert "Cannot restore rollout checkpoint" in caplog.text
+    (root / "iter_0000009/weights.pt").unlink()
     with pytest.raises(FileNotFoundError):
-        resolve_checkpoint(_checkpoint_args(root, tmp_path / "lost", step=9))
+        resolve_checkpoint(_checkpoint_args(root, tmp_path / "missing-model", step=9))
 
 
 if __name__ == "__main__":
