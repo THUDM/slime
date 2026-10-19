@@ -25,6 +25,7 @@ class _FakeUpdater:
     [
         pytest.param("delta", "disk", False, "update_weight_from_disk_delta", "UpdateWeightFromDiskDelta", id="delta"),
         pytest.param("full", "disk", False, "update_weight_from_disk", "UpdateWeightFromDisk", id="disk"),
+        pytest.param("full", "p2p", False, "update_weight_from_p2p", "UpdateWeightFromP2P", id="p2p"),
         pytest.param("full", "nccl", True, "update_weight_from_tensor", "UpdateWeightFromTensor", id="colocated"),
         pytest.param(
             "full",

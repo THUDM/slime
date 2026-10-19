@@ -712,5 +712,68 @@ def test_isolated_server_launch_waits_for_node_zero_before_registering(monkeypat
     engine._register_to_router.assert_called_once_with(args)
 
 
+@pytest.mark.parametrize("overrides", [None, {"custom_weight_loader": ["custom.loader"]}])
+@pytest.mark.parametrize("role", ["regular", "prefill", "decode"])
+def test_p2p_registers_loader_after_per_group_overrides(monkeypatch, overrides, role):
+    from slime.backends.sglang_utils.p2p import LOADER
+    from slime.backends.sglang_utils.sglang_engine import _compute_server_args
+    from slime.utils import accelerator
+
+    monkeypatch.setattr(accelerator, "resolve_visible_device_id", lambda index: index)
+    args = Namespace(
+        hf_checkpoint="/tmp/hf",
+        seed=1,
+        offload_rollout=False,
+        rollout_num_gpus_per_engine=2,
+        num_gpus_per_node=4,
+        sglang_pp_size=1,
+        sglang_dp_size=1,
+        sglang_ep_size=2,
+        use_rollout_routing_replay=False,
+        fp16=False,
+        update_weight_transport="p2p",
+    )
+    kwargs, _ = _compute_server_args(
+        args,
+        rank=0,
+        dist_init_addr="127.0.0.1:12345",
+        nccl_port=12346,
+        host="127.0.0.1",
+        port=30000,
+        base_gpu_id=0,
+        sglang_overrides=overrides,
+        worker_type=role,
+        disaggregation_bootstrap_port=30001,
+    )
+    assert kwargs["custom_weight_loader"] == (["custom.loader", LOADER] if overrides else [LOADER])
+    if overrides:
+        assert overrides == {"custom_weight_loader": ["custom.loader"]}
+    with pytest.raises(ValueError, match="PP=1"):
+        _compute_server_args(
+            args,
+            rank=0,
+            dist_init_addr="127.0.0.1:12345",
+            nccl_port=12346,
+            host="127.0.0.1",
+            port=30000,
+            base_gpu_id=0,
+            sglang_overrides={"pp_size": 2},
+        )
+    if role != "regular":
+        args.flush_cache_interval = 0
+        with pytest.raises(ValueError, match="PD requires --flush-cache-interval=1"):
+            _compute_server_args(
+                args,
+                rank=0,
+                dist_init_addr="127.0.0.1:12345",
+                nccl_port=12346,
+                host="127.0.0.1",
+                port=30000,
+                base_gpu_id=0,
+                worker_type=role,
+                disaggregation_bootstrap_port=30001,
+            )
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))

@@ -11,13 +11,14 @@ This page is a roadmap. Use it to decide when to use `--rollout-external-engine-
 | Engines are already launched externally and slime should only connect for rollout | `--rollout-external-engine-addrs` |
 | slime should still launch engines, but you need PD disaggregation, multi-model serving, heterogeneous server groups, or per-group overrides | [SGLang Config](sglang-config.md) |
 | slime should launch engines using a separate Python or activated conda environment | [`--sglang-python-executable`](sglang-config.md#independent-sglang-python-environment) |
+| Separate Megatron and SGLang runtimes with a compatible GPU RDMA network | [P2P weight synchronization](p2p-weight-sync.md) |
 | Trainer and external engines can form an NCCL group | Default `--update-weight-mode full --update-weight-transport nccl` |
 | Trainer and external engines cannot form an NCCL group, but can see the same filesystem path | `--update-weight-mode full --update-weight-transport disk` |
 | Full checkpoints are too heavy for large-model cross-cluster or cross-DC sync | `--update-weight-mode delta --update-weight-transport disk` |
 | Rollout serving can use an independent SGLang environment, or even different GPU models/vendors | external engines + disk transport |
 | You need frozen reference, reward, or tool-side models | Prefer `update_weights: false` in [SGLang Config](sglang-config.md#3-multi-model-serving) |
 
-Delta mode supports disk transport only. Use full mode when syncing weights over NCCL.
+Delta mode supports disk transport only. Use full mode when syncing weights over NCCL or P2P.
 
 ## What External Engine Does
 
