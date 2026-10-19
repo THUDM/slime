@@ -11,7 +11,7 @@ from sglang.srt.utils import kill_process_tree
 from urllib3.exceptions import NewConnectionError
 
 from slime.backends.sglang_utils.external import get_server_info
-from slime.backends.sglang_utils.server_control import unregister_worker
+from slime.backends.sglang_utils.server_control import register_worker, unregister_worker
 from slime.ray.ray_actor import RayActor
 from slime.utils import accelerator
 from slime.utils.http_utils import get_host_info
@@ -221,11 +221,7 @@ class SGLangEngine(RayActor):
                         "cannot register it to the PD router."
                     )
                 payload["bootstrap_port"] = bootstrap_port
-            response = requests.post(
-                f"http://{self.router_ip}:{self.router_port}/workers",
-                json=payload,
-            )
-            response.raise_for_status()
+            register_worker(f"http://{self.router_ip}:{self.router_port}", payload)
 
     def _make_request(self, endpoint: str, payload: dict | None = None, *, timeout=None):
         """Make a POST request to the specified endpoint with the given payload.
