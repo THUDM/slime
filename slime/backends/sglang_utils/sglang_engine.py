@@ -3,14 +3,19 @@ import ipaddress
 import logging
 import multiprocessing
 import os
+import sys
 import time
 
 import requests
 from sglang.srt.server_args import ServerArgs
-from sglang.srt.utils import kill_process_tree
 from urllib3.exceptions import NewConnectionError
 
 from slime.backends.sglang_utils.external import get_server_info
+from slime.backends.sglang_utils.runtime import (
+    launch_server_subprocess,
+    prepare_server_environment,
+    terminate_server_process,
+)
 from slime.backends.sglang_utils.server_control import unregister_worker
 from slime.ray.ray_actor import RayActor
 from slime.utils import accelerator
@@ -34,16 +39,9 @@ def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
     # Expandable segments help the colocated training actor tolerate repeated
     # cache releases, but SGLang's allocator/sleep path does not support them.
     # The rollout Ray actor inherits the job environment, so remove the option
-    # before spawning every SGLang server and its children.
-    os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
-    os.environ.pop("PYTORCH_ALLOC_CONF", None)
-
-    # Mooncake's default RPC range (15000-17000) overlaps our HTTP port
-    # allocation. Its workers can bind a port before another server starts.
-    # Preserve explicit ranges, including the legacy PRC spelling.
-    if not any(f"MC_{bound}_{spelling}_PORT" in os.environ for bound in ("MIN", "MAX") for spelling in ("RPC", "PRC")):
-        os.environ["MC_MIN_PRC_PORT"] = "27000"
-        os.environ["MC_MAX_PRC_PORT"] = "28000"
+    # before spawning every SGLang server and its children. Preserve pinned-host
+    # allocation settings and the existing Mooncake port-range defaults.
+    prepare_server_environment(os.environ)
 
     if getattr(server_args, "encoder_only", False):
         try:
@@ -76,6 +74,7 @@ def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
 
 
 def _launch_server(server_args, parent_pid):
+    _prepare_server_stdin()
     if getattr(server_args, "encoder_only", False):
         from sglang.srt.disaggregation.encoder.http_server import launch_server
     else:
@@ -87,6 +86,26 @@ def _launch_server(server_args, parent_pid):
     kill_itself_when_parent_died()
     if os.getppid() == parent_pid:
         launch_server(server_args)
+
+
+def _prepare_server_stdin():
+    # Uvicorn passes stdin's fd to spawn workers. Ray's nested spawn can leave
+    # sys.stdin on a nonstandard fd that is absent in those workers.
+    try:
+        if sys.stdin.fileno() == 0:
+            os.fstat(0)
+            return
+    except (AttributeError, OSError, ValueError):
+        pass
+    try:
+        sys.stdin.close()
+    except (AttributeError, OSError):
+        pass
+    descriptor = os.open(os.devnull, os.O_RDONLY)
+    if descriptor != 0:
+        os.dup2(descriptor, 0)
+        os.close(descriptor)
+    sys.stdin = os.fdopen(0, "r", closefd=False)
 
 
 def _wait_server_healthy(base_url, api_key, is_process_alive):
@@ -200,7 +219,17 @@ class SGLangEngine(RayActor):
             server_args_dict["model_path"], server_args_dict.get("json_model_override_args", "{}")
         )
         logger.info(f"Launch HttpServerEngineAdapter at: {self.server_host}:{self.server_port}")
-        self.process = launch_server_process(ServerArgs(**server_args_dict))
+        executable = getattr(self.args, "sglang_python_executable", None)
+        if executable:
+            self.process = launch_server_subprocess(executable, server_args_dict)
+            if self.node_rank == 0:
+                _wait_server_healthy(
+                    base_url=f"http://{self.server_host}:{self.server_port}",
+                    api_key=server_args_dict.get("api_key"),
+                    is_process_alive=lambda: self.process.poll() is None,
+                )
+        else:
+            self.process = launch_server_process(ServerArgs(**server_args_dict))
         self._register_to_router(server_args_dict)
 
     def _register_to_router(self, server_args_dict):
@@ -340,7 +369,7 @@ class SGLangEngine(RayActor):
                 # Even if router cleanup fails, terminate the local process.
                 # Owner-side cleanup keeps the URL outside this actor for retry.
                 logger.warning(f"Failed to fetch workers list or remove worker: {e}")
-        kill_process_tree(self.process.pid)
+        terminate_server_process(self.process)
 
     def get_weight_version(self):
         if self.node_rank != 0:

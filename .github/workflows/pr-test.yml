@@ -1120,6 +1120,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_sglang_runtime.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_cuda_stack_offload.py"
             },
             {
