@@ -1043,3 +1043,49 @@ def test_sampler_normalization_is_not_rechecked(mass):
     validate_sampler_top_p([0, 1], [0, 2], logps, 1)
     sample = Sample(response_length=1, rollout_topk_token_ids=[[0, 1]], rollout_topk_log_probs=[logps])
     validate_sampler_topk(sample, 2)
+
+
+@pytest.mark.parametrize("entropy_coef", [0.0, 0.13])
+@pytest.mark.parametrize("chunk_size", [-1, 2])
+@pytest.mark.parametrize("empty_response", [False, True])
+def test_joint_policy_outputs_match_separate_path(monkeypatch, entropy_coef, chunk_size, empty_response):
+    from megatron.core import mpu
+    from slime.backends.megatron_utils.loss import get_log_probs_and_entropy, get_score_centering_terms
+
+    monkeypatch.setattr(mpu, "get_tensor_model_parallel_group", lambda: None, raising=False)
+    batch = make_batch()
+    if empty_response:
+        batch["response_lengths"][0] = 0
+        for key in ("rollout_topk_token_ids", "rollout_topk_log_probs", "rollout_log_probs"):
+            batch[key][0] = batch[key][0][:0]
+    a = args(entropy_coef=entropy_coef, log_probs_chunk_size=chunk_size)
+    logits = torch.randn(1, 16, 12).requires_grad_()
+    joint = get_score_centering_terms(a, batch, logits, joint_log_probs=True)
+    separate = get_score_centering_terms(a, batch, logits)
+    _, scores = get_log_probs_and_entropy(
+        logits,
+        args=a,
+        unconcat_tokens=batch["unconcat_tokens"],
+        total_lengths=batch["total_lengths"],
+        response_lengths=batch["response_lengths"],
+        with_entropy=True,
+    )
+    separate.update(scores)
+    objectives = []
+    for result in (joint, separate):
+        objectives.append(
+            sum(x.sum() for x in result["log_probs"])
+            + result["sc_correction"].sum()
+            - entropy_coef * sum(x.sum() for x in result["entropy"])
+        )
+    for key in joint:
+        left, right = joint[key], separate[key]
+        if isinstance(left, list):
+            left, right = torch.cat(left), torch.cat(right)
+        torch.testing.assert_close(left, right, atol=2e-6, rtol=2e-6)
+    torch.testing.assert_close(
+        torch.autograd.grad(objectives[0], logits)[0],
+        torch.autograd.grad(objectives[1], logits)[0],
+        atol=2e-6,
+        rtol=2e-6,
+    )
