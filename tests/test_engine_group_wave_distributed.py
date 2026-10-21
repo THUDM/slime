@@ -1,3 +1,4 @@
+import ast
 import importlib.util
 import sys
 import types
@@ -285,6 +286,119 @@ def test_distributed_wave_waits_before_admitting_next_engines(monkeypatch):
         ("work.wait", 3),
         ("ray.get", ("ref-3",)),
     ]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("transport", ["full", "delta"])
+@pytest.mark.parametrize("limit", [0, 2])
+@pytest.mark.parametrize("version,flush", [(2, False), (3, True)])
+@pytest.mark.parametrize("fail_reload", [False, True])
+def test_disk_waves_preserve_cache_policy_and_wait_before_resume(transport, limit, version, flush, fail_reload):
+    from slime.utils.engine_group_wave import run_engine_group_waves
+    from slime.utils.weight_sync import should_flush_cache
+
+    events = []
+
+    class RemoteMethod:
+        def __init__(self, operation, index):
+            self.operation, self.index = operation, index
+
+        def remote(self, *args, **kwargs):
+            events.append(("call", self.operation, self.index, args, kwargs))
+            return self.operation, self.index
+
+    engines = [
+        types.SimpleNamespace(
+            **{
+                name: RemoteMethod(name, index)
+                for name in (
+                    "pull_weights",
+                    "pause_generation",
+                    "flush_cache",
+                    "update_weights_from_disk",
+                    "continue_generation",
+                )
+            }
+        )
+        for index in range(5)
+    ]
+
+    def wait(refs):
+        if isinstance(refs, list):
+            events.append(("wait", tuple(refs)))
+            if fail_reload and refs and refs[0][0] == "update_weights_from_disk":
+                raise RuntimeError("reload failed")
+        return refs
+
+    relative, method = (
+        ("slime/ray/actor_group.py", "_reload_rollout_weights_from_disk")
+        if transport == "full"
+        else (
+            "slime/backends/megatron_utils/update_weight/update_weight_from_disk_delta.py",
+            "_reload_engines",
+        )
+    )
+    path = REPO_ROOT / relative
+    function = next(
+        node
+        for node in ast.walk(ast.parse(path.read_text()))
+        if isinstance(node, ast.FunctionDef) and node.name == method
+    )
+    namespace = {
+        "ray": types.SimpleNamespace(get=wait),
+        "dist": types.SimpleNamespace(get_rank=lambda: 0, barrier=lambda **kwargs: None),
+        "get_gloo_group": lambda: None,
+        "run_engine_group_waves": run_engine_group_waves,
+        "should_flush_cache": should_flush_cache,
+    }
+    exec(
+        compile(ast.fix_missing_locations(ast.Module(body=[function], type_ignores=[])), str(path), "exec"), namespace
+    )
+    updater = types.SimpleNamespace(
+        args=Namespace(
+            offload_rollout=False,
+            update_weight_disk_keep_files=True,
+            update_weight_max_inflight_engine_groups=limit,
+            update_weight_local_checkpoint_dir="local-checkpoint",
+            flush_cache_interval=2,
+            ci_test=False,
+        ),
+        _rollout_manager=types.SimpleNamespace(
+            get_updatable_engines_and_lock=types.SimpleNamespace(remote=lambda: (engines,))
+        ),
+        rollout_engines=engines,
+        weight_version=version,
+        _post_write_hook=None,
+    )
+    arguments = (updater, "published-checkpoint", str(version)) if transport == "full" else (updater,)
+    if fail_reload:
+        with pytest.raises(RuntimeError, match="reload failed"):
+            namespace[method](*arguments)
+    else:
+        namespace[method](*arguments)
+
+    calls = [event for event in events if event[0] == "call"]
+    assert [event[1] for event in calls[:5]] == ["pull_weights"] * 5
+    pauses = [event for event in calls if event[1] == "pause_generation"]
+    assert len(pauses) == 5
+    assert all(event[4] == {"mode": "abort" if flush else "in_place"} for event in pauses)
+    assert len([event for event in calls if event[1] == "flush_cache"]) == (5 if flush else 0)
+    reloads = [event for event in calls if event[1] == "update_weights_from_disk"]
+    assert len(reloads) == ((limit or 5) if fail_reload else 5)
+    assert all(
+        event[4] == {"model_path": "local-checkpoint", "weight_version": str(version), "flush_cache": flush}
+        for event in reloads
+    )
+    waits = [
+        event[1]
+        for event in events
+        if event[0] == "wait" and event[1] and event[1][0][0] in ("pull_weights", "update_weights_from_disk")
+    ]
+    assert all(len(refs) <= (limit or 5) for refs in waits)
+    resumes = [event for event in calls if event[1] == "continue_generation"]
+    assert len(resumes) == (0 if fail_reload else 5)
+    if not fail_reload:
+        assert events[-7][0] == "wait" and events[-7][1][-1] == ("update_weights_from_disk", 4)
 
 
 if __name__ == "__main__":

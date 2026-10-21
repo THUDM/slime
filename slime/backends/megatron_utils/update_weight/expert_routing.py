@@ -16,7 +16,9 @@ __all__ = ["configure_expert_routing"]
 
 logger = logging.getLogger(__name__)
 
-_ROUTED_EXPERT = re.compile(r"module\.module\.decoder\.layers\.(\d+)\.mlp\.experts\.linear_fc([12])\.weight(\d+)")
+_ROUTED_EXPERT = re.compile(
+    r"module\.module\.(?:language_model\.)?decoder\.layers\.(\d+)\.mlp\.experts\.linear_fc([12])\.weight(\d+)"
+)
 
 
 @dataclass(frozen=True)

@@ -1,12 +1,16 @@
 import logging
 import random
+from contextlib import nullcontext
+from pathlib import Path
 
 import numpy as np
 import torch
+from filelock import FileLock
 from megatron.core import mpu, tensor_parallel
 from megatron.core.config import set_experimental_flag
 from megatron.core.num_microbatches_calculator import init_num_microbatches_calculator
 from megatron.training.global_vars import _build_tokenizer, set_args
+from transformers.utils import HF_MODULES_CACHE
 
 logger = logging.getLogger(__name__)
 
@@ -62,9 +66,6 @@ def init(args):
     # Pytorch distributed.
     _initialize_distributed(args)
 
-    # https://github.com/NVIDIA/Megatron-LM/issues/1563
-    assert np.__version__.startswith("1."), "Megatron does not support numpy 2.x"
-
     # Random seeds for reproducibility.
     if args.rank == 0:
         logger.info(f"> setting random seeds to {args.seed} ...")
@@ -74,7 +75,14 @@ def init(args):
         args.te_rng_tracker,
         args.inference_rng_tracker,
     )
-    _build_tokenizer(args)
+    # HF copies remote tokenizer code into a shared cache before importing it.
+    # Protect both operations so another rank cannot import a partial file.
+    tokenizer_lock = nullcontext()
+    if args.tokenizer_type == "HuggingFaceTokenizer":
+        Path(HF_MODULES_CACHE).mkdir(parents=True, exist_ok=True)
+        tokenizer_lock = FileLock(str(Path(HF_MODULES_CACHE) / "slime-tokenizer.lock"))
+    with tokenizer_lock:
+        _build_tokenizer(args)
     # We won't use this. initialize to pass some validation in megatron.
     init_num_microbatches_calculator(
         args.rank,

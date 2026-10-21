@@ -24,13 +24,14 @@ fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-source "${SCRIPT_DIR}/../models/qwen3-235B-A22B.sh"
+MODEL_ARGS_ROTARY_BASE=5000000 source "${SCRIPT_DIR}/../models/qwen3-235B-A22B.sh"
 
+# Use the 256K-context Instruct-2507 checkpoint and its converted training weights.
 CKPT_ARGS=(
-   --hf-checkpoint /root/Qwen3-235B-A22B-INT4/
-   --ref-load /root/Qwen3-235B-A22B_torch_dist/
-   --load /root/Qwen3-235B-A22B-slime/ 
-   --save /root/Qwen3-235B-A22B-slime/ 
+   --hf-checkpoint /root/Qwen3-235B-A22B-Instruct-2507-INT4/
+   --ref-load /root/Qwen3-235B-A22B-Instruct-2507_torch_dist/
+   --load /root/Qwen3-235B-A22B-Instruct-2507-slime/
+   --save /root/Qwen3-235B-A22B-Instruct-2507-slime/
    --save-interval 20
 )
 
@@ -46,7 +47,7 @@ ROLLOUT_ARGS=(
    --num-rollout 300
    --rollout-batch-size 32
    --n-samples-per-prompt 8
-   --rollout-max-response-len 8192
+   --rollout-max-response-len 131072
    --rollout-temperature 0.8
 
    --global-batch-size 256
@@ -57,7 +58,7 @@ EVAL_ARGS=(
    --eval-interval 10
    --eval-prompt-data aime /root/aime-2024/aime-2024.jsonl
    --n-samples-per-eval-prompt 16
-   --eval-max-response-len 16384
+   --eval-max-response-len 131072
    --eval-top-p 0.7
 )
 
@@ -76,18 +77,23 @@ PERF_ARGS=(
 
    # --micro-batch-size 1
    --use-dynamic-batch-size
+   --log-probs-chunk-size 1024
    --max-tokens-per-gpu 16384
 )
 
 GRPO_ARGS=(
    --advantage-estimator grpo
+   --use-score-centering
+   --score-centering-top-k 128
+   --pg-loss-type reinforce
+   --disable-grpo-std-normalization
+   --calculate-per-token-loss
+   --use-rollout-routing-replay
    --use-kl-loss
    --kl-loss-coef 0.00
    --kl-loss-type low_var_kl
    # --kl-coef 0.00
    --entropy-coef 0.00
-   --eps-clip 0.2
-   --eps-clip-high 0.28
    --use-tis
 )
 

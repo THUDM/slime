@@ -229,8 +229,8 @@ class FakeSandbox:
     done-marker file so the next poll succeeds.
 
     Construct directly, or via :meth:`factory` to get a zero-arg callable that
-    ``examples...generate.E2BSandbox`` / ``swe.E2BSandbox`` can be monkeypatched
-    to (they call ``E2BSandbox(image)``).
+    ``examples...generate.create_sandbox`` / ``swe.create_sandbox`` can be monkeypatched
+    to (they call ``create_sandbox(image)``).
     """
 
     def __init__(
@@ -250,7 +250,7 @@ class FakeSandbox:
 
     @classmethod
     def factory(cls, **kwargs) -> Callable[..., FakeSandbox]:
-        """Return ``E2BSandbox(image)``-compatible constructor with kwargs baked in."""
+        """Return ``create_sandbox(image)``-compatible constructor with kwargs baked in."""
 
         def _make(image: str = "fake-image", **_ignored) -> FakeSandbox:
             return cls(image, **kwargs)
@@ -285,6 +285,8 @@ class FakeSandbox:
         for needle, result in self.responses:
             if needle in cmd:
                 return result
+        if "git write-tree" in cmd:
+            return 0, "0" * 40 + "\n", ""
         return 0, "", ""
 
     async def write_file(self, sandbox_path, content, *, user="root") -> None:

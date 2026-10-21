@@ -1125,8 +1125,13 @@ def _load_deepgemm_ops() -> _DeepGEMMOps:
     import deep_gemm
     from sgl_kernel import silu_and_mul
     from sglang.srt.layers import deep_gemm_wrapper
-    from sglang.srt.layers.moe.ep_moe.kernels import tma_align_input_scale
-    from sglang.srt.layers.quantization.fp8_kernel import sglang_per_token_group_quant_fp8
+
+    try:
+        from sglang.kernels.ops.moe.ep_moe_kernels import tma_align_input_scale
+        from sglang.kernels.ops.quantization.fp8_kernel import sglang_per_token_group_quant_fp8
+    except ImportError:
+        from sglang.srt.layers.moe.ep_moe.kernels import tma_align_input_scale
+        from sglang.srt.layers.quantization.fp8_kernel import sglang_per_token_group_quant_fp8
 
     from slime.backends.megatron_utils.kernels.fp8_kernel import blockwise_cast_to_fp8_triton
 
@@ -2448,7 +2453,10 @@ class _SGLangEPGatherWithBF16Backward(torch.autograd.Function):
             )
         if topk_indices.shape != topk_weights.shape or topk_indices.shape != output_index.shape:
             raise ValueError("DeepEP gather IDs, weights, and output indices must align")
-        from sglang.srt.layers.moe.ep_moe.kernels import ep_gather
+        try:
+            from sglang.kernels.ops.moe.ep_moe_kernels import ep_gather
+        except ImportError:
+            from sglang.srt.layers.moe.ep_moe.kernels import ep_gather
 
         output_shape = (topk_indices.shape[0], hidden_states.shape[1])
         output = torch.empty(

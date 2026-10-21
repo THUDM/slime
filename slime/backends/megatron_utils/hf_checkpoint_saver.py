@@ -42,7 +42,8 @@ def save_hf_model_to_path(
         )
 
     import torch.distributed as dist
-    from transformers import AutoConfig
+
+    from slime.utils.model_config import load_hf_config
 
     from .update_weight.common import named_params_and_buffers
     from .update_weight.hf_weight_iterator_direct import HfWeightIteratorDirect
@@ -68,7 +69,7 @@ def save_hf_model_to_path(
     else:
         if is_save_rank:
             try:
-                hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
+                hf_config = load_hf_config(args.hf_checkpoint, trust_remote_code=True)
                 payload = [
                     (
                         type(hf_config).__name__.lower() if args.model_name is None else args.model_name,

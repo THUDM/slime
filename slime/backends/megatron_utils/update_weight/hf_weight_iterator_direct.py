@@ -190,6 +190,7 @@ def _get_megatron_local_param_infos(args: Namespace, model: Sequence[torch.nn.Mo
                 "tensor_model_parallel": getattr(param, "tensor_model_parallel", False),
                 "partition_dim": getattr(param, "partition_dim", -1),
                 "partition_stride": getattr(param, "partition_stride", 1),
+                "partition_sections": getattr(param, "partition_sections", None),
                 "parallel_mode": getattr(param, "parallel_mode", None),
             },
             size=param.numel() * param.element_size(),

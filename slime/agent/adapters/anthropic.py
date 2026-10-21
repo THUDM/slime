@@ -81,6 +81,21 @@ class AnthropicAdapter(BaseAdapter):
 def _translate_messages(msgs: list[dict], system: Any) -> list[dict]:
     """Anthropic messages + system -> chat-template messages. Pure function."""
     translated: list[dict] = []
+    tool_order: dict[str, int] = {}
+    next_tool_order = 0
+    pending_results: list[dict] = []
+
+    def flush_results() -> None:
+        # Qwen's chat template associates results by position, without wire IDs.
+        # Parallel tools can finish in a different order, including across
+        # consecutive user messages. Restore call order before dropping IDs.
+        ids = [result.get("tool_use_id") for result in pending_results]
+        if all(isinstance(ident, str) and ident in tool_order for ident in ids):
+            pending_results.sort(key=lambda result: tool_order[result["tool_use_id"]])
+        for result in pending_results:
+            translated.append({"role": "tool", "content": flatten_content(result.get("content"))})
+        pending_results.clear()
+
     if system:
         translated.append({"role": "system", "content": flatten_content(system)})
     for m in msgs:
@@ -91,12 +106,15 @@ def _translate_messages(msgs: list[dict], system: Any) -> list[dict]:
             blocks = content if isinstance(content, list) else [{"type": "text", "text": flatten_content(content)}]
             for b in blocks:
                 if isinstance(b, dict) and b.get("type") == "tool_result":
-                    translated.append({"role": "tool", "content": flatten_content(b.get("content"))})
+                    pending_results.append(b)
                 elif isinstance(b, dict) and b.get("type") == "text":
+                    flush_results()
                     translated.append({"role": "user", "content": b.get("text", "")})
                 else:
+                    flush_results()
                     translated.append({"role": "user", "content": flatten_content(b)})
         elif role == "assistant":
+            flush_results()
             texts, thinkings, tcs = [], [], []
             blocks = content if isinstance(content, list) else [{"type": "text", "text": flatten_content(content)}]
             for b in blocks:
@@ -107,6 +125,9 @@ def _translate_messages(msgs: list[dict], system: Any) -> list[dict]:
                 elif b.get("type") == "thinking":
                     thinkings.append(b.get("thinking", ""))
                 elif b.get("type") == "tool_use":
+                    if isinstance(b.get("id"), str):
+                        tool_order[b["id"]] = next_tool_order
+                    next_tool_order += 1
                     # drop the wire-only id; tool_call_dict keeps arguments a dict
                     tcs.append(tool_call_dict(b.get("name", "tool"), b.get("input")))
             mo: dict[str, Any] = {"role": "assistant", "content": "".join(texts)}
@@ -116,7 +137,9 @@ def _translate_messages(msgs: list[dict], system: Any) -> list[dict]:
                 mo["tool_calls"] = tcs
             translated.append(mo)
         elif role == "system":
+            flush_results()
             translated.append({"role": "system", "content": flatten_content(content)})
+    flush_results()
     return translated
 
 

@@ -1,17 +1,19 @@
 gguf>=0.10.0
 ipykernel
 ipywidgets
+jieba
 jupyter_client
 markdown>=3.4.0
 matplotlib
-myst-parser
+myst-parser[linkify]
 nbconvert
 nbsphinx
 nbstripout
 pandoc
 pillow
 pydantic
-sphinx
+# Sphinx 9.1 emits an undefined ChineseStemmer in the Chinese search bundle.
+sphinx>=8.2,<9
 sphinx-autobuild
 sphinx-book-theme
 sphinx-copybutton

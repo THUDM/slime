@@ -68,3 +68,7 @@ def test_create_weight_updater_selects_implementation(monkeypatch, mode, transpo
     assert updater.model_name == "model"
     assert updater.quantization_config == {"quant_method": "test"}
     assert updater.weight_version == 7
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))

@@ -3,7 +3,8 @@ import logging
 
 from megatron.training.arguments import parse_args as _megatron_parse_args
 from megatron.training.arguments import validate_args as _megatron_validate_args
-from transformers import AutoConfig
+
+from slime.utils.model_config import load_hf_config
 
 try:
     from megatron.core.tokenizers.utils.build_tokenizer import vocab_size_with_padding as _vocab_size_with_padding
@@ -18,6 +19,8 @@ logger = logging.getLogger(__name__)
 _ALLGATHER_CP_DSA_ARCHITECTURES = {
     "DeepseekV32ForCausalLM",
     "GlmMoeDsaForCausalLM",
+    "Glm5NextForCausalLM",
+    "Glm5NextForConditionalGeneration",
 }
 
 
@@ -38,7 +41,7 @@ def _validate_allgather_cp_supported(args, hf_config=None):
 
     raise ValueError(
         "--allgather-cp with --context-parallel-size > 1 is currently only supported for "
-        "DSA attention models (DeepSeek-V3.2 and GLM-5.1). Non-DSA models still use the "
+        "DSA attention models (DeepSeek-V3.2, GLM-5.1 and GLM5-next). Other models still use the "
         "zigzag CP layout and would silently scramble token order under allgather CP. "
         "Please remove --allgather-cp, set --context-parallel-size 1, or use a supported DSA model."
     )
@@ -149,8 +152,16 @@ def _hf_validate_args(args, hf_config):
 
 
 def _set_default_megatron_args(args):
+    # Megatron 0.19 validates MTP before resolving this legacy RoPE flag.
+    # Normalize it here for both training and checkpoint conversion.
+    if getattr(args, "use_rotary_position_embeddings", False):
+        args.position_embedding_type = "rope"
     # always use zero optimizer
     args.use_distributed_optimizer = True
+    if hasattr(args, "mtp_detach_heads"):
+        args.mtp_detach_heads = True
+    if hasattr(args, "trust_remote_code"):
+        args.trust_remote_code = True
     if not hasattr(args, "enable_gloo_process_groups"):
         args.enable_gloo_process_groups = True
     # TODO: maybe change this after megatron has good fp8 support
@@ -196,7 +207,7 @@ def megatron_parse_args(extra_args_provider, skip_hf_validate=False):
 
     hf_config = None
     if args.hf_checkpoint and not skip_hf_validate:
-        hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
+        hf_config = load_hf_config(args.hf_checkpoint, trust_remote_code=True)
         _hf_validate_args(args, hf_config)
 
     if not skip_hf_validate:
