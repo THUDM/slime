@@ -885,6 +885,66 @@ def chunked_gae(
     return advantages, returns
 
 
+class _ChunkedLogProbEntropy(torch.autograd.Function):
+    """Recompute row chunks in backward instead of retaining full-vocab softmaxes.
+
+    A single autograd node also allocates the full logits gradient only once;
+    independently differentiable chunks otherwise need a second full-size
+    allocation when their gradients are joined.
+    """
+
+    @staticmethod
+    def forward(ctx, logits, tokens, keep_mask, tp_group, with_entropy, with_entropy_grad, chunk_size):
+        log_prob = torch.empty((logits.size(0), 1), device=logits.device, dtype=torch.float32)
+        entropy = log_prob.new_empty((logits.size(0),) if with_entropy else (0,))
+        for start in range(0, logits.size(0), chunk_size):
+            end = min(start + chunk_size, logits.size(0))
+            values, entropies = _calculate_log_probs_and_entropy_chunk(
+                logits[start:end],
+                tokens[start:end],
+                tp_group,
+                with_entropy=with_entropy,
+                with_entropy_grad=with_entropy_grad,
+                log_prob_keep_mask=None if keep_mask is None else keep_mask[start:end],
+            )
+            log_prob[start:end] = values
+            if with_entropy:
+                entropy[start:end] = entropies
+        ctx.save_for_backward(logits, tokens, keep_mask)
+        ctx.tp_group = tp_group
+        ctx.with_entropy_grad = with_entropy and with_entropy_grad
+        ctx.chunk_size = chunk_size
+        if not ctx.with_entropy_grad:
+            ctx.mark_non_differentiable(entropy)
+        return log_prob, entropy
+
+    @staticmethod
+    @torch.autograd.function.once_differentiable
+    def backward(ctx, grad_log_prob, grad_entropy):
+        logits, tokens, keep_mask = ctx.saved_tensors
+        grad_input = torch.empty_like(logits)
+        for start in range(0, logits.size(0), ctx.chunk_size):
+            end = min(start + ctx.chunk_size, logits.size(0))
+            with torch.enable_grad():
+                chunk = logits[start:end].detach().requires_grad_()
+                values, entropies = _calculate_log_probs_and_entropy_chunk(
+                    chunk,
+                    tokens[start:end],
+                    ctx.tp_group,
+                    with_entropy=ctx.with_entropy_grad,
+                    with_entropy_grad=ctx.with_entropy_grad,
+                    log_prob_keep_mask=None if keep_mask is None else keep_mask[start:end],
+                )
+                outputs, gradients = [values], [grad_log_prob[start:end]]
+                if ctx.with_entropy_grad:
+                    outputs.append(entropies)
+                    gradients.append(grad_entropy[start:end])
+                (gradient,) = torch.autograd.grad(outputs, chunk, grad_outputs=gradients)
+            grad_input[start:end] = gradient
+            del gradient, outputs, gradients, values, entropies, chunk
+        return grad_input, None, None, None, None, None, None
+
+
 def calculate_log_probs_and_entropy(
     logits,
     tokens,
@@ -898,30 +958,11 @@ def calculate_log_probs_and_entropy(
     entropy = None
     if logits.size(0) != 0:
         if chunk_size > 0:
-            num_chunks = (logits.size(0) - 1) // chunk_size + 1
-            logits_chunks = logits.chunk(num_chunks, dim=0)
-            tokens_chunks = tokens.chunk(num_chunks, dim=0)
-            mask_chunks = (
-                log_prob_keep_mask.chunk(num_chunks, dim=0) if log_prob_keep_mask is not None else [None] * num_chunks
+            log_prob, entropy = _ChunkedLogProbEntropy.apply(
+                logits, tokens, log_prob_keep_mask, tp_group, with_entropy, with_entropy_grad, chunk_size
             )
-
-            log_probs = []
-            entropy_chunks = []
-            for tokens_chunk, logits_chunk, mask_chunk in zip(tokens_chunks, logits_chunks, mask_chunks, strict=True):
-                log_prob, entropy_chunk = _calculate_log_probs_and_entropy_chunk(
-                    logits_chunk,
-                    tokens_chunk,
-                    tp_group,
-                    with_entropy=with_entropy,
-                    with_entropy_grad=with_entropy_grad,
-                    log_prob_keep_mask=mask_chunk,
-                )
-                log_probs.append(log_prob)
-                if entropy_chunk is not None:
-                    entropy_chunks.append(entropy_chunk)
-            log_prob = torch.cat(log_probs, dim=0)
-            if entropy_chunks:
-                entropy = torch.cat(entropy_chunks, dim=0)
+            if not with_entropy:
+                entropy = None
         else:
             log_prob, entropy = _calculate_log_probs_and_entropy_chunk(
                 logits,

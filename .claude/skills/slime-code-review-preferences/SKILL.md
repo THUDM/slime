@@ -1,11 +1,19 @@
 ---
 name: slime-code-review-preferences
-description: Use when reviewing or editing slime code, especially refactors around helper APIs, branch selection, argument validation, or recurring reviewer preferences about avoiding unnecessary wrappers and making control flow self-explanatory.
+description: Use when reviewing or editing slime code or documentation, especially helper APIs, branch selection, argument validation, and preserving curated README ecosystem project descriptions.
 ---
 
 # Slime Code Review Preferences
 
-Apply these lightweight review heuristics when changing slime code.
+Apply these lightweight review heuristics when changing slime code or documentation.
+
+## Preserve Ecosystem Project Descriptions
+
+Treat ecosystem listings and third-party project introductions as curated content, including `Ecosystem Built on slime` in `README.md` and `基于 slime 构建的生态` in `README_zh.md`.
+
+- Unless the user explicitly requests changes to this content, preserve project titles, emojis, wording, descriptive detail, links, ordering, and introductory/concluding prose.
+- Release preparation, code refactors, general README cleanup, and preferences for brevity or consistent style do not authorize shortening, rewriting, standardizing, or reordering these sections.
+- For an explicitly requested addition or correction, edit only the relevant entries and preserve unaffected descriptions in both language versions.
 
 ## Prefer Direct APIs Over Thin Wrappers
 

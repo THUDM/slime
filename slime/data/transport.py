@@ -51,7 +51,7 @@ def resolve_rollout_data_dir(args):
             )
             paths = sorted(glob.glob(str(Path(pattern).expanduser())))
             if not paths:
-                raise FileNotFoundError(f"No Straw rollout archive matches {debug_path}")
+                raise FileNotFoundError(f"No straw rollout archive matches {debug_path}")
             path = paths[0]
         else:
             path = Path(debug_path.format(rollout_id=start)).expanduser()
@@ -62,7 +62,7 @@ def resolve_rollout_data_dir(args):
         args.rollout_queue_run_id = RecordSetRef.from_dict(index["manifest"]).manifest.segment.run_id
     if args.rollout_data_dir is None:
         if args.save is None:
-            raise ValueError("Straw rollout transport requires --rollout-data-dir or --save on shared storage")
+            raise ValueError("straw rollout transport requires --rollout-data-dir or --save on shared storage")
         args.rollout_data_dir = str(Path(args.save) / "rollout_data")
     args.rollout_data_dir = str(Path(args.rollout_data_dir).expanduser().resolve())
 
@@ -85,20 +85,22 @@ def rollout_store(args):
     profile = getattr(args, "rollout_storage_profile", "local")
     declaration_path = getattr(args, "rollout_storage_declaration", None)
     declaration = json.loads(Path(declaration_path).read_text()) if declaration_path else None
-    segment_mib = getattr(args, "rollout_queue_segment_mib", 256)
+    segment_mib = getattr(args, "rollout_queue_segment_mib", None)
     online_gc = getattr(args, "rollout_queue_online_gc", False)
     key = (os.getpid(), root, run_id, profile, segment_mib, online_gc, json.dumps(declaration, sort_keys=True))
     with _writers_lock:
         if key not in _writers:
+            # Omit the override unless requested, so straw owns its default.
+            pack_options = {} if segment_mib is None else {"segment_target_bytes": segment_mib * 1024**2}
             store = SharedFilesystemStore(
                 root,
                 run_id,
                 online_gc=online_gc,
                 codecs=CODECS,
-                segment_target_bytes=segment_mib * 1024**2,
                 max_record_bytes=MAX_TENSOR_BYTES,
                 max_buffer_bytes=MAX_PUBLICATION_BYTES,
                 backend=FilesystemBackend(root, profile=profile, declaration=declaration),
+                **pack_options,
             )
             _writers[key] = (store, threading.RLock())
         store, lock = _writers[key]
@@ -120,7 +122,7 @@ class DiskPayloadRef:
     path: tuple = field(default=(), kw_only=True)
     sample_metadata: list[dict] | None = field(default=None, kw_only=True)
 
-    def load(self, *, root=None):
+    def load(self, *, root=None, selection=None):
         from straw.store import SharedFilesystemStore
         from straw.tensor import MAX_PUBLICATION_BYTES, MAX_TENSOR_BYTES
 
@@ -133,7 +135,7 @@ class DiskPayloadRef:
             max_record_bytes=MAX_TENSOR_BYTES,
             max_buffer_bytes=MAX_PUBLICATION_BYTES,
         )
-        value = SampleCodec(store).load(self.manifest)
+        value = SampleCodec(store).load(self.manifest, selection=selection)
         for part in self.path:
             value = value[part] if isinstance(part, int) else getattr(value, part)
         if self.sample_metadata is not None:
@@ -158,8 +160,6 @@ class DiskPayloadRef:
 class RolloutGroupRef(DiskPayloadRef):
     index: int
     receipt: CommitReceipt | None = None
-    # A fork reuses the payload but supplies positions in its own accepted log.
-    source_positions: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -170,20 +170,35 @@ class RawRolloutRef(DiskPayloadRef):
 
 @dataclass(frozen=True)
 class TrainBatchRef(DiskPayloadRef):
+    """One rank's view of shared conversion records, plus its trainer schedule.
+
+    ``plan_digest`` identifies this layout, so ranks from different DP/mbs
+    schedules cannot accidentally train together even when the data is shared.
+    """
+
     batch_id: str
     rank: int
     plan_digest: str
+    selection: dict | None = field(default=None, kw_only=True)
+    schedule: dict | None = field(default=None, kw_only=True)
+
+    def load(self, *, root=None):
+        value = super().load(root=root, selection=self.selection)
+        if self.schedule is not None:
+            value.update(self.schedule)
+        return value
 
 
 def group_lease(group):
-    from straw.protocol import Lease
-
     from slime.rollout.base_types import iter_samples
 
     samples = list(iter_samples(group))
     leases = [getattr(sample, "_queue_lease", None) for sample in samples]
     if not any(leases):
         return None
+    # Ordinary in-memory groups have no queue lease and do not require straw.
+    from straw.protocol import Lease
+
     if not all(value == leases[0] for value in leases):
         raise ValueError("A queue group must preserve one task authorization across all trajectories")
     return Lease(**leases[0])
@@ -200,9 +215,7 @@ def inherit_queue_context(source, output):
         "_queue_receipt",
         "_queue_source_positions",
         "_queue_resume_origin",
-        "_queue_generation_start",
-        "_queue_branch",
-        "queue_policy_segments",
+        "_queue_original_input",
         "queue_generation_requests",
     )
     for sample in iter_samples(output):
@@ -217,28 +230,6 @@ def inherit_queue_context(source, output):
     return output
 
 
-def record_generation_provenance(group):
-    from slime.rollout.base_types import iter_samples
-
-    for sample in iter_samples(group):
-        start = getattr(sample, "_queue_generation_start", None)
-        branch = getattr(sample, "_queue_branch", None)
-        if start is not None and branch is not None and len(sample.tokens) > start:
-            segments = list(getattr(sample, "queue_policy_segments", []))
-            if not segments and start:
-                segments.append({"start": 0, "stop": start, "branch": None, "reported_versions": None})
-            segments.append(
-                {
-                    "start": start,
-                    "stop": len(sample.tokens),
-                    "branch": branch,
-                    "reported_versions": sample.weight_versions or None,
-                }
-            )
-            sample.queue_policy_segments = segments
-            sample._queue_generation_start = len(sample.tokens)
-
-
 def pack_rollout_group(group, args, rollout_id, *, controller=None):
     if getattr(args, "rollout_data_transport", "object-store") != "straw":
         return group
@@ -246,7 +237,6 @@ def pack_rollout_group(group, args, rollout_id, *, controller=None):
 
     first = next(iter_samples(group))
     lease = group_lease(group)
-    record_generation_provenance(group)
     metadata = {"task_id": lease.task_id, "attempt_id": lease.attempt_id} if lease else {}
     ref = pack_rollout_payload(
         group, args, rollout_id, metadata=metadata, submission_id=f"group:{lease.attempt_id}" if lease else None
@@ -321,8 +311,6 @@ def load_rollout_samples(value):
             group = expanded
         if isinstance(reference, RolloutGroupRef) and reference.receipt:
             for sample in iter_samples(group):
-                if reference.source_positions is not None:
-                    sample._queue_source_positions = list(reference.source_positions)
                 sample.__dict__.pop("_queue_lease", None)
                 sample._queue_receipt = asdict(reference.receipt)
         return group
@@ -391,7 +379,7 @@ def unpack_rollout_payload(value):
 
 
 async def unpack_published_payload(value):
-    """Load off the event loop; Straw handles visibility for every read path."""
+    """Load off the event loop; straw handles visibility for every read path."""
     if not isinstance(value, DiskPayloadRef):
         return await asyncio.to_thread(unpack_rollout_payload, value)
     from straw.errors import CorruptData
@@ -401,7 +389,13 @@ async def unpack_published_payload(value):
     try:
         return await asyncio.to_thread(unpack_rollout_payload, value)
     except CorruptData as error:
-        error.add_note(context)
+        # Python 3.10 has no exception notes; keep the original storage error
+        # and expose its manifest context in the message instead.
+        add_note = getattr(error, "add_note", None)
+        if add_note is not None:
+            add_note(context)
+        else:
+            error.args = (f"{error}\n{context}",)
         raise
 
 

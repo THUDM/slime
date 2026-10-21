@@ -102,3 +102,20 @@ def iter_samples(value):
     else:
         for child in value:
             yield from iter_samples(child)
+
+
+def prepare_retry_group(inputs, results):
+    """Keep finished trajectories; restart interrupted fan-outs from their inputs.
+
+    Segments from a closed agent session cannot resume generation on their own.
+    Flat partial responses remain valid inputs to generators that resume tokens.
+    """
+    return [
+        (
+            original
+            if isinstance(result, list)
+            and any(sample.status in (Sample.Status.ABORTED, Sample.Status.PENDING) for sample in iter_samples(result))
+            else result
+        )
+        for original, result in zip(inputs, results, strict=True)
+    ]
