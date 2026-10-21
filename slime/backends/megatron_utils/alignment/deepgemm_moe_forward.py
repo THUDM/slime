@@ -1366,6 +1366,50 @@ def _quantize_grouped_weights(
     expert_end: int | None = None,
     grouped_qweight_workspace: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    from .weight_cache import get_quantized_weight, is_deepgemm_weight_cache_enabled
+
+    kwargs = dict(
+        expected_shape=expected_shape,
+        layout=layout,
+        input_device=input_device,
+        module_name=module_name,
+        ops=ops,
+        expert_start=expert_start,
+        expert_end=expert_end,
+        grouped_qweight_workspace=grouped_qweight_workspace,
+    )
+    if not is_deepgemm_weight_cache_enabled():
+        return _quantize_grouped_weights_uncached(grouped_linear, **kwargs)
+
+    end = layout.num_local_experts if expert_end is None else expert_end
+    weights = _get_expert_weights(
+        grouped_linear,
+        num_local_experts=layout.num_local_experts,
+        expected_shape=expected_shape,
+        module_name=module_name,
+    )[expert_start:end]
+    # FC1 normally aliases the later SwiGLU activation buffer. Cached weights
+    # must own their storage so subsequent kernels cannot overwrite them.
+    kwargs["grouped_qweight_workspace"] = None
+    return get_quantized_weight(
+        ("grouped", id(grouped_linear), expert_start, end, expected_shape, ops.scale_ue8m0),
+        weights,
+        lambda: _quantize_grouped_weights_uncached(grouped_linear, **kwargs),
+    )
+
+
+def _quantize_grouped_weights_uncached(
+    grouped_linear: torch.nn.Module,
+    *,
+    expected_shape: tuple[int, int],
+    layout: _MoELayout,
+    input_device: torch.device,
+    module_name: str,
+    ops: _DeepGEMMOps,
+    expert_start: int = 0,
+    expert_end: int | None = None,
+    grouped_qweight_workspace: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
     weights = _get_expert_weights(
         grouped_linear,
         num_local_experts=layout.num_local_experts,

@@ -76,3 +76,29 @@ The regression gate is `tests/test_glm52_6layer_deterministic_e2e.py` (6-layer G
 An additional short EP8 gate, `tests/test_glm52_layerwise_zero_e2e.py`, records
 the visible output of decoder layers 0–5 on both sides and requires every
 matched hidden-state element to have an absolute difference of exactly zero.
+
+
+### Cache FP8 weights in the DeepGEMM training forward
+
+Add `--megatron-deepgemm-cache-weights` to reuse quantized dense and grouped-MoE
+weights across microbatches and activation-checkpoint recomputation. The flag is
+disabled by default and does not install the DeepGEMM hooks; configure the target
+layers and hooks as usual.
+
+Each training forward/backward schedule quantizes a weight or expert group on
+first use. The cache is released before the optimizer update, including when an
+optimizer writes through `.data` without incrementing the Parameter version.
+Every logprob/value evaluation gets a separate cache, released at the end of the
+call, so actor/reference/old-policy weight swaps cannot reuse stale values.
+Version, storage, and layout changes within a schedule also invalidate entries.
+
+Only FP8 weights and their scales are cached. Activation quantization and the
+backward rules are unchanged. Cached MoE weights own their storage instead of
+aliasing a temporary activation workspace. This increases live GPU memory by
+roughly one byte per cached weight element plus scales; disabling the flag keeps
+the existing repeated-quantization and workspace-reuse behavior.
+
+Direct low-level calls outside the standard schedules remain uncached. For a
+custom schedule, use `deepgemm_weight_cache_scope(True)` around the interval in
+which weights stay unchanged. Do not mutate weights through `.data` inside that
+scope.
