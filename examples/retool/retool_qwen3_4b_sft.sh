@@ -54,7 +54,7 @@ PERF_ARGS=(
    --tensor-model-parallel-size 1
    --sequence-parallel
    --pipeline-model-parallel-size 1
-   --context-parallel-size 1
+   --context-parallel-size 2
    --expert-model-parallel-size 1
    --expert-tensor-parallel-size 1
 
@@ -64,10 +64,14 @@ PERF_ARGS=(
 
    # --micro-batch-size 1
    --use-dynamic-batch-size
+   --log-probs-chunk-size 1024
    --max-tokens-per-gpu 9216
 )
 
 OPTIMIZER_ARGS=(
+   --optimizer-cpu-offload
+   --overlap-cpu-optimizer-d2h-h2d
+   --use-precision-aware-optimizer
    --optimizer adam
    --lr 1e-5
    --lr-decay-style cosine

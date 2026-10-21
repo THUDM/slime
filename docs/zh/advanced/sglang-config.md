@@ -22,6 +22,43 @@
 
 ---
 
+## 独立的 SGLang Python 环境
+
+通过 `--sglang-python-executable`，可以让 slime 管理的 SGLang 服务使用与 Megatron 不同的 Python 环境：
+
+```bash
+python train.py \
+  --sglang-python-executable /path/to/sglang-env/bin/python \
+  ...
+```
+
+Ray 控制 actor 和 router 继续使用训练环境，只有 SGLang 服务及其 worker 使用指定的 executable，服务参数通过 JSON 传递。默认部署和 `--sglang-config` 均支持该选项，包括 PD 分离和多节点引擎。不设置该选项时，继续使用原来的 multiprocessing 启动方式。
+
+两个环境都需要能导入同一份 slime checkout，可通过安装或作业的 `PYTHONPATH` 提供。训练环境仍需 SGLang 的 Python 辅助模块及 router 包；两个环境应使用一致的 SGLang 版本，以匹配参数定义和权重更新协议。推理环境需要自身的 SGLang 依赖，但不需要 Megatron。两个环境可以各自保留 PyTorch、Triton、CUDA 库和编译扩展，不要把另一个环境的整个 `site-packages` 加入 `PYTHONPATH`。
+
+使用 conda 环境时，可以自行编写 wrapper，例如 `serve-python.sh`，将占位符替换为你自己的 conda 安装路径和环境名称：
+
+```bash
+#!/usr/bin/env bash
+set -e
+source /path/to/miniconda/etc/profile.d/conda.sh
+conda activate your-serving-env
+exec python "$@"
+```
+
+为脚本添加可执行权限，并将其路径传给 slime：
+
+```bash
+chmod +x /path/to/serve-python.sh
+python train.py \
+  --sglang-python-executable /path/to/serve-python.sh \
+  ...
+```
+
+通过 `exec python "$@"` 透传 Python 参数并保留进程归属关系。每个 rollout 节点上都须能通过配置的路径访问 wrapper、conda 安装和推理环境。
+
+环境选择不会改变权重同步方式：CUDA IPC 和 NCCL 仍需满足库和硬件兼容性要求；无法满足时使用 disk transport，详见[外部 rollout 引擎](external-rollout-engines.md#环境与硬件解耦)。
+
 ## 配置格式
 
 配置文件是一个 YAML 文档，顶层 `sglang` 键包含一个模型定义列表：

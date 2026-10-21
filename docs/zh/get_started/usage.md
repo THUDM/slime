@@ -23,7 +23,7 @@
 
 - `--rollout-num-gpus-per-engine`：每个 inference engine 有多少卡，这个参数会比较像 sglang 的 `tp_size`，也就是在进行多机 serving 的时候，这个数值应该是总卡数，例如 2 机 16 卡 serving 一个模型，这里的值应该是 16。
 
-  这里不像其他的 sglang 参数那样引入 `--sglang-tp-size` 是因为未来也许会考虑支持 sglang 的 dp_size 参数，也就是一个 engine 里面其实是有多个 sglang server 的（目前只支持 `--sglang-enable-dp-attention` 情况下的 `--sglang-dp-size`）。
+  SGLang 的 DP 大小通过 `--sglang-dp-size` 单独传入。默认 TP 大小为 engine 的 GPU 总数除以 PP 大小；也可以通过 SGLang 配置覆盖某个 server group 的并行参数。
 
 在默认的配置下，我们会根据这些参数，通过 ray 给训练部分分配 `actor_num_nodes * actor_num_gpus_per_node` 张 GPU，给推理分配 `rollout_num_gpus` 张 GPU，也就是实现了训推分离。
 
@@ -77,7 +77,7 @@ MODEL_ARGS=(
 )
 ```
 
-我们在 [scripts/models](../../../scripts/models) 提供了常用模型的配置，可以直接复用。如果你也在使用 megatron 进行 pretrain/sft 的话，可以直接复用 pretrain/sft 中的模型配置。
+我们在 [scripts/models](https://github.com/THUDM/slime/tree/main/scripts/models) 提供了常用模型的配置，可以直接复用。如果你也在使用 megatron 进行 pretrain/sft 的话，可以直接复用 pretrain/sft 中的模型配置。
 
 注意：
 
@@ -110,7 +110,7 @@ megatron 支持多种其自定义的 ckpt 格式，这里介绍 2 种比较主�
 
 torch 格式是 megatron 的老存储格式，里面的结构大约是一些 `mp_rank_xxx` 的文件夹，每个文件夹对应了在对应的并行划分下，每个 rank 存储的 ckpt。也是因为如此，在加载 torch 格式的 ckpt 的时候，需要保证 ckpt 的并行策略和训练任务的并行策略是相同的。
 
-我们推荐使用 torch_dist 格式 ckpt，因为 torch_dist 格式可以支持自动并行切分，也就是不同并行的训练任务都可以共用同一个 ckpt，会方便很多。torch_dist 这也是开源 megatron 目前的默认格式。torch_dist 格式的 ckpt 中一般是一堆 `.distcp` 文件。在使用 torch_dist 时，可以使用 [README](../../../README_zh.md) 中介绍的 ckpt 转化方法从 huggingface 转化为 torch_dist，反之亦然。
+我们推荐使用 torch_dist 格式 ckpt，因为 torch_dist 格式可以支持自动并行切分，也就是不同并行的训练任务都可以共用同一个 ckpt，会方便很多。torch_dist 这也是开源 megatron 目前的默认格式。torch_dist 格式的 ckpt 中一般是一堆 `.distcp` 文件。在使用 torch_dist 时，可以使用 [README](https://github.com/THUDM/slime/blob/main/README_zh.md) 中介绍的 ckpt 转化方法从 huggingface 转化为 torch_dist，反之亦然。
 
 在存储结构上，megatron 的 ckpt 一般是这样的结构，这里假设存储的路径为 `/ckpt/`：
 
@@ -156,7 +156,7 @@ sglang 的加载非常简单，只需要：
 
 ### 数据格式
 
-原始数据统一由 DataSource 管理。有 `--prompt-data` 时内置 DataSource 会加载数据；需要自行管理数据时可通过 `--data-source-path` 提供自定义实现。原来的 `--disable-rollout-global-dataset` 已移除，旧启动脚本需要删除该参数。
+原始数据统一由 DataSource 管理。有 `--prompt-data` 时内置 DataSource 会加载数据；需要自行管理数据时可通过 `--data-source-path` 提供自定义实现。
 
 slime 支持加载 `.jsonl` 和 `.parquet` 格式文件；读取 Parquet 需要安装 `pyarrow`。两种格式中的每条记录都应包含 `--input-key` 和 `--label-key` 指定的字段。下面是一条 JSONL 数据展开后的示例：
 
@@ -286,7 +286,7 @@ PPO 相关参数：
 
 **采样要求：** temperature 必须为正，使用 `0 < top_p <= 1`、`top_k=-1`、`min_p=0`，不启用 repetition/frequency/presence penalty 或约束解码。temperature 不为 1 或 top_p 小于 1 时，所有 sampler worker 上的 `SGLANG_RETURN_ORIGINAL_LOGPROB` 必须未设置或为 false。目前不支持逐请求修改 temperature 或 top_p，也不支持流式 SC。评估不会请求 SC 数据，可以使用独立的采样配置。
 
-**与 top-p replay 组合：** 将上面的 `--rollout-top-p 1.0` 改为例如 `--rollout-top-p 0.9`，SC 会自动改用精确支持集求和，`--score-centering-top-k` 不再生效。rollout 返回每个 token 完整的 replay 支持集及其截断、归一化后的 sampler logprobs；trainer 在同一份支持集上归一化，并计算 `sum(stop_gradient(q * weight) * log p)` 的校正项。不使用论文的长尾近似，也不把支持集外的 token 纳入求和。训练端的完整 logits 本身无法恢复 sampler 概率，因此仍需要保存原始采样概率。传输量随每步支持集大小变化，top-p 接近 1 时可能明显大于固定的 top-k。精确性针对保存的 replay 支持集；沿用 replay 对边界 sampled token 的保留规则。
+**与 top-p replay 组合：** 将上面的 `--rollout-top-p 1.0` 改为例如 `--rollout-top-p 0.9`，SC 会自动改用精确支持集求和，`--score-centering-top-k` 不再生效。rollout 返回每个 token 完整的 replay 支持集及其截断、归一化后的 sampler logprobs；trainer 在同一份支持集上归一化，并计算 `sum(stop_gradient(q * weight - weight(1) * p) * log p)` 的校正项，与非 top-p 路径在完整支持集上的中心化口径一致。减去的基线具有零 score 梯度，因此训练更新不变；训推分布一致时，`sc_correction` 为零（允许舍入误差）。不使用论文的长尾近似，也不把支持集外的 token 纳入求和。训练端的完整 logits 本身无法恢复 sampler 概率，因此仍需要保存原始采样概率。传输量随每步支持集大小变化，top-p 接近 1 时可能明显大于固定的 top-k。精确性针对保存的 replay 支持集；沿用 replay 对边界 sampled token 的保留规则。
 
 **SGLang 支持：** 使用包含 `docker/patch/latest/sglang-top_p.patch` 的镜像，该 patch 提供二进制 top-k 输出和完整 top-p 概率输出。`top_p=1` 时 slime 通过 `top_logprobs_num=k` 请求 top-k；`top_p<1` 时通过 `custom_params.return_top_p_log_probs` 请求整个 replay 支持集的概率，保存原始采样时的概率，不使用更新后的 checkpoint 重新计算这些概率。自定义 generator 应调用 `slime.utils.score_centering` 中的 `score_centering_request`，并将响应 metadata 传给 `Sample.append_response_tokens`。
 
@@ -391,11 +391,60 @@ slime 支持不同程度的自定义数据生成（rollout）。
 
 - 有的时候，我们还需要支持自定义的 reward model，可以通过配置 `--custom-rm-path` 来进行配置。
 
+### 持久化 rollout 队列和分布式 fully async
+
+默认 rollout 传输为 Ray `object-store`，不需要共享目录。`--rollout-data-transport nixl` 选择 Ray 的 NIXL 张量传输。需要跨机持久化队列和打包张量存储时，使用 [straw](../advanced/straw.md) 和共享 JuiceFS 目录。
+
+启用使用 straw 的分布式 fully async rollout：
+
+```bash
+--rollout-function-path slime.rollout.fully_async_rollout.generate_rollout_fully_async \
+--rollout-data-transport straw \
+--rollout-data-dir /shared/run/rollout_data
+```
+
+所有节点必须以相同绝对路径挂载该目录，并安装 `straw-queue`。标准 slime 安装已包含此依赖；已有环境可以执行 `pip install 'straw-queue>=0.1.3'`。JuiceFS storage profile 和部署声明的配置见 [straw 指南](../advanced/straw.md#启用方式)。只选择 straw 时使用同步 rollout 入口。新任务已设置 `--save` 时，省略 `--rollout-data-dir` 会使用 `<save>/rollout_data`。
+
+使用 straw 时，`--use-rollout-routing-replay` 和 `--use-score-centering` 将 R3、SC 张量随 sample 持久化，也支持 partial continuation。`--rollout-queue-online-gc` 可开启未使用存储的回收，默认关闭。恢复使用 `--load`、`--save` 和可选的 `--ckpt-step`。调度、checkpoint 恢复和 debug 回放见 [straw 指南](../advanced/straw.md)，自定义 rollout 函数见[自定义功能](customization.md)。
+
+### 跨权重更新保留 KV（PipelineRL）
+
+`--flush-cache-interval` 控制权重同步时的缓存刷新策略：
+
+| 值 | 行为 |
+| --- | --- |
+| `1`（默认） | 保持原有实现：abort 生成、flush KV、更新权重，再恢复生成。 |
+| `<= 0` | 原地暂停生成，更新权重后让未完成请求沿用已有 KV 继续生成。 |
+| `N > 1` | 每 N 次训练权重更新完整刷新一次，其余更新保留 KV。 |
+
+首次发布权重总会刷新，包括从 checkpoint 恢复时。例如 `2` 会在 serving
+version 2 保留 KV、version 3 刷新、version 4 再次保留。周期按权重同步次数
+计算，而不是 optimizer step 或 rollout batch 数。
+
+使用默认 rollout 函数时，非 `1` 的值会自动选择 fully async rollout 实现。
+自定义 rollout 函数保留自己的调度逻辑。训推需要使用独立 GPU，不能开启
+rollout offload 或 `--release-train`。默认评估仍使用标准 SGLang rollout 函数。
+
+```bash
+--flush-cache-interval 8 \
+--use-rollout-logprobs
+```
+
+实现使用 SGLang 已有的 `pause_generation(mode="in_place")` API，无需修改
+SGLang 源码。跨更新的请求会使用旧权重计算的 KV；rollout log probabilities
+对应实际生成各 token 的策略。周期性完整刷新会 abort 未完成请求，标准
+fully async worker 会将其重新排队生成。
+
+公共 prefix 也可能在刷新前一直复用旧 KV。设为 `<= 0` 时，高频 prefix 没有
+缓存年龄上限。可选地添加 `--sglang-disable-radix-cache`，关闭跨请求 prefix
+复用，同时保留未完成请求自身的 KV。周期性刷新则可以限制公共 KV 的存活
+时间，暂不引入权重版本缓存命名空间。
+
 ## sglang 使用方法
 
 slime 通过 `HttpServerEngineAdapter` 作为中介，实现了基于 sglang 的 server based engine。
 
-### 参数配置
+### SGLang 参数
 
 slime 通过引入 sglang 的 `ServerArgs.add_cli_args`，从而引入了几乎所有的 sglang 参数，在设置一个 sglang 参数的时候，需要在参数前加上 `--sglang` 的前缀，例如：
 
@@ -452,7 +501,7 @@ sglang:
 
 slime 通过复用 `megatron.training` 目录下的常规函数，如 `parse_args`， `save_checkpoint`，`load_checkpoint`，从而实现对不同版本以及轻度魔改的 megatron 的支持。所以在使用时，需要保证 `PYTHONPATH` 中能访问到 megatron，例如在运行时加入 `export PYTHONPATH=/root/Megatron-LM`。
 
-### 参数配置
+### Megatron 参数
 
 slime 通过直接引入 `from megatron.training.arguments import parse_args` 引入了当前环境中 megatron 的所有参数。如果当前使用的 megatron 有在 `parse_args` 之外的参数，可以通过像 [train.py](https://github.com/THUDM/slime/blob/main/train.py) 中传入参数来进行配置，例如：
 

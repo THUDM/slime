@@ -396,8 +396,10 @@ def _make_empty_update_updater(module, events, continue_result="continue-ref"):
         def __init__(self, name, result):
             self.name = name
             self.result = result
+            self.calls = []
 
-        def remote(self):
+        def remote(self, **kwargs):
+            self.calls.append(kwargs)
             events.append(self.name)
             return self.result
 
@@ -413,6 +415,7 @@ def _make_empty_update_updater(module, events, continue_result="continue-ref"):
     )
     updater = object.__new__(module.UpdateWeightFromTensor)
     updater.rank = 0
+    updater.args = types.SimpleNamespace(flush_cache_interval=1)
     updater.weight_version = 0
     updater.rollout_engines = [colocated_engine]
     updater._all_rollout_engines = [colocated_engine, distributed_engine]
@@ -468,6 +471,39 @@ def test_tensor_resume_failure_poisons_version(monkeypatch):
     assert updater._weight_sync_credit.snapshot.failed_reason == "RuntimeError: resume failed"
     with pytest.raises(RuntimeError, match="cannot commit failed weight version"):
         updater._weight_sync_credit.commit_version(1)
+
+
+@pytest.mark.parametrize(
+    ("interval", "previous_version", "start_version", "flush_cache"),
+    [(3, 0, 0, True), (3, 1, 0, False), (3, 3, 0, True), (0, 4, 0, False), (3, 10, 10, True), (3, 11, 10, False)],
+)
+def test_tensor_cache_policy_applies_to_all_consumers(
+    monkeypatch, interval, previous_version, start_version, flush_cache
+):
+    module, _ = _load_update_weight_module(monkeypatch)
+    events = []
+    updater = _make_empty_update_updater(module, events)
+    updater.args.flush_cache_interval = interval
+    updater.args.update_weight_start_version = start_version
+    updater.weight_version = previous_version
+    module.dist.barrier = lambda **_: events.append("barrier")
+    original_commit = updater._weight_sync_credit.commit_version
+
+    def commit_version(version):
+        assert version == previous_version + 1
+        assert "continue" in events and "continue-distributed" in events
+        events.append("commit")
+        original_commit(version)
+
+    updater._weight_sync_credit.commit_version = commit_version
+    updater.update_weights()
+
+    for engine in updater._all_rollout_engines:
+        assert engine.pause_generation.calls == [{"mode": "abort" if flush_cache else "in_place"}]
+        assert engine.flush_cache.calls == ([{}] if flush_cache else [])
+        assert engine.continue_generation.calls == [{}]
+    assert events[-1] == "commit"
+    assert updater._weight_sync_credit.snapshot.active_version is None
 
 
 if __name__ == "__main__":

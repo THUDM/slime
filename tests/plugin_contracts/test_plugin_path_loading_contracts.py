@@ -32,8 +32,8 @@ install_stubs(with_sglang_router=True, with_transformers=True)
 
 NUM_GPUS = 0
 
+from slime.data.data_source import RolloutDataSourceWithBuffer
 from slime.rollout.base_types import RolloutFnEvalOutput, call_rollout_fn
-from slime.rollout.data_source import RolloutDataSourceWithBuffer
 from slime.rollout.filter_hub.base_types import (
     DynamicFilterOutput,
     call_dynamic_filter,
@@ -222,7 +222,7 @@ def test_strict_dynamic_filter_still_drops_at_target_capacity():
 
 
 def check_buffer_filter_default() -> None:
-    fn = load_function("slime.rollout.data_source.pop_first")
+    fn = load_function("slime.data.data_source.pop_first")
     assert tuple(inspect.signature(fn).parameters)[:4] == ("args", "rollout_id", "buffer", "num_samples")
 
 
@@ -235,7 +235,7 @@ def check_buffer_filter_path(path: str) -> None:
 
 
 def check_data_source_default() -> None:
-    cls = load_function("slime.rollout.data_source.RolloutDataSourceWithBuffer")
+    cls = load_function("slime.data.data_source.RolloutDataSourceWithBuffer")
     assert tuple(inspect.signature(cls.__init__).parameters)[:2] == ("self", "args")
 
 
@@ -292,7 +292,7 @@ SYNC_CASES = [
     SyncCase(
         "buffer_filter",
         "BUFFER_FILTER_PATH",
-        "slime.rollout.data_source.pop_first",
+        "slime.data.data_source.pop_first",
         check_buffer_filter_default,
         check_buffer_filter_path,
     ),

@@ -91,6 +91,9 @@ def start_rollout_servers(args, pg) -> tuple[dict[str, Any], list[Any]]:
 
     servers: dict[str, RolloutServer] = {}
     pending_init_handles: list[Any] = []
+    # Models initialize concurrently, so ports allocated to earlier models may
+    # not be bound yet. Carry the cursors across every model and group.
+    port_cursors: dict[int, int] = {}
 
     for model_idx, model_config in enumerate(config.models):
         model_config.resolve(args)
@@ -106,23 +109,24 @@ def start_rollout_servers(args, pg) -> tuple[dict[str, Any], list[Any]]:
             args.sglang_router_port = router_port
 
         if model_config.has_encoder_disaggregation:
-            server_groups, init_handles = start_epd_server_groups(
+            server_groups, init_handles, port_cursors = start_epd_server_groups(
                 model_config,
                 placement,
                 router_ip,
                 router_port,
+                port_cursors,
             )
         elif model_config.has_pd_disaggregation:
-            server_groups, init_handles = start_pd_server_groups(
+            server_groups, init_handles, port_cursors = start_pd_server_groups(
                 model_config,
                 placement,
                 router_ip,
                 router_port,
+                port_cursors,
             )
         else:
             server_groups = []
             init_handles = []
-            port_cursors: dict[int, int] = {}
             for group_config in model_config.server_groups:
                 group = placement.create(group_config, router_ip, router_port)
                 handles, port_cursors = group.start_engines(port_cursors)

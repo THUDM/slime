@@ -40,6 +40,7 @@ Test choices
 
 import os
 import tempfile
+from shlex import quote
 
 import slime.utils.external_utils.command_utils as U
 
@@ -86,6 +87,7 @@ def execute():
     # custom_generate yields a ``list[list[Sample]]`` and crashes
     # ``async_rm`` (`'list' object has no attribute 'metadata'`).
     rollout_args = (
+        "--rollout-data-transport straw "
         "--prompt-data /root/datasets/dapo-math-17k/dapo-math-17k.jsonl "
         "--input-key prompt "
         "--label-key label "
@@ -100,16 +102,6 @@ def execute():
         "--global-batch-size 4 "
         "--balance-data "
         "--custom-generate-function-path fanout_test_helpers.compact_generate "
-        # GRPO normalization needs per-prompt grouping. The default
-        # ``_post_process_rewards`` (slime/ray/rollout.py:618) reshapes
-        # by ``n_samples_per_prompt`` and falls back to "one big group"
-        # when the per-prompt count is uneven — fan-out trips exactly
-        # that fallback. The helper here groups by ``Sample.group_index``
-        # (the per-prompt counter the data source stamps; deepcopy in
-        # compact_generate preserves it across siblings) so each prompt's
-        # siblings normalize against each other, matching the GRPO
-        # semantics the default targets in the uniform case.
-        "--custom-reward-post-process-path fanout_test_helpers.grpo_normalize_by_group_index "
     )
 
     perf_args = (
@@ -182,18 +174,20 @@ def execute():
         f"{misc_args} "
     )
 
-    U.execute_train(
-        train_args=train_args,
-        num_gpus_per_node=NUM_GPUS,
-        megatron_model_type=MODEL_TYPE,
-        extra_env_vars={
-            # Make the helper importable by both the Ray driver and workers
-            # without installing test modules as part of the slime package.
-            "PYTHONPATH": f"{TESTS_DIR}:{U.repo_base_dir}:/root/Megatron-LM/",
-            # The helper picks up the shared counter path via os.environ.
-            "SLIME_FANOUT_TEST_COUNTER_FILE": FANOUT_COUNTER_FILE,
-        },
-    )
+    with tempfile.TemporaryDirectory(prefix="slime_straw_") as rollout_dir:
+        train_args += f"--rollout-data-dir {quote(rollout_dir)} "
+        U.execute_train(
+            train_args=train_args,
+            num_gpus_per_node=NUM_GPUS,
+            megatron_model_type=MODEL_TYPE,
+            extra_env_vars={
+                # Make the helper importable by both the Ray driver and workers
+                # without installing test modules as part of the slime package.
+                "PYTHONPATH": f"{TESTS_DIR}:{U.repo_base_dir}:/root/Megatron-LM/",
+                # The helper picks up the shared counter path via os.environ.
+                "SLIME_FANOUT_TEST_COUNTER_FILE": FANOUT_COUNTER_FILE,
+            },
+        )
 
     # Post-train assertion: compact_generate must have been called exactly
     # ``num_rollout * rollout_batch_size`` = 2 * 4 = 8 times. A regression

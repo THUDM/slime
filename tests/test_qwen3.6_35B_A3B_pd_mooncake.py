@@ -1,8 +1,8 @@
 import os
 import tempfile
+from shlex import quote
 
 import slime.utils.external_utils.command_utils as U
-
 
 MODEL_NAME = "Qwen3.6-35B-A3B"
 MODEL_TYPE = "qwen3.5-35B-A3B"
@@ -25,17 +25,14 @@ def prepare():
 
 def execute():
     debug_data_path = os.environ.get("DEBUG_ROLLOUT_DATA") or tempfile.mktemp(
-        prefix="qwen3_6_35b_a3b_pd_rollout_", suffix=".pt"
+        prefix="qwen3_6_35b_a3b_pd_rollout_", suffix="_{rollout_id}.pt"
     )
-    try:
-        os.remove(debug_data_path)
-    except FileNotFoundError:
-        pass
     print(f"Saving debug rollout data to {debug_data_path}")
 
     ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME} " f"--ref-load {TORCH_DIST_CKPT} "
 
     rollout_args = (
+        "--rollout-data-transport straw "
         "--prompt-data /root/datasets/dapo-math-17k/dapo-math-17k.jsonl "
         "--input-key prompt "
         "--label-key label "
@@ -113,7 +110,7 @@ def execute():
 
     misc_args = (
         "--ci-test "
-        f"--save-debug-rollout-data {debug_data_path} "
+        f"--save-debug-rollout-data {quote(debug_data_path)} "
         "--update-weight-buffer-size 2147483648 "
         "--attention-dropout 0.0 "
         "--hidden-dropout 0.0 "
@@ -139,11 +136,13 @@ def execute():
         f"{misc_args} "
     )
 
-    U.execute_train(
-        train_args=train_args,
-        num_gpus_per_node=NUM_GPUS,
-        megatron_model_type=MODEL_TYPE,
-    )
+    with tempfile.TemporaryDirectory(prefix="slime_straw_") as rollout_dir:
+        train_args += f"--rollout-data-dir {quote(rollout_dir)} "
+        U.execute_train(
+            train_args=train_args,
+            num_gpus_per_node=NUM_GPUS,
+            megatron_model_type=MODEL_TYPE,
+        )
 
 
 if __name__ == "__main__":

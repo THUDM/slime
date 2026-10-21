@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 import torch
 import torch.nn.functional as F
@@ -9,6 +10,19 @@ from slime.utils import accelerator
 from slime.utils.types import RolloutBatch
 
 from .cp_utils import slice_with_cp
+
+
+@dataclass
+class PackedSeqParamsWithCPUOffsets(PackedSeqParams):
+    """Retain CPU sequence boundaries for the HuggingfaceAttention CP wrapper.
+
+    That wrapper reorders CP chunks with Python slices. Using CUDA scalars as
+    slice bounds would synchronize the GPU with the host for every slice in
+    every layer. get_batch already builds these boundaries on the CPU, so keep
+    them alongside the CUDA cu_seqlens tensors consumed by attention kernels.
+    """
+
+    cu_seqlens_q_cpu: tuple[int, ...] | None = None
 
 
 def get_batch(
@@ -69,14 +83,13 @@ def get_batch(
             tokens = F.pad(tokens, (0, pad), value=pad_token_id)
             cu_seqlens_list.append(cu_seqlens_list[-1] + pad)
 
-        cu_seqlens = torch.tensor(cu_seqlens_list, dtype=torch.int, device=accelerator.current_device())
         tokens = tokens.chunk(cp_size, dim=0)[cp_rank]
     else:
         tokens = [slice_with_cp(t, pad_token_id) for t in tokens]
 
-        cu_seqlens = [0]
+        cu_seqlens_list = [0]
         for t in tokens:
-            cu_seqlens.append(cu_seqlens[-1] + t.size(0))
+            cu_seqlens_list.append(cu_seqlens_list[-1] + t.size(0))
 
         tokens = torch.cat(tokens)
 
@@ -84,15 +97,17 @@ def get_batch(
         pad = (pad_size - tokens.size(0) % pad_size) % pad_size
         if pad != 0:
             tokens = F.pad(tokens, (0, pad), value=pad_token_id)
-            cu_seqlens.append(cu_seqlens[-1] + pad)
+            cu_seqlens_list.append(cu_seqlens_list[-1] + pad)
 
         # thd requires the cu_seqlens to be of the origin length
-        cu_seqlens = torch.tensor(cu_seqlens, dtype=torch.int, device=accelerator.device()) * cp_size
+        cu_seqlens_list = [offset * cp_size for offset in cu_seqlens_list]
 
-    max_seqlen = (cu_seqlens[1:] - cu_seqlens[:-1]).max().item()
-    packed_seq_params = PackedSeqParams(
+    cu_seqlens = torch.tensor(cu_seqlens_list, dtype=torch.int, device=accelerator.device())
+    max_seqlen = max(end - start for start, end in zip(cu_seqlens_list[:-1], cu_seqlens_list[1:], strict=True))
+    packed_seq_params = PackedSeqParamsWithCPUOffsets(
         cu_seqlens_q=cu_seqlens,
         cu_seqlens_kv=cu_seqlens,
+        cu_seqlens_q_cpu=tuple(cu_seqlens_list),
         max_seqlen_q=max_seqlen,
         max_seqlen_kv=max_seqlen,
         qkv_format="thd",

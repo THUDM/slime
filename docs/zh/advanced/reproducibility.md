@@ -23,29 +23,29 @@ And set the following environment variables:
      }
 ```
 
-Here we provide the script to do RL training on Qwen2.5 0.5B model and GSM8K dataset with full deterministic.
+GSM8K 样例使用 Qwen3-4B-Instruct-2507，启用 deterministic、CP=4 和 128K 回复上限。
 
 For data and checkpoint preparation, please run:
 
 ```bash
 # download
 hf download --repo-type dataset zhuzilin/gsm8k --local-dir /root/gsm8k
-hf download Qwen/Qwen2.5-0.5B-Instruct --local-dir /root/Qwen2.5-0.5B-Instruct
+hf download Qwen/Qwen3-4B-Instruct-2507 --local-dir /root/Qwen3-4B-Instruct-2507
 
 # convert ckpt
 cd slime/
-source scripts/models/qwen2.5-0.5B.sh
+source scripts/models/qwen3-4B-Instruct-2507.sh
 PYTHONPATH=/root/Megatron-LM/ python \
    tools/convert_hf_to_torch_dist.py \
    ${MODEL_ARGS[@]} \
-   --hf-checkpoint /root/Qwen2.5-0.5B-Instruct \
-   --save /root/Qwen2.5-0.5B-Instruct_torch_dist/
+   --hf-checkpoint /root/Qwen3-4B-Instruct-2507 \
+   --save /root/Qwen3-4B-Instruct-2507_torch_dist/
 ```
 
 And to run training,
 
 ```bash
-bash scripts/run-qwen2.5-0.5B-reproducibility.sh
+bash scripts/run-qwen3-4B-reproducibility.sh
 ```
 
 For screen shots of the wandb, please refer to [pull#370](https://github.com/THUDM/slime/pull/370).

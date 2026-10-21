@@ -24,14 +24,15 @@ fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-source "/root/slime/scripts/models/qwen3-4B.sh"
+source "/root/slime/scripts/models/qwen3-4B-Instruct-2507.sh"
 
+# Use the 256K-context Instruct-2507 checkpoint and its converted training weights.
 CKPT_ARGS=(
-   --hf-checkpoint /root/Qwen3-4B
-   #--hf-checkpoint /root/Qwen3-4B-FP8
-   --ref-load /root/Qwen3-4B_torch_dist
-   # --load /root/Qwen3-4B_slime/
-   --save /root/Qwen3-4B_slime/
+   --hf-checkpoint /root/Qwen3-4B-Instruct-2507
+   #--hf-checkpoint /root/Qwen3-4B-Instruct-2507-FP8
+   --ref-load /root/Qwen3-4B-Instruct-2507_torch_dist
+   # --load /root/Qwen3-4B-Instruct-2507_slime/
+   --save /root/Qwen3-4B-Instruct-2507_slime/
    --save-interval 200
 )
 
@@ -45,7 +46,7 @@ ROLLOUT_ARGS=(
    --num-rollout 3000
    --rollout-batch-size 32
    --n-samples-per-prompt 8
-   --rollout-max-response-len 8192
+   --rollout-max-response-len 131072
    --rollout-temperature 1
 
    --global-batch-size 256
@@ -56,7 +57,7 @@ EVAL_ARGS=(
    # --eval-interval 20
    --eval-prompt-data aime /root/aime-2024/aime-2024.jsonl
    --n-samples-per-eval-prompt 1
-   --eval-max-response-len 16384
+   --eval-max-response-len 131072
    --eval-top-p 1
 )
 
@@ -74,6 +75,7 @@ PERF_ARGS=(
 
    # --micro-batch-size 1
    --use-dynamic-batch-size
+   --log-probs-chunk-size 1024
    --max-tokens-per-gpu 9216
 )
 
@@ -89,6 +91,9 @@ GRPO_ARGS=(
 )
 
 OPTIMIZER_ARGS=(
+   --optimizer-cpu-offload
+   --overlap-cpu-optimizer-d2h-h2d
+   --use-precision-aware-optimizer
    --optimizer adam
    --lr 1e-6
    --lr-decay-style constant

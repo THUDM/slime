@@ -47,7 +47,7 @@ ROLLOUT_ARGS=(
    --num-rollout 100
    --rollout-batch-size 128
    --n-samples-per-prompt 8
-   --rollout-max-response-len 16384
+   --rollout-max-response-len 131072
    --rollout-temperature 1
 
    # --global-batch-size 1024
@@ -63,7 +63,7 @@ EVAL_ARGS=(
    --eval-interval 20
    --eval-prompt-data aime $BASE_DIR/aime-2024.jsonl
    --n-samples-per-eval-prompt 16
-   --eval-max-response-len 16384
+   --eval-max-response-len 131072
    --eval-top-p 1
 )
 
@@ -81,18 +81,23 @@ PERF_ARGS=(
    --recompute-num-layers 1
 
    --use-dynamic-batch-size
+   --log-probs-chunk-size 1024
    --max-tokens-per-gpu 16384
 )
 
 GRPO_ARGS=(
    --advantage-estimator grpo
+   --use-score-centering
+   --score-centering-top-k 128
+   --pg-loss-type reinforce
+   --disable-grpo-std-normalization
+   --calculate-per-token-loss
+   --use-rollout-routing-replay
    --use-kl-loss
    --kl-loss-coef 0.00
    --kl-loss-type low_var_kl
    # --kl-coef 0.00
    --entropy-coef 0.00
-   --eps-clip 0.2
-   --eps-clip-high 0.28
    --use-tis
 )
 

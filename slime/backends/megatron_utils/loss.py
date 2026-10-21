@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from megatron.core import mpu
 from torch.utils.checkpoint import checkpoint
 
+from slime.data.tensor import TensorRef
 from slime.utils.distributed_utils import distributed_masked_whiten
 from slime.utils.misc import load_function
 from slime.utils.ppo_utils import (
@@ -27,7 +28,6 @@ from slime.utils.ppo_utils import (
     importance_weights,
 )
 from slime.utils.score_centering import get_score_centering_is_config, score_centering_correction
-from slime.utils.tensor_store import DiskTensorRef
 from slime.utils.types import RolloutBatch
 
 from .cp_utils import (
@@ -172,25 +172,30 @@ def get_responses(
                 tokens_chunk = tokens[(s + 1) - seq_start : (e + 1) - seq_start]
             assert logits_chunk.size(0) == tokens_chunk.size(0), f"{logits_chunk.size(0)} vs {tokens_chunk.size(0)}"
         else:
-            # TODO: this is super ugly... do better abstraction.
             chunk_size, chunks_offset, logits_offset, tokens_offset = get_logits_and_tokens_offset_with_cp(
                 total_length, response_length
             )
-
-            logits_0, logits_1 = logits[end : end + chunk_size], logits[end + chunk_size : end + 2 * chunk_size]
+            # Gather both spans together. Separate slices each allocate a full
+            # [T, V] gradient in backward, even when one span is empty.
+            response_rows = torch.cat(
+                [
+                    torch.arange(
+                        end + i * chunk_size + start - chunk_start,
+                        end + i * chunk_size + stop - chunk_start,
+                        device=logits.device,
+                    )
+                    for i, ((chunk_start, _), (start, stop)) in enumerate(
+                        zip(chunks_offset, logits_offset, strict=True)
+                    )
+                ]
+            )
+            # Empty index_select backward can launch a zero-sized CUDA grid
+            # when the input requires 64-bit indexing. Keep its zero gradient
+            # connected through a single empty slice instead.
+            logits_chunk = logits.index_select(0, response_rows) if response_rows.numel() else logits[:0]
             end += 2 * chunk_size
-
-            logits_0 = logits_0[logits_offset[0][0] - chunks_offset[0][0] : logits_offset[0][1] - chunks_offset[0][0]]
-            tokens_0 = tokens[tokens_offset[0][0] : tokens_offset[0][1]]
-
-            logits_1 = logits_1[logits_offset[1][0] - chunks_offset[1][0] : logits_offset[1][1] - chunks_offset[1][0]]
-            tokens_1 = tokens[tokens_offset[1][0] : tokens_offset[1][1]]
-
-            assert logits_0.size(0) == tokens_0.size(0), f"{logits_0.size(0)} vs {tokens_0.size(0)}"
-            assert logits_1.size(0) == tokens_1.size(0), f"{logits_1.size(0)} vs {tokens_1.size(0)}"
-
-            logits_chunk = torch.cat([logits_0, logits_1], dim=0)
-            tokens_chunk = torch.cat([tokens_0, tokens_1], dim=0)
+            tokens_chunk = torch.cat([tokens[start:stop] for start, stop in tokens_offset])
+            assert logits_chunk.size(0) == tokens_chunk.size(0), f"{logits_chunk.size(0)} vs {tokens_chunk.size(0)}"
 
         seq_start += total_length
 
@@ -331,7 +336,7 @@ def _build_shifted_tokens(
 
 def _fill_topp_mask_rows(
     keep: torch.Tensor,
-    ids: list[int],
+    ids: list[int] | torch.Tensor | TensorRef,
     offsets: list[int],
     response_start: int,
     local_start: int,
@@ -340,24 +345,32 @@ def _fill_topp_mask_rows(
     vocab_end: int,
 ) -> None:
     end = min(response_start + length, max(len(offsets) - 1, 0))
-    for response_idx in range(response_start, end):
-        local_ids = [
-            token_id - vocab_start
-            for token_id in ids[offsets[response_idx] : offsets[response_idx + 1]]
-            if vocab_start <= token_id < vocab_end
-        ]
-        row = local_start + response_idx - response_start
-        keep[row].fill_(False)
-        if local_ids:
-            keep[row, torch.tensor(local_ids, device=keep.device, dtype=torch.long)] = True
+    if end <= response_start:
+        return
+    # Each CP half is contiguous. Read its support in one range, never by
+    # iterating a TensorRef (which only supports contiguous slices).
+    base = offsets[response_start]
+    ids = ids[base : offsets[end]]
+    keep[local_start : local_start + end - response_start].fill_(False)
+    ids = torch.as_tensor(ids, dtype=torch.long, device="cpu")
+    if ids.numel() == 0:
+        return
+    # Build sparse coordinates on the host, then transfer/scatter once for the
+    # entire span instead of launching a fill and copy for every response row.
+    counts = torch.diff(torch.tensor(offsets[response_start : end + 1], dtype=torch.long, device="cpu"))
+    rows = torch.repeat_interleave(torch.arange(end - response_start, device="cpu"), counts)
+    in_vocab = (ids >= vocab_start) & (ids < vocab_end)
+    rows = rows[in_vocab] + local_start
+    columns = ids[in_vocab] - vocab_start
+    keep[rows.to(keep.device), columns.to(keep.device)] = True
 
 
 def _build_topp_keep_mask(
     T: int,
     vocab_local: int,
     device: torch.device,
-    top_p_token_ids: list[list[int]],
-    top_p_token_offsets: list[list[int]],
+    top_p_token_ids: list[list[int] | torch.Tensor | TensorRef],
+    top_p_token_offsets: list[list[int] | torch.Tensor | TensorRef],
     total_lengths: list[int],
     response_lengths: list[int],
     allgather_cp: bool,
@@ -373,9 +386,11 @@ def _build_topp_keep_mask(
     vocab_start = tp_rank * vocab_local
     vocab_end = vocab_start + vocab_local
 
-    # Normalize ragged payloads (may arrive as CPU int32 tensors) to python lists.
-    top_p_token_ids = [t.tolist() if torch.is_tensor(t) else list(t) for t in top_p_token_ids]
-    top_p_token_offsets = [t.tolist() if torch.is_tensor(t) else list(t) for t in top_p_token_offsets]
+    # Only offsets are needed in full; ids stay lazy until selecting CP rows.
+    top_p_token_offsets = [
+        t.load().tolist() if isinstance(t, TensorRef) else t.tolist() if torch.is_tensor(t) else list(t)
+        for t in top_p_token_offsets
+    ]
 
     keep = torch.ones((T, vocab_local), dtype=torch.bool, device=device)
 
@@ -1000,13 +1015,33 @@ def get_score_centering_terms(args, batch, logits):
             batch["rollout_top_p_log_probs"],
             strict=True,
         ):
+            if isinstance(offsets, TensorRef):
+                offsets = offsets.load()
             offsets = torch.as_tensor(offsets, device="cpu", dtype=torch.long)
-            spans = [torch.arange(offsets[i], offsets[i + 1]) for i in indices.tolist()]
-            selected = torch.cat(spans) if spans else torch.empty(0, dtype=torch.long)
-            lengths = offsets[indices + 1] - offsets[indices]
+            # Coalesce adjacent row supports, preserving zigzag/allgather CP
+            # order while avoiding a filesystem read per response token.
+            starts, ends = offsets[indices], offsets[indices + 1]
+            lengths = ends - starts
+            nonempty = starts != ends
+            starts, ends = starts[nonempty], ends[nonempty]
+            # Determine contiguous read ranges in bulk. Scalar tensor indexing
+            # here otherwise performs two CPU dispatches per response token.
+            boundary = starts[1:] != ends[:-1]
+            first = torch.ones(min(len(starts), 1), dtype=torch.bool)
+            spans = list(
+                zip(
+                    starts[torch.cat((first, boundary))].tolist(),
+                    ends[torch.cat((boundary, first))].tolist(),
+                    strict=True,
+                )
+            )
             local_offsets = torch.cat((lengths.new_zeros(1), lengths.cumsum(0))).to(logits.device)
-            head_ids = torch.as_tensor(ids)[selected].to(device=logits.device, dtype=torch.long)
-            q = torch.as_tensor(q)[selected].to(device=logits.device, dtype=torch.float32)
+            head_ids, q = [
+                (
+                    torch.cat([torch.as_tensor(value[start:end]) for start, end in spans]) if spans else torch.empty(0)
+                ).to(device=logits.device, dtype=dtype)
+                for value, dtype in ((ids, torch.long), (q, torch.float32))
+            ]
             p = calculate_ragged_log_probs(
                 rows, head_ids, local_offsets, mpu.get_tensor_model_parallel_group(), args.rollout_temperature
             )
@@ -1015,7 +1050,15 @@ def get_score_centering_terms(args, batch, logits):
                 coefficients = q.exp() * importance_weights((p - q).exp(), **weighting)
                 q_mass = q.new_zeros(len(rows)).scatter_add_(0, row_ids, q.exp())
                 p_mass = p.new_zeros(len(rows)).scatter_add_(0, row_ids, p.exp())
-            correction = p.new_zeros(len(rows)).scatter_add_(0, row_ids, coefficients * p)
+                # Match the head/tail path's centered scalar convention.
+                # The complete support has no tail: rho = 1, alpha = w(1),
+                # matching score_centering_correction's zero-tail case.
+                # Sum_a stop_gradient(p_a) * grad(log p_a) == 0 on the
+                # complete replay support, so this baseline preserves the
+                # original weighted score gradient (including TIS/MIS).
+                alpha = importance_weights(torch.ones_like(q_mass), **weighting)
+                residual = coefficients - alpha[row_ids] * p.exp()
+            correction = p.new_zeros(len(rows)).scatter_add_(0, row_ids, residual * p)
             for key, value in zip(res, (correction, q_mass, p_mass), strict=True):
                 res[key].append(value)
         if allgather_cp:
@@ -1041,7 +1084,7 @@ def get_score_centering_terms(args, batch, logits):
                         if mpu.get_context_parallel_world_size() == 1
                         else slice_log_prob_with_cp(value, total, response)
                     )
-                    if isinstance(value, DiskTensorRef)
+                    if isinstance(value, TensorRef)
                     else value
                 )
                 for value, total, response in zip(values, total_lengths, response_lengths, strict=True)
@@ -1531,7 +1574,7 @@ def loss_function(
 
     return (
         loss,
-        (num_tokens if args.calculate_per_token_loss else torch.tensor(1, device=logits.device)),
+        (num_tokens if args.calculate_per_token_loss else torch.ones((), dtype=torch.int64, device=logits.device)),
         {
             "keys": list(log.keys()),
             # values[0] is the consumer's reporting denominator after
@@ -1541,12 +1584,24 @@ def loss_function(
             # so we leave a 0 placeholder here and let ``train_one_step``
             # substitute the constant directly, instead of routing it through
             # per-mb fractions.
-            "values": torch.tensor(
+            # Keep GPU scalars on device. Constructing a tensor from their
+            # Python list reads them back individually and synchronizes CUDA.
+            "values": torch.stack(
                 [
-                    num_tokens if args.calculate_per_token_loss else 0,
+                    (
+                        num_tokens.detach()
+                        if args.calculate_per_token_loss
+                        else torch.zeros((), dtype=torch.int64, device=logits.device)
+                    ),
                 ]
-                + list(log.values()),
-                device=logits.device,
+                + [
+                    (
+                        value.detach().reshape(()).to(logits.device)
+                        if isinstance(value, torch.Tensor)
+                        else torch.full((), value, device=logits.device)
+                    )
+                    for value in log.values()
+                ],
             ),
         },
     )

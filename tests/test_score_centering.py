@@ -23,6 +23,7 @@ NUM_GPUS = 0
 
 def args(mode="none", **overrides):
     values = dict(
+        rollout_data_transport="object-store",
         pg_loss_type=None,
         use_score_centering=True,
         score_centering_top_k=3,
@@ -223,18 +224,24 @@ def distributed_worker(rank, world_size, port, layout, mode, disk=False):
         local = local.clone().requires_grad_()
         original = dict(batch)
         import tempfile
-        from pathlib import Path
-        from slime.utils.tensor_store import DiskTensorRef
 
         with tempfile.TemporaryDirectory() as directory:
             if disk:
-                for key in ("rollout_topk_token_ids", "rollout_topk_log_probs"):
-                    batch[key] = [
-                        DiskTensorRef.write(
-                            value.int() if key.endswith("ids") else value, Path(directory) / f"{key}_{i}.safetensors"
+                from straw import SharedFilesystemStore
+                from straw.tensor import publish_tensors
+
+                with SharedFilesystemStore(directory, "sc", codecs=("tensor.v1",)) as store:
+                    for key in ("rollout_topk_token_ids", "rollout_topk_log_probs"):
+                        batch[key] = list(
+                            publish_tensors(
+                                store,
+                                {
+                                    str(i): value.int() if key.endswith("ids") else value
+                                    for i, value in enumerate(batch[key])
+                                },
+                                submission_id=key,
+                            )
                         )
-                        for i, value in enumerate(batch[key])
-                    ]
             _check_distributed_batch(
                 rank,
                 layout,
@@ -377,7 +384,6 @@ def test_empty_sample_topk_shape():
     "ids,logps",
     [
         ([[1, 1, 2]], [[-1.0, -2.0, -3.0]]),
-        ([[1, 2, 3]], [[0.0, 0.0, 0.0]]),
         ([[1, 2, 3]], [[float("nan"), -2.0, -3.0]]),
     ],
 )
@@ -596,7 +602,7 @@ def test_full_argument_validation_accepts_sc_tis_with_rollout_logprobs(monkeypat
         loss_type="policy_loss",
         eval_resume_step=None,
     )
-    module.slime_validate_args(a)
+    a, _ = module.slime_validate_args(a)
     assert a.use_tis and a.use_score_centering and a.use_rollout_logprobs
 
 
@@ -673,7 +679,18 @@ def top_p_weight(ratio, a):
     return ratio.clamp(a.tis_clip_low, a.tis_clip)
 
 
-def top_p_reference(logits, batch, a):
+def store_top_p_batch(batch, directory):
+    from straw import SharedFilesystemStore
+    from straw.tensor import publish_tensors
+
+    with SharedFilesystemStore(directory, "top-p", codecs=("tensor.v1",)) as store:
+        for key in ("rollout_top_p_token_ids", "rollout_top_p_token_offsets", "rollout_top_p_log_probs"):
+            batch[key] = list(
+                publish_tensors(store, {str(i): value for i, value in enumerate(batch[key])}, submission_id=key)
+            )
+
+
+def top_p_reference(logits, batch, a, *, centered=True):
     result = logits.sum() * 0
     position = 0
     for i, (total, response) in enumerate(zip(batch["total_lengths"], batch["response_lengths"], strict=True)):
@@ -688,6 +705,8 @@ def top_p_reference(logits, batch, a):
             keep = torch.zeros_like(values, dtype=torch.bool).scatter_(0, ids, True)
             logp = values.masked_fill(~keep, -torch.inf).log_softmax(0)
             coeff = (q * top_p_weight(logp[ids].exp() / q, a)).detach()
+            if centered:
+                coeff = coeff - top_p_weight(torch.ones_like(q), a) * logp[ids].exp().detach()
             target = batch["unconcat_tokens"][i][-response + row]
             w = top_p_weight((logp[target] - batch["rollout_log_probs"][i][row]).exp(), a).detach()
             loss = -batch["advantages"][i][row] * (w * logp[target] - (coeff * logp[ids]).sum())
@@ -709,8 +728,59 @@ def test_request_selects_complete_support():
 
 
 @pytest.mark.parametrize("mode", ["none", "tis", "mis"])
+@pytest.mark.parametrize("delta", [-3.0, 0.0, 0.01])
+def test_top_p_matches_existing_centering_without_changing_gradient(mode, delta, monkeypatch):
+    from megatron.core import mpu
+    from slime.backends.megatron_utils.loss import get_score_centering_terms
+
+    monkeypatch.setattr(mpu, "get_tensor_model_parallel_group", lambda: None, raising=False)
+    monkeypatch.setattr(mpu, "get_tensor_model_parallel_rank", lambda: 0, raising=False)
+    q = torch.tensor([0.94, 0.06], requires_grad=True)
+    base = torch.tensor([0.893, 0.057, 0.05]).log()
+    logits = base.repeat(1, 2, 1)
+    logits[0, 0, 0] += delta
+    logits.requires_grad_()
+    batch = {
+        "total_lengths": [2],
+        "response_lengths": [1],
+        "unconcat_tokens": [torch.tensor([2, 0])],
+        "loss_masks": [torch.ones(1)],
+        "rollout_log_probs": [q[:1].log()],
+        "rollout_top_p_token_ids": [torch.tensor([0, 1], dtype=torch.int32)],
+        "rollout_top_p_token_offsets": [torch.tensor([0, 2], dtype=torch.int32)],
+        "rollout_top_p_log_probs": [q.log()],
+    }
+    a = args(mode=mode, rollout_top_p=0.95, rollout_temperature=1.0)
+    terms = get_score_centering_terms(a, batch, logits)
+    gradient, q_gradient = torch.autograd.grad(terms["sc_correction"].sum(), (logits, q), allow_unused=True)
+    assert q_gradient is None
+    assert set(terms) == {"sc_correction", "sc_sampler_head_mass", "sc_train_head_mass"}
+
+    # The unchanged non-top-p helper uses the whole support as its head:
+    # this isolates the scalar convention from its usual tail approximation.
+    logp = logits[0, 0, :2].log_softmax(0)
+    existing, _, _ = score_centering_correction(logp[None], q.log()[None], **get_score_centering_is_config(a))
+    torch.testing.assert_close(terms["sc_correction"], existing, rtol=1e-5, atol=1e-7)
+    torch.testing.assert_close(
+        gradient, torch.autograd.grad(existing.sum(), logits, retain_graph=True)[0], rtol=1e-5, atol=1e-7
+    )
+
+    # Independently compare with the previous, uncentered top-p objective.
+    raw = ((q * top_p_weight(logp.exp() / q, a)).detach() * logp).sum()
+    torch.testing.assert_close(gradient, torch.autograd.grad(raw, logits)[0], rtol=1e-5, atol=1e-7)
+    assert gradient[0, 0, 2] == 0 and not gradient[0, 1].any()
+    if delta == 0:
+        assert raw.item() == pytest.approx(-0.2269675, abs=1e-6)
+        assert terms["sc_correction"].abs().item() < 1e-7
+        assert gradient.abs().max().item() < 1e-7
+    elif mode == "none" and delta == 0.01:
+        assert 0 < gradient.abs().max().item() < 0.001
+
+
+@pytest.mark.parametrize("mode", ["none", "tis", "mis"])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
-def test_exact_loss_gradient(mode, dtype, monkeypatch):
+@pytest.mark.parametrize("disk", [False, True])
+def test_exact_loss_gradient(mode, dtype, disk, monkeypatch, tmp_path):
     top_p = 0.95
     from megatron.core import mpu
     from slime.backends.megatron_utils.cp_utils import get_sum_of_sample_mean
@@ -721,18 +791,32 @@ def test_exact_loss_gradient(mode, dtype, monkeypatch):
     batch = top_p_batch(top_p=top_p)
     for offsets, mask in zip(batch["rollout_top_p_token_offsets"], batch["loss_masks"], strict=True):
         assert offsets.diff().tolist() == (3 * mask).tolist()
+    original = dict(batch)
+    if disk:
+        store_top_p_batch(batch, tmp_path)
+        from slime.data.tensor import TensorRef
+
+        load = TensorRef.load
+        offsets_refs = batch["rollout_top_p_token_offsets"]
+
+        def load_offsets(ref, **kwargs):
+            assert ref in offsets_refs, "Loss must slice ids/logprobs instead of loading entire supports"
+            return load(ref, **kwargs)
+
+        monkeypatch.setattr(TensorRef, "load", load_offsets)
     a = args(mode=mode, rollout_top_p=top_p)
     logits = torch.randn(1, 16, 12, dtype=dtype).requires_grad_()
     reducer = get_sum_of_sample_mean(
         batch["total_lengths"], batch["response_lengths"], batch["loss_masks"], batch["rollout_mask_sums"]
     )
     loss, metrics = policy_loss_function(a, batch, logits.float(), reducer)
-    expected = top_p_reference(logits, batch, a)
+    expected = top_p_reference(logits, original, a)
     torch.testing.assert_close(loss, expected, atol=2e-6, rtol=2e-6)
     tol = 0.004 if dtype == torch.bfloat16 else 2e-6
-    torch.testing.assert_close(
-        torch.autograd.grad(loss, logits)[0], torch.autograd.grad(expected, logits)[0], atol=tol, rtol=tol
-    )
+    actual_grad = torch.autograd.grad(loss, logits)[0]
+    torch.testing.assert_close(actual_grad, torch.autograd.grad(expected, logits)[0], atol=tol, rtol=tol)
+    old_objective = top_p_reference(logits, original, a, centered=False)
+    torch.testing.assert_close(actual_grad, torch.autograd.grad(old_objective, logits)[0], atol=tol, rtol=tol)
     assert metrics["sc_sampler_head_mass"] == pytest.approx(2.0, abs=1e-5)
 
 
@@ -800,7 +884,7 @@ def test_exact_correction_cancels_expected_drift(mode):
     )
 
 
-def top_p_distributed_worker(rank, world_size, port, layout, mode):
+def top_p_distributed_worker(rank, world_size, port, layout, mode, directory=None):
     import torch.distributed as dist
     from megatron.core import mpu
 
@@ -833,6 +917,10 @@ def top_p_distributed_worker(rank, world_size, port, layout, mode):
             local = full_logits[row_ids]
         local = local.clone().requires_grad_()
         original = dict(batch)
+        if directory is not None:
+            from pathlib import Path
+
+            store_top_p_batch(batch, Path(directory) / str(rank))
         if not is_tp:
             for key in ["advantages", "rollout_log_probs"]:
                 batch[key] = [
@@ -859,9 +947,12 @@ def top_p_distributed_worker(rank, world_size, port, layout, mode):
 
 @pytest.mark.parametrize("layout", ["tp", "zigzag", "allgather"])
 @pytest.mark.parametrize("mode", ["none", "tis", "mis"])
-def test_distributed_exact_gradients(layout, mode):
+@pytest.mark.parametrize("disk", [False, True])
+def test_distributed_exact_gradients(layout, mode, disk, tmp_path):
     torch.multiprocessing.spawn(
-        top_p_distributed_worker, args=(2, _cp_dist_helpers.free_port(), layout, mode), nprocs=2
+        top_p_distributed_worker,
+        args=(2, _cp_dist_helpers.free_port(), layout, mode, str(tmp_path) if disk else None),
+        nprocs=2,
     )
 
 
@@ -906,21 +997,34 @@ def test_binary_resume_and_masked_environment():
     assert sample.rollout_topk_token_ids is None
 
 
-@pytest.mark.parametrize("corruption", ["missing", "partial", "duplicate", "offsets", "nan", "sampled"])
-def test_invalid_support_rejected(corruption):
+@pytest.mark.parametrize("corruption", ["missing", "duplicate", "offsets", "nan", "sampled"])
+@pytest.mark.parametrize("disk", [False, True])
+def test_invalid_support_rejected(corruption, disk, tmp_path):
     from slime.utils.score_centering import validate_sampler_top_p
 
     ids, offsets, q = [1, 2], [0, 2], np.log([0.3, 0.7])
     if corruption == "missing":
         q = None
-    elif corruption == "partial":
-        q = np.log([0.2, 0.4])
     elif corruption == "duplicate":
         ids = [1, 1]
     elif corruption == "offsets":
         offsets = [0, 1]
     elif corruption == "nan":
         q[0] = np.nan
+    if disk:
+        from straw import SharedFilesystemStore
+        from straw.tensor import publish_tensors
+
+        values = {"ids": torch.tensor(ids), "offsets": torch.tensor(offsets)}
+        if q is not None:
+            values["logps"] = torch.tensor(q)
+        with SharedFilesystemStore(tmp_path, "invalid-top-p", codecs=("tensor.v1",)) as store:
+            refs = dict(zip(values, publish_tensors(store, values, submission_id="sample"), strict=True))
+        # These deliberately malformed captures have not passed sampler validation.
+        from dataclasses import replace
+
+        refs = {key: replace(value, validated=False) for key, value in refs.items()}
+        ids, offsets, q = refs["ids"], refs["offsets"], refs.get("logps")
     with pytest.raises(ValueError):
         validate_sampler_top_p(
             ids, offsets, q, 1, tokens=[3] if corruption == "sampled" else [2], sampled_logps=[float(np.log(0.7))]
@@ -929,3 +1033,13 @@ def test_invalid_support_rejected(corruption):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
+
+
+@pytest.mark.parametrize("mass", [0.6, 0.999898, 1.0001005, 1.5])
+def test_sampler_normalization_is_not_rechecked(mass):
+    from slime.utils.score_centering import validate_sampler_top_p
+
+    logps = np.log(np.array([mass / 2, mass / 2]))
+    validate_sampler_top_p([0, 1], [0, 2], logps, 1)
+    sample = Sample(response_length=1, rollout_topk_token_ids=[[0, 1]], rollout_topk_log_probs=[logps])
+    validate_sampler_topk(sample, 2)

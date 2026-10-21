@@ -3,17 +3,24 @@ import ipaddress
 import logging
 import multiprocessing
 import os
+import sys
 import time
 
 import requests
 from sglang.srt.server_args import ServerArgs
-from sglang.srt.utils import kill_process_tree
 from urllib3.exceptions import NewConnectionError
 
 from slime.backends.sglang_utils.external import get_server_info
+from slime.backends.sglang_utils.runtime import (
+    launch_server_subprocess,
+    prepare_server_environment,
+    terminate_server_process,
+)
+from slime.backends.sglang_utils.server_control import unregister_worker
 from slime.ray.ray_actor import RayActor
 from slime.utils import accelerator
 from slime.utils.http_utils import get_host_info
+from slime.utils.model_config import sglang_model_config_overrides
 
 logger = logging.getLogger(__name__)
 
@@ -32,24 +39,26 @@ def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
     # Expandable segments help the colocated training actor tolerate repeated
     # cache releases, but SGLang's allocator/sleep path does not support them.
     # The rollout Ray actor inherits the job environment, so remove the option
-    # before spawning every SGLang server and its children.
-    os.environ.pop("PYTORCH_CUDA_ALLOC_CONF", None)
-    os.environ.pop("PYTORCH_ALLOC_CONF", None)
+    # before spawning every SGLang server and its children. Preserve pinned-host
+    # allocation settings and the existing Mooncake port-range defaults.
+    prepare_server_environment(os.environ)
 
     if getattr(server_args, "encoder_only", False):
-        from sglang.srt.disaggregation.encode_server import launch_server_process as sglang_launch_server_process
-
-        return sglang_launch_server_process(
-            server_args,
-            start_method="spawn",
-            wait_for_server=True,
-        )
-
-    from sglang.srt.entrypoints.http_server import launch_server
+        try:
+            from sglang.srt.disaggregation.encode_server import launch_server_process as sglang_launch_server_process
+        except ModuleNotFoundError as exc:
+            if exc.name != "sglang.srt.disaggregation.encode_server":
+                raise
+        else:
+            return sglang_launch_server_process(
+                server_args,
+                start_method="spawn",
+                wait_for_server=True,
+            )
 
     multiprocessing.set_start_method("spawn", force=True)
     server_args.host = server_args.host.strip("[]")
-    p = multiprocessing.Process(target=launch_server, args=(server_args,))
+    p = multiprocessing.Process(target=_launch_server, args=(server_args, os.getpid()))
     p.start()
 
     if getattr(server_args, "node_rank", 0) != 0:
@@ -64,6 +73,41 @@ def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
     return p
 
 
+def _launch_server(server_args, parent_pid):
+    _prepare_server_stdin()
+    if getattr(server_args, "encoder_only", False):
+        from sglang.srt.disaggregation.encoder.http_server import launch_server
+    else:
+        from sglang.srt.entrypoints.http_server import launch_server
+    from sglang.srt.utils import kill_itself_when_parent_died
+
+    # A wedged actor cannot run shutdown(). Its server must still release GPUs
+    # when the owner kills that actor before creating a replacement engine.
+    kill_itself_when_parent_died()
+    if os.getppid() == parent_pid:
+        launch_server(server_args)
+
+
+def _prepare_server_stdin():
+    # Uvicorn passes stdin's fd to spawn workers. Ray's nested spawn can leave
+    # sys.stdin on a nonstandard fd that is absent in those workers.
+    try:
+        if sys.stdin.fileno() == 0:
+            os.fstat(0)
+            return
+    except (AttributeError, OSError, ValueError):
+        pass
+    try:
+        sys.stdin.close()
+    except (AttributeError, OSError):
+        pass
+    descriptor = os.open(os.devnull, os.O_RDONLY)
+    if descriptor != 0:
+        os.dup2(descriptor, 0)
+        os.close(descriptor)
+    sys.stdin = os.fdopen(0, "r", closefd=False)
+
+
 def _wait_server_healthy(base_url, api_key, is_process_alive):
     headers = {
         "Content-Type": "application/json; charset=utf-8",
@@ -73,7 +117,7 @@ def _wait_server_healthy(base_url, api_key, is_process_alive):
     with requests.Session() as session:
         while True:
             try:
-                response = session.get(f"{base_url}/health_generate", headers=headers)
+                response = session.get(f"{base_url}/health_generate", headers=headers, timeout=5)
                 if response.status_code == 200:
                     break
             except requests.RequestException:
@@ -101,6 +145,7 @@ class SGLangEngine(RayActor):
         self.base_gpu_id = base_gpu_id
         self.sglang_overrides = sglang_overrides or {}
         self.num_gpus_per_engine = num_gpus_per_engine
+        self._weight_update_groups = set()
 
     def init(
         self,
@@ -170,8 +215,21 @@ class SGLangEngine(RayActor):
         self._register_to_router(expect_server_args)
 
     def _init_normal(self, server_args_dict):
+        server_args_dict["json_model_override_args"] = sglang_model_config_overrides(
+            server_args_dict["model_path"], server_args_dict.get("json_model_override_args", "{}")
+        )
         logger.info(f"Launch HttpServerEngineAdapter at: {self.server_host}:{self.server_port}")
-        self.process = launch_server_process(ServerArgs(**server_args_dict))
+        executable = getattr(self.args, "sglang_python_executable", None)
+        if executable:
+            self.process = launch_server_subprocess(executable, server_args_dict)
+            if self.node_rank == 0:
+                _wait_server_healthy(
+                    base_url=f"http://{self.server_host}:{self.server_port}",
+                    api_key=server_args_dict.get("api_key"),
+                    is_process_alive=lambda: self.process.poll() is None,
+                )
+        else:
+            self.process = launch_server_process(ServerArgs(**server_args_dict))
         self._register_to_router(server_args_dict)
 
     def _register_to_router(self, server_args_dict):
@@ -198,7 +256,7 @@ class SGLangEngine(RayActor):
             )
             response.raise_for_status()
 
-    def _make_request(self, endpoint: str, payload: dict | None = None):
+    def _make_request(self, endpoint: str, payload: dict | None = None, *, timeout=None):
         """Make a POST request to the specified endpoint with the given payload.
 
         Args:
@@ -212,7 +270,7 @@ class SGLangEngine(RayActor):
             return
 
         url = f"http://{self.server_host}:{self.server_port}/{endpoint}"
-        response = requests.post(url, json=payload or {})
+        response = requests.post(url, json=payload or {}, timeout=timeout)
         try:
             response.raise_for_status()
         except requests.exceptions.HTTPError as e:
@@ -295,33 +353,29 @@ class SGLangEngine(RayActor):
 
     def shutdown(self):
         if self.args.rollout_external:
+            # The external cluster owns its processes; slime must not kill them.
             return
 
         logger.info(f"Shutdown engine {self.server_host}:{self.server_port}...")
         if self.worker_type != "encoder" and self.node_rank == 0:
             worker_url = f"http://{self.server_host}:{self.server_port}"
-            response = None
             try:
-                all_workers = requests.get(f"http://{self.router_ip}:{self.router_port}/workers").json()["workers"]
-                for worker in all_workers:
-                    if worker["url"] == worker_url:
-                        worker_id = worker["id"]
-                        response = requests.delete(f"http://{self.router_ip}:{self.router_port}/workers/{worker_id}")
-                        break
-                else:
-                    logger.warning(f"Worker {worker_url} not found in router during shutdown.")
+                unregister_worker(
+                    f"http://{self.router_ip}:{self.router_port}",
+                    worker_url,
+                    timeout=self.args.rollout_health_check_timeout,
+                )
             except Exception as e:
+                # Even if router cleanup fails, terminate the local process.
+                # Owner-side cleanup keeps the URL outside this actor for retry.
                 logger.warning(f"Failed to fetch workers list or remove worker: {e}")
-
-            if response is not None:
-                response.raise_for_status()
-        kill_process_tree(self.process.pid)
+        terminate_server_process(self.process)
 
     def get_weight_version(self):
         if self.node_rank != 0:
             return
         url = f"http://{self.server_host}:{self.server_port}/get_weight_version"
-        response = requests.get(url)
+        response = requests.get(url, timeout=self.args.rollout_health_check_timeout)
         response.raise_for_status()
         return response.json()["weight_version"]
 
@@ -360,9 +414,10 @@ class SGLangEngine(RayActor):
         model_path: str,
         load_format: str | None = None,
         weight_version: str | None = None,
+        flush_cache: bool = True,
     ):
         """Reload weights from the checkpoint at *model_path* without restarting the engine."""
-        payload: dict = {"model_path": model_path}
+        payload: dict = {"model_path": model_path, "flush_cache": flush_cache}
         if load_format is not None:
             payload["load_format"] = load_format
         if weight_version is not None:
@@ -370,7 +425,10 @@ class SGLangEngine(RayActor):
         return self._make_request("update_weights_from_disk", payload)
 
     def init_weights_update_group(self, master_address, master_port, rank_offset, world_size, group_name, backend):
-        return self._make_request(
+        # A lost reply can leave a live NCCL group behind. Reset every attempted
+        # group on reattachment, including those whose creation never replied.
+        self._weight_update_groups.add(group_name)
+        result = self._make_request(
             "init_weights_update_group",
             {
                 "master_address": master_address,
@@ -381,15 +439,33 @@ class SGLangEngine(RayActor):
                 "backend": backend,
             },
         )
+        return result
+
+    def reset_weights_update_groups(self):
+        """Remove dead trainer peers while retaining the serving process."""
+        # Old NCCL groups refer to the previous trainer's ranks and cannot be
+        # reused, even when the new trainer has the same parallel layout.
+        # Process-group shutdown can synchronize peers. A set's iteration order
+        # differs across workers, so every engine must destroy groups in the
+        # same order or wait forever for a peer destroying another group.
+        for group_name in sorted(self._weight_update_groups):
+            self._make_request(
+                "destroy_weights_update_group",
+                {"group_name": group_name},
+                timeout=self.args.rollout_health_check_timeout,
+            )
+            self._weight_update_groups.remove(group_name)
 
     def destroy_weights_update_group(self, group_name):
         try:
-            return self._make_request(
+            result = self._make_request(
                 "destroy_weights_update_group",
                 {
                     "group_name": group_name,
                 },
             )
+            self._weight_update_groups.discard(group_name)
+            return result
         except requests.exceptions.RequestException:
             # catch the case there the engine is just created and does not have the group.
             pass
@@ -420,10 +496,10 @@ class SGLangEngine(RayActor):
             payload,
         )
 
-    def pause_generation(self):
+    def pause_generation(self, mode: str = "abort"):
         if self.node_rank != 0:
             return
-        response = requests.post(f"http://{self.server_host}:{self.server_port}/pause_generation", json={})
+        response = requests.post(f"http://{self.server_host}:{self.server_port}/pause_generation", json={"mode": mode})
         response.raise_for_status()
         return response
 
@@ -572,19 +648,37 @@ def _compute_server_args(
         kwargs["dtype"] = "float16"
     external_engine_need_check_fields = [k for k in kwargs.keys() if k not in _EXTERNAL_ENGINE_SKIP_CHECK_FIELDS]
 
-    server_arg_fields = dataclasses.fields(ServerArgs)
-    server_arg_field_names = {attr.name for attr in server_arg_fields}
+    if dataclasses.is_dataclass(ServerArgs):
+        server_arg_field_names = {field.name for field in dataclasses.fields(ServerArgs)}
+    else:
+        # SGLang 0.5.21 represents ServerArgs as a msgspec Struct.
+        server_arg_field_names = set(ServerArgs.__struct_fields__)
     unused_keys = set(kwargs.keys())
-    for attr in server_arg_fields:
-        if worker_type == "decode" and attr.name == "enable_hierarchical_cache":
+    for name in server_arg_field_names:
+        if worker_type == "decode" and name == "enable_hierarchical_cache":
             continue
-        if hasattr(args, f"sglang_{attr.name}") and attr.name not in kwargs:
-            kwargs[attr.name] = getattr(args, f"sglang_{attr.name}")
-        unused_keys.discard(attr.name)
+        if hasattr(args, f"sglang_{name}") and name not in kwargs:
+            kwargs[name] = getattr(args, f"sglang_{name}")
+        unused_keys.discard(name)
 
     # Per-server-group overrides from --sglang-config YAML.
     # Applied after base args so they take highest priority.
     if sglang_overrides:
+        renamed_fields = {
+            "cuda_graph_max_bs": "cuda_graph_max_bs_decode",
+            "cuda_graph_bs": "cuda_graph_bs_decode",
+            "piecewise_cuda_graph_tokens": "cuda_graph_bs_prefill",
+            "piecewise_cuda_graph_max_tokens": "cuda_graph_max_bs_prefill",
+            "piecewise_cuda_graph_compiler": "cuda_graph_tc_compiler",
+            "nsa_prefill_backend": "dsa_prefill_backend",
+            "nsa_decode_backend": "dsa_decode_backend",
+            "mamba_scheduler_strategy": "mamba_radix_cache_strategy",
+        }
+        prefill_backend_flags = {
+            "enable_breakable_cuda_graph": "breakable",
+            "disable_piecewise_cuda_graph": "disabled",
+            "enforce_piecewise_cuda_graph": "tc_piecewise",
+        }
         for key, value in sglang_overrides.items():
             normalized_key = key.replace("-", "_")
             if normalized_key != key:
@@ -592,6 +686,17 @@ def _compute_server_args(
                     f"sglang_overrides key '{key}' normalized to '{normalized_key}' (rank={rank}). "
                     "Please use underscore style in YAML overrides."
                 )
+            if normalized_key not in server_arg_field_names:
+                renamed_key = renamed_fields.get(normalized_key)
+                if renamed_key in server_arg_field_names:
+                    normalized_key = renamed_key
+                elif (
+                    normalized_key in prefill_backend_flags and "cuda_graph_backend_prefill" in server_arg_field_names
+                ):
+                    if not value:
+                        continue
+                    value = prefill_backend_flags[normalized_key]
+                    normalized_key = "cuda_graph_backend_prefill"
             if normalized_key in kwargs:
                 logger.info(
                     f"sglang_overrides: overriding {normalized_key}={kwargs[normalized_key]} -> {value} (rank={rank})"

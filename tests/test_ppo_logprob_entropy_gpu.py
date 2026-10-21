@@ -10,8 +10,117 @@ import torch
 
 from slime.utils.ppo_utils import calculate_log_probs_and_entropy
 
-
 NUM_GPUS = 2
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+@pytest.mark.parametrize("response_length", [0, 1])
+def test_cp_empty_response_backward_with_large_logits(monkeypatch, response_length):
+    from argparse import Namespace
+
+    mpu = pytest.importorskip("megatron.core").mpu
+    from slime.backends.megatron_utils.loss import get_responses
+
+    monkeypatch.setattr(mpu, "get_context_parallel_world_size", lambda: 2)
+    monkeypatch.setattr(mpu, "get_context_parallel_rank", lambda: 1)
+    torch.cuda.empty_cache()
+    if torch.cuda.mem_get_info()[0] < 20 * 2**30:
+        pytest.skip("Large-index backward needs 20 GiB of free GPU memory")
+    # Cross the 32-bit indexing boundary. Rank 1 owns no response rows even
+    # when the other CP rank has one response token.
+    logits = torch.empty(1, 32768, 65537, device="cuda", requires_grad=True)
+    rows, tokens = next(
+        get_responses(
+            logits,
+            args=Namespace(rollout_temperature=1.0, allgather_cp=False),
+            unconcat_tokens=[torch.zeros(65536, device="cuda", dtype=torch.long)],
+            total_lengths=[65536],
+            response_lengths=[response_length],
+        )
+    )
+    assert rows.shape == (0, 65537) and tokens.numel() == 0
+    rows.sum().backward()
+    torch.cuda.synchronize()
+    assert logits.grad is not None
+    assert torch.count_nonzero(logits.grad).item() == 0
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+@pytest.mark.parametrize("cp_rank,response_length", [(0, 4096), (1, 4096), (0, 6144), (1, 6144)])
+def test_cp_response_backward_avoids_duplicate_full_logit_gradients(monkeypatch, cp_rank, response_length):
+    from argparse import Namespace
+
+    mpu = pytest.importorskip("megatron.core").mpu
+    from slime.backends.megatron_utils.loss import get_responses
+
+    monkeypatch.setattr(mpu, "get_context_parallel_world_size", lambda: 2)
+    monkeypatch.setattr(mpu, "get_context_parallel_rank", lambda: cp_rank)
+    torch.cuda.empty_cache()
+    logits = torch.ones(1, 4096, 8192, device="cuda", requires_grad=True)
+    tokens = torch.zeros(8192, device="cuda", dtype=torch.long)
+    torch.cuda.synchronize()
+    torch.cuda.reset_peak_memory_stats()
+    baseline = torch.cuda.memory_allocated()
+    rows, _ = next(
+        get_responses(
+            logits,
+            args=Namespace(rollout_temperature=1.0, allgather_cp=False),
+            unconcat_tokens=[tokens],
+            total_lengths=[8192],
+            response_lengths=[response_length],
+        )
+    )
+    rows.sum().backward()
+    torch.cuda.synchronize()
+    # At most one gathered response and one dense input gradient, plus small
+    # index tensors. Separate CP slices require multiple dense gradients.
+    assert torch.cuda.max_memory_allocated() - baseline < 2.1 * logits.numel() * logits.element_size()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+def test_chunked_backward_avoids_retained_softmax_and_gradient_join_peak():
+    from slime.utils.ppo_utils import _calculate_log_probs_and_entropy_chunk
+
+    def measure(legacy):
+        torch.cuda.empty_cache()
+        logits = torch.randn(2048, 8192, device="cuda", requires_grad=True)
+        tokens = torch.arange(2048, device="cuda")
+        mask = torch.ones_like(logits, dtype=torch.bool)
+        torch.cuda.synchronize()
+        torch.cuda.reset_peak_memory_stats()
+        baseline = torch.cuda.memory_allocated()
+        if legacy:
+            chunks = [
+                _calculate_log_probs_and_entropy_chunk(
+                    rows,
+                    ids,
+                    None,
+                    with_entropy=True,
+                    with_entropy_grad=False,
+                    log_prob_keep_mask=keep,
+                )[0]
+                for rows, ids, keep in zip(logits.split(128), tokens.split(128), mask.split(128), strict=True)
+            ]
+            values = torch.cat(chunks)
+        else:
+            values, _ = calculate_log_probs_and_entropy(
+                logits,
+                tokens,
+                None,
+                with_entropy=True,
+                with_entropy_grad=False,
+                chunk_size=128,
+                log_prob_keep_mask=mask,
+            )
+        values.sum().backward()
+        torch.cuda.synchronize()
+        return torch.cuda.max_memory_allocated() - baseline
+
+    legacy_peak = measure(True)
+    recompute_peak = measure(False)
+    # This workload must save at least half of one full FP32 vocabulary tensor.
+    assert legacy_peak - recompute_peak > 2048 * 8192 * 4 // 2
+
 
 # Megatron's JIT fused CE can differ from the same Python-level expression by
 # one fp32 ulp in the unmasked path.

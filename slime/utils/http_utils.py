@@ -5,6 +5,7 @@ import logging
 import os
 import random
 import socket
+import ssl
 
 import httpx
 
@@ -144,6 +145,47 @@ def _next_actor():
     return actor
 
 
+class _ShardedHTTPTransport(httpx.AsyncBaseTransport):
+    """Reduce asyncio CPU stalls from httpcore's per-request connection scans.
+
+    Split this client's connection budget across pools of at most 128
+    connections, so each synchronous scan touches a small pool. The pools
+    operate concurrently: 128 is a per-pool limit, not a client-wide request
+    limit. Their connection limits sum to max_connections; requests assigned
+    to a full pool wait for a connection there.
+
+    Allow each pool to retain its entire connection budget as idle keep-alive
+    connections, subject to the usual expiry. This avoids closing/reopening
+    most sockets after a request wave; httpx otherwise keeps at most 20 idle
+    connections per pool. That idle limit is separate from active concurrency.
+    """
+
+    def __init__(self, max_connections: int):
+        count = max(1, (max_connections + 127) // 128)
+        size, remainder = divmod(max(1, max_connections), count)
+        tls = ssl.create_default_context()
+        self._transports = [
+            httpx.AsyncHTTPTransport(
+                verify=tls,
+                trust_env=False,
+                limits=httpx.Limits(
+                    max_connections=size + (i < remainder),
+                    max_keepalive_connections=size + (i < remainder),
+                ),
+            )
+            for i in range(count)
+        ]
+        self._next = 0
+
+    async def handle_async_request(self, request):
+        transport = self._transports[self._next]
+        self._next = (self._next + 1) % len(self._transports)
+        return await transport.handle_async_request(request)
+
+    async def aclose(self):
+        await asyncio.gather(*(transport.aclose() for transport in self._transports))
+
+
 async def _post(client, url, payload, max_retries=60, headers=None, timeout=None, score_centering_top_k=None):
     retry_count = 0
     while retry_count < max_retries:
@@ -173,7 +215,7 @@ async def _post(client, url, payload, max_retries=60, headers=None, timeout=None
                 response_text = None
 
             logger.info(
-                f"Error: {e}, retrying... (attempt {retry_count}/{max_retries}, url={url}, response={response_text})"
+                f"Error: {e!r}, retrying... (attempt {retry_count}/{max_retries}, url={url}, response={response_text})"
             )
             if retry_count >= max_retries:
                 logger.info(f"Max retries ({max_retries}) reached, failing... (url={url})")
@@ -200,17 +242,17 @@ def get_rollout_num_engines(args) -> int:
     return max(1, rollout_num_gpus // rollout_num_gpus_per_engine)
 
 
-def init_http_client(args):
+def init_http_client(args, *, concurrency: int | None = None):
     """Initialize HTTP client and optionally enable distributed POST via Ray."""
     global _http_client, _client_concurrency, _distributed_post_enabled
     num_engines = get_rollout_num_engines(args)
     if num_engines <= 0:
         return
 
-    _client_concurrency = args.sglang_server_concurrency * num_engines
+    _client_concurrency = concurrency if concurrency is not None else args.sglang_server_concurrency * num_engines
     if _http_client is None:
         _http_client = httpx.AsyncClient(
-            limits=httpx.Limits(max_connections=_client_concurrency),
+            transport=_ShardedHTTPTransport(_client_concurrency),
             timeout=httpx.Timeout(None),
             trust_env=False,  # internal SGLang comm only — never route through system proxy
         )
@@ -247,7 +289,7 @@ def _init_ray_distributed_post(args):
         def __init__(self, concurrency: int):
             # Lazy creation to this actor's event loop
             self._client = httpx.AsyncClient(
-                limits=httpx.Limits(max_connections=max(1, concurrency)),
+                transport=_ShardedHTTPTransport(concurrency),
                 timeout=httpx.Timeout(None),
                 trust_env=False,  # internal SGLang comm only — never route through system proxy
             )

@@ -3,6 +3,7 @@
 import os
 import tempfile
 from pathlib import Path
+from shlex import quote
 
 import torch
 
@@ -24,6 +25,8 @@ def prepare():
 def execute(top_p=1.0):
     with tempfile.TemporaryDirectory(prefix="slime-score-centering-") as directory:
         train_args = (
+            "--rollout-data-transport straw --rollout-queue-online-gc "
+            f"--rollout-data-dir {quote(str(Path(directory) / 'queue'))} "
             f"--hf-checkpoint /root/models/{MODEL_NAME} --ref-load /root/models/{MODEL_NAME} "
             "--prompt-data /root/datasets/gsm8k/train.parquet "
             "--input-key messages --label-key label --apply-chat-template --rm-type math "

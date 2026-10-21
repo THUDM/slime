@@ -1,8 +1,6 @@
 import ctypes
 import gc
 import logging
-import resource
-import sys
 from functools import lru_cache
 
 import psutil
@@ -40,16 +38,6 @@ def reset_cuda_stack_size() -> None:
     if error:
         raise RuntimeError(f"cuCtxSetLimit(CU_LIMIT_STACK_SIZE) failed: CUDA error {error}")
     logger.info("Reset CUDA stack limit after offload: %d -> 1024 bytes", previous.value)
-
-
-def get_process_host_memory_gib(process: psutil.Process | None = None) -> tuple[float, float]:
-    """Return current and peak resident host memory in GiB."""
-    process = process or psutil.Process()
-    rss_gib = process.memory_info().rss / 1024**3
-    max_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    # Linux reports KiB; macOS reports bytes.
-    hwm_gib = max_rss / (1024**2 if sys.platform != "darwin" else 1024**3)
-    return rss_gib, hwm_gib
 
 
 def clear_memory(clear_host_memory: bool = False):
