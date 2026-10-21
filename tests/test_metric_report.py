@@ -36,6 +36,52 @@ from slime.observability.train_metric_utils import (  # noqa: E402
 NUM_GPUS = 0
 
 
+def test_truncation_fraction_is_reported_once_for_all_rollout_sources(monkeypatch):
+    from types import SimpleNamespace
+
+    from megatron.core import mpu
+
+    from slime.observability import train_metric_utils
+    from slime.observability.rollout_metrics import compute_metrics_from_samples
+    from slime.utils.types import Sample
+
+    monkeypatch.setattr(mpu, "get_tensor_model_parallel_rank", lambda: 0, raising=False)
+    monkeypatch.setattr(mpu, "is_pipeline_last_stage", lambda: True, raising=False)
+    monkeypatch.setattr(mpu, "get_context_parallel_world_size", lambda: 1, raising=False)
+    monkeypatch.setattr(mpu, "get_data_parallel_world_size", lambda **kwargs: 1, raising=False)
+    captured = {}
+    monkeypatch.setattr(
+        train_metric_utils, "gather_log_data", lambda name, args, step, metrics: captured.update(metrics)
+    )
+    args = SimpleNamespace(
+        ci_test=False,
+        log_multi_turn=False,
+        log_passrate=False,
+        log_correct_samples=False,
+        advantage_estimator="ppo",
+        log_reward_category=None,
+    )
+    samples = [
+        Sample(index=0, response_length=1, response="ok", status=Sample.Status.COMPLETED),
+        Sample(index=1, response_length=1, response="partial", status=Sample.Status.TRUNCATED),
+    ]
+    rollout_metrics = compute_metrics_from_samples(args, samples)
+    assert "truncated_ratio" not in rollout_metrics
+    assert "truncated" not in rollout_metrics
+    data = {
+        "response_lengths": [1, 1],
+        "total_lengths": [2, 2],
+        "loss_masks": [[1], [1]],
+        "global_batch_sizes": [2],
+        "truncated": [0, 1],
+    }
+    train_metric_utils.log_rollout_data(0, args, data)
+    assert captured["truncated"] == (1, 2)
+    assert "truncated_ratio" not in captured
+    assert captured["response_lengths"] == (2, 2)
+    assert data["truncated"] == [0, 1]  # Training still receives the internal flags.
+
+
 @pytest.fixture
 def mock_dp_with_cp_group(monkeypatch):
     """A sentinel "process group" object plus a no-op ``dist.all_reduce``.

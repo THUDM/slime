@@ -10,7 +10,7 @@ import torch
 import torch.distributed as dist
 from megatron.core import mpu
 from torch_memory_saver import torch_memory_saver
-from transformers import AutoConfig, AutoTokenizer
+from transformers import AutoTokenizer
 
 from slime.data.tensor import TensorRef
 from slime.observability import train_data_utils, train_metric_utils
@@ -24,6 +24,7 @@ from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.memory_utils import clear_memory, print_memory, reset_cuda_stack_size
 from slime.utils.misc import Box
+from slime.utils.model_config import load_hf_config
 from slime.utils.reloadable_process_group import (
     destroy_process_groups,
     monkey_patch_torch_dist,
@@ -94,7 +95,7 @@ class MegatronTrainRayActor(TrainRayActor):
         # read config and tokenizer serialized to prevent concurrent writing bug.
         for i in range(args.num_gpus_per_node):
             if i == dist.get_rank() % args.num_gpus_per_node:
-                self.hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
+                self.hf_config = load_hf_config(args.hf_checkpoint, trust_remote_code=True)
                 self.tokenizer = AutoTokenizer.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
             dist.barrier(group=get_gloo_group())
 
@@ -384,6 +385,7 @@ class MegatronTrainRayActor(TrainRayActor):
         data_iterator: list[DataIterator],
         num_microbatches: list[int],
         store_prefix: str = "",
+        use_rollout_top_p_replay: bool = True,
     ) -> dict[str, list[torch.Tensor]]:
         with timer(f"{store_prefix}log_probs"):
             return forward_only(
@@ -393,7 +395,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 data_iterator,
                 num_microbatches,
                 store_prefix=store_prefix,
-                use_rollout_top_p_replay=True,
+                use_rollout_top_p_replay=use_rollout_top_p_replay,
             )
 
     def train(self, rollout_id: int, rollout_data_ref: Box, external_data=None):
@@ -466,6 +468,7 @@ class MegatronTrainRayActor(TrainRayActor):
                             data_iterator,
                             num_microbatches,
                             store_prefix="ref_",
+                            use_rollout_top_p_replay=False,
                         )
                     )
 
@@ -613,6 +616,8 @@ class MegatronTrainRayActor(TrainRayActor):
         save(rollout_id, self.model, self.optimizer, self.opt_param_scheduler)
 
         if force_sync and self.args.async_save:
+            # Replay data can be released once this call returns, so the current
+            # save must be durable rather than merely queued in the background.
             maybe_finalize_async_save(blocking=True)
 
         if self.args.save_hf is not None and self.role == "actor":
@@ -626,7 +631,9 @@ class MegatronTrainRayActor(TrainRayActor):
         if self.args.debug_train_only or self.args.debug_rollout_only:
             return
 
-        if self.args.use_fault_tolerance:
+        if not self.args.rollout_external or self.args.use_fault_tolerance:
+            # Recover just before weights can be installed. One rank changes
+            # serving topology; the barrier lets all ranks see the same engines.
             if dist.get_rank() == 0:
                 ray.get(self.rollout_manager.recover_updatable_engines.remote())
             dist.barrier(group=get_gloo_group())
@@ -653,6 +660,8 @@ class MegatronTrainRayActor(TrainRayActor):
             reload_process_groups()
 
         if num_new_engines > 0 or reconnect_rollout_engines:
+            # A replacement trainer must reconnect even to surviving engines;
+            # their previous update groups belonged to the old trainer ranks.
             self.weight_updater.connect_rollout_engines(
                 rollout_engines,
                 rollout_engine_lock,
@@ -662,6 +671,7 @@ class MegatronTrainRayActor(TrainRayActor):
             )
             dist.barrier(group=get_gloo_group())
             if dist.get_rank() == 0:
+                # Clear connection markers only after every rank is connected.
                 ray.get(self.rollout_manager.clear_updatable_num_new_engines.remote())
 
         with torch_memory_saver.disable() if self.args.offload_train else nullcontext():
@@ -689,24 +699,27 @@ class MegatronTrainRayActor(TrainRayActor):
         self.args.no_load_rng = True
         self.args.finetune = True
 
-        if model_tag == "ref" and self.args.ref_ckpt_step is not None:
+        # The actor's resume step belongs to a different checkpoint. A None
+        # reference/teacher step must let its own tracker select the release.
+        if model_tag == "ref":
             self.args.ckpt_step = self.args.ref_ckpt_step
-        elif model_tag == "teacher" and self.args.opd_teacher_ckpt_step is not None:
+        elif model_tag == "teacher":
             self.args.ckpt_step = self.args.opd_teacher_ckpt_step
-
-        _, _ = load_checkpoint(
-            self.model,
-            None,
-            None,
-            checkpointing_context={},
-        )
-        (
-            self.args.load,
-            self.args.no_load_optim,
-            self.args.no_load_rng,
-            self.args.finetune,
-            self.args.ckpt_step,
-        ) = old_args
+        try:
+            _, _ = load_checkpoint(
+                self.model,
+                None,
+                None,
+                checkpointing_context={},
+            )
+        finally:
+            (
+                self.args.load,
+                self.args.no_load_optim,
+                self.args.no_load_rng,
+                self.args.finetune,
+                self.args.ckpt_step,
+            ) = old_args
 
         self.weights_backuper.backup(model_tag)
         self._active_model_tag = model_tag

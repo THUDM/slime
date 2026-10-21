@@ -1,6 +1,6 @@
 # On-Policy Distillation Example
 
-This example shows how to run **on-policy distillation (OPD)** using slime. A small student (Qwen3-8B) is aligned to imitate a larger teacher (Qwen3-32B) by training only on the student's own rollouts and matching the teacher's token-level log-probabilities.
+This example shows how to run **on-policy distillation (OPD)** using slime. A small student (Qwen3-4B-Instruct-2507) is aligned to imitate a larger teacher (Qwen3-30B-A3B-Instruct-2507) by training only on the student's own rollouts and matching the teacher's token-level log-probabilities.
 
 ## Key Features
 
@@ -31,34 +31,38 @@ This example shows how to run **on-policy distillation (OPD)** using slime. A sm
 - `slime/rollout/on_policy_distillation.py` implements (for SGLang mode):
   - `reward_func` calls the teacher server (via `args.rm_url`) with every sample to obtain token-level logprobs.
   - `post_process_rewards` trims the teacher logprobs to the generated response span and writes the tensors back to each `Sample` to compute advantages.
-- `run-qwen3-8B-opd.sh` launches an SGLang teacher server, then submits a Ray job that runs `train.py`.
-- `run-qwen3-8B-opd-megatron.sh` uses Megatron-loaded teacher model (no external server needed).
+- `run-qwen3-4B-opd.sh` launches an SGLang teacher server, then submits a Ray job that runs `train.py`.
+- `run-qwen3-4B-opd-megatron.sh` uses Megatron-loaded teacher model (no external server needed).
 
 ## Running the example
 
 ### Using SGLang Teacher (External Server)
 
+The 8-GPU example reserves GPUs 6–7 for the TP2 teacher; Ray uses GPUs 0–5
+for four training GPUs (CP4) and two rollout GPUs. The response limit is 128K,
+and both checkpoints have a native 256K context window.
+
 1. Download or prepare the required checkpoints and data.
 ```bash
-hf download Qwen/Qwen3-32B --local-dir /root/Qwen3-32B
-hf download Qwen/Qwen3-8B --local-dir /root/Qwen3-8B
+hf download Qwen/Qwen3-30B-A3B-Instruct-2507 --local-dir /root/Qwen3-30B-A3B-Instruct-2507
+hf download Qwen/Qwen3-4B-Instruct-2507 --local-dir /root/Qwen3-4B-Instruct-2507
 hf download --repo-type dataset zhuzilin/dapo-math-17k --local-dir /root/dapo-math-17k
 ```
 
 2. Run the hf to mcore for student model conversion:
 ```bash
 cd /root/slime
-source scripts/models/qwen3-8B.sh
+source scripts/models/qwen3-4B-Instruct-2507.sh
 
 PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
     ${MODEL_ARGS[@]} \
-    --hf-checkpoint /root/Qwen3-8B \
-    --save /root/Qwen3-8B_torch_dist
+    --hf-checkpoint /root/Qwen3-4B-Instruct-2507 \
+    --save /root/Qwen3-4B-Instruct-2507_torch_dist
 ```
 
 3. Run on-policy distillation:
 ```bash
-bash examples/on_policy_distillation/run-qwen3-8B-opd.sh
+bash examples/on_policy_distillation/run-qwen3-4B-opd.sh
 ```
 
 ### Using Megatron Teacher (No External Server)
@@ -70,7 +74,7 @@ bash examples/on_policy_distillation/run-qwen3-8B-opd.sh
 # This example uses the same model as both student and teacher (for demonstration only)
 # In practice, use a different (stronger) model as the teacher!
 cd /root/slime
-source scripts/models/qwen3-8B.sh  # Or your teacher model config
+source scripts/models/qwen3-4B-Instruct-2507.sh  # Or your teacher model config
 
 PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
     ${MODEL_ARGS[@]} \
@@ -78,13 +82,13 @@ PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
     --save /root/YourTeacherModel_torch_dist
 ```
 
-3. Edit `run-qwen3-8B-opd-megatron.sh` to update paths:
+3. Edit `run-qwen3-4B-opd-megatron.sh` to update paths:
    - Change `--opd-teacher-load` to your teacher model path
    - Adjust `--opd-kl-coef` based on your task
 
 4. Run:
 ```bash
-bash examples/on_policy_distillation/run-qwen3-8B-opd-megatron.sh
+bash examples/on_policy_distillation/run-qwen3-4B-opd-megatron.sh
 ```
 
 

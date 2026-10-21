@@ -2,6 +2,7 @@ import logging
 import threading
 
 import ray
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -23,12 +24,14 @@ class RolloutHealthMonitor:
         self._server_group = server_group
 
         self._thread = None
-        self._stop_event = None
-        self._pause_event = None  # When set, health checking is paused
+        self._stop_event = threading.Event()
+        self._pause_event = threading.Event()
+        self._pause_event.set()  # Engines may be offloaded before the first rollout.
         self._check_interval = args.rollout_health_check_interval
         self._check_timeout = args.rollout_health_check_timeout
         self._check_first_wait = args.rollout_health_check_first_wait
         self._need_first_wait = True  # Need to wait after each resume
+        self._check_lock = threading.Lock()
 
     def start(self) -> bool:
         """Start the health monitor thread. Called once during initialization.
@@ -44,9 +47,9 @@ class RolloutHealthMonitor:
             return True
 
         logger.info("Starting RolloutHealthMonitor...")
-        self._stop_event = threading.Event()
-        self._pause_event = threading.Event()
-        self._pause_event.set()  # Start in paused state until resume() is called
+        self._stop_event.clear()
+        self._pause_event.set()
+        self._need_first_wait = True
         self._thread = threading.Thread(
             target=self._health_monitor_loop,
             name="RolloutHealthMonitor",
@@ -56,47 +59,39 @@ class RolloutHealthMonitor:
         logger.info("RolloutHealthMonitor started (in paused state).")
         return True
 
-    def stop(self) -> None:
+    def stop(self, *, timeout=None) -> None:
         """Stop the health monitor thread completely. Called during dispose."""
         if not self._thread:
             return
 
         logger.info("Stopping RolloutHealthMonitor...")
-        assert self._stop_event is not None
         self._stop_event.set()
-        # Also clear pause to let the thread exit
-        if self._pause_event:
-            self._pause_event.clear()
-        timeout = self._check_timeout + self._check_interval + 5
+        if timeout is None:
+            timeout = self._check_timeout + 5
         self._thread.join(timeout=timeout)
         if self._thread.is_alive():
-            logging.warning("Rollout health monitor thread did not terminate within %.1fs", timeout)
+            raise TimeoutError(f"Rollout health monitor did not terminate within {timeout:.1f}s")
         else:
             logger.info("RolloutHealthMonitor stopped.")
 
         self._thread = None
-        self._stop_event = None
-        self._pause_event = None
 
-    def pause(self) -> None:
+    def pause(self, *, timeout=None) -> None:
         """Pause health checking. Called when engines are offloaded."""
-        if self._pause_event is None:
-            return
         logger.info("Pausing health monitor...")
         self._pause_event.set()
+        # Finish an in-flight check before weights or memory ownership change.
+        if not self._check_lock.acquire(timeout=self._check_timeout if timeout is None else timeout):
+            raise TimeoutError("Health check did not finish before pause deadline")
+        self._check_lock.release()
 
     def resume(self) -> None:
         """Resume health checking. Called when engines are onloaded."""
-        if self._pause_event is None:
-            return
         logger.info("Resuming health monitor...")
         self._need_first_wait = True  # Need to wait after each resume
         self._pause_event.clear()
 
     def _health_monitor_loop(self) -> None:
-        assert self._stop_event is not None
-        assert self._pause_event is not None
-
         while not self._stop_event.is_set():
             # Wait while paused
             while self._pause_event.is_set() and not self._stop_event.is_set():
@@ -119,50 +114,41 @@ class RolloutHealthMonitor:
 
             # Run health checks
             if not self._pause_event.is_set() and not self._stop_event.is_set():
-                self._run_health_checks()
+                try:
+                    self._run_health_checks()
+                except requests.RequestException:
+                    logger.exception("Failed to unregister an unhealthy worker; retaining it for the next check")
 
             # Wait for next check interval
             if self._stop_event.wait(self._check_interval):
                 break
 
-    def _run_health_checks(self) -> None:
-        for rollout_engine_id, engine in enumerate(self._server_group.engines):
-            if self._stop_event is not None and self._stop_event.is_set():
-                break
-            if self._pause_event is not None and self._pause_event.is_set():
-                break
-            self._check_engine_health(rollout_engine_id, engine)
+    def check_once(self) -> None:
+        """Check at the rollout boundary, regardless of interval or warmup grace."""
+        self._run_health_checks(force=True)
 
-    def _check_engine_health(self, rollout_engine_id, engine) -> None:
-        if engine is None:
-            logger.info(f"Skipping health check for engine {rollout_engine_id} (None)")
-            return
-
-        try:
-            ray.get(engine.health_generate.remote(timeout=self._check_timeout))
-        except Exception as e:
-            logger.error(
-                f"Health check failed for rollout engine {rollout_engine_id} (ray timeout or error). Killing actor. Exception: {e}"
-            )
-            self._kill_engine(rollout_engine_id=rollout_engine_id)
-        else:
-            logger.debug(f"Health check passed for rollout engine {rollout_engine_id}")
-
-    def _kill_engine(self, rollout_engine_id: int):
-        logger.info(f"Killing server group {rollout_engine_id}...")
-        for i in range(
-            rollout_engine_id * self._server_group.nodes_per_engine,
-            (rollout_engine_id + 1) * self._server_group.nodes_per_engine,
-        ):
-            engine = self._server_group.all_engines[i]
-            if engine:
-                logger.info(f"Shutting down and killing engine at index {i}")
+    def _run_health_checks(self, *, force=False) -> None:
+        # The background thread and rollout-completion RPC share this lock, so
+        # they cannot retire the same engine while another check uses its handle.
+        with self._check_lock:
+            if self._stop_event.is_set():
+                return
+            if not force and self._pause_event.is_set():
+                return
+            checks = {
+                engine.health_generate.remote(timeout=self._check_timeout): rollout_engine_id
+                for rollout_engine_id, engine in enumerate(self._server_group.engines)
+                if engine is not None
+            }
+            if checks:
+                # Bound queued/wedged actor RPCs as well as the underlying HTTP
+                # requests. All engines are probed concurrently.
+                ray.wait(list(checks), num_returns=len(checks), timeout=self._check_timeout)
+            for handle, rollout_engine_id in checks.items():
                 try:
-                    ray.get(engine.shutdown.remote())
-                    ray.kill(engine)
-                    logger.info(f"Successfully killed engine at index {i}")
-                except Exception as e:
-                    logger.warning(f"Fail to kill engine at index {i} (e: {e})")
-            else:
-                logger.info(f"Engine at index {i} is already None")
-            self._server_group.all_engines[i] = None
+                    ray.get(handle, timeout=0)
+                except Exception as error:
+                    # Both HTTP failures and unresponsive/dead actor RPCs retire
+                    # the engine; HTTP timeout alone cannot detect a wedged actor.
+                    logger.error("Health check failed for engine %s: %s", rollout_engine_id, error)
+                    self._server_group.retire_engine(rollout_engine_id, timeout=self._check_timeout)

@@ -131,6 +131,35 @@ def test_anthropic_translation_keeps_tool_results_thinking_and_tools():
     ]
 
 
+@pytest.mark.parametrize("split_messages", [False, True])
+def test_anthropic_parallel_file_reads_keep_call_result_correspondence(split_messages):
+    # Real Claude CLI reads completed LogEI/base/EI/PI, while Qwen requested
+    # EI/PI/LogEI/base. Losing the IDs without reordering swaps file contents.
+    filenames = ["EI.py", "PI.py", "LogEI.py", "base.py"]
+    messages = [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": name, "name": "Read", "input": {"file_path": name}} for name in filenames
+            ],
+        }
+    ]
+    results = [
+        {"type": "tool_result", "tool_use_id": name, "content": f"contents of {name}"}
+        for name in ["LogEI.py", "base.py", "EI.py", "PI.py"]
+    ]
+    if split_messages:
+        messages.extend({"role": "user", "content": [result]} for result in results)
+    else:
+        messages.append({"role": "user", "content": results})
+    messages.append({"role": "user", "content": "Continue with the fix."})
+
+    translated = anthropic._translate_messages(messages, system=None)
+    assert [m["content"] for m in translated if m["role"] == "tool"] == [f"contents of {name}" for name in filenames]
+    assert translated[-1] == {"role": "user", "content": "Continue with the fix."}
+    assert [result["tool_use_id"] for result in results] == ["LogEI.py", "base.py", "EI.py", "PI.py"]
+
+
 def test_openai_translation_developer_to_system_and_tool_calls_to_dict():
     translated = openai._translate_messages(
         [
@@ -163,6 +192,43 @@ def test_openai_translation_developer_to_system_and_tool_calls_to_dict():
 # ===========================================================================
 # §3 non-stream JSON + token capture (real HTTP, real /generate)
 # ===========================================================================
+
+
+@pytest.mark.parametrize(
+    "adapter_cls,route",
+    [(anthropic.AnthropicAdapter, "/v1/messages"), (openai.OpenAIAdapter, "/v1/chat/completions")],
+)
+def test_chat_template_options_reach_model_prompt_per_session(adapter_cls, route):
+    class ConfigurableTokenizer(FakeTokenizer):
+        def apply_chat_template(self, *args, reasoning_effort="xhigh", **kwargs):
+            marker = 9001 if reasoning_effort == "medium" else 9002
+            return [marker, *super().apply_chat_template(*args, **kwargs)]
+
+    async def run_case():
+        async with FakeSGLangServer([[(-0.1, 101)], [(-0.1, 101)]]) as sglang:
+            adapter = adapter_cls(tokenizer=ConfigurableTokenizer(outputs={(101,): "done"}), sglang_url=sglang.url)
+            options = {"reasoning_effort": "medium"}
+            adapter.open_session("tuned", apply_chat_template_kwargs=options)
+            options["reasoning_effort"] = "low"  # Opening a session captures its own options.
+            adapter.open_session("default")
+            client = TestClient(TestServer(adapter.app))
+            await client.start_server()
+            try:
+                for sid in ("tuned", "default"):
+                    response = await client.post(
+                        route,
+                        headers={"Authorization": f"Bearer {sid}"},
+                        json={"model": "m", "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]},
+                    )
+                    assert response.status == 200, await response.text()
+                    await response.read()
+            finally:
+                await client.close()
+            for sid in ("tuned", "default"):
+                await _drain(adapter, sid)
+            assert [request["input_ids"][0] for request in sglang.requests] == [9001, 9002]
+
+    asyncio.run(run_case())
 
 
 def test_anthropic_messages_nonstream_records_token_segments():

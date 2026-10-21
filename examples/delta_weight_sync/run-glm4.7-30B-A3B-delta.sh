@@ -36,7 +36,7 @@ ROLLOUT_ARGS=(
    --num-rollout 3
    --rollout-batch-size 32
    --n-samples-per-prompt 4
-   --rollout-max-response-len 8192
+   --rollout-max-response-len 131072
    --global-batch-size 128
 )
 
@@ -53,11 +53,12 @@ WEIGHT_SYNC_ARGS=(
 PERF_ARGS=(
    --tensor-model-parallel-size 2
    --pipeline-model-parallel-size 2
-   --context-parallel-size 2
+   --context-parallel-size 4
    --expert-model-parallel-size 8
    --expert-tensor-parallel-size 1
    --sequence-parallel
    --use-dynamic-batch-size
+   --log-probs-chunk-size 1024
    --max-tokens-per-gpu 32768
 )
 
@@ -72,6 +73,15 @@ OPTIMIZER_ARGS=(
 
 GRPO_ARGS=(
    --advantage-estimator grpo
+   --use-score-centering
+   --score-centering-top-k 128
+   --pg-loss-type reinforce
+   --use-tis
+   --tis-clip-low 0
+   --tis-clip 2
+   --disable-grpo-std-normalization
+   --calculate-per-token-loss
+   --use-rollout-routing-replay
    --use-kl-loss
    --kl-loss-coef 0.0
    --kl-loss-type low_var_kl

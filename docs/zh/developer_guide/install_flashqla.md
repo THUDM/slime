@@ -17,29 +17,19 @@ FlashQLA 是 Qwen GDN kernel 的可选运行后端。安装 FlashQLA 后，仍�
 - NVIDIA SM90 或更新架构 GPU。
 - 所有训练节点都安装了同一套 FlashQLA Python 包。
 
-## Conda / 本地环境
+## 当前 CUDA 13 构建
 
-`build_conda.sh` 会默认安装 FlashQLA：
+SGLang v0.5.21 要求 TileLang 0.1.12。旧 CUDA 12 镜像使用的 FlashQLA
+版本依赖 TileLang 0.1.9，因此当前 Docker 和 conda 构建使用默认 FLA 后端。
 
-```bash
-bash build_conda.sh
-```
-
-## Docker 镜像
-
-标准 CUDA 12 Docker 镜像会默认安装 FlashQLA：
+需要旧 CUDA 12/FlashQLA 环境时，可使用带版本的 CUDA 12 镜像，或从保留
+原有依赖的历史 checkout 构建：
 
 ```bash
-docker build \
-  -f docker/Dockerfile \
-  --build-arg SGLANG_IMAGE_REPOSITORY=slimerl/sglang \
-  --build-arg SGLANG_IMAGE_TAG=v0.5.15.post1-cu129 \
-  -t slime:flashqla .
+git worktree add ../slime-cu12 2f4280e3
+cd ../slime-cu12
+docker build -f docker/Dockerfile . -t slime:flashqla-cu12
 ```
-
-CUDA 13 镜像中的 SGLang 0.5.15.post1 依赖 TileLang 0.1.11，而当前
-FlashQLA 依赖 TileLang 0.1.9，两者的 kernel 行为不兼容。因此 CUDA 13
-镜像不安装 FlashQLA，请使用默认的 FLA 后端。
 
 ## GB10 镜像
 

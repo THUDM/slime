@@ -1,9 +1,71 @@
+import ast
+import dataclasses
+import importlib.util
+import sys
+from contextlib import nullcontext
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
+
 import pytest
 import torch
 
 from slime.backends.megatron_utils.stateless_adam import StatelessAdam
 
 NUM_GPUS = 0
+
+
+def test_optimizer_construction_keeps_fp32_shards_out_of_autograd():
+    path = Path(__file__).resolve().parents[1] / "slime/backends/megatron_utils/model.py"
+    definition = next(
+        node
+        for node in ast.parse(path.read_text()).body
+        if isinstance(node, ast.FunctionDef) and node.name == "setup_model_and_optimizer"
+    )
+
+    @dataclasses.dataclass
+    class Config:
+        use_precision_aware_optimizer: bool = False
+
+    model = torch.nn.Linear(4, 2)
+
+    def optimizer_factory(*, config, model_chunks, use_gloo_process_groups):
+        # Real DistributedOptimizer slices FP32 model parameters this way. An
+        # autograd-tracked view is not a leaf and torch.optim rejects it.
+        shard = model_chunks[0].weight.view(-1)[:4]
+        return torch.optim.SGD([shard], lr=0.01)
+
+    namespace = dict(
+        torch=torch,
+        dataclasses=dataclasses,
+        nullcontext=nullcontext,
+        OptimizerConfig=Config,
+        get_model_provider_func=lambda args, role: None,
+        get_model=lambda provider, model_type: [model],
+        ModelType=SimpleNamespace(encoder_or_decoder=None),
+        get_megatron_optimizer=optimizer_factory,
+        get_optimizer_param_scheduler=lambda args, optimizer: None,
+    )
+    module = ast.Module(
+        body=[ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0), definition],
+        type_ignores=[],
+    )
+    exec(compile(ast.fix_missing_locations(module), str(path), "exec"), namespace)
+    args = SimpleNamespace(
+        moe_use_upcycling=False,
+        load="model",
+        num_rollout=1,
+        use_stateless_adam=False,
+        enable_gloo_process_groups=False,
+    )
+    with torch.enable_grad():
+        models, optimizer, _ = namespace["setup_model_and_optimizer"](args)
+        assert torch.is_grad_enabled()
+        models[0](torch.ones(1, 4)).sum().backward()
+    assert model.weight.grad is not None
+    shard = optimizer.param_groups[0]["params"][0]
+    assert shard.is_leaf and shard.grad_fn is None
+    assert shard.data_ptr() == model.weight.data_ptr()
 
 
 def _run_with_reinitialized_adam(param, grads, *, adam_w_mode):
@@ -56,6 +118,76 @@ def test_stateless_adam_does_not_persist_moment_tensors():
 
     assert optimizer.state == {}
     assert optimizer.state_dict()["state"] == {}
+
+
+@pytest.fixture
+def checkpoint_module(tmp_path, monkeypatch):
+    # Only Megatron's model/collective boundary is replaced. The Slime adapter
+    # writes real checkpoint files, and the optimizer/scheduler below are real.
+    args = SimpleNamespace(
+        save=str(tmp_path),
+        load=str(tmp_path),
+        use_stateless_adam=True,
+        finetune=False,
+        ckpt_step=0,
+        async_save=False,
+        offload_train=False,
+    )
+
+    def save_model(iteration, *a, **kw):
+        (tmp_path / f"iter_{iteration:07d}").mkdir()
+        (tmp_path / "latest_checkpointed_iteration.txt").write_text(str(iteration))
+
+    native = SimpleNamespace(save_checkpoint=Mock(side_effect=save_model), load_checkpoint=Mock(return_value=(0, 0)))
+    monkeypatch.setitem(sys.modules, "megatron.training.checkpointing", native)
+    monkeypatch.setitem(sys.modules, "megatron.training.global_vars", SimpleNamespace(get_args=lambda: args))
+    path = Path(__file__).resolve().parents[1] / "slime/backends/megatron_utils/checkpoint.py"
+    spec = importlib.util.spec_from_file_location("stateless_checkpoint_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module.dist, "get_rank", lambda: 0)
+    return module, args, native
+
+
+@pytest.mark.parametrize("step", [0, 7])
+def test_stateless_checkpoint_restores_scheduler_progress(checkpoint_module, step):
+    module, args, native = checkpoint_module
+    args.ckpt_step = step
+    param = torch.tensor([1.0])
+    optimizer = StatelessAdam([param], lr=0.1)
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda count: 0.8**count)
+    for _ in range(3):
+        param.grad = torch.ones_like(param)
+        optimizer.step()
+        scheduler.step()
+    module.save_checkpoint(step, [], optimizer, scheduler, num_floating_point_operations_so_far=0)
+    expected = scheduler.state_dict()
+    param.grad = torch.ones_like(param)
+    optimizer.step()
+    scheduler.step()
+    expected_next_lr = scheduler.get_last_lr()
+
+    restored_optimizer = StatelessAdam([torch.tensor([1.0])], lr=0.1)
+    restored_scheduler = torch.optim.lr_scheduler.LambdaLR(restored_optimizer, lambda count: 0.8**count)
+    native.load_checkpoint.return_value = (step, 0)
+    assert module.load_checkpoint([], restored_optimizer, restored_scheduler, {}) == (step, 0)
+    assert args.no_load_optim and restored_optimizer.state == {}
+    assert restored_scheduler.state_dict() == expected
+    restored_optimizer.step()
+    restored_scheduler.step()
+    assert restored_scheduler.get_last_lr() == expected_next_lr
+
+
+def test_stateless_resume_rejects_missing_scheduler_but_finetune_can_reset(checkpoint_module):
+    module, args, native = checkpoint_module
+    native.save_checkpoint(0)
+    scheduler = Mock()
+    with pytest.raises(FileNotFoundError, match="opt_param_scheduler"):
+        module.load_checkpoint([], Mock(), scheduler, {})
+    scheduler.load_state_dict.assert_not_called()
+    args.finetune = True
+    assert module.load_checkpoint([], Mock(), scheduler, {}) == (0, 0)
+    scheduler.load_state_dict.assert_not_called()
 
 
 if __name__ == "__main__":
