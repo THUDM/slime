@@ -190,10 +190,10 @@ index 5af52950ff182997cf51badc33e53dc45475a93b..bd708d202f110af01d4a2ff583a8f153
          "Disable mmap while loading weight using safetensors.",
 diff --git a/python/sglang/srt/weight_sync/local_checkpoint.py b/python/sglang/srt/weight_sync/local_checkpoint.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..2fc0593931940342eebf849751ec518a26585f85
+index 0000000000000000000000000000000000000000..822abdb596f3cbf956935586a93026d81f4f2571
 --- /dev/null
 +++ b/python/sglang/srt/weight_sync/local_checkpoint.py
-@@ -0,0 +1,349 @@
+@@ -0,0 +1,358 @@
 +"""Host-local pull of published weights (the /pull_weights endpoint).
 +
 +A trainer publishes each weight sync as a version directory ``weight_v{N:06d}/``
@@ -409,9 +409,18 @@ index 0000000000000000000000000000000000000000..2fc0593931940342eebf849751ec518a
 +
 +
 +def _tensor_locations(ckpt_dir: str) -> dict:
-+    """Map each tensor name to (file, byte offset, nbytes) by reading every safetensors header."""
++    """Map each tensor to (file, byte offset, nbytes), honoring the HF shard index."""
++    index_path = os.path.join(ckpt_dir, "model.safetensors.index.json")
++    if os.path.isfile(index_path):
++        with open(index_path) as f:
++            weight_map = json.load(f)["weight_map"]
++        # Match the model loader: unreferenced files may contain stale copies of
++        # the same tensors. Open indexed shards directly so missing files fail.
++        paths = [os.path.join(ckpt_dir, name) for name in sorted(set(weight_map.values()))]
++    else:
++        paths = glob.glob(os.path.join(ckpt_dir, "*.safetensors"))
 +    locations = {}
-+    for path in glob.glob(os.path.join(ckpt_dir, "*.safetensors")):
++    for path in paths:
 +        with open(path, "rb") as f:
 +            (header_len,) = struct.unpack("<Q", f.read(8))
 +            header = json.loads(f.read(header_len))

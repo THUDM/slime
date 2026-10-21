@@ -29,6 +29,41 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  docs-lab:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [generator, browser]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Generator contracts and exported shell execution
+        if: matrix.suite == 'generator'
+        run: node --test docs/tests/experiment.test.cjs
+      - name: Install browser and documentation dependencies
+        if: matrix.suite == 'browser'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pandoc fonts-noto-cjk
+          pip install -r docs/requirements.txt -r docs/tests/requirements.txt
+          python -m playwright install --with-deps chromium
+      - name: Strict bilingual build and browser walkthrough
+        if: matrix.suite == 'browser'
+        env:
+          SLIME_DOC_LAYOUT: prefix
+        run: |
+          bash docs/build.sh en -W --keep-going
+          bash docs/build.sh zh -W --keep-going
+          python docs/tests/test_browser.py
+
 
   e2e-test-sglang-config:
 
@@ -36,6 +71,7 @@ jobs:
 
 
     runs-on: self-hosted
+
 
     strategy:
       fail-fast: false
@@ -49,6 +85,10 @@ jobs:
             {
               "num_gpus": 0,
               "test_file": "utils/test_sglang_config.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_sglang_weight_update_compat.py"
             },
             {
               "num_gpus": 8,
@@ -90,7 +130,20 @@ jobs:
         shell: bash
         run: |
 
-          docker run --pull=always --rm \
+          # Checkpoints and Ray spill files can exceed the runner's root disk.
+          mkdir -p /mnt/nvme0n1/slime_ci
+          SLIME_CI_CONTAINER_DIR=$(mktemp -d /mnt/nvme0n1/slime_ci/run.XXXXXX)
+          mkdir -m 1777 "$SLIME_CI_CONTAINER_DIR/tmp"
+          cleanup_ci_container() {
+            if [ -s "$SLIME_CI_CONTAINER_DIR/container.cid" ]; then
+              docker rm -f "$(cat "$SLIME_CI_CONTAINER_DIR/container.cid")" >/dev/null 2>&1 || true
+            fi
+            rm -rf -- "$SLIME_CI_CONTAINER_DIR"
+          }
+          trap cleanup_ci_container EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          docker run --pull=always --rm --init --cidfile "$SLIME_CI_CONTAINER_DIR/container.cid" \
             --privileged \
             --cap-add SYS_NICE \
             --security-opt seccomp=unconfined \
@@ -106,6 +159,10 @@ jobs:
             -e https_proxy \
             -e HTTP_PROXY \
             -e HTTPS_PROXY \
+            -e all_proxy \
+            -e ALL_PROXY \
+            -e no_proxy \
+            -e NO_PROXY \
             -e GITHUB_COMMIT_NAME \
             -e WANDB_API_KEY \
             -e SLIME_TEST_ENABLE_INFINITE_RUN \
@@ -115,7 +172,10 @@ jobs:
             -e TEST_FILE="${{ matrix.info.test_file }}" \
             -e TEST_ARGS="${{ matrix.info.test_args || '' }}" \
             -e NUM_GPUS="${{ matrix.info.num_gpus }}" \
+            -e SLIME_AGENT_TEST_RUN_DIR=/workspace/.agent-e2e/run \
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -v "$GITHUB_WORKSPACE:/workspace" \
+            -v "$SLIME_CI_CONTAINER_DIR/tmp:/tmp" \
             -v /mnt/nvme0n1/slime_ci:/data/slime_ci \
             -v /mnt/nvme0n1/slime_ci/models:/root/models \
             -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets \
@@ -123,8 +183,11 @@ jobs:
             slimerl/slime:latest \
             bash -lc '
               set -euo pipefail
-              python -m pip install --upgrade --only-binary=straw-queue --break-system-packages straw-queue
+              python -m pip install --upgrade --no-deps --only-binary=straw-queue --break-system-packages "straw-queue>=0.1.3"
               pip install -e . --no-deps --break-system-packages
+              if [[ "${TEST_FILE##*/}" == "test_agent_sunabako_codex_e2e.py" ]]; then
+                source tests/ci/setup_agent_e2e.sh
+              fi
               TEST_PATH="$TEST_FILE"
               if [[ "$TEST_PATH" != tests/* ]]; then
                 TEST_PATH="tests/$TEST_PATH"
@@ -141,6 +204,21 @@ jobs:
               fi
             '
 
+      - name: Package agent E2E evidence
+        if: always() && matrix.info.test_file == 'test_agent_sunabako_codex_e2e.py'
+        run: |
+          if [ -d .agent-e2e/run ]; then
+            # Node state contains sandbox rootfs trees and host mount symlinks.
+            tar -czf .agent-e2e/evidence.tar.gz --exclude='./node' -C .agent-e2e/run .
+          fi
+      - name: Upload agent E2E evidence
+        if: always() && matrix.info.test_file == 'test_agent_sunabako_codex_e2e.py'
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-e2e-e2e-test-sglang-config
+          path: ${{ github.workspace }}/.agent-e2e/evidence.tar.gz
+          include-hidden-files: true
+          if-no-files-found: ignore
 
   e2e-test-megatron:
 
@@ -149,11 +227,19 @@ jobs:
 
     runs-on: self-hosted
 
+
+    timeout-minutes: ${{ matrix.info.timeout_minutes || 360 }}
+
     strategy:
       fail-fast: false
       matrix:
         info:
           [
+            {
+              "num_gpus": 8,
+              "test_file": "test_agent_sunabako_codex_e2e.py",
+              "timeout_minutes": 35
+            },
             {
               "num_gpus": 4,
               "test_file": "test_full_disk_weight_update.py"
@@ -171,6 +257,10 @@ jobs:
             {
               "num_gpus": 8,
               "test_file": "test_glm4.7_30B_A3B_pd_mooncake.py"
+            },
+            {
+              "num_gpus": 2,
+              "test_file": "test_mooncake_memory_reregister.py"
             },
             {
               "num_gpus": 8,
@@ -222,6 +312,18 @@ jobs:
               "test_file": "test_ppo_logprob_entropy_gpu.py"
             },
             {
+              "num_gpus": 1,
+              "test_file": "test_sglang_top_p_copy.py"
+            },
+            {
+              "num_gpus": 1,
+              "test_file": "test_glm5_next_gpu.py"
+            },
+            {
+              "num_gpus": 4,
+              "test_file": "test_glm5_next_cp.py"
+            },
+            {
               "enable_eval": "0",
               "num_gpus": 8,
               "test_file": "test_moonlight_16B_A3B.py"
@@ -266,7 +368,75 @@ jobs:
             {
               "num_gpus": 4,
               "straw": true,
-              "test_file": "test_straw_checkpoint_fork.py"
+              "test_args": "--transport nccl",
+              "test_file": "test_qwen2.5_0.5B_pipeline_rl.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
+              "test_args": "--transport disk",
+              "test_file": "test_qwen2.5_0.5B_pipeline_rl.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
+              "test_args": "--transport nccl --flush-cache-interval 2",
+              "test_file": "test_qwen2.5_0.5B_pipeline_rl.py"
+            },
+            {
+              "num_gpus": 4,
+              "test_args": "--crash-mode server",
+              "test_file": "test_qwen2.5_0.5B_rollout_health.py"
+            },
+            {
+              "num_gpus": 4,
+              "test_args": "--crash-mode actor",
+              "test_file": "test_qwen2.5_0.5B_rollout_health.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
+              "test_args": "--mode straw --failure-rollout 1 --save-interval 3 --no-fault-tolerance",
+              "test_file": "test_qwen2.5_0.5B_training_recovery.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
+              "test_args": "--mode straw --failure-rollout 1 --save-interval 3 --kill-manager --no-fault-tolerance",
+              "test_file": "test_qwen2.5_0.5B_training_recovery.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
+              "test_args": "--mode straw --failure-rollout 1 --role-config --kill-manager --manager-crash-phase training",
+              "test_file": "test_qwen2.5_0.5B_training_recovery.py"
+            },
+            {
+              "num_gpus": 4,
+              "test_args": "--mode debug --failure-rollout 1 --save-interval 3 --kill-manager --no-fault-tolerance",
+              "test_file": "test_qwen2.5_0.5B_training_recovery.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
+              "test_args": "--mode straw --failure-rollout 1 --save-interval 1 --weight-sync disk-delta --kill-manager",
+              "test_file": "test_qwen2.5_0.5B_training_recovery.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
+              "test_args": "--mode straw --failure-rollout 1 --pd --wedge-engine --kill-manager",
+              "test_file": "test_qwen2.5_0.5B_training_recovery.py"
+            },
+            {
+              "num_gpus": 8,
+              "straw": true,
+              "test_file": "test_qwen3_30B_A3B_training_recovery.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
+              "test_file": "test_straw_checkpoint_rewind.py"
             },
             {
               "num_gpus": 4,
@@ -338,7 +508,20 @@ jobs:
         shell: bash
         run: |
 
-          docker run --pull=always --rm \
+          # Checkpoints and Ray spill files can exceed the runner's root disk.
+          mkdir -p /mnt/nvme0n1/slime_ci
+          SLIME_CI_CONTAINER_DIR=$(mktemp -d /mnt/nvme0n1/slime_ci/run.XXXXXX)
+          mkdir -m 1777 "$SLIME_CI_CONTAINER_DIR/tmp"
+          cleanup_ci_container() {
+            if [ -s "$SLIME_CI_CONTAINER_DIR/container.cid" ]; then
+              docker rm -f "$(cat "$SLIME_CI_CONTAINER_DIR/container.cid")" >/dev/null 2>&1 || true
+            fi
+            rm -rf -- "$SLIME_CI_CONTAINER_DIR"
+          }
+          trap cleanup_ci_container EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          docker run --pull=always --rm --init --cidfile "$SLIME_CI_CONTAINER_DIR/container.cid" \
             --privileged \
             --cap-add SYS_NICE \
             --security-opt seccomp=unconfined \
@@ -354,6 +537,10 @@ jobs:
             -e https_proxy \
             -e HTTP_PROXY \
             -e HTTPS_PROXY \
+            -e all_proxy \
+            -e ALL_PROXY \
+            -e no_proxy \
+            -e NO_PROXY \
             -e GITHUB_COMMIT_NAME \
             -e WANDB_API_KEY \
             -e SLIME_TEST_ENABLE_INFINITE_RUN \
@@ -363,7 +550,10 @@ jobs:
             -e TEST_FILE="${{ matrix.info.test_file }}" \
             -e TEST_ARGS="${{ matrix.info.test_args || '' }}" \
             -e NUM_GPUS="${{ matrix.info.num_gpus }}" \
+            -e SLIME_AGENT_TEST_RUN_DIR=/workspace/.agent-e2e/run \
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -v "$GITHUB_WORKSPACE:/workspace" \
+            -v "$SLIME_CI_CONTAINER_DIR/tmp:/tmp" \
             -v /mnt/nvme0n1/slime_ci:/data/slime_ci \
             -v /mnt/nvme0n1/slime_ci/models:/root/models \
             -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets \
@@ -371,8 +561,11 @@ jobs:
             slimerl/slime:latest \
             bash -lc '
               set -euo pipefail
-              python -m pip install --upgrade --only-binary=straw-queue --break-system-packages straw-queue
+              python -m pip install --upgrade --no-deps --only-binary=straw-queue --break-system-packages "straw-queue>=0.1.3"
               pip install -e . --no-deps --break-system-packages
+              if [[ "${TEST_FILE##*/}" == "test_agent_sunabako_codex_e2e.py" ]]; then
+                source tests/ci/setup_agent_e2e.sh
+              fi
               TEST_PATH="$TEST_FILE"
               if [[ "$TEST_PATH" != tests/* ]]; then
                 TEST_PATH="tests/$TEST_PATH"
@@ -389,6 +582,21 @@ jobs:
               fi
             '
 
+      - name: Package agent E2E evidence
+        if: always() && matrix.info.test_file == 'test_agent_sunabako_codex_e2e.py'
+        run: |
+          if [ -d .agent-e2e/run ]; then
+            # Node state contains sandbox rootfs trees and host mount symlinks.
+            tar -czf .agent-e2e/evidence.tar.gz --exclude='./node' -C .agent-e2e/run .
+          fi
+      - name: Upload agent E2E evidence
+        if: always() && matrix.info.test_file == 'test_agent_sunabako_codex_e2e.py'
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-e2e-e2e-test-megatron
+          path: ${{ github.workspace }}/.agent-e2e/evidence.tar.gz
+          include-hidden-files: true
+          if-no-files-found: ignore
 
   e2e-test-precision:
 
@@ -396,6 +604,7 @@ jobs:
 
 
     runs-on: self-hosted
+
 
     strategy:
       fail-fast: false
@@ -432,7 +641,20 @@ jobs:
         shell: bash
         run: |
 
-          docker run --pull=always --rm \
+          # Checkpoints and Ray spill files can exceed the runner's root disk.
+          mkdir -p /mnt/nvme0n1/slime_ci
+          SLIME_CI_CONTAINER_DIR=$(mktemp -d /mnt/nvme0n1/slime_ci/run.XXXXXX)
+          mkdir -m 1777 "$SLIME_CI_CONTAINER_DIR/tmp"
+          cleanup_ci_container() {
+            if [ -s "$SLIME_CI_CONTAINER_DIR/container.cid" ]; then
+              docker rm -f "$(cat "$SLIME_CI_CONTAINER_DIR/container.cid")" >/dev/null 2>&1 || true
+            fi
+            rm -rf -- "$SLIME_CI_CONTAINER_DIR"
+          }
+          trap cleanup_ci_container EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          docker run --pull=always --rm --init --cidfile "$SLIME_CI_CONTAINER_DIR/container.cid" \
             --privileged \
             --cap-add SYS_NICE \
             --security-opt seccomp=unconfined \
@@ -448,6 +670,10 @@ jobs:
             -e https_proxy \
             -e HTTP_PROXY \
             -e HTTPS_PROXY \
+            -e all_proxy \
+            -e ALL_PROXY \
+            -e no_proxy \
+            -e NO_PROXY \
             -e GITHUB_COMMIT_NAME \
             -e WANDB_API_KEY \
             -e SLIME_TEST_ENABLE_INFINITE_RUN \
@@ -457,7 +683,10 @@ jobs:
             -e TEST_FILE="${{ matrix.info.test_file }}" \
             -e TEST_ARGS="${{ matrix.info.test_args || '' }}" \
             -e NUM_GPUS="${{ matrix.info.num_gpus }}" \
+            -e SLIME_AGENT_TEST_RUN_DIR=/workspace/.agent-e2e/run \
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -v "$GITHUB_WORKSPACE:/workspace" \
+            -v "$SLIME_CI_CONTAINER_DIR/tmp:/tmp" \
             -v /mnt/nvme0n1/slime_ci:/data/slime_ci \
             -v /mnt/nvme0n1/slime_ci/models:/root/models \
             -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets \
@@ -465,8 +694,11 @@ jobs:
             slimerl/slime:latest \
             bash -lc '
               set -euo pipefail
-              python -m pip install --upgrade --only-binary=straw-queue --break-system-packages straw-queue
+              python -m pip install --upgrade --no-deps --only-binary=straw-queue --break-system-packages "straw-queue>=0.1.3"
               pip install -e . --no-deps --break-system-packages
+              if [[ "${TEST_FILE##*/}" == "test_agent_sunabako_codex_e2e.py" ]]; then
+                source tests/ci/setup_agent_e2e.sh
+              fi
               TEST_PATH="$TEST_FILE"
               if [[ "$TEST_PATH" != tests/* ]]; then
                 TEST_PATH="tests/$TEST_PATH"
@@ -483,6 +715,21 @@ jobs:
               fi
             '
 
+      - name: Package agent E2E evidence
+        if: always() && matrix.info.test_file == 'test_agent_sunabako_codex_e2e.py'
+        run: |
+          if [ -d .agent-e2e/run ]; then
+            # Node state contains sandbox rootfs trees and host mount symlinks.
+            tar -czf .agent-e2e/evidence.tar.gz --exclude='./node' -C .agent-e2e/run .
+          fi
+      - name: Upload agent E2E evidence
+        if: always() && matrix.info.test_file == 'test_agent_sunabako_codex_e2e.py'
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-e2e-e2e-test-precision
+          path: ${{ github.workspace }}/.agent-e2e/evidence.tar.gz
+          include-hidden-files: true
+          if-no-files-found: ignore
 
   e2e-test-ckpt:
 
@@ -490,6 +737,7 @@ jobs:
 
 
     runs-on: self-hosted
+
 
     strategy:
       fail-fast: false
@@ -548,7 +796,20 @@ jobs:
         shell: bash
         run: |
 
-          docker run --pull=always --rm \
+          # Checkpoints and Ray spill files can exceed the runner's root disk.
+          mkdir -p /mnt/nvme0n1/slime_ci
+          SLIME_CI_CONTAINER_DIR=$(mktemp -d /mnt/nvme0n1/slime_ci/run.XXXXXX)
+          mkdir -m 1777 "$SLIME_CI_CONTAINER_DIR/tmp"
+          cleanup_ci_container() {
+            if [ -s "$SLIME_CI_CONTAINER_DIR/container.cid" ]; then
+              docker rm -f "$(cat "$SLIME_CI_CONTAINER_DIR/container.cid")" >/dev/null 2>&1 || true
+            fi
+            rm -rf -- "$SLIME_CI_CONTAINER_DIR"
+          }
+          trap cleanup_ci_container EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          docker run --pull=always --rm --init --cidfile "$SLIME_CI_CONTAINER_DIR/container.cid" \
             --privileged \
             --cap-add SYS_NICE \
             --security-opt seccomp=unconfined \
@@ -564,6 +825,10 @@ jobs:
             -e https_proxy \
             -e HTTP_PROXY \
             -e HTTPS_PROXY \
+            -e all_proxy \
+            -e ALL_PROXY \
+            -e no_proxy \
+            -e NO_PROXY \
             -e GITHUB_COMMIT_NAME \
             -e WANDB_API_KEY \
             -e SLIME_TEST_ENABLE_INFINITE_RUN \
@@ -573,7 +838,10 @@ jobs:
             -e TEST_FILE="${{ matrix.info.test_file }}" \
             -e TEST_ARGS="${{ matrix.info.test_args || '' }}" \
             -e NUM_GPUS="${{ matrix.info.num_gpus }}" \
+            -e SLIME_AGENT_TEST_RUN_DIR=/workspace/.agent-e2e/run \
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -v "$GITHUB_WORKSPACE:/workspace" \
+            -v "$SLIME_CI_CONTAINER_DIR/tmp:/tmp" \
             -v /mnt/nvme0n1/slime_ci:/data/slime_ci \
             -v /mnt/nvme0n1/slime_ci/models:/root/models \
             -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets \
@@ -581,8 +849,11 @@ jobs:
             slimerl/slime:latest \
             bash -lc '
               set -euo pipefail
-              python -m pip install --upgrade --only-binary=straw-queue --break-system-packages straw-queue
+              python -m pip install --upgrade --no-deps --only-binary=straw-queue --break-system-packages "straw-queue>=0.1.3"
               pip install -e . --no-deps --break-system-packages
+              if [[ "${TEST_FILE##*/}" == "test_agent_sunabako_codex_e2e.py" ]]; then
+                source tests/ci/setup_agent_e2e.sh
+              fi
               TEST_PATH="$TEST_FILE"
               if [[ "$TEST_PATH" != tests/* ]]; then
                 TEST_PATH="tests/$TEST_PATH"
@@ -599,6 +870,21 @@ jobs:
               fi
             '
 
+      - name: Package agent E2E evidence
+        if: always() && matrix.info.test_file == 'test_agent_sunabako_codex_e2e.py'
+        run: |
+          if [ -d .agent-e2e/run ]; then
+            # Node state contains sandbox rootfs trees and host mount symlinks.
+            tar -czf .agent-e2e/evidence.tar.gz --exclude='./node' -C .agent-e2e/run .
+          fi
+      - name: Upload agent E2E evidence
+        if: always() && matrix.info.test_file == 'test_agent_sunabako_codex_e2e.py'
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-e2e-e2e-test-ckpt
+          path: ${{ github.workspace }}/.agent-e2e/evidence.tar.gz
+          include-hidden-files: true
+          if-no-files-found: ignore
 
   cpu-unittest:
 
@@ -606,6 +892,7 @@ jobs:
 
 
     runs-on: ubuntu-latest
+
 
     strategy:
       fail-fast: false
@@ -619,6 +906,26 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_megatron_tokenizer_init.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_megatron_grad_sync_memory.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_qwen3_5_native_weights.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_megatron_checkpoint.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_reference_top_p_replay.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "utils/test_megatron_role_config.py"
             },
             {
@@ -628,6 +935,10 @@ jobs:
             {
               "num_gpus": 0,
               "test_file": "test_stateless_adam.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_update_weight_factory.py"
             },
             {
               "num_gpus": 0,
@@ -769,6 +1080,28 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_pipeline_rl.py"
+            },
+            {
+              "num_gpus": 0,
+              "straw": true,
+              "test_file": "test_training_recovery.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_disk_delta_recovery.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_disk_delta_checkpoint_index.py"
+            },
+            {
+              "num_gpus": 0,
+              "straw": true,
+              "test_file": "test_rollout_manager_recovery.py"
+            },
+            {
+              "num_gpus": 0,
               "straw": true,
               "test_file": "test_distributed_rollout.py"
             },
@@ -784,6 +1117,10 @@ jobs:
             {
               "num_gpus": 0,
               "test_file": "test_server_control.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_sglang_runtime.py"
             },
             {
               "num_gpus": 0,
@@ -803,6 +1140,16 @@ jobs:
               "num_gpus": 0,
               "straw": true,
               "test_file": "test_rollout_straw_transport.py"
+            },
+            {
+              "num_gpus": 0,
+              "straw": true,
+              "test_file": "test_published_payload_retry.py"
+            },
+            {
+              "num_gpus": 0,
+              "straw": true,
+              "test_file": "test_rollout_metadata_index.py"
             },
             {
               "num_gpus": 0,
@@ -843,6 +1190,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_reloadable_process_group_megatron_bindings.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_placement_group.py"
             },
             {
@@ -864,6 +1215,10 @@ jobs:
             {
               "num_gpus": 0,
               "test_file": "test_glm5_indexer_short_context.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_glm5_next_ops.py"
             },
             {
               "num_gpus": 0,
@@ -934,14 +1289,14 @@ jobs:
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install pytest numpy packaging pyyaml omegaconf tqdm httpx requests ray pybase64 pylatexenc sympy aiohttp pillow safetensors psutil
 
-          pip install transformers wandb
+          pip install transformers wandb zstandard
 
 
 
       - name: Install straw for queue tests
         if: matrix.info.straw == true
         shell: bash
-        run: python -m pip install --upgrade --only-binary=straw-queue straw-queue
+        run: python -m pip install --upgrade --no-deps --only-binary=straw-queue "straw-queue>=0.1.3"
 
 
       - name: Install
@@ -969,6 +1324,21 @@ jobs:
             python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
           fi
 
+      - name: Package agent E2E evidence
+        if: always() && matrix.info.test_file == 'test_agent_sunabako_codex_e2e.py'
+        run: |
+          if [ -d .agent-e2e/run ]; then
+            # Node state contains sandbox rootfs trees and host mount symlinks.
+            tar -czf .agent-e2e/evidence.tar.gz --exclude='./node' -C .agent-e2e/run .
+          fi
+      - name: Upload agent E2E evidence
+        if: always() && matrix.info.test_file == 'test_agent_sunabako_codex_e2e.py'
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-e2e-cpu-unittest
+          path: ${{ github.workspace }}/.agent-e2e/evidence.tar.gz
+          include-hidden-files: true
+          if-no-files-found: ignore
 
   agent-test:
 
@@ -976,6 +1346,7 @@ jobs:
 
 
     runs-on: ubuntu-latest
+
 
     strategy:
       fail-fast: false
@@ -988,7 +1359,27 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_agent/test_token_contract.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_agent/test_prompt_continuity.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_agent/test_sampler_replay.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_grouped_rewards.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_agent/test_adapters.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_agent/test_responses.py"
             },
             {
               "num_gpus": 0,
@@ -1001,6 +1392,22 @@ jobs:
             {
               "num_gpus": 0,
               "test_file": "test_agent/test_agent_rollout_cpu.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_agent/test_sunabako_provider.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_agent/test_e2e_asset_cache.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_agent/test_e2e_grpo_contract.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_agent/test_swe_workspace_diff.py"
             }
           ]
     defaults:
@@ -1031,6 +1438,8 @@ jobs:
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install pytest numpy packaging pyyaml omegaconf tqdm httpx requests ray pybase64 pylatexenc sympy aiohttp pillow safetensors psutil
 
+          pip install transformers tokenizers wandb
+
 
 
 
@@ -1059,6 +1468,21 @@ jobs:
             python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
           fi
 
+      - name: Package agent E2E evidence
+        if: always() && matrix.info.test_file == 'test_agent_sunabako_codex_e2e.py'
+        run: |
+          if [ -d .agent-e2e/run ]; then
+            # Node state contains sandbox rootfs trees and host mount symlinks.
+            tar -czf .agent-e2e/evidence.tar.gz --exclude='./node' -C .agent-e2e/run .
+          fi
+      - name: Upload agent E2E evidence
+        if: always() && matrix.info.test_file == 'test_agent_sunabako_codex_e2e.py'
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-e2e-agent-test
+          path: ${{ github.workspace }}/.agent-e2e/evidence.tar.gz
+          include-hidden-files: true
+          if-no-files-found: ignore
 
   e2e-test-image:
 
@@ -1067,11 +1491,19 @@ jobs:
 
     runs-on: self-hosted
 
+
+    timeout-minutes: ${{ matrix.info.timeout_minutes || 360 }}
+
     strategy:
       fail-fast: false
       matrix:
         info:
           [
+            {
+              "num_gpus": 8,
+              "test_file": "test_agent_sunabako_codex_e2e.py",
+              "timeout_minutes": 35
+            },
             {
               "num_gpus": 4,
               "test_file": "test_full_disk_weight_update.py"
@@ -1089,6 +1521,10 @@ jobs:
             {
               "num_gpus": 8,
               "test_file": "test_glm4.7_30B_A3B_pd_mooncake.py"
+            },
+            {
+              "num_gpus": 2,
+              "test_file": "test_mooncake_memory_reregister.py"
             },
             {
               "num_gpus": 8,
@@ -1140,6 +1576,18 @@ jobs:
               "test_file": "test_ppo_logprob_entropy_gpu.py"
             },
             {
+              "num_gpus": 1,
+              "test_file": "test_sglang_top_p_copy.py"
+            },
+            {
+              "num_gpus": 1,
+              "test_file": "test_glm5_next_gpu.py"
+            },
+            {
+              "num_gpus": 4,
+              "test_file": "test_glm5_next_cp.py"
+            },
+            {
               "enable_eval": "0",
               "num_gpus": 8,
               "test_file": "test_moonlight_16B_A3B.py"
@@ -1184,7 +1632,75 @@ jobs:
             {
               "num_gpus": 4,
               "straw": true,
-              "test_file": "test_straw_checkpoint_fork.py"
+              "test_args": "--transport nccl",
+              "test_file": "test_qwen2.5_0.5B_pipeline_rl.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
+              "test_args": "--transport disk",
+              "test_file": "test_qwen2.5_0.5B_pipeline_rl.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
+              "test_args": "--transport nccl --flush-cache-interval 2",
+              "test_file": "test_qwen2.5_0.5B_pipeline_rl.py"
+            },
+            {
+              "num_gpus": 4,
+              "test_args": "--crash-mode server",
+              "test_file": "test_qwen2.5_0.5B_rollout_health.py"
+            },
+            {
+              "num_gpus": 4,
+              "test_args": "--crash-mode actor",
+              "test_file": "test_qwen2.5_0.5B_rollout_health.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
+              "test_args": "--mode straw --failure-rollout 1 --save-interval 3 --no-fault-tolerance",
+              "test_file": "test_qwen2.5_0.5B_training_recovery.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
+              "test_args": "--mode straw --failure-rollout 1 --save-interval 3 --kill-manager --no-fault-tolerance",
+              "test_file": "test_qwen2.5_0.5B_training_recovery.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
+              "test_args": "--mode straw --failure-rollout 1 --role-config --kill-manager --manager-crash-phase training",
+              "test_file": "test_qwen2.5_0.5B_training_recovery.py"
+            },
+            {
+              "num_gpus": 4,
+              "test_args": "--mode debug --failure-rollout 1 --save-interval 3 --kill-manager --no-fault-tolerance",
+              "test_file": "test_qwen2.5_0.5B_training_recovery.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
+              "test_args": "--mode straw --failure-rollout 1 --save-interval 1 --weight-sync disk-delta --kill-manager",
+              "test_file": "test_qwen2.5_0.5B_training_recovery.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
+              "test_args": "--mode straw --failure-rollout 1 --pd --wedge-engine --kill-manager",
+              "test_file": "test_qwen2.5_0.5B_training_recovery.py"
+            },
+            {
+              "num_gpus": 8,
+              "straw": true,
+              "test_file": "test_qwen3_30B_A3B_training_recovery.py"
+            },
+            {
+              "num_gpus": 4,
+              "straw": true,
+              "test_file": "test_straw_checkpoint_rewind.py"
             },
             {
               "num_gpus": 4,
@@ -1256,7 +1772,20 @@ jobs:
         shell: bash
         run: |
 
-          docker run --pull=always --rm \
+          # Checkpoints and Ray spill files can exceed the runner's root disk.
+          mkdir -p /mnt/nvme0n1/slime_ci
+          SLIME_CI_CONTAINER_DIR=$(mktemp -d /mnt/nvme0n1/slime_ci/run.XXXXXX)
+          mkdir -m 1777 "$SLIME_CI_CONTAINER_DIR/tmp"
+          cleanup_ci_container() {
+            if [ -s "$SLIME_CI_CONTAINER_DIR/container.cid" ]; then
+              docker rm -f "$(cat "$SLIME_CI_CONTAINER_DIR/container.cid")" >/dev/null 2>&1 || true
+            fi
+            rm -rf -- "$SLIME_CI_CONTAINER_DIR"
+          }
+          trap cleanup_ci_container EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          docker run --pull=always --rm --init --cidfile "$SLIME_CI_CONTAINER_DIR/container.cid" \
             --privileged \
             --cap-add SYS_NICE \
             --security-opt seccomp=unconfined \
@@ -1272,6 +1801,10 @@ jobs:
             -e https_proxy \
             -e HTTP_PROXY \
             -e HTTPS_PROXY \
+            -e all_proxy \
+            -e ALL_PROXY \
+            -e no_proxy \
+            -e NO_PROXY \
             -e GITHUB_COMMIT_NAME \
             -e WANDB_API_KEY \
             -e SLIME_TEST_ENABLE_INFINITE_RUN \
@@ -1281,7 +1814,10 @@ jobs:
             -e TEST_FILE="${{ matrix.info.test_file }}" \
             -e TEST_ARGS="${{ matrix.info.test_args || '' }}" \
             -e NUM_GPUS="${{ matrix.info.num_gpus }}" \
+            -e SLIME_AGENT_TEST_RUN_DIR=/workspace/.agent-e2e/run \
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -v "$GITHUB_WORKSPACE:/workspace" \
+            -v "$SLIME_CI_CONTAINER_DIR/tmp:/tmp" \
             -v /mnt/nvme0n1/slime_ci:/data/slime_ci \
             -v /mnt/nvme0n1/slime_ci/models:/root/models \
             -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets \
@@ -1289,8 +1825,11 @@ jobs:
             slimerl/slime-test:latest \
             bash -lc '
               set -euo pipefail
-              python -m pip install --upgrade --only-binary=straw-queue --break-system-packages straw-queue
+              python -m pip install --upgrade --no-deps --only-binary=straw-queue --break-system-packages "straw-queue>=0.1.3"
               pip install -e . --no-deps --break-system-packages
+              if [[ "${TEST_FILE##*/}" == "test_agent_sunabako_codex_e2e.py" ]]; then
+                source tests/ci/setup_agent_e2e.sh
+              fi
               TEST_PATH="$TEST_FILE"
               if [[ "$TEST_PATH" != tests/* ]]; then
                 TEST_PATH="tests/$TEST_PATH"
@@ -1307,6 +1846,21 @@ jobs:
               fi
             '
 
+      - name: Package agent E2E evidence
+        if: always() && matrix.info.test_file == 'test_agent_sunabako_codex_e2e.py'
+        run: |
+          if [ -d .agent-e2e/run ]; then
+            # Node state contains sandbox rootfs trees and host mount symlinks.
+            tar -czf .agent-e2e/evidence.tar.gz --exclude='./node' -C .agent-e2e/run .
+          fi
+      - name: Upload agent E2E evidence
+        if: always() && matrix.info.test_file == 'test_agent_sunabako_codex_e2e.py'
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-e2e-e2e-test-image
+          path: ${{ github.workspace }}/.agent-e2e/evidence.tar.gz
+          include-hidden-files: true
+          if-no-files-found: ignore
 
 
   e2e-test-changed-detect:
@@ -1373,7 +1927,20 @@ jobs:
       - name: Execute
         shell: bash
         run: |
-          docker run --pull=always --rm \
+          # Checkpoints and Ray spill files can exceed the runner's root disk.
+          mkdir -p /mnt/nvme0n1/slime_ci
+          SLIME_CI_CONTAINER_DIR=$(mktemp -d /mnt/nvme0n1/slime_ci/run.XXXXXX)
+          mkdir -m 1777 "$SLIME_CI_CONTAINER_DIR/tmp"
+          cleanup_ci_container() {
+            if [ -s "$SLIME_CI_CONTAINER_DIR/container.cid" ]; then
+              docker rm -f "$(cat "$SLIME_CI_CONTAINER_DIR/container.cid")" >/dev/null 2>&1 || true
+            fi
+            rm -rf -- "$SLIME_CI_CONTAINER_DIR"
+          }
+          trap cleanup_ci_container EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          docker run --pull=always --rm --init --cidfile "$SLIME_CI_CONTAINER_DIR/container.cid" \
             --privileged \
             --cap-add SYS_NICE \
             --security-opt seccomp=unconfined \
@@ -1389,6 +1956,10 @@ jobs:
             -e https_proxy \
             -e HTTP_PROXY \
             -e HTTPS_PROXY \
+            -e all_proxy \
+            -e ALL_PROXY \
+            -e no_proxy \
+            -e NO_PROXY \
             -e GITHUB_COMMIT_NAME \
             -e WANDB_API_KEY \
             -e SLIME_TEST_ENABLE_INFINITE_RUN \
@@ -1398,7 +1969,10 @@ jobs:
             -e TEST_FILE="${{ matrix.info.test_file }}" \
             -e TEST_ARGS="${{ matrix.info.test_args || '' }}" \
             -e NUM_GPUS="${{ matrix.info.num_gpus }}" \
+            -e SLIME_AGENT_TEST_RUN_DIR=/workspace/.agent-e2e/run \
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+            -v "$GITHUB_WORKSPACE:/workspace" \
+            -v "$SLIME_CI_CONTAINER_DIR/tmp:/tmp" \
             -v /mnt/nvme0n1/slime_ci:/data/slime_ci \
             -v /mnt/nvme0n1/slime_ci/models:/root/models \
             -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets \
@@ -1406,8 +1980,11 @@ jobs:
             slimerl/slime:latest \
             bash -lc '
               set -euo pipefail
-              python -m pip install --upgrade --only-binary=straw-queue --break-system-packages straw-queue
+              python -m pip install --upgrade --no-deps --only-binary=straw-queue --break-system-packages "straw-queue>=0.1.3"
               pip install -e . --no-deps --break-system-packages
+              if [[ "${TEST_FILE##*/}" == "test_agent_sunabako_codex_e2e.py" ]]; then
+                source tests/ci/setup_agent_e2e.sh
+              fi
               TEST_PATH="$TEST_FILE"
               if [[ "$TEST_PATH" != tests/* ]]; then
                 TEST_PATH="tests/$TEST_PATH"
@@ -1423,3 +2000,18 @@ jobs:
                 python tests/ci/gpu_lock_exec.py --count "$NUM_GPUS" -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
               fi
             '
+      - name: Package agent E2E evidence
+        if: always() && endsWith(matrix.info.test_file, 'test_agent_sunabako_codex_e2e.py')
+        run: |
+          if [ -d .agent-e2e/run ]; then
+            # Node state contains sandbox rootfs trees and host mount symlinks.
+            tar -czf .agent-e2e/evidence.tar.gz --exclude='./node' -C .agent-e2e/run .
+          fi
+      - name: Upload agent E2E evidence
+        if: always() && endsWith(matrix.info.test_file, 'test_agent_sunabako_codex_e2e.py')
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-e2e-changed
+          path: ${{ github.workspace }}/.agent-e2e/evidence.tar.gz
+          include-hidden-files: true
+          if-no-files-found: ignore

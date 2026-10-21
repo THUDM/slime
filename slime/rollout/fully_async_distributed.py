@@ -24,8 +24,8 @@ from slime.data.transport import (
 from slime.observability import logging_utils
 from slime.observability.rollout_data_utils import validate_rollout_id_annotated
 from slime.ray.utils import add_default_ray_env_vars
-from slime.rollout.base_types import finalize_rollout_groups, iter_samples
-from slime.rollout.filter_hub.base_types import DynamicFilterOutput, call_dynamic_filter
+from slime.rollout.base_types import finalize_rollout_groups, iter_samples, prepare_retry_group
+from slime.rollout.filter_hub.base_types import DynamicFilterOutput, MetricGatherer, call_dynamic_filter
 from slime.rollout.sample_hooks import rollout_context
 from slime.utils.async_utils import get_async_loop
 from slime.utils.http_utils import get_rollout_num_engines, init_http_client
@@ -47,13 +47,14 @@ class RolloutScheduler:
         self.capacities = capacities
         self.capacity = sum(capacities)
         self.ready = deque()
-        self.delivered = set()
+        self.collecting = set()
         self.pending = {}
         self.controls = {}
         self.configurations = {}
         self.running_workers = set()
         self.demand = self.prefetch = 0
         self.rollout_id = 0
+        self.policy_version = getattr(args, "policy_version", 0)
         self.paused = True
         self.closed = False
         self.error = None
@@ -102,7 +103,7 @@ class RolloutScheduler:
                 with self.condition:
                     if self.closed:
                         return
-                    desired = (self.paused, self.rollout_id)
+                    desired = (self.paused, self.rollout_id, self.policy_version)
                     configuring = {worker for worker, _ in self.controls.values()}
                     for i, worker in enumerate(self.workers):
                         if not self.capacities[i] or i in configuring or configurations.get(i) == desired:
@@ -112,7 +113,11 @@ class RolloutScheduler:
                             continue
                         # Control RPCs share the wait loop with results. Never
                         # hold the condition lock waiting for a remote worker.
-                        ref = worker.pause.remote() if self.paused else worker.start.remote(self.rollout_id)
+                        ref = (
+                            worker.pause.remote()
+                            if self.paused
+                            else worker.start.remote(self.rollout_id, self.policy_version)
+                        )
                         self.controls[ref] = (i, desired)
                     # One outstanding result request per worker. These requests
                     # only consume results; workers refill their pools locally.
@@ -144,9 +149,6 @@ class RolloutScheduler:
                             self.running_workers.remove(worker)
                         else:
                             self.ready.append(output)
-                            group, _ = output
-                            if isinstance(group, RolloutGroupRef) and group.receipt:
-                                self.delivered.add(group.receipt.position)
                     self.condition.notify_all()
         except Exception as error:
             with self.condition:
@@ -165,11 +167,14 @@ class RolloutScheduler:
         groups = []
         dropped_count = 0
         drop_reasons = Counter()
+        metric_gatherer = MetricGatherer()
         with self.condition:
             if self.error is not None:
                 raise self.error
             if self.demand:
                 raise RuntimeError("A rollout batch is already being collected")
+            # The previous batch is durable before the next collection starts.
+            self.collecting.clear()
             self.rollout_id = rollout_id
             self.demand = self.args.rollout_batch_size
             self.prefetch = min(prefetch, self.capacity)
@@ -185,6 +190,7 @@ class RolloutScheduler:
                     self.condition.wait()
                     continue
                 group, verdict = self.ready.popleft()
+                metric_gatherer.on_group_completed(verdict)
                 # Fully async continuously replaces rejected groups. The
                 # finite-batch keep_when_insufficient fallback does not apply.
                 if not verdict.keep:
@@ -193,12 +199,15 @@ class RolloutScheduler:
                     drop_reasons[reason] += 1
                 else:
                     groups.append(group)
+                    if isinstance(group, RolloutGroupRef) and group.receipt:
+                        self.collecting.add(group.receipt.position)
                     self.demand -= 1
                 self.condition.notify_all()
 
         metrics = {f"rollout/dynamic_filter/drop_{reason}": count for reason, count in drop_reasons.items()}
         metrics["rollout/dynamic_filter/dropped_groups"] = dropped_count
         metrics["rollout/dynamic_filter/dropped_ratio"] = dropped_count / (len(groups) + dropped_count)
+        metrics.update(metric_gatherer.collect())
         # Publish a manifest of group references outside the scheduler lock.
         return finalize_rollout_groups(self.args, rollout_id, groups, metrics, controller=self.controller)
 
@@ -210,7 +219,8 @@ class RolloutScheduler:
             self.condition.notify_all()
             while self.error is None:
                 unsettled = bool(self.controls) or any(
-                    self.configurations.get(worker) != (True, self.rollout_id) for worker in self.running_workers
+                    self.configurations.get(worker) != (True, self.rollout_id, self.policy_version)
+                    for worker in self.running_workers
                 )
                 if drain:
                     unsettled |= bool(self.pending or self.running_workers)
@@ -220,6 +230,15 @@ class RolloutScheduler:
             if self.error is not None:
                 raise self.error
             return was_paused
+
+    def publish_policy_version(self, policy_version):
+        with self.condition:
+            if policy_version < self.policy_version:
+                raise ValueError(
+                    f"policy version must be monotonic: current={self.policy_version}, new={policy_version}"
+                )
+            self.policy_version = policy_version
+            self.condition.notify_all()
 
     def resume(self):
         with self.condition:
@@ -237,11 +256,6 @@ class RolloutScheduler:
             if self.thread is not None:
                 raise RuntimeError("Restore rollout state before starting generation")
             self.ready = deque(state["ready"])
-            self.delivered = {
-                group.receipt.position
-                for group, _ in self.ready
-                if isinstance(group, RolloutGroupRef) and group.receipt
-            }
 
     def close(self):
         with self.condition:
@@ -272,19 +286,24 @@ class _GenerationActor:
             load_function(self.args.dynamic_sampling_filter_path) if self.args.dynamic_sampling_filter_path else None
         )
 
-        self.capacity = concurrency // self.args.n_samples_per_prompt
+        self.capacity = (concurrency // self.args.n_samples_per_prompt) * getattr(
+            self.args, "fully_async_group_prefetch_factor", 1
+        )
         self.running = False
         self.rollout_id = 0
+        self.policy_version = getattr(self.args, "policy_version", 0)
         self.producer = None
 
     def dataset_size(self):
         return len(self.data_source)
 
-    async def start(self, rollout_id):
-        future = asyncio.run_coroutine_threadsafe(self._start(rollout_id), get_async_loop().loop)
+    async def start(self, rollout_id, policy_version=None):
+        future = asyncio.run_coroutine_threadsafe(self._start(rollout_id, policy_version), get_async_loop().loop)
         await asyncio.wrap_future(future)
 
-    async def _start(self, rollout_id):
+    async def _start(self, rollout_id, policy_version=None):
+        if policy_version is not None:
+            self.policy_version = policy_version
         self.rollout_id = rollout_id
         self.running = True
         if self.producer is None or self.producer.done():
@@ -292,8 +311,12 @@ class _GenerationActor:
                 self.producer.result()
             # Keep completed results bounded even when training stops consuming.
             # At most one queued result plus one result per pool slot stays local.
-            self.outputs = asyncio.Queue(maxsize=1)
+            if self.producer is None:
+                self.outputs = asyncio.Queue(maxsize=1)
+            self._slot_tasks = set()
+            self._pool_changed = asyncio.Event()
             self.producer = asyncio.create_task(self._produce())
+        self._pool_changed.set()
 
     async def pause(self):
         future = asyncio.run_coroutine_threadsafe(self._pause(), get_async_loop().loop)
@@ -301,6 +324,8 @@ class _GenerationActor:
 
     async def _pause(self):
         self.running = False
+        if changed := getattr(self, "_pool_changed", None):
+            changed.set()
 
     async def next(self):
         future = asyncio.run_coroutine_threadsafe(self._next(), get_async_loop().loop)
@@ -329,18 +354,34 @@ class _GenerationActor:
                     await self.outputs.put(output)
                 del output
 
-        tasks = []
+        tasks = self._slot_tasks
+        changed = None
         try:
-            for offset in range(0, self.capacity, 64):
-                if not self.running:
+            while self.running or tasks:
+                self._pool_changed.clear()
+                if self.running and len(tasks) < self.capacity:
+                    groups = await self.data_source.get_samples_async(min(64, self.capacity - len(tasks)))
+                    tasks.update(asyncio.create_task(generate_slot(group)) for group in groups)
+                    # Spread startup callbacks across loop turns to reduce
+                    # asyncio pressure. Each slot also refills itself locally.
+                    await asyncio.sleep(0.001)
+                    continue
+                if not tasks:
                     break
-                groups = await self.data_source.get_samples_async(min(64, self.capacity - offset))
-                tasks.extend(asyncio.create_task(generate_slot(group)) for group in groups)
-                # Spread startup callbacks across loop turns to reduce asyncio
-                # pressure. Each slot then pulls its own next group immediately.
-                await asyncio.sleep(0.001)
-            await asyncio.gather(*tasks)
+                # Resume must replenish slots that exited while paused, even
+                # when another group remains alive across many training steps.
+                changed = asyncio.create_task(self._pool_changed.wait())
+                done, _ = await asyncio.wait((*tasks, changed), return_when=asyncio.FIRST_COMPLETED)
+                changed.cancel()
+                await asyncio.gather(changed, return_exceptions=True)
+                changed = None
+                for task in done & tasks:
+                    tasks.remove(task)
+                    task.result()
         finally:
+            if changed is not None:
+                changed.cancel()
+                await asyncio.gather(changed, return_exceptions=True)
             for task in tasks:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -360,13 +401,28 @@ class _GenerationActor:
             sample.status in (Sample.Status.COMPLETED, Sample.Status.TRUNCATED) and sample.reward is not None
             for sample in iter_samples(group)
         ):
+            policy_version = getattr(self, "policy_version", 0)
+            retained_versions = {
+                id(sample): sample.policy_version
+                for sample in iter_samples(group)
+                if sample.status in (Sample.Status.COMPLETED, Sample.Status.TRUNCATED) and sample.reward is not None
+            }
+            for sample in iter_samples(group):
+                sample.policy_version = retained_versions.get(id(sample), policy_version)
+            retry_group = [sample if isinstance(sample, list) else copy.deepcopy(sample) for sample in group]
             with rollout_context(rollout_id):
                 group = await generate_and_rm_group(self.args, group, self.state.sampling_params.copy())
+            # A custom generator may replace the inputs, and another start RPC
+            # may publish a new version while this task is awaiting generation.
+            for sample in iter_samples(group):
+                sample.policy_version = retained_versions.get(id(sample), policy_version)
+            if any(sample.status in (Sample.Status.ABORTED, Sample.Status.PENDING) for sample in iter_samples(group)):
+                # Preserve successful trajectories while restarting only the
+                # interrupted agent sessions from their original inputs.
+                await self._rebuffer(prepare_retry_group(retry_group, group))
+                return None
         validate_rollout_id_annotated([group])
         samples = list(iter_samples(group))
-        if any(sample.status == Sample.Status.ABORTED for sample in samples):
-            await self._rebuffer(group)
-            return None
         for sample in samples:
             if sample.index is None:
                 raise ValueError("Distributed generation must preserve the source sample index")
@@ -461,23 +517,34 @@ class DistributedRollout(RolloutScheduler):
     def _recover_worker_results(self, worker):
         if self.args.rollout_data_transport != "straw":
             return
-        delivered = pack_rollout_payload(sorted(self.delivered), self.args, self.rollout_id)
-        ref = ray.get(self.controller.recover_reader_results.remote(f"fully_async_{worker}", delivered.manifest))
+        # A worker can publish a result and die before its reply reaches us.
+        # Recover queue receipts, excluding positions already delivered locally.
+        positions = self.collecting | {
+            group.receipt.position for group, _ in self.ready if isinstance(group, RolloutGroupRef) and group.receipt
+        }
+        delivered = pack_rollout_payload(sorted(positions), self.args, self.rollout_id)
+        ref = ray.get(self.controller.recover_reader_results.remote(self.reader_ids[worker], delivered.manifest))
         for value in DiskPayloadRef(ref, self.args.rollout_data_dir).load():
             receipt = CommitReceipt.from_dict(value)
             payload = DiskPayloadRef(receipt.result_ref, self.args.rollout_data_dir)
             index = next(iter_samples(payload.load())).index
             group = RolloutGroupRef(receipt.result_ref, payload.root, index, receipt)
             self.ready.append((group, DynamicFilterOutput(keep=True)))
-            self.delivered.add(receipt.position)
 
     def __init__(self, args, data_source):
         if args.rollout_all_samples_process_path is not None:
             raise ValueError("--rollout-all-samples-process-path is not supported by distributed fully-async rollout")
         recovered = []
-        if data_source.restore_plan.mode == "resume" and "fully_async" not in data_source._restored_consumers:
+        # A new queue restores whole-job progress. A replacement manager keeps
+        # the live queue and has already recovered old readers through the source.
+        if (
+            not data_source.manager_restored
+            and data_source.restore_plan.mode == "resume"
+            and "fully_async" not in data_source._restored_consumers
+        ):
             ref = ray.get(data_source.controller.recover_pending_rollout.remote())
-            for value in DiskPayloadRef(ref, args.rollout_data_dir).load():
+            values = DiskPayloadRef(ref, args.rollout_data_dir).load()
+            for value in values:
                 receipt = CommitReceipt.from_dict(value)
                 payload = DiskPayloadRef(receipt.result_ref, args.rollout_data_dir)
                 index = next(iter_samples(payload.load())).index
@@ -496,15 +563,18 @@ class DistributedRollout(RolloutScheduler):
             key=lambda node: (node["NodeManagerAddress"], node["NodeID"]),
         )
         total_concurrency = args.sglang_server_concurrency * get_rollout_num_engines(args)
+        total_concurrency = total_concurrency // args.n_samples_per_prompt * args.n_samples_per_prompt
         if not nodes or total_concurrency < len(nodes) * args.n_samples_per_prompt:
             raise ValueError("Distributed rollout needs concurrency for at least one prompt group per node")
         groups_per_worker, remainder = divmod(total_concurrency // args.n_samples_per_prompt, len(nodes))
-        workers, capacities = [], []
+        prefetch_factor = getattr(args, "fully_async_group_prefetch_factor", 1)
+        workers, capacities, reader_ids = [], [], []
         try:
             for i, node in enumerate(nodes):
                 capacity = groups_per_worker + (i < remainder)
-                capacities.append(capacity)
+                capacities.append(capacity * prefetch_factor)
                 reader = data_source.reader_config(f"fully_async_{i}")
+                reader_ids.append(reader.reader_id)
                 workers.append(
                     ray.remote(_GenerationActor)
                     .options(
@@ -521,17 +591,20 @@ class DistributedRollout(RolloutScheduler):
             if any(size != len(data_source) for size in sizes):
                 raise ValueError(f"Replicated datasets differ in size: owner={len(data_source)}, workers={sizes}")
         except Exception:
+            # A partially started worker set is not usable. Release its actors
+            # while leaving accepted data in the independently owned queue.
             for worker in workers:
                 ray.kill(worker)
             raise
         super().__init__(args, workers, capacities, controller=data_source.controller)
+        self.reader_ids = reader_ids
         self.ready.extend(recovered)
-        self.delivered.update(group.receipt.position for group, _ in recovered)
         logging.getLogger(__name__).info(
-            "Fully-async rollout: %d nodes, dataset=%d, concurrency=%d",
+            "Fully-async rollout: %d nodes, dataset=%d, concurrency=%d, group_capacity=%d",
             len(nodes),
             len(data_source),
             total_concurrency,
+            sum(capacities),
         )
 
     def state_dict(self):

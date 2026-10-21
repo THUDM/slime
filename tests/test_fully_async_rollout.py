@@ -65,6 +65,7 @@ def test_custom_data_source_keeps_original_entrypoint(monkeypatch):
         assert rollout_id == 3
         return expected
 
+    monkeypatch.setattr(fa, "_get_worker", lambda args, source: _make_worker(monkeypatch))
     monkeypatch.setattr(fa, "_generate_rollout_async", generate)
     monkeypatch.setattr(fa, "run", asyncio.run)
     assert fa.generate_rollout_fully_async(args, 3, source) is expected
@@ -118,7 +119,7 @@ def test_rollout_takes_target_groups_and_leaves_surplus_queued(monkeypatch):
     worker = _make_worker(monkeypatch)
     for gid in range(10):
         worker.output_queue.put(fa.CompletedSampleRecord(gid, _make_group(gid), policy_version=0))
-    monkeypatch.setattr(fa, "_get_global_worker", lambda args, data_buffer: worker)
+    monkeypatch.setattr(fa, "_get_worker", lambda args, data_buffer: worker)
 
     args = SimpleNamespace(
         rollout_batch_size=4, rollout_data_transport="object-store", rollout_sample_filter_path=None
@@ -150,6 +151,8 @@ def test_concurrency_is_scaled_by_samples_per_prompt(monkeypatch):
     args = SimpleNamespace(n_samples_per_prompt=4)
     assert fa.AsyncRolloutWorker(args, _FakeDataBuffer([]), concurrency=10).concurrency == 2
     assert fa.AsyncRolloutWorker(args, _FakeDataBuffer([]), concurrency=2).concurrency == 1
+    args.fully_async_group_prefetch_factor = 2
+    assert fa.AsyncRolloutWorker(args, _FakeDataBuffer([]), concurrency=10).concurrency == 4
 
 
 @pytest.mark.unit
@@ -159,7 +162,7 @@ def test_dynamic_filter_drops_groups_and_refills(monkeypatch):
         group = _make_group(gid)
         group[0].reward = float(gid % 2)
         worker.output_queue.put(fa.CompletedSampleRecord(gid, group, policy_version=0))
-    monkeypatch.setattr(fa, "_get_global_worker", lambda args, data_buffer: worker)
+    monkeypatch.setattr(fa, "_get_worker", lambda args, data_buffer: worker)
 
     def keep_odd(args, group):
         return DynamicFilterOutput(keep=bool(group[0].reward), reason="even")
@@ -170,6 +173,7 @@ def test_dynamic_filter_drops_groups_and_refills(monkeypatch):
         rollout_data_transport="object-store",
         rollout_sample_filter_path=None,
         dynamic_sampling_filter_path="test.keep_odd",
+        reward_key=None,
     )
     result = asyncio.run(fa._generate_rollout_async(args, rollout_id=7, data_buffer=None))
 
@@ -178,7 +182,41 @@ def test_dynamic_filter_drops_groups_and_refills(monkeypatch):
     assert result.metrics["rollout/dynamic_filter/dropped_groups"] == 3
     assert result.metrics["rollout/dynamic_filter/dropped_ratio"] == 0.5
     assert result.metrics["rollout/dynamic_filter/drop_even"] == 3
+    assert result.metrics["rollout/raw_reward_before_filters"] == 0.5
     assert [record.gid for record in worker.get_completed_groups()] == [6, 7]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("segmented", [False, True])
+def test_uniform_reward_filter_replenishes_eight_sample_groups(monkeypatch, segmented):
+    worker = _make_worker(monkeypatch)
+    rewards = [[0.0] * 8, [1.0] * 8, [0.0, 1.0] * 4, [1.0, 0.0] * 4, [0.0] * 8]
+    groups = []
+    for gid, values in enumerate(rewards):
+        group = []
+        for index, reward in enumerate(values):
+            sample = Sample(index=gid * 8 + index, reward=reward, status=Sample.Status.COMPLETED)
+            # Multiple context windows still represent one trajectory reward.
+            group.append([sample, sample] if segmented and index % 2 else [sample] if segmented else sample)
+        groups.append(group)
+        worker.output_queue.put(fa.CompletedSampleRecord(gid, group, policy_version=0))
+    monkeypatch.setattr(fa, "_get_worker", lambda args, data_buffer: worker)
+    args = SimpleNamespace(
+        rollout_batch_size=2,
+        n_samples_per_prompt=8,
+        reward_key=None,
+        rollout_data_transport="object-store",
+        rollout_sample_filter_path=None,
+        dynamic_sampling_filter_path="slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std",
+    )
+    result = asyncio.run(fa._generate_rollout_async(args, rollout_id=0, data_buffer=None))
+    assert result.samples == groups[2:4]
+    assert all(len(group) == 8 for group in result.samples)
+    assert result.metrics["rollout/dynamic_filter/drop_zero_std_0.0"] == 1
+    assert result.metrics["rollout/dynamic_filter/drop_zero_std_1.0"] == 1
+    assert result.metrics["rollout/dynamic_filter/dropped_groups"] == 2
+    assert result.metrics["rollout/raw_reward_before_filters"] == 0.5
+    assert [record.gid for record in worker.get_completed_groups()] == [4]
 
 
 @pytest.mark.unit
@@ -221,7 +259,7 @@ def test_done_callback_never_blocks_event_loop_thread(monkeypatch):
 
     def _push_all():
         for gid in range(1001):
-            worker._make_done_cb(gid, worker.policy_version)(_DoneTask(gid))
+            worker._make_done_cb(gid, _make_group(gid), worker.policy_version)(_DoneTask(gid))
 
     pusher = threading.Thread(target=_push_all, daemon=True)
     pusher.start()
@@ -229,6 +267,59 @@ def test_done_callback_never_blocks_event_loop_thread(monkeypatch):
 
     assert not pusher.is_alive(), "done-callback blocked on a full output queue"
     assert worker.queue_size() == 1001
+
+
+@pytest.mark.unit
+def test_interrupted_segmented_group_retains_successful_siblings(monkeypatch):
+    worker = _make_worker(monkeypatch)
+    original = [Sample(index=i, prompt=f"original-{i}") for i in range(8)]
+    callback = worker._make_done_cb(0, original, worker.policy_version)
+    original[0].remove_sample = True
+    original[0].prompt = "mutated by aborted generator"
+    result = [[Sample(index=i, status=Sample.Status.COMPLETED)] for i in range(8)]
+    result[3].append(Sample(index=3, status=Sample.Status.ABORTED))
+    callback(SimpleNamespace(result=lambda: result))
+    assert worker.queue_size() == 0
+    [requeued] = worker.data_buffer.requeued
+    assert len(requeued) == 8
+    for index, sample in enumerate(requeued):
+        if index == 3:
+            assert isinstance(sample, Sample)
+            assert sample.prompt == "original-3"
+            assert sample.status == Sample.Status.PENDING and not sample.remove_sample
+        else:
+            assert sample is result[index]
+
+
+def test_oldest_buffer_order_uses_retained_segment_versions():
+    from slime.data.data_source import pop_oldest
+
+    older = [[Sample(weight_versions=["2", "7"])], Sample()]
+    newer = [[Sample(weight_versions=["4"])], Sample()]
+    buffer = [newer, older]
+    assert pop_oldest(None, None, buffer, 1) == [older]
+    assert buffer == [newer]
+
+
+@pytest.mark.parametrize("status,reward", [(Sample.Status.ABORTED, 0.0), (Sample.Status.COMPLETED, None)])
+def test_retry_rejects_unfinished_segments_before_starting_generation(monkeypatch, status, reward):
+    from slime.rollout import sglang_rollout
+
+    monkeypatch.setattr(sglang_rollout, "GenerateState", lambda args: types.SimpleNamespace(aborted=False))
+    group = [Sample(), [Sample(status=status, reward=reward)]]
+    with pytest.raises(ValueError, match="Only completed segmented"):
+        asyncio.run(sglang_rollout.generate_and_rm_group(types.SimpleNamespace(group_rm=False), group, {}))
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("status", [Sample.Status.PENDING, Sample.Status.ABORTED])
+def test_unfinished_flat_group_is_requeued_without_discarding_partial_response(monkeypatch, status):
+    worker = _make_worker(monkeypatch)
+    group = [Sample(index=0, status=status, response="partial", response_length=7)]
+    worker._make_done_cb(0, group, worker.policy_version)(SimpleNamespace(result=lambda: group))
+    assert worker.queue_size() == 0
+    assert worker.data_buffer.requeued == [group]
+    assert worker.data_buffer.requeued[0][0] is group[0]
 
 
 @pytest.mark.unit
@@ -257,7 +348,7 @@ def test_loop_backpressure_stops_topping_up_when_queue_is_full(monkeypatch):
                 break
             time.sleep(0.02)
     finally:
-        worker.stop()
+        worker.close()
 
     # In-flight tasks may still land after the gate check, so allow one pool
     # beyond the gate — but nothing near the unthrottled fuel size.
@@ -281,8 +372,8 @@ def test_out_of_order_completion_keeps_each_admission_policy_version(monkeypatch
 
     # The newer-policy request finishes first. Neither record may consult the
     # worker's mutable current version when its callback eventually runs.
-    worker._make_done_cb(gid=12, policy_version=new_admission_version)(_DoneTask(8))
-    worker._make_done_cb(gid=11, policy_version=old_admission_version)(_DoneTask(7))
+    worker._make_done_cb(gid=12, input_group=_make_group(8), policy_version=new_admission_version)(_DoneTask(8))
+    worker._make_done_cb(gid=11, input_group=_make_group(7), policy_version=old_admission_version)(_DoneTask(7))
 
     records = worker.get_completed_groups(limit=2)
     assert [(record.gid, record.policy_version) for record in records] == [(12, 4), (11, 3)]
@@ -293,15 +384,14 @@ def test_out_of_order_completion_keeps_each_admission_policy_version(monkeypatch
 @pytest.mark.unit
 def test_failed_weight_update_does_not_publish_policy_version(monkeypatch):
     worker = _make_worker(monkeypatch, policy_version=5)
-    monkeypatch.setattr(fa, "_global_worker", worker)
-    monkeypatch.setattr(fa, "_published_policy_version", 5)
+    source = SimpleNamespace(policy_version=5, consumers={"fully_async": worker})
 
-    fa.after_weight_update(policy_version=5, succeeded=False)
-    assert fa._published_policy_version == 5
+    fa.after_weight_update(data_source=source, policy_version=5, succeeded=False)
+    assert source.policy_version == 5
     assert worker.policy_version == 5
 
-    fa.after_weight_update(policy_version=6, succeeded=True)
-    assert fa._published_policy_version == 6
+    fa.after_weight_update(data_source=source, policy_version=6, succeeded=True)
+    assert source.policy_version == 6
     assert worker.policy_version == 6
 
 
@@ -311,6 +401,114 @@ def test_policy_version_rejects_regression(monkeypatch):
 
     with pytest.raises(ValueError, match="policy version must be monotonic"):
         worker.publish_policy_version(1)
+
+
+def test_policy_publication_is_scoped_to_source_before_and_after_start(monkeypatch):
+    monkeypatch.setattr(fa.AsyncRolloutWorker, "start", lambda worker: None)
+    monkeypatch.setattr(fa, "GenerateState", _FakeGenerateState)
+    monkeypatch.setattr(fa, "get_rollout_num_engines", lambda args: 1)
+    args = SimpleNamespace(sglang_server_concurrency=1)
+    first, second = _FakeDataBuffer([]), _FakeDataBuffer([])
+    fa.after_weight_update(data_source=first, policy_version=3, succeeded=True)
+    a, b = fa._get_worker(args, first), fa._get_worker(args, second)
+    assert (a.policy_version, b.policy_version) == (3, 0)
+    fa.after_weight_update(data_source=second, policy_version=1, succeeded=True)
+    fa.after_weight_update(data_source=first, policy_version=4, succeeded=False)
+    assert (a.policy_version, b.policy_version) == (3, 1)
+
+
+def test_retry_keeps_completed_sibling_policy_and_stamps_new_segments(monkeypatch):
+    worker = _make_worker(monkeypatch, policy_version=4)
+    retained = Sample(index=0, status=Sample.Status.COMPLETED, reward=1, policy_version=2)
+    pending = Sample(index=1, status=Sample.Status.ABORTED, policy_version=3)
+    callback = worker._make_done_cb(0, [[retained], pending], worker.policy_version)
+    assert pending.policy_version == 4
+    worker.publish_policy_version(5)
+    replacement = Sample(index=1, status=Sample.Status.COMPLETED, reward=1)
+    callback(SimpleNamespace(result=lambda: [[retained], [replacement]]))
+    [record] = worker.get_completed_groups()
+    assert record.policy_version == 4
+    assert (retained.policy_version, replacement.policy_version) == (2, 4)
+
+
+def test_restore_legacy_ready_queue_keeps_unknown_policy(monkeypatch):
+    worker = _make_worker(monkeypatch, policy_version=4)
+    group = _make_group(7)
+    worker.load_state_dict({"ready": [(11, group)]})
+    [record] = worker.get_completed_groups()
+    assert (record.gid, record.group) == (11, group)
+    assert record.policy_version is None and group[0].policy_version is None
+
+
+def test_admission_pause_keeps_unfinished_agent_group_alive(monkeypatch):
+    started, finish = threading.Event(), threading.Event()
+    group = _make_group(7)
+    invocations = []
+
+    async def generate(args, received, sampling_params, evaluation):
+        invocations.append(received)
+        started.set()
+        while not finish.is_set():
+            await asyncio.sleep(0.01)
+        return [[received[0]]]
+
+    monkeypatch.setattr(fa, "generate_and_rm_group", generate)
+    worker = _make_worker(monkeypatch, data_buffer=_FakeDataBuffer([group]), concurrency=1)
+    worker.start()
+    try:
+        assert started.wait(5)
+        assert worker.pause(drain=False) is False
+        assert worker.active == 1 and worker.queue_size() == 0
+        # Weight publication pauses new admission; the existing sandbox task is
+        # still the same coroutine when the next training round resumes it.
+        worker.resume()
+        finish.set()
+        deadline = time.monotonic() + 5
+        while worker.queue_size() == 0:
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        assert invocations == [group]
+        assert worker.get_completed_groups()[0].group == [[group[0]]]
+        assert not worker.data_buffer.requeued
+    finally:
+        finish.set()
+        worker.close()
+
+
+@pytest.mark.parametrize("transport", ["object-store", "straw"])
+def test_local_worker_lifecycle_is_scoped_to_source(monkeypatch, transport):
+    from slime.data.data_source import DataSource
+
+    monkeypatch.setattr(fa, "GenerateState", _FakeGenerateState)
+    monkeypatch.setattr(fa, "get_rollout_num_engines", lambda args: 1)
+
+    async def generate(args, group, sampling_params, evaluation):
+        await asyncio.sleep(0.01)
+        return group
+
+    monkeypatch.setattr(fa, "generate_and_rm_group", generate)
+    args = SimpleNamespace(n_samples_per_prompt=1, sglang_server_concurrency=2, rollout_data_transport=transport)
+    sources = [_FakeDataBuffer([_make_group(i) for i in range(20)]) for _ in range(2)]
+    workers = [fa._get_worker(args, source) for source in sources]
+    try:
+        assert workers[0] is not workers[1]
+        deadline = time.monotonic() + 5
+        while not all(worker.queue_size() for worker in workers):
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        for worker in workers:
+            assert worker.pause() is False
+            saved = worker.state_dict()
+            queued = worker.queue_size()
+            time.sleep(0.03)
+            assert worker.queue_size() == queued and not worker.active
+            replacement = fa.AsyncRolloutWorker(args, worker.data_buffer, concurrency=2)
+            replacement.load_state_dict(saved)
+            assert replacement.get_completed_groups() == worker.get_completed_groups()
+    finally:
+        for source in sources:
+            DataSource.close(source)
+    assert all(not worker.worker_thread.is_alive() for worker in workers)
 
 
 if __name__ == "__main__":

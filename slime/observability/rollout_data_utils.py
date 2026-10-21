@@ -157,5 +157,7 @@ def save_debug_rollout_data(
     else:
         samples = [sample.to_dict() for sample in data]
 
+    for sample in samples:
+        sample.pop("_queue_original_input", None)
     dump_data = {"rollout_id": rollout_id, "samples": samples}
     torch.save(materialize_tensor_refs(dump_data), path)
