@@ -1,4 +1,5 @@
 import argparse
+import ast
 import importlib.util
 import runpy
 import shlex
@@ -9,6 +10,60 @@ from pathlib import Path
 import pytest
 
 NUM_GPUS = 0
+
+
+@pytest.mark.parametrize("legacy_parser", [False, True])
+def test_checkpoint_conversion_accepts_legacy_model_flags(legacy_parser):
+    path = Path(__file__).resolve().parents[1] / "tools/convert_hf_to_torch_dist.py"
+    function = next(
+        node
+        for node in ast.parse(path.read_text()).body
+        if isinstance(node, ast.FunctionDef) and node.name == "add_convertion_args"
+    )
+    namespace = {}
+    exec(
+        compile(ast.fix_missing_locations(ast.Module(body=[function], type_ignores=[])), str(path), "exec"), namespace
+    )
+    parser = argparse.ArgumentParser()
+    flags = ["--use-gated-attention", "--post-self-attn-layernorm", "--post-mlp-layernorm"]
+    if legacy_parser:
+        for flag in flags:
+            parser.add_argument(flag, action="store_true")
+    parser = namespace["add_convertion_args"](parser)
+    args = parser.parse_args(["--hf-checkpoint", "model", *flags])
+    assert args.use_gated_attention and args.post_self_attn_layernorm and args.post_mlp_layernorm
+    assert args.hf_checkpoint == "model"
+
+
+def test_parallel_check_replays_the_same_rollout_for_all_gradient_comparisons(monkeypatch):
+    from slime.utils import external_utils
+
+    commands = []
+    launcher = types.ModuleType("slime.utils.external_utils.command_utils")
+    launcher.execute_train = lambda **kwargs: commands.append(kwargs["train_args"])
+    launcher.get_default_wandb_args = lambda _: ""
+    monkeypatch.setitem(sys.modules, launcher.__name__, launcher)
+    monkeypatch.setattr(external_utils, "command_utils", launcher, raising=False)
+    test = runpy.run_path(str(Path(__file__).with_name("test_qwen3_0.6B_parallel_check.py")))
+    test["execute"]()
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--save-debug-rollout-data")
+    parser.add_argument("--load-debug-rollout-data")
+    parser.add_argument("--ci-save-grad-norm")
+    parser.add_argument("--ci-load-grad-norm")
+    parsed = [parser.parse_known_args(shlex.split(command))[0] for command in commands]
+    assert len(parsed) == 2 * (1 + len(test["PARALLEL_CONFIGS"]))
+    template = parsed[0].save_debug_rollout_data
+    assert template.format(rollout_id=0) != template.format(rollout_id=1)
+    for index, args in enumerate(parsed):
+        if index == 0:
+            assert args.load_debug_rollout_data is None
+        else:
+            assert args.load_debug_rollout_data == template
+        if args.ci_load_grad_norm:
+            reference_index = 0 if index <= len(test["PARALLEL_CONFIGS"]) else 1
+            assert args.ci_load_grad_norm == f"grad_norms-{reference_index}.pt"
 
 
 @pytest.mark.parametrize("mode", ["save", "async_save", "load"])
@@ -52,19 +107,19 @@ def load_arguments_module(monkeypatch):
     arguments_mod = types.ModuleType("megatron.training.arguments")
     tokenizer_pkg_mod = types.ModuleType("megatron.training.tokenizer")
     tokenizer_mod = types.ModuleType("megatron.training.tokenizer.tokenizer")
-    transformers_mod = types.ModuleType("transformers")
+    model_config_mod = types.ModuleType("slime.utils.model_config")
 
     arguments_mod.parse_args = lambda *args, **kwargs: None
     arguments_mod.validate_args = lambda args: args
     tokenizer_mod._vocab_size_with_padding = lambda vocab_size, _args: vocab_size
-    transformers_mod.AutoConfig = types.SimpleNamespace(from_pretrained=lambda *args, **kwargs: None)
+    model_config_mod.load_hf_config = lambda *args, **kwargs: None
 
     monkeypatch.setitem(sys.modules, "megatron", megatron_mod)
     monkeypatch.setitem(sys.modules, "megatron.training", training_mod)
     monkeypatch.setitem(sys.modules, "megatron.training.arguments", arguments_mod)
     monkeypatch.setitem(sys.modules, "megatron.training.tokenizer", tokenizer_pkg_mod)
     monkeypatch.setitem(sys.modules, "megatron.training.tokenizer.tokenizer", tokenizer_mod)
-    monkeypatch.setitem(sys.modules, "transformers", transformers_mod)
+    monkeypatch.setitem(sys.modules, "slime.utils.model_config", model_config_mod)
 
     module_path = Path(__file__).resolve().parents[1] / "slime" / "backends" / "megatron_utils" / "arguments.py"
     module_name = "test_megatron_argument_validation_module"
@@ -103,6 +158,84 @@ def load_slime_arguments_module(monkeypatch):
     assert spec.loader is not None
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.mark.parametrize("strategy", [None, "mcore", "nvrx"])
+def test_native_async_checkpoint_default_preserves_explicit_strategy(monkeypatch, strategy):
+    module = load_slime_arguments_module(monkeypatch)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--async-strategy", choices=["mcore", "nvrx"], default="nvrx")
+    module.get_slime_extra_args_provider()(parser)
+    command = ["--rollout-batch-size", "1"]
+    if strategy is not None:
+        command += ["--async-strategy", strategy]
+    assert parser.parse_args(command).async_strategy == (strategy or "mcore")
+
+
+def test_legacy_megatron_parser_does_not_gain_async_strategy(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    parser = argparse.ArgumentParser()
+    module.get_slime_extra_args_provider()(parser)
+    assert not hasattr(parser.parse_args(["--rollout-batch-size", "1"]), "async_strategy")
+
+
+@pytest.mark.parametrize(
+    "legacy_rope,position_type,expected",
+    [(True, "learned_absolute", "rope"), (False, "learned_absolute", "learned_absolute"), (False, "none", "none")],
+)
+def test_legacy_rope_is_resolved_before_mtp_validation(monkeypatch, legacy_rope, position_type, expected):
+    module = load_arguments_module(monkeypatch)
+    args = argparse.Namespace(
+        use_rotary_position_embeddings=legacy_rope,
+        position_embedding_type=position_type,
+        mtp_num_layers=1,
+        fp16=False,
+        seq_length=None,
+        max_position_embeddings=None,
+        vocab_size=None,
+        padded_vocab_size=None,
+        tokenizer_model=None,
+        tokenizer_type=None,
+        hf_checkpoint="model",
+    )
+    module.set_default_megatron_args(args)
+    assert args.position_embedding_type == expected
+
+
+@pytest.mark.parametrize("explicit_path", [False, True])
+def test_pd_mooncake_debug_dump_keeps_each_rollout(monkeypatch, tmp_path, explicit_path):
+    from slime.utils import external_utils
+
+    commands = []
+    launcher = types.ModuleType("slime.utils.external_utils.command_utils")
+    launcher.execute_train = lambda **kwargs: commands.append(kwargs["train_args"])
+    launcher.get_default_wandb_args = lambda _: ""
+    monkeypatch.setitem(sys.modules, launcher.__name__, launcher)
+    monkeypatch.setattr(external_utils, "command_utils", launcher, raising=False)
+    if explicit_path:
+        monkeypatch.setenv("DEBUG_ROLLOUT_DATA", str(tmp_path / "debug data" / "rollout_{rollout_id}.pt"))
+    else:
+        monkeypatch.delenv("DEBUG_ROLLOUT_DATA", raising=False)
+    test = runpy.run_path(str(Path(__file__).with_name("test_qwen3.6_35B_A3B_pd_mooncake.py")))
+    test["execute"]()
+    [command] = commands
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--save-debug-rollout-data")
+    args, _ = parser.parse_known_args(shlex.split(command))
+
+    module = load_slime_arguments_module(monkeypatch)
+    module.slime_validate_args(
+        make_slime_validate_args(
+            rollout_data_transport="straw",
+            rollout_data_dir=str(tmp_path / "rollout_data"),
+            ckpt_format="torch_dist",
+            save_debug_rollout_data=args.save_debug_rollout_data,
+        )
+    )
+    paths = [args.save_debug_rollout_data.format(rollout_id=rollout_id) for rollout_id in range(2)]
+    assert paths[0] != paths[1]
+    if explicit_path:
+        assert paths[0] == str(tmp_path / "debug data" / "rollout_0.pt")
 
 
 def make_qwen3_6_args(**overrides):
@@ -189,6 +322,8 @@ def test_allgather_cp_rejects_non_dsa_cp_models(monkeypatch):
     [
         types.SimpleNamespace(architectures=["DeepseekV32ForCausalLM"], model_type="deepseek_v3"),
         types.SimpleNamespace(architectures=["GlmMoeDsaForCausalLM"], model_type="glm"),
+        types.SimpleNamespace(architectures=["Glm5NextForCausalLM"], model_type="glm5_next"),
+        types.SimpleNamespace(architectures=["Glm5NextForConditionalGeneration"], model_type="glm5_next"),
     ],
 )
 def test_allgather_cp_allows_dsa_architectures(monkeypatch, hf_config):
@@ -211,7 +346,7 @@ def test_update_weight_disk_dir_required_for_disk_transport(monkeypatch):
     args = make_slime_validate_args(update_weight_transport="disk", update_weight_disk_dir=None)
 
     with pytest.raises(ValueError, match="update-weight-disk-dir"):
-        module.slime_validate_args(args)
+        args, _ = module.slime_validate_args(args)
 
 
 @pytest.mark.unit
@@ -225,11 +360,14 @@ def test_update_weight_engine_group_wave_limit_must_be_non_negative(monkeypatch)
 
 def make_slime_validate_args(**overrides):
     values = dict(
+        ckpt_format="torch_dist",
+        flush_cache_interval=1,
         rollout_data_transport="object-store",
         rollout_data_dir=None,
         rollout_queue_lease_seconds=300,
-        rollout_queue_segment_mib=256,
+        rollout_queue_segment_mib=None,
         rollout_io_concurrency=4,
+        fully_async_group_prefetch_factor=1,
         use_distributed_post=False,
         data_source_path=None,
         eval_config=None,
@@ -315,6 +453,92 @@ def make_slime_validate_args(**overrides):
     return types.SimpleNamespace(**values)
 
 
+def test_trainer_fault_tolerance_saves_reshardable_optimizer(monkeypatch, tmp_path):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(
+        use_fault_tolerance=True,
+        save_debug_rollout_data=str(tmp_path / "rollout_{rollout_id}.pt"),
+        ckpt_format="torch_dist",
+        ckpt_fully_parallel_save=False,
+        dist_ckpt_optim_fully_reshardable=False,
+    )
+    args, _ = module.slime_validate_args(args)
+    assert args.ckpt_fully_parallel_save
+    assert args.dist_ckpt_optim_fully_reshardable
+
+
+@pytest.mark.parametrize(
+    "options,match",
+    [
+        ({"no_save_optim": True}, "optimizer and RNG"),
+        ({"no_save_rng": True}, "optimizer and RNG"),
+        ({"ckpt_format": "torch"}, "torch_dist"),
+        ({"save_debug_rollout_data": "one-file.pt"}, "unique"),
+    ],
+)
+def test_trainer_fault_tolerance_rejects_unrecoverable_checkpoints(monkeypatch, tmp_path, options, match):
+    module = load_slime_arguments_module(monkeypatch)
+    values = dict(
+        use_fault_tolerance=True,
+        save_debug_rollout_data=str(tmp_path / "rollout_{rollout_id}.pt"),
+        ckpt_format="torch_dist",
+    )
+    values.update(options)
+    with pytest.raises(ValueError, match=match):
+        module.slime_validate_args(make_slime_validate_args(**values))
+
+
+@pytest.mark.parametrize(
+    "rollout_path",
+    [
+        "slime.rollout.sglang_rollout.generate_rollout",
+        "slime.rollout.fully_async_rollout.generate_rollout_fully_async",
+        "custom.rollout",
+    ],
+)
+def test_pipeline_rl_defaults_to_fully_async_with_separate_eval(monkeypatch, rollout_path):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(flush_cache_interval=0, rollout_function_path=rollout_path)
+    args, _ = module.slime_validate_args(args)
+    expected = (
+        "slime.rollout.fully_async_rollout.generate_rollout_fully_async"
+        if "sglang_rollout" in rollout_path
+        else rollout_path
+    )
+    assert args.rollout_function_path == expected
+    assert args.eval_function_path == "slime.rollout.sglang_rollout.generate_rollout"
+
+
+@pytest.mark.parametrize(
+    "options",
+    [{"colocate": True}, {"offload_rollout": True}, {"debug_train_only": True}, {"debug_rollout_only": True}],
+)
+def test_pipeline_rl_rejects_incompatible_lifecycles(monkeypatch, options):
+    module = load_slime_arguments_module(monkeypatch)
+    with pytest.raises(ValueError, match="flush-cache-interval"):
+        module.slime_validate_args(make_slime_validate_args(flush_cache_interval=0, **options))
+
+
+def test_flush_cache_interval_defaults_to_existing_behavior(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    parser = module.get_slime_extra_args_provider()(argparse.ArgumentParser())
+    assert parser.parse_args(["--rollout-batch-size", "1"]).flush_cache_interval == 1
+    assert parser.parse_args(["--rollout-batch-size", "1", "--flush-cache-interval", "0"]).flush_cache_interval == 0
+    args = make_slime_validate_args(rollout_function_path="slime.rollout.sglang_rollout.generate_rollout")
+    args, _ = module.slime_validate_args(args)
+    assert args.rollout_function_path == args.eval_function_path == "slime.rollout.sglang_rollout.generate_rollout"
+
+
+@pytest.mark.parametrize("interval", [-1, -100])
+def test_negative_flush_cache_interval_disables_training_flush(monkeypatch, interval):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(
+        flush_cache_interval=interval, rollout_function_path="slime.rollout.sglang_rollout.generate_rollout"
+    )
+    args, _ = module.slime_validate_args(args)
+    assert args.rollout_function_path == "slime.rollout.fully_async_rollout.generate_rollout_fully_async"
+
+
 def test_distributed_fully_async_is_opt_in(monkeypatch):
     module = load_slime_arguments_module(monkeypatch)
     parser = module.get_slime_extra_args_provider()(argparse.ArgumentParser())
@@ -324,6 +548,8 @@ def test_distributed_fully_async_is_opt_in(monkeypatch):
     assert defaults.rollout_data_transport == "object-store"
     assert defaults.rollout_data_dir is None
     assert not defaults.rollout_queue_online_gc
+    assert defaults.rollout_health_check_timeout == defaults.rollout_health_check_first_wait == 600
+    assert defaults.rollout_cleanup_timeout == 60
     path = "slime.data.queue_data_source.QueueDataSource"
     enabled = parser.parse_args(["--rollout-batch-size", "1", "--data-source-path", path])
     assert enabled.data_source_path == path
@@ -337,9 +563,9 @@ def test_rollout_transport_selects_source_and_only_straw_needs_storage(monkeypat
     args = make_slime_validate_args(rollout_data_transport=parsed.rollout_data_transport)
     if transport == "straw":
         with pytest.raises(ValueError, match="--rollout-data-dir or --save"):
-            module.slime_validate_args(args)
+            args, _ = module.slime_validate_args(args)
         args.save = str(tmp_path)
-    module.slime_validate_args(args)
+    args, _ = module.slime_validate_args(args)
     if transport == "straw":
         assert args.data_source_path == "slime.data.queue_data_source.QueueDataSource"
         assert args.rollout_data_dir == str(tmp_path / "rollout_data")
@@ -347,6 +573,27 @@ def test_rollout_transport_selects_source_and_only_straw_needs_storage(monkeypat
         assert args.data_source_path == "slime.data.data_source.RolloutDataSourceWithBuffer"
         assert args.rollout_data_dir is None
     assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("segment_mib", [None, 1, 1024, 0, -1])
+def test_straw_pack_size_is_optional_but_explicit_values_must_be_positive(monkeypatch, tmp_path, segment_mib):
+    module = load_slime_arguments_module(monkeypatch)
+    parser = module.get_slime_extra_args_provider()(argparse.ArgumentParser())
+    options = ["--rollout-batch-size", "1"]
+    if segment_mib is not None:
+        options += ["--rollout-queue-segment-mib", str(segment_mib)]
+    parsed = parser.parse_args(options)
+    assert parsed.rollout_queue_segment_mib == segment_mib
+    args = make_slime_validate_args(
+        rollout_data_transport="straw",
+        rollout_data_dir=str(tmp_path),
+        rollout_queue_segment_mib=parsed.rollout_queue_segment_mib,
+    )
+    if segment_mib is not None and segment_mib <= 0:
+        with pytest.raises(ValueError, match="rollout-queue-segment-mib.*positive"):
+            args, _ = module.slime_validate_args(args)
+    else:
+        args, _ = module.slime_validate_args(args)
 
 
 @pytest.mark.parametrize(
@@ -397,7 +644,7 @@ def test_slime_validate_args_preserves_explicit_start_rollout_id(monkeypatch):
     module = load_slime_arguments_module(monkeypatch)
     args = make_slime_validate_args(start_rollout_id=100)
 
-    module.slime_validate_args(args)
+    args, _ = module.slime_validate_args(args)
 
     assert args.start_rollout_id == 100
 
@@ -407,7 +654,7 @@ def test_slime_validate_args_defaults_start_rollout_id_to_zero(monkeypatch):
     module = load_slime_arguments_module(monkeypatch)
     args = make_slime_validate_args(start_rollout_id=None)
 
-    module.slime_validate_args(args)
+    args, _ = module.slime_validate_args(args)
 
     assert args.start_rollout_id == 0
 
@@ -421,7 +668,7 @@ def test_slime_validate_args_rejects_equal_debug_data_paths(monkeypatch):
     )
 
     with pytest.raises(ValueError, match="--save-debug-train-data must not be equal"):
-        module.slime_validate_args(args)
+        args, _ = module.slime_validate_args(args)
 
 
 @pytest.mark.unit
@@ -431,7 +678,7 @@ def test_slime_validate_args_rejects_non_positive_rollout_temperature(monkeypatc
     args = make_slime_validate_args(rollout_temperature=temperature)
 
     with pytest.raises(ValueError, match="--rollout-temperature must be > 0"):
-        module.slime_validate_args(args)
+        args, _ = module.slime_validate_args(args)
 
 
 @pytest.mark.unit
@@ -439,7 +686,7 @@ def test_slime_validate_args_preserves_zero_rollout_gpus_under_colocate(monkeypa
     module = load_slime_arguments_module(monkeypatch)
     args = make_slime_validate_args(colocate=True, rollout_num_gpus=0)
 
-    module.slime_validate_args(args)
+    args, _ = module.slime_validate_args(args)
 
     assert args.rollout_num_gpus == 0
     assert args.offload_train is True
@@ -456,7 +703,7 @@ def test_slime_validate_args_preserves_larger_rollout_gpus_under_colocate(monkey
         rollout_num_gpus=12,
     )
 
-    module.slime_validate_args(args)
+    args, _ = module.slime_validate_args(args)
 
     assert args.rollout_num_gpus == 12
     assert args.offload_train is True
@@ -468,7 +715,7 @@ def test_slime_validate_args_preserves_zero_rollout_gpus_without_colocate(monkey
     module = load_slime_arguments_module(monkeypatch)
     args = make_slime_validate_args(colocate=False, rollout_num_gpus=0)
 
-    module.slime_validate_args(args)
+    args, _ = module.slime_validate_args(args)
 
     assert args.rollout_num_gpus == 0
     assert args.actor_num_gpus_per_node == 8
@@ -487,7 +734,7 @@ def test_update_weight_delta_requires_disk_transport(monkeypatch):
     )
 
     with pytest.raises(ValueError, match="requires --update-weight-transport=disk"):
-        module.slime_validate_args(args)
+        args, _ = module.slime_validate_args(args)
 
 
 @pytest.mark.unit
@@ -502,7 +749,7 @@ def test_update_weight_delta_rejects_colocate(monkeypatch):
     )
 
     with pytest.raises(ValueError, match="not supported with --colocate"):
-        module.slime_validate_args(args)
+        args, _ = module.slime_validate_args(args)
 
 
 @pytest.mark.unit
@@ -516,7 +763,7 @@ def test_update_weight_delta_requires_local_checkpoint_dir(monkeypatch):
     )
 
     with pytest.raises(ValueError, match="requires --update-weight-local-checkpoint-dir"):
-        module.slime_validate_args(args)
+        args, _ = module.slime_validate_args(args)
 
 
 @pytest.mark.unit

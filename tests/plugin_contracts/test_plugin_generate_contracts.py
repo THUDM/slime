@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import types
 from contextlib import contextmanager
 
 import pytest
@@ -58,7 +57,7 @@ def make_args(**overrides):
 class FakeGenerateState:
     def __init__(self, args) -> None:
         self.args = args
-        self.semaphore = types.SimpleNamespace(__aenter__=None)
+        self.semaphore = asyncio.Semaphore(1)
         self.generation_pacer = AsyncPacer()
         self.pendings = set()
         self.remaining_batch_size = 0
@@ -104,26 +103,12 @@ def assert_custom_generate_signature_matches_expected(fn) -> None:
     assert params[:3] == ("args", "sample", "sampling_params")
 
 
-class _DummySemaphore:
-    async def __aenter__(self):
-        return None
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return False
-
-
-class _PatchedGenerateState(FakeGenerateState):
-    def __init__(self, args):
-        super().__init__(args)
-        self.semaphore = _DummySemaphore()
-
-
 @pytest.fixture
 def patch_generate_state(monkeypatch):
     """Patch GenerateState with a test-safe variant; returns the sglang_rollout module."""
     from slime.rollout import sglang_rollout
 
-    monkeypatch.setattr(sglang_rollout, "GenerateState", _PatchedGenerateState)
+    monkeypatch.setattr(sglang_rollout, "GenerateState", FakeGenerateState)
     return sglang_rollout
 
 

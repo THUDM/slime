@@ -191,8 +191,8 @@ class RolloutArchive:
                 "_queue_lease",
                 "_queue_receipt",
                 "_queue_source_positions",
-                "_queue_generation_start",
                 "_queue_resume_origin",
+                "_queue_original_input",
             ):
                 sample.__dict__.pop(name, None)
             result.append(sample)

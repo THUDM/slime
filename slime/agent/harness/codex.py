@@ -24,12 +24,20 @@ class CodexHarness(BaseHarness):
     # host paths + CLI knobs, all under the agent-layer SLIME_AGENT_* prefix
     node_tarball_env = "SLIME_AGENT_NODE_TARBALL"
     cli_tarball_env = "SLIME_AGENT_CODEX_TARBALL"
+    native_tarball_env = "SLIME_AGENT_CODEX_NATIVE_TARBALL"
     extra_args_env = "SLIME_AGENT_CODEX_EXTRA_ARGS"
     extra_envs_env = "SLIME_AGENT_CODEX_EXTRA_ENVS"
+    max_compactions_env = "SLIME_AGENT_CODEX_MAX_COMPACTIONS"
+    context_window_env = "SLIME_AGENT_CODEX_CONTEXT_WINDOW"
+    compact_token_limit_env = "SLIME_AGENT_CODEX_COMPACT_TOKEN_LIMIT"
 
     # static flags after ``codex exec``; --skip-git-repo-check lets it run in
     # workdirs whose git check is brittle (e.g. shallow clones)
-    exec_flags = "--skip-git-repo-check"
+    # The outer Sandbox owns isolation. Codex's nested bwrap cannot run inside
+    # an unprivileged PRoot sandbox. Never use this harness directly on the host.
+    exec_flags = (
+        "--skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust --json"
+    )
 
     # config.toml written into the sandbox. base_url MUST be inline here (Codex
     # only honours env vars for the default OpenAI provider). {model} / {base_url}
@@ -37,15 +45,36 @@ class CodexHarness(BaseHarness):
     config_toml = (
         'model = "{model}"\n'
         'model_provider = "slime"\n'
+        'web_search = "disabled"\n'
+        'model_reasoning_effort = "medium"\n'
         "\n"
         "[model_providers.slime]\n"
         'name = "slime"\n'
         'base_url = "{base_url}"\n'
         'env_key = "OPENAI_API_KEY"\n'
-        'wire_api = "chat"\n'
+        'wire_api = "responses"\n'
+        "requires_openai_auth = false\n"
+        "supports_websockets = false\n"
+        "\n[features]\n"
+        "multi_agent = false\n"
     )
 
     async def install_cli(self, sb: Sandbox) -> None:
+        if archive := os.environ.get(self.native_tarball_env):
+            # Official @openai/codex platform npm archive: keep the sibling
+            # resources/tools beside bin/codex. This is an offline install and
+            # needs neither Node nor an npm optional-dependency download.
+            await sb.write_file("/tmp/codex-native.tgz", Path(archive))
+            await sb.exec(
+                "mkdir -p /opt/codex /usr/local/bin && "
+                "tar xzf /tmp/codex-native.tgz -C /opt/codex --strip-components=3 && "
+                "ln -sf /opt/codex/bin/codex /usr/local/bin/codex && "
+                "ln -sf /opt/codex/codex-path/rg /usr/local/bin/rg && codex --version",
+                user="root",
+                timeout=180,
+                check=True,
+            )
+            return
         await install_npm_cli(
             sb,
             node_runtime=Path(os.environ[self.node_tarball_env]),
@@ -54,7 +83,21 @@ class CodexHarness(BaseHarness):
         )
 
     async def write_config(self, sb: Sandbox, ctx: HarnessContext) -> None:
+        limit = int(os.environ.get(self.max_compactions_env, "-1"))
+        if limit < -1:
+            raise ValueError(f"{self.max_compactions_env} must be -1 or nonnegative")
         toml = self.config_toml.format(model=ctx.model_label, base_url=f"{ctx.adapter_url}/v1")
+        model_settings = ""
+        for env, key in (
+            (self.context_window_env, "model_context_window"),
+            (self.compact_token_limit_env, "model_auto_compact_token_limit"),
+        ):
+            if value := os.environ.get(env):
+                tokens = int(value)
+                if tokens <= 0:
+                    raise ValueError(f"{env} must be positive")
+                model_settings += f"{key} = {tokens}\n"
+        toml = model_settings + toml
         toml_b64 = base64.b64encode(toml.encode("utf-8")).decode("ascii")
         await sb.exec(
             "mkdir -p /home/agent/.codex && "
@@ -64,6 +107,20 @@ class CodexHarness(BaseHarness):
             user="root",
             check=True,
             timeout=60,
+        )
+        hook_path = "/tmp/slime-codex-compaction.py"
+        await sb.write_file(hook_path, Path(__file__).with_name("compaction.py"))
+        command = f"python3 {hook_path} {shlex.quote(ctx.workdir + '/.harness')} {limit} json"
+        await sb.write_file(
+            "/home/agent/.codex/hooks.json",
+            json.dumps(
+                {
+                    "hooks": {
+                        event: [{"hooks": [{"type": "command", "command": command, "timeout": 10}]}]
+                        for event in ("PreCompact", "PostCompact")
+                    }
+                }
+            ),
         )
 
     async def launch_and_wait(self, sb: Sandbox, ctx: HarnessContext, prompt: str, time_budget_sec: int) -> int:
@@ -83,4 +140,20 @@ class CodexHarness(BaseHarness):
         extra_envs = os.environ.get(self.extra_envs_env, "").strip()
         if extra_envs:
             env.update(json.loads(extra_envs))
+        directory = shlex.quote(f"{ctx.workdir}/.harness")
+        cmd = (
+            f'printf \'%s\\n\' \'{{"attempts":0,"count":0,"limit_reached":false}}\' '
+            f"> {directory}/compaction.json; {cmd}"
+        )
         return await run_agent(sb, workdir=ctx.workdir, start_cmd=cmd, env=env, time_budget_sec=time_budget_sec)
+
+    async def collect_metrics(self, sb: Sandbox, *, workdir: str) -> dict[str, int | float]:
+        contents = await sb.read_file(f"{workdir}/.harness/compaction.json")
+        if not contents.strip():
+            return {}
+        state = json.loads(contents)
+        return {
+            "compact_count": int(state.get("count", 0)),
+            "compact_attempts": int(state.get("attempts", 0)),
+            "compact_limit_reached": int(state.get("limit_reached", False)),
+        }

@@ -18,6 +18,7 @@ from slime.utils import accelerator
 from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.engine_group_wave import build_engine_group_waves
 from slime.utils.types import ParamInfo
+from slime.utils.weight_sync import should_flush_cache
 
 from ..megatron_to_hf import convert_to_hf
 from ..sglang import FlattenedTensorBucket, MultiprocessingSerializer
@@ -411,15 +412,24 @@ class UpdateWeightFromTensor:
     @trace_weight_update
     def update_weights(self) -> None:
         """
-        version++, flush caches, process buckets. Progress on rank 0.
+        version++, pause generation, optionally flush caches, process buckets.
         """
         sync_started = perf_counter()
         self.weight_version += 1
+        flush_cache = should_flush_cache(
+            self.args.flush_cache_interval, self.weight_version, getattr(self.args, "update_weight_start_version", 0)
+        )
 
         if self.rank == 0:
             consumer_engines = self._consumer_engines()
-            ray.get([engine.pause_generation.remote() for engine in consumer_engines])
-            ray.get([engine.flush_cache.remote() for engine in consumer_engines])
+            ray.get(
+                [
+                    engine.pause_generation.remote(mode="abort" if flush_cache else "in_place")
+                    for engine in consumer_engines
+                ]
+            )
+            if flush_cache:
+                ray.get([engine.flush_cache.remote() for engine in consumer_engines])
             if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
                 post_process_weights(
                     restore_weights_before_load=True,

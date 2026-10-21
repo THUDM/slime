@@ -30,15 +30,15 @@ This example connects `slime` with [`strands-sglang`](https://github.com/horizon
 
 ```bash
 # hf checkpoint
-hf download Qwen/Qwen3-8B --local-dir /root/models/Qwen/Qwen3-8B
+hf download Qwen/Qwen3-4B-Instruct-2507 --local-dir /root/models/Qwen/Qwen3-4B-Instruct-2507
 
 # mcore checkpoint
 cd /root/slime
-source scripts/models/qwen3-8B.sh
+source scripts/models/qwen3-4B-Instruct-2507.sh
 PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
     ${MODEL_ARGS[@]} \
-    --hf-checkpoint /root/models/Qwen/Qwen3-8B \
-    --save /root/models/Qwen/Qwen3-8B_torch_dist
+    --hf-checkpoint /root/models/Qwen/Qwen3-4B-Instruct-2507 \
+    --save /root/models/Qwen/Qwen3-4B-Instruct-2507_torch_dist
 ```
 
 ## Prepare Dataset
@@ -64,5 +64,5 @@ ds.to_json("/root/data/aime-2024.jsonl", orient="records", lines=True)
 ```bash
 cd /root/slime
 export WANDB_KEY=$your_wandb_key
-bash examples/strands_sglang/strands_qwen3_8b.sh
+bash examples/strands_sglang/strands_qwen3_4b.sh
 ```

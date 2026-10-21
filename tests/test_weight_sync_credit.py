@@ -430,7 +430,8 @@ def test_production_updater_composes_waves_credits_and_publication(
         def __init__(self, name, result=None):
             self.name, self.result = name, result
 
-        def remote(self):
+        def remote(self, **kwargs):
+            assert kwargs == ({"mode": "abort"} if self.name == "pause" else {})
             events.append(self.name)
             return self.result
 
@@ -444,6 +445,7 @@ def test_production_updater_composes_waves_credits_and_publication(
     ]
     updater = module.UpdateWeightFromDistributed(
         types.SimpleNamespace(
+            flush_cache_interval=0,
             update_weight_max_inflight_buckets=2,
             update_weight_max_inflight_bytes=32,
             update_weight_max_inflight_engine_groups=1,

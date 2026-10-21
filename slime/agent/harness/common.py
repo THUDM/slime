@@ -103,6 +103,10 @@ class BaseHarness(ABC, metaclass=SingletonABCMeta):
         await self.write_config(sb, ctx)
         return await self.launch_and_wait(sb, ctx, prompt, time_budget_sec)
 
+    async def collect_metrics(self, sb: Sandbox, *, workdir: str) -> dict[str, int | float]:
+        """Read agent-specific counters before its sandbox is cleaned up."""
+        return {}
+
 
 async def run_agent(sb: Sandbox, *, workdir: str, start_cmd: str, env: dict[str, str], time_budget_sec: int) -> int:
     """Launch the agent (start_cmd) and run it to completion, returning its exit code."""

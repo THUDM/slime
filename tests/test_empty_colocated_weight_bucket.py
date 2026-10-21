@@ -509,7 +509,8 @@ def _make_empty_update_updater(module, events, continue_result="continue-ref"):
             self.name = name
             self.result = result
 
-        def remote(self):
+        def remote(self, **kwargs):
+            assert kwargs == ({"mode": "abort"} if self.name.startswith("pause") else {})
             events.append(self.name)
             return self.result
 
@@ -524,6 +525,7 @@ def _make_empty_update_updater(module, events, continue_result="continue-ref"):
         continue_generation=_EventRemote("continue-distributed", "continue-distributed-ref"),
     )
     updater = object.__new__(module.UpdateWeightFromTensor)
+    updater.args = types.SimpleNamespace(flush_cache_interval=0)
     updater.rank = 0
     updater.weight_version = 0
     updater.rollout_engines = [colocated_engine]

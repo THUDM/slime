@@ -17,6 +17,9 @@ def _load_model_provider(monkeypatch):
         "megatron.core.models.gpt": types.ModuleType("megatron.core.models.gpt"),
         "megatron.core.models.gpt.gpt_layer_specs": types.ModuleType("megatron.core.models.gpt.gpt_layer_specs"),
         "megatron.core.transformer": types.ModuleType("megatron.core.transformer"),
+        "megatron.core.transformer.multi_latent_attention": types.ModuleType(
+            "megatron.core.transformer.multi_latent_attention"
+        ),
         "megatron.core.transformer.spec_utils": types.ModuleType("megatron.core.transformer.spec_utils"),
         "megatron.core.transformer.transformer_config": types.ModuleType(
             "megatron.core.transformer.transformer_config"
@@ -27,6 +30,11 @@ def _load_model_provider(monkeypatch):
     }
     modules["megatron.core"].tensor_parallel = types.SimpleNamespace()
     modules["megatron.core.models.gpt"].GPTModel = torch.nn.Module
+
+    class NativeMLASelfAttention(torch.nn.Module):
+        pass
+
+    modules["megatron.core.transformer.multi_latent_attention"].MLASelfAttention = NativeMLASelfAttention
     layer_specs = modules["megatron.core.models.gpt.gpt_layer_specs"]
     layer_specs.get_gpt_decoder_block_spec = lambda *args, **kwargs: None
     layer_specs.get_gpt_layer_local_spec = lambda *args, **kwargs: None
@@ -121,6 +129,86 @@ def test_freeze_indexer_rejects_unrecognized_attention(monkeypatch):
 
     with pytest.raises(RuntimeError, match="no recognized DSA indexer"):
         model_provider.freeze_model_params(model, args)
+
+
+@pytest.mark.parametrize("legacy_spec", [False, True])
+@pytest.mark.parametrize("mla", [False, True])
+@pytest.mark.parametrize("legacy_mla", [False, True])
+@pytest.mark.parametrize("num_experts", [None, 4])
+def test_provider_supports_old_and_new_te_spec_signatures(monkeypatch, legacy_spec, mla, legacy_mla, num_experts):
+    from types import SimpleNamespace
+
+    module = _load_model_provider(monkeypatch)
+    config = SimpleNamespace(q_lora_rank=None, qk_layernorm=mla)
+    monkeypatch.setattr(module, "core_transformer_config_from_args", lambda args: config)
+    calls = []
+    if not legacy_mla:
+        monkeypatch.setattr(module.MegatronMLASelfAttention, "_resolve_qk_norm_config", lambda *a: {}, raising=False)
+    layer_spec = SimpleNamespace(
+        submodules=SimpleNamespace(self_attention=SimpleNamespace(module=module.MegatronMLASelfAttention))
+    )
+    transformer_spec = SimpleNamespace(layer_specs=[layer_spec]) if num_experts else layer_spec
+    monkeypatch.setattr(module, "get_gpt_decoder_block_spec", lambda *a, **kw: transformer_spec)
+
+    if legacy_spec:
+
+        def build_spec(
+            num_experts, moe_grouped_gemm, qk_layernorm, multi_latent_attention, moe_use_legacy_grouped_gemm
+        ):
+            assert moe_use_legacy_grouped_gemm is True
+            calls.append((num_experts, moe_grouped_gemm, qk_layernorm, multi_latent_attention))
+            return layer_spec
+
+    else:
+
+        def build_spec(num_experts, moe_grouped_gemm, qk_layernorm, multi_latent_attention):
+            calls.append((num_experts, moe_grouped_gemm, qk_layernorm, multi_latent_attention))
+            return layer_spec
+
+    monkeypatch.setattr(module, "get_gpt_layer_with_transformer_engine_spec", build_spec)
+    monkeypatch.setattr(module, "GPTModel", lambda **kwargs: SimpleNamespace(**kwargs))
+    args = SimpleNamespace(
+        transformer_impl="transformer_engine",
+        spec=None,
+        num_experts=num_experts,
+        moe_grouped_gemm=False,
+        qk_layernorm=mla,
+        multi_latent_attention=mla,
+        moe_use_legacy_grouped_gemm=True,
+        fp8_param_gather=False,
+        padded_vocab_size=128,
+        max_position_embeddings=64,
+        fp16_lm_cross_entropy=False,
+        untie_embeddings_and_output_weights=True,
+        position_embedding_type="rope",
+        rotary_percent=1.0,
+        rotary_base=10000,
+        use_rope_scaling=False,
+        mtp_num_layers=None,
+    )
+    model = module._get_model_provider_func(args)()
+    assert model.transformer_layer_spec is transformer_spec
+    assert model.config is config
+    assert calls == ([] if num_experts else [(None, False, mla, mla)])
+    expected_attention = module.MLASelfAttention if mla and not legacy_mla else module.MegatronMLASelfAttention
+    assert layer_spec.submodules.self_attention.module is expected_attention
+
+
+@pytest.mark.parametrize("q_lora_rank", [None, 16])
+def test_mla_q_norm_requires_q_lora(monkeypatch, q_lora_rank):
+    module = _load_model_provider(monkeypatch)
+    q_projection, fused_q_projection, kv_projection = object(), object(), object()
+    monkeypatch.setattr(
+        module.MegatronMLASelfAttention,
+        "_resolve_qk_norm_config",
+        lambda *args: {"linear_q_proj": fused_q_projection, "linear_kv_up_proj": kv_projection},
+        raising=False,
+    )
+    attention = module.MLASelfAttention()
+    attention.config = types.SimpleNamespace(q_lora_rank=q_lora_rank)
+    resolved = attention._resolve_qk_norm_config(types.SimpleNamespace(linear_q_proj=q_projection))
+    assert resolved["linear_q_proj"] is (q_projection if q_lora_rank is None else fused_q_projection)
+    assert resolved["linear_kv_up_proj"] is kv_projection
 
 
 if __name__ == "__main__":
