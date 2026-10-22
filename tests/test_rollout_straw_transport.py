@@ -339,26 +339,35 @@ def test_fully_async_stores_groups_while_collecting_the_batch(args, monkeypatch)
     args.rollout_batch_size = 2
     args.dynamic_sampling_filter_path = None
     saved = []
+    processed = []
 
     def pack(group, *a, **kwargs):
         ref = pack_rollout_group(group, *a, **kwargs)
         saved.append(ref)
         return ref
 
-    def take(limit):
+    def take(limit, *, max_policy_version_lag):
+        assert max_policy_version_lag is None
         assert limit == 2 - len(saved)
         # Producing the next group requires the previous one to be on disk.
         if saved:
             assert saved[0].load()[0].index == 2
-        return [(len(saved), [Sample(index=2 - len(saved), reward=1)])]
+        return [fa.CompletedSampleRecord(len(saved), [Sample(index=2 - len(saved), reward=1)], policy_version=0)]
 
-    worker = SimpleNamespace(queue_size=lambda: 0, get_completed_groups=take, resume=lambda: None, error=None)
+    worker = SimpleNamespace(
+        queue_size=lambda: 0,
+        get_completed_groups=take,
+        record_processed_groups=lambda groups: processed.extend(group[0].index for group in groups),
+        resume=lambda: None,
+        error=None,
+    )
     monkeypatch.setattr(fa, "_get_worker", lambda *a: worker)
     from slime.data import transport as rollout_transport
 
     monkeypatch.setattr(rollout_transport, "pack_rollout_group", pack)
     output = asyncio.run(fa._generate_rollout_async(args, 0, None))
     assert len(saved) == 2
+    assert processed == [2, 1]
     assert isinstance(output.samples, DiskPayloadRef)
     assert [group[0].index for group in load_rollout_samples(output.samples)] == [1, 2]
 
@@ -1524,3 +1533,18 @@ def test_broken_rollout_falls_back_but_missing_model_still_fails(tmp_path, caplo
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
+
+
+def test_manager_restores_policy_version_before_publishing_weights():
+    import slime.rollout.fully_async_rollout as fa
+    from slime.ray.rollout import RolloutManager
+
+    manager = object.__new__(RolloutManager.__ray_metadata__.modified_class)
+    manager.data_source = SimpleNamespace(metadata={"fully_async_policy_version": 7})
+    manager.generate_rollout = fa.generate_rollout_fully_async
+    manager.policy_version = 0
+    assert manager.before_weight_update() == 7
+    assert manager.after_weight_update(succeeded=True) == 8
+    assert manager.data_source.metadata["fully_async_policy_version"] == 8
+    assert manager.after_weight_update(succeeded=False) == 8
+    assert manager.data_source.metadata["fully_async_policy_version"] == 8
