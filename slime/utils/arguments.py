@@ -159,14 +159,21 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
             parser.add_argument(
                 "--update-weight-transport",
-                choices=["nccl", "disk"],
+                choices=["nccl", "disk", "p2p"],
                 default="nccl",
                 help=(
-                    "Carrier for weight sync. In full mode, 'nccl' broadcasts chunks and "
+                    "Carrier for weight sync. In full mode, 'nccl' broadcasts chunks, "
+                    "'p2p' streams weights directly between trainers and engines using Mooncake RDMA, and "
                     "'disk' writes a complete HF checkpoint under --update-weight-disk-dir "
                     "before engines reload it. Delta mode is 'disk' only: each host applies the "
                     "published deltas into its local checkpoint and reloads via update_weights_from_disk."
                 ),
+            )
+            parser.add_argument(
+                "--update-weight-p2p-timeout",
+                type=float,
+                default=120.0,
+                help="Timeout in seconds for P2P weight transfer/loading and each engine-control phase.",
             )
             parser.add_argument(
                 "--release-train",
@@ -2229,6 +2236,14 @@ def slime_validate_args(args):
 
     if args.only_train_params_name_list and args.freeze_params_name_list:
         raise ValueError("You can only specify ONE of: --only-train-params-name-list, or --freeze-params-name-list.")
+
+    if args.update_weight_transport == "p2p":
+        if args.train_backend != "megatron" or args.colocate or args.update_weight_mode != "full":
+            raise ValueError(
+                "--update-weight-transport=p2p requires full Megatron updates on separate training/rollout GPUs"
+            )
+        if not 0 < args.update_weight_p2p_timeout < float("inf") or args.update_weight_buffer_size <= 0:
+            raise ValueError("P2P timeout must be finite and positive, and buffer size must be positive")
 
     # disk-backed sync (full or delta) writes on the trainer and reads on the engines: needs a shared dir
     if args.update_weight_transport == "disk" and not args.update_weight_disk_dir:
