@@ -53,7 +53,7 @@ class FakeAccelerator(accelerator.Accelerator):
 def reset_accelerator_selection(monkeypatch):
     registry = accelerator._REGISTRY.copy()
     selected = accelerator._ACCELERATOR
-    patch_imported = accelerator._MUSA_PATCH_IMPORTED
+    patch_imported = accelerator._MUSA_TITAN_IMPORTED
     bootstrap_checked = accelerator._MUSA_BOOTSTRAP_CHECKED
     npu_imported = accelerator._NPU_RUNTIME_IMPORTED
     npu_bootstrap_checked = accelerator._NPU_BOOTSTRAP_CHECKED
@@ -62,7 +62,7 @@ def reset_accelerator_selection(monkeypatch):
     for name in (
         "SLIME_ACCELERATOR",
         "MUSA_VISIBLE_DEVICES",
-        "MUSA_PATCH_PATH",
+        "MUSA_TITAN_PATH",
         "CUDA_VISIBLE_DEVICES",
         "ASCEND_RT_VISIBLE_DEVICES",
         "ASCEND_HOME_PATH",
@@ -72,7 +72,7 @@ def reset_accelerator_selection(monkeypatch):
         monkeypatch.delenv(name, raising=False)
     accelerator._REGISTRY.clear()
     accelerator.reset_accelerator()
-    accelerator._MUSA_PATCH_IMPORTED = False
+    accelerator._MUSA_TITAN_IMPORTED = False
     accelerator._MUSA_BOOTSTRAP_CHECKED = False
     accelerator._NPU_RUNTIME_IMPORTED = False
     accelerator._NPU_BOOTSTRAP_CHECKED = False
@@ -82,7 +82,7 @@ def reset_accelerator_selection(monkeypatch):
     accelerator._REGISTRY.clear()
     accelerator._REGISTRY.update(registry)
     accelerator._ACCELERATOR = selected
-    accelerator._MUSA_PATCH_IMPORTED = patch_imported
+    accelerator._MUSA_TITAN_IMPORTED = patch_imported
     accelerator._MUSA_BOOTSTRAP_CHECKED = bootstrap_checked
     accelerator._NPU_RUNTIME_IMPORTED = npu_imported
     accelerator._NPU_BOOTSTRAP_CHECKED = npu_bootstrap_checked
@@ -98,8 +98,8 @@ def test_cuda_selection_does_not_bootstrap_musa(monkeypatch):
     monkeypatch.setattr(accelerator.CUDAAccelerator, "is_available", lambda self: True)
     monkeypatch.setattr(
         accelerator,
-        "_import_musa_patch",
-        lambda: pytest.fail("CUDA selection must not import musa_patch"),
+        "_import_musa_titan",
+        lambda: pytest.fail("CUDA selection must not import musa_titan"),
     )
 
     assert accelerator.get_accelerator().name == "cuda"
@@ -112,18 +112,94 @@ def test_selected_musa_bootstraps_patch_once(monkeypatch):
     imports = []
     fake_musa = SimpleNamespace(is_available=lambda: True)
 
-    def import_musa_patch():
-        imports.append("musa_patch")
+    def import_musa_titan():
+        imports.append("musa_titan")
         monkeypatch.setattr(accelerator.torch, "musa", fake_musa, raising=False)
         return True
 
     monkeypatch.setenv("MUSA_VISIBLE_DEVICES", "0")
-    monkeypatch.setattr(accelerator, "_import_musa_patch", import_musa_patch)
+    monkeypatch.setattr(accelerator, "_import_musa_titan", import_musa_titan)
 
     assert imports == []
     assert accelerator.initialize_accelerator().name == "musa"
     assert accelerator.initialize_accelerator().name == "musa"
-    assert imports == ["musa_patch"]
+    assert imports == ["musa_titan"]
+
+
+@pytest.mark.unit
+def test_musa_titan_path_is_appended_once(monkeypatch, tmp_path):
+    titan_path = str(tmp_path / "musa-titan")
+    monkeypatch.setenv("MUSA_TITAN_PATH", titan_path)
+    monkeypatch.setattr(accelerator.sys, "path", [])
+
+    accelerator._append_musa_titan_path()
+    accelerator._append_musa_titan_path()
+
+    assert accelerator.sys.path == [titan_path]
+
+
+@pytest.mark.unit
+def test_import_musa_titan_prefers_apply_rl_patch(monkeypatch):
+    imported = []
+    callbacks = []
+    module = SimpleNamespace(
+        apply_rl_patch=lambda: callbacks.append("apply_rl_patch"),
+        patch_after_import_torch=lambda: callbacks.append("patch_after_import_torch"),
+    )
+
+    def import_module(name):
+        imported.append(name)
+        return module
+
+    monkeypatch.setattr(accelerator.importlib, "import_module", import_module)
+
+    assert accelerator._import_musa_titan() is True
+    assert imported == ["musa_titan"]
+    assert callbacks == ["apply_rl_patch"]
+
+
+@pytest.mark.unit
+def test_import_musa_titan_falls_back_to_post_import_callback(monkeypatch):
+    callbacks = []
+    module = SimpleNamespace(patch_after_import_torch=lambda: callbacks.append("patch_after_import_torch"))
+    monkeypatch.setattr(accelerator.importlib, "import_module", lambda name: module)
+
+    assert accelerator._import_musa_titan() is True
+    assert callbacks == ["patch_after_import_torch"]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(("dependency", "expected"), [("musa_titan", False), ("torchada", True)])
+def test_import_musa_titan_handles_missing_dependencies(monkeypatch, dependency, expected):
+    def import_module(name):
+        raise ModuleNotFoundError(f"No module named {dependency!r}", name=dependency)
+
+    monkeypatch.setattr(accelerator.importlib, "import_module", import_module)
+
+    if expected:
+        with pytest.raises(RuntimeError, match="dependency 'torchada' is missing"):
+            accelerator._import_musa_titan()
+    else:
+        assert accelerator._import_musa_titan() is False
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("has_apply_rl_patch", [True, False])
+def test_musa_accelerator_post_import_torch_uses_compatible_callback(monkeypatch, has_apply_rl_patch):
+    from slime.utils.accelerator import musa as musa_backend
+
+    callbacks = []
+    module = SimpleNamespace(
+        apply_rl_patch=lambda: callbacks.append("apply_rl_patch"),
+        patch_after_import_torch=lambda: callbacks.append("patch_after_import_torch"),
+    )
+    if not has_apply_rl_patch:
+        del module.apply_rl_patch
+    monkeypatch.setattr(musa_backend.importlib, "import_module", lambda name: module)
+
+    accelerator.MUSAAccelerator().post_import_torch()
+
+    assert callbacks == ["apply_rl_patch" if has_apply_rl_patch else "patch_after_import_torch"]
 
 
 @pytest.mark.unit
