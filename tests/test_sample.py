@@ -240,6 +240,27 @@ def test_weight_version_is_not_appended_for_zero_token_segment():
 
 
 @pytest.mark.unit
+def test_nonterminal_chunks_record_distinct_token_weight_versions():
+    sample = Sample()
+    for token, version in [(11, "1"), (12, "1"), (13, "2")]:
+        sample.append_response_tokens(
+            _make_args(),
+            tokens=[token],
+            log_probs=[-0.1],
+            meta_info={"weight_version": version},
+            update_terminal_info=False,
+        )
+
+    assert sample.weight_versions == ["1", "2"]
+    sample.append_response_tokens(
+        _make_args(),
+        tokens=[],
+        meta_info={"finish_reason": {"type": "stop"}, "weight_version": "3"},
+    )
+    assert sample.weight_versions == ["1", "2"]
+
+
+@pytest.mark.unit
 def test_prefix_cache_info_is_accumulated_across_calls():
     """Every call to append_response_tokens with terminal metadata adds to prefix_cache_info
     (types.py:171). Multi-turn rollouts call this once per turn — the
