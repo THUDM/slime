@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import sys
 import types
 from pathlib import Path
@@ -54,6 +55,18 @@ class _FakeEngine:
         self.update_weights_from_tensor = _FakeRemoteMethod()
 
 
+class _FakeTensor:
+    def __init__(self, numel, element_size):
+        self._numel = numel
+        self._element_size = element_size
+
+    def numel(self):
+        return self._numel
+
+    def element_size(self):
+        return self._element_size
+
+
 def _install_fake_deps(monkeypatch):
     dist_state = types.SimpleNamespace(rank=0, world_size=2, gathered=None, local_object=None)
 
@@ -90,11 +103,22 @@ def _install_fake_deps(monkeypatch):
     torch_mod.distributed = dist_mod
     torch_mod.empty = lambda size, dtype, device: {"size": size, "dtype": dtype, "device": device}
     torch_mod.no_grad = lambda: (lambda fn: fn)
-    torch_mod.cuda = types.SimpleNamespace(current_device=lambda: "cuda:0", ipc_collect=lambda: None)
+    torch_mod.cuda = types.SimpleNamespace(
+        current_device=lambda: "cuda:0",
+        ipc_collect=lambda: None,
+        is_available=lambda: False,
+    )
     torch_mod.nn = types.SimpleNamespace(Module=object)
 
     ray_mod = types.ModuleType("ray")
     ray_mod.ObjectRef = object
+    ray_mod.get_calls = []
+
+    def ray_get(refs):
+        ray_mod.get_calls.append(refs)
+        return None
+
+    ray_mod.get = ray_get
     ray_actor_mod = types.ModuleType("ray.actor")
     ray_actor_mod.ActorHandle = object
 
@@ -226,6 +250,38 @@ def test_source_rank_pads_empty_colocated_bucket_entries(monkeypatch):
             "weight_version": "7",
         }
     ]
+
+
+def test_send_weight_bucket_records_transfer_and_consumer_wait(monkeypatch, tmp_path):
+    module, _ = _load_update_weight_module(monkeypatch)
+    timeline = importlib.import_module("slime.observability.communication_timeline")
+    trace_path = tmp_path / "weight-bucket.jsonl"
+    timeline.configure_communication_timeline(str(trace_path), rank=0, world_size=1, run_id="test")
+    updater = module.UpdateWeightFromTensor.__new__(module.UpdateWeightFromTensor)
+    updater.rollout_engines = [object()]
+    updater.use_distribute = False
+    updater.weight_version = 4
+    updater._send_hf_params = lambda tensors: (["engine-ref"], "keepalive")
+    tensors = [("weight", _FakeTensor(8, 2))]
+
+    with module.communication_context(weight_version=4, transport="cuda_ipc"):
+        refs, keepalive = updater._send_weight_bucket(tensors, bucket_id=2, bucket_kind="non_expert")
+    timeline.close_communication_timeline()
+
+    assert refs == ["engine-ref"]
+    assert keepalive == "keepalive"
+    assert sys.modules["ray"].get_calls == [["engine-ref"]]
+    records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    assert [record["operation"] for record in records] == [
+        "weight_bucket_ready",
+        "weight_bucket_send",
+        "engine_bucket_receive",
+        "engine_load_weights",
+    ]
+    assert all(record["weight_version"] == 4 for record in records)
+    assert all(record["bucket_id"] == 2 for record in records)
+    assert all(record["message_bytes"] == 16 for record in records)
+    assert records[-1]["consumer_timestamp_ns"] is not None
 
 
 if __name__ == "__main__":

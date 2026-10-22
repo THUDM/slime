@@ -1053,7 +1053,8 @@ def test_training_commits_only_after_save_calls_return(tmp_path, monkeypatch, fa
 
 
 @pytest.mark.parametrize("mode", ["nccl", "disk", "release"])
-def test_disk_weight_updates_do_not_require_actor_return_values(tmp_path, monkeypatch, mode):
+@pytest.mark.parametrize("rollout_id", [None, 17])
+def test_disk_weight_updates_do_not_require_actor_return_values(tmp_path, monkeypatch, mode, rollout_id):
     from unittest.mock import Mock
 
     from slime.ray.actor_group import RayTrainGroup
@@ -1076,13 +1077,15 @@ def test_disk_weight_updates_do_not_require_actor_return_values(tmp_path, monkey
     monkeypatch.setattr("slime.ray.actor_group.ray.get", lambda value: value)
     reloaded = []
     monkeypatch.setattr(
-        group, "_reload_rollout_weights_from_disk", lambda path, version: reloaded.append((path, version))
+        group,
+        "_reload_rollout_weights_from_disk",
+        lambda path, version, *, rollout_id: reloaded.append((path, version, rollout_id)),
     )
     monkeypatch.setattr(group, "release", lambda: group._actor_handlers.clear())
     monkeypatch.setattr(group, "_allocate_gpus_for_actor", lambda *a: group._actor_handlers.append(worker))
 
     for version in (13, 14, 15, 16):
-        assert group.update_weights() is None
+        assert group.update_weights(rollout_id=rollout_id) is None
         if mode == "release" and not group._actor_handlers:
             assert group.create() == [8]
             assert worker.init.remote.call_args.args[0].update_weight_start_version == version
@@ -1090,7 +1093,9 @@ def test_disk_weight_updates_do_not_require_actor_return_values(tmp_path, monkey
     expected = (
         []
         if mode == "nccl"
-        else [(tmp_path / "weights" / f"weight_v{version:06d}", str(version)) for version in (13, 14, 15, 16)]
+        else [
+            (tmp_path / "weights" / f"weight_v{version:06d}", str(version), rollout_id) for version in (13, 14, 15, 16)
+        ]
     )
     assert reloaded == expected
 
