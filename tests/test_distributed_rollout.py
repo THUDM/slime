@@ -749,6 +749,58 @@ def test_scheduler_replaces_rejected_groups_and_bounds_prefetch(scheduler_factor
     assert not scheduler.pending and not scheduler.running_workers
 
 
+def test_scheduler_publishes_policy_version_when_resuming_workers(scheduler_factory):
+    scheduler, _, _ = scheduler_factory(1, [1, 1])
+    scheduler.publish_policy_version(3)
+    scheduler.generate(0, prefetch=2)
+    scheduler.pause()
+    assert all(worker.actor.policy_version == 3 for worker in scheduler.workers)
+    scheduler.publish_policy_version(4)
+    # Consume the warm queue and require fresh admission on both workers.
+    scheduler.args.rollout_batch_size = 10
+    scheduler.generate(1, prefetch=2)
+    scheduler.pause()
+    assert all(worker.actor.policy_version == 4 for worker in scheduler.workers)
+    with pytest.raises(ValueError, match="policy version must be monotonic"):
+        scheduler.publish_policy_version(2)
+
+
+def test_distributed_policy_is_captured_before_generation_and_retains_completed_siblings(monkeypatch):
+    from slime.rollout import sglang_rollout
+    from slime.rollout.fully_async_distributed import _GenerationActor
+
+    async def exercise():
+        entered, finish = asyncio.Event(), asyncio.Event()
+        retained = Sample(index=0, rollout_id=0, status=Sample.Status.COMPLETED, reward=1, policy_version=2)
+        pending = Sample(index=1, rollout_id=1, policy_version=1)
+        replacement = Sample(index=1, rollout_id=1, status=Sample.Status.COMPLETED, reward=1)
+
+        async def generate(args, group, params):
+            assert (retained.policy_version, pending.policy_version) == (2, 3)
+            entered.set()
+            await finish.wait()
+            return [[retained], [replacement]]
+
+        monkeypatch.setattr(sglang_rollout, "generate_and_rm_group", generate)
+        worker = _GenerationActor.__new__(_GenerationActor)
+        worker.running = True
+        worker.policy_version = 3
+        worker.args = SimpleNamespace(rollout_data_transport="object-store", reward_key=None)
+        worker.state = SimpleNamespace(sampling_params={})
+        worker.data_source = SimpleNamespace(materialize_samples=lambda group: group)
+        worker.dynamic_filter = None
+        task = asyncio.create_task(worker._generate_group(0, [[retained], pending]))
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        worker.policy_version = 4
+        finish.set()
+        group, verdict = await asyncio.wait_for(task, timeout=5)
+        assert verdict.keep
+        assert group == [[retained], [replacement]]
+        assert (retained.policy_version, replacement.policy_version) == (2, 3)
+
+    asyncio.run(exercise())
+
+
 def test_rejected_groups_are_released_while_filling_batch(scheduler_factory, monkeypatch):
     import ray
 

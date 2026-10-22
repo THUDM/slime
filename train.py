@@ -10,6 +10,17 @@ from slime.utils.cleanup import Cleanup
 from slime.utils.misc import should_run_periodic_action
 
 
+def _update_actor_weights(actor_model, rollout_manager) -> None:
+    """Publish the policy version only after the weight update succeeds."""
+    ray.get(rollout_manager.before_weight_update.remote())
+    succeeded = False
+    try:
+        actor_model.update_weights()
+        succeeded = True
+    finally:
+        ray.get(rollout_manager.after_weight_update.remote(succeeded=succeeded))
+
+
 def train(args, pgs, rollout_manager, num_rollout_per_epoch, restore_plan):
     release_train = args.release_train
 
@@ -19,7 +30,7 @@ def train(args, pgs, rollout_manager, num_rollout_per_epoch, restore_plan):
         ray.get(rollout_manager.onload_weights.remote())
 
     # Always push actor weights to rollout once weights are loaded.
-    actor_model.update_weights()
+    _update_actor_weights(actor_model, rollout_manager)
     # Reattached async producers stay paused until restored weights are installed.
     # This startup notification resumes them once, before entering the train loop.
     ray.get(rollout_manager.training_ready.remote())
@@ -86,7 +97,7 @@ def train(args, pgs, rollout_manager, num_rollout_per_epoch, restore_plan):
         if args.offload_rollout and not release_train:
             ray.get(rollout_manager.onload_weights.remote())
         was_paused = ray.get(rollout_manager.pause_rollout_admission.remote())
-        actor_model.update_weights()
+        _update_actor_weights(actor_model, rollout_manager)
         # Final evaluation uses the synchronized engines directly. Keep training
         # producers paused when no later rollout will consume their new work.
         if rollout_id + 1 < args.num_rollout:

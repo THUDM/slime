@@ -1,3 +1,4 @@
+import importlib
 import itertools
 import logging
 import time
@@ -144,6 +145,7 @@ class RolloutManager:
             ).remote()
         )
         self.rollout_id = -1
+        self.policy_version = 0
         if self.recovery is not None:
             self.recovery.source_state = self._source_state()
             self.recovery.persist()
@@ -313,6 +315,36 @@ class RolloutManager:
 
     def get_num_rollout_per_epoch(self):
         return len(self.data_source) // self.args.rollout_batch_size
+
+    def _call_generate_rollout_hook(self, hook_name: str, **kwargs):
+        """Call an optional lifecycle hook defined beside the rollout function."""
+
+        module = importlib.import_module(self.generate_rollout.__module__)
+        hook = getattr(module, hook_name, None)
+        if hook is None:
+            return None
+        return hook(data_source=self.data_source, **kwargs)
+
+    def before_weight_update(self) -> int:
+        """Notify the rollout implementation before actor weights are updated."""
+
+        self._call_generate_rollout_hook(
+            "before_weight_update",
+            policy_version=self.policy_version,
+        )
+        return self.policy_version
+
+    def after_weight_update(self, succeeded: bool) -> int:
+        """Publish a new policy version only after all weight updates succeed."""
+
+        if succeeded:
+            self.policy_version += 1
+        self._call_generate_rollout_hook(
+            "after_weight_update",
+            policy_version=self.policy_version,
+            succeeded=succeeded,
+        )
+        return self.policy_version
 
     def generate(self, rollout_id):
         start_time = time.time()

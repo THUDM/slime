@@ -54,6 +54,7 @@ class RolloutScheduler:
         self.running_workers = set()
         self.demand = self.prefetch = 0
         self.rollout_id = 0
+        self.policy_version = getattr(args, "policy_version", 0)
         self.paused = True
         self.closed = False
         self.error = None
@@ -102,7 +103,7 @@ class RolloutScheduler:
                 with self.condition:
                     if self.closed:
                         return
-                    desired = (self.paused, self.rollout_id)
+                    desired = (self.paused, self.rollout_id, self.policy_version)
                     configuring = {worker for worker, _ in self.controls.values()}
                     for i, worker in enumerate(self.workers):
                         if not self.capacities[i] or i in configuring or configurations.get(i) == desired:
@@ -112,7 +113,11 @@ class RolloutScheduler:
                             continue
                         # Control RPCs share the wait loop with results. Never
                         # hold the condition lock waiting for a remote worker.
-                        ref = worker.pause.remote() if self.paused else worker.start.remote(self.rollout_id)
+                        ref = (
+                            worker.pause.remote()
+                            if self.paused
+                            else worker.start.remote(self.rollout_id, self.policy_version)
+                        )
                         self.controls[ref] = (i, desired)
                     # One outstanding result request per worker. These requests
                     # only consume results; workers refill their pools locally.
@@ -214,7 +219,8 @@ class RolloutScheduler:
             self.condition.notify_all()
             while self.error is None:
                 unsettled = bool(self.controls) or any(
-                    self.configurations.get(worker) != (True, self.rollout_id) for worker in self.running_workers
+                    self.configurations.get(worker) != (True, self.rollout_id, self.policy_version)
+                    for worker in self.running_workers
                 )
                 if drain:
                     unsettled |= bool(self.pending or self.running_workers)
@@ -224,6 +230,15 @@ class RolloutScheduler:
             if self.error is not None:
                 raise self.error
             return was_paused
+
+    def publish_policy_version(self, policy_version):
+        with self.condition:
+            if policy_version < self.policy_version:
+                raise ValueError(
+                    f"policy version must be monotonic: current={self.policy_version}, new={policy_version}"
+                )
+            self.policy_version = policy_version
+            self.condition.notify_all()
 
     def resume(self):
         with self.condition:
@@ -276,16 +291,19 @@ class _GenerationActor:
         )
         self.running = False
         self.rollout_id = 0
+        self.policy_version = getattr(self.args, "policy_version", 0)
         self.producer = None
 
     def dataset_size(self):
         return len(self.data_source)
 
-    async def start(self, rollout_id):
-        future = asyncio.run_coroutine_threadsafe(self._start(rollout_id), get_async_loop().loop)
+    async def start(self, rollout_id, policy_version=None):
+        future = asyncio.run_coroutine_threadsafe(self._start(rollout_id, policy_version), get_async_loop().loop)
         await asyncio.wrap_future(future)
 
-    async def _start(self, rollout_id):
+    async def _start(self, rollout_id, policy_version=None):
+        if policy_version is not None:
+            self.policy_version = policy_version
         self.rollout_id = rollout_id
         self.running = True
         if self.producer is None or self.producer.done():
@@ -383,9 +401,21 @@ class _GenerationActor:
             sample.status in (Sample.Status.COMPLETED, Sample.Status.TRUNCATED) and sample.reward is not None
             for sample in iter_samples(group)
         ):
+            policy_version = getattr(self, "policy_version", 0)
+            retained_versions = {
+                id(sample): sample.policy_version
+                for sample in iter_samples(group)
+                if sample.status in (Sample.Status.COMPLETED, Sample.Status.TRUNCATED) and sample.reward is not None
+            }
+            for sample in iter_samples(group):
+                sample.policy_version = retained_versions.get(id(sample), policy_version)
             retry_group = [sample if isinstance(sample, list) else copy.deepcopy(sample) for sample in group]
             with rollout_context(rollout_id):
                 group = await generate_and_rm_group(self.args, group, self.state.sampling_params.copy())
+            # A custom generator may replace the inputs, and another start RPC
+            # may publish a new version while this task is awaiting generation.
+            for sample in iter_samples(group):
+                sample.policy_version = retained_versions.get(id(sample), policy_version)
             if any(sample.status in (Sample.Status.ABORTED, Sample.Status.PENDING) for sample in iter_samples(group)):
                 # Preserve successful trajectories while restarting only the
                 # interrupted agent sessions from their original inputs.
