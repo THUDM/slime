@@ -105,10 +105,14 @@ OPTIMIZER_ARGS=(
 # Same flag-spelling resolution as run_geo3k_nemotron35.sh: slime drops unknown
 # Megatron flags silently, so check the Megatron that is actually mounted.
 MEGATRON_ARGUMENTS_PY=/root/Megatron-LM/megatron/training/arguments.py
-if grep -q "offload_optimizer_states" "${MEGATRON_ARGUMENTS_PY}" 2>/dev/null; then
-   OPTIMIZER_ARGS+=(--offload-optimizer-states)
-elif grep -q "optimizer-cpu-offload" "${MEGATRON_ARGUMENTS_PY}" 2>/dev/null; then
+# --optimizer-cpu-offload is checked first: recent Megatron dev has both spellings, and
+# there --offload-optimizer-states is a different mechanism (RL-time offload of the optimizer
+# state, not CPU-resident Adam), so picking it leaves the optimizer on the GPU and runs out of
+# memory when DeepEP allocates its buffers.
+if grep -q "optimizer-cpu-offload" "${MEGATRON_ARGUMENTS_PY}" 2>/dev/null; then
    OPTIMIZER_ARGS+=(--optimizer-cpu-offload --use-precision-aware-optimizer)
+elif grep -q "offload_optimizer_states" "${MEGATRON_ARGUMENTS_PY}" 2>/dev/null; then
+   OPTIMIZER_ARGS+=(--offload-optimizer-states)
 else
    echo "${MEGATRON_ARGUMENTS_PY} has neither --offload-optimizer-states nor --optimizer-cpu-offload" >&2
    exit 2

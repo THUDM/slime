@@ -4,7 +4,7 @@ FROM slimerl/sglang:${SGLANG_IMAGE_TAG} AS sglang
 # ======================================== Arguments =============================================
 
 ARG PATCH_VERSION=latest
-ARG MEGATRON_COMMIT=f6c33bde4cdc10805ee7157db746d47b758f5f02
+ARG MEGATRON_COMMIT=ae76c60e6c35d913867d6dd7bad0f30b128b54e7
 ARG DEEPGEMM_COMMIT=b38a77cd193cf38f670caae192310521d24343be
 ARG DEEPEP_COMMIT=6845ffd9d59126ec0030c13e0e155935a61e5b5a
 ARG DEEPEP_CUDA_ARCH_LIST=
@@ -68,6 +68,11 @@ RUN NVCC_APPEND_FLAGS="--threads 4" \
 RUN git clone https://github.com/NVIDIA/Megatron-LM.git --recursive && \
     cd Megatron-LM && git checkout ${MEGATRON_COMMIT} && \
     pip install -e .
+
+# Megatron dev reads cached checkpoint metadata (slime sets ckpt_assume_constant_structure)
+# and runs async checkpointing through nvidia-resiliency-ext, which sits in its `dev` extra
+# and is therefore not pulled in by `pip install -e .`. Keep the pin equal to Megatron's.
+RUN pip install --no-deps nvidia-resiliency-ext==0.7.0
 
 # zhuzilin fork builds, grouped together right after Megatron-LM:
 # torch_memory_saver, plus the GLM-5 train/rollout alignment kernels

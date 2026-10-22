@@ -8,6 +8,14 @@ from megatron.core.config import set_experimental_flag
 from megatron.core.num_microbatches_calculator import init_num_microbatches_calculator
 from megatron.training.global_vars import _build_tokenizer, set_args
 
+try:
+    # Newer Megatron keeps a run config next to args; get_model and the training loop read it.
+    from megatron.training.argument_utils import pretrain_cfg_container_from_args
+    from megatron.training.global_vars import set_run_config
+except ImportError:
+    pretrain_cfg_container_from_args = None
+    set_run_config = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -55,6 +63,8 @@ def _initialize_distributed(args, get_embedding_ranks=None, get_position_embeddi
 
 def init(args):
     set_args(args)
+    if set_run_config is not None:
+        set_run_config(pretrain_cfg_container_from_args(args))
     if args.enable_experimental:
         logger.info("Enable megatron experimental")
         set_experimental_flag(True)

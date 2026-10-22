@@ -13,7 +13,7 @@
 # Most of the flags below are not declared in megatron/training/arguments.py --
 # they are generated from TransformerConfig dataclass fields by
 # megatron/training/argument_utils.py, the same mechanism that produces
-# --moe-flex-dispatcher-backend. Verified present on mcore 0.20 (f6c33bde4).
+# --moe-flex-dispatcher-backend. Verified present on mcore 0.20 (f6c33bde4, ae76c60e6).
 
 # 'M' Mamba2 x40, 'E' MoE x40, '*' attention x8, in this order.
 NEMOTRON_H_PATTERN="MEMEMEM*EMEMEMEM*EMEMEMEM*EMEMEMEMEM*EMEMEMEMEM*EMEMEMEMEM*EMEMEMEMEM*EMEMEMEM*EMEMEMEME"

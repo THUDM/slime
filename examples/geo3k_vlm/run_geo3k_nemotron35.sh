@@ -168,10 +168,14 @@ OPTIMIZER_ARGS=(
 # an error and the offload just stops happening -- resolve the spelling against
 # the Megatron actually mounted instead of assuming one.
 MEGATRON_ARGUMENTS_PY=/root/Megatron-LM/megatron/training/arguments.py
-if grep -q "offload_optimizer_states" "${MEGATRON_ARGUMENTS_PY}" 2>/dev/null; then
-   OPTIMIZER_ARGS+=(--offload-optimizer-states)
-elif grep -q "optimizer-cpu-offload" "${MEGATRON_ARGUMENTS_PY}" 2>/dev/null; then
+# --optimizer-cpu-offload is checked first: recent Megatron dev has both spellings, and
+# there --offload-optimizer-states is a different mechanism (RL-time offload of the optimizer
+# state, not CPU-resident Adam), so picking it leaves the optimizer on the GPU and runs out of
+# memory when DeepEP allocates its buffers.
+if grep -q "optimizer-cpu-offload" "${MEGATRON_ARGUMENTS_PY}" 2>/dev/null; then
    OPTIMIZER_ARGS+=(--optimizer-cpu-offload --use-precision-aware-optimizer)
+elif grep -q "offload_optimizer_states" "${MEGATRON_ARGUMENTS_PY}" 2>/dev/null; then
+   OPTIMIZER_ARGS+=(--offload-optimizer-states)
 else
    echo "${MEGATRON_ARGUMENTS_PY} has neither --offload-optimizer-states nor --optimizer-cpu-offload;" >&2
    echo "either would be dropped silently and this recipe would run out of memory on an 80 GB GPU." >&2
