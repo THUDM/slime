@@ -241,7 +241,18 @@ class BatchBuilder:
                 groups.setdefault(group, []).append(position)
             rewards = torch.tensor([value[1] for value in rollouts.values()], dtype=torch.float)
             for positions in groups.values():
-                centered = rewards[positions] - rewards[positions].mean()
+                group_rewards = rewards[positions]
+                if torch.isfinite(group_rewards).all() and (group_rewards == group_rewards[0]).all():
+                    # Every rollout in the group got the same reward, so
+                    # every advantage is exactly zero. Centering identical
+                    # float32 rewards can still leave a residue of about
+                    # an ulp, and dividing that by its own std turns it
+                    # into a small nonzero advantage shared by the whole
+                    # group. Non-finite rewards skip this on purpose, so
+                    # a NaN in the group keeps propagating as NaN.
+                    rewards[positions] = torch.zeros_like(group_rewards)
+                    continue
+                centered = group_rewards - group_rewards.mean()
                 if (
                     self.args.advantage_estimator in ["grpo", "gspo", "cispo"]
                     and self.args.grpo_std_normalization
