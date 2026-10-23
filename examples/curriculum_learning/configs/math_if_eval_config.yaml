@@ -1,0 +1,14 @@
+eval:
+  datasets:
+    - name: aime
+      path: examples/curriculum_learning/data/aime-2024.jsonl
+      rm_type: deepscaler
+      max_response_len: 16384
+      temperature: 1.0
+      n_samples_per_eval_prompt: 16
+    - name: ifbench
+      path: examples/curriculum_learning/data/IFBench_eval.jsonl
+      rm_type: ifbench
+      max_response_len: 8192
+      temperature: 0.7
+      n_samples_per_eval_prompt: 1
