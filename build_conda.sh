@@ -33,7 +33,7 @@ export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-9.0 10.0 10.3}"
 #   - DEEPGEMM_COMMIT / DEEPEP_COMMIT     -> matching source builds below
 export SGLANG_VERSION="v0.5.21"
 export SGLANG_COMMIT="e00930c5489053f26d86b179cee0d087f846acbb"
-export MEGATRON_COMMIT="4b4acac9a1d28ea6829c8d4f566d75698a21249d"
+export MEGATRON_COMMIT="ae76c60e6c35d913867d6dd7bad0f30b128b54e7"
 export PATCH_VERSION="v0.5.21"
 export TMS_COMMIT="bdab8c55f490a00a746ec34e301391617f5ca878"
 export DEEPGEMM_COMMIT="8965e4a5cded4041c8dbbe8d35b0be31fd8da90b"
@@ -194,6 +194,8 @@ fi
 # The pybind11 extension provides megatron.core.datasets.helpers_cpp.
 pip install "setuptools>=80.0.0" pybind11 "packaging>=24.2"
 cd "$BASE_DIR/Megatron-LM" && git checkout ${MEGATRON_COMMIT} && pip install -e . --no-build-isolation
+# Megatron dev needs nvidia-resiliency-ext (its `dev` extra) for cached checkpoint metadata; keep the pin equal to Megatron's.
+pip install --no-deps nvidia-resiliency-ext==0.7.0
 
 # Install runtime dependencies before reasserting the compatibility pins.
 
@@ -328,7 +330,7 @@ assert version("numpy") == "2.3.5"
 assert version("scipy") == "1.18.1"
 assert pyarrow.__version__ == "25.0.1"
 assert version("tilelang") == "0.1.12"
-assert version("megatron-core").split("+")[0] == "0.19.2"
+assert version("megatron-core").split("+")[0] == "0.20.0"
 assert version("transformer-engine") == "2.18.0"
 assert version("flash-attn-4").startswith("4.")
 assert version("flash-attn-3") == "3.0.0"
