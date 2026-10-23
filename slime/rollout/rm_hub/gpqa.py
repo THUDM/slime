@@ -27,17 +27,19 @@ def _extract_letter_from_response(response: str, valid_letters: Iterable[str]) -
         return None
 
     text = _strip_chain_of_thought(response)
+    # Keywords are case-insensitive but the letter must be a standalone capital, or
+    # "the answer is definitely C" reads as D. Answer statements outrank option mentions
+    # and the last one wins, since replies often walk through options before answering.
     patterns = [
-        r"(?:answer|option|choice)\s*(?:is|:)?\s*([A-Z])",
-        r"([A-Z])\s*(?:is\s*(?:the)?\s*correct)",
-        r"final\s*(?:answer|option)\s*(?:is|:)?\s*([A-Z])",
+        r"(?i:final\s*(?:answer|option))\s*(?:(?i:is)|:)?\s*([A-Z])\b",
+        r"(?i:answer)\s*(?:(?i:is)|:)?\s*([A-Z])\b",
+        r"\b([A-Z])\s*(?i:is\s*(?:the)?\s*correct)",
+        r"(?i:option|choice)\s*(?:(?i:is)|:)?\s*([A-Z])\b",
     ]
 
     valid_letters = {letter.upper() for letter in valid_letters}
     for pattern in patterns:
-        match = re.search(pattern, text, flags=re.IGNORECASE)
-        if match:
-            letter = match.group(1).upper()
+        for letter in reversed(re.findall(pattern, text)):
             if letter in valid_letters:
                 return letter
 
