@@ -85,6 +85,25 @@ def test_extract_letter_respects_valid_letters_restriction():
     assert _extract_letter_from_response(response, ["A", "B"]) == "B"
 
 
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "response,expected",
+    [
+        # A lowercase word after the keyword is not an option letter.
+        ("The answer is definitely C.", "C"),
+        ("My answer is clearly B.", "B"),
+        ("The answer is approximately 10^-4 eV, which is option C.", "C"),
+        ("Only the one which is correct matters: B", "B"),
+        # The answer statement wins over options discussed before it.
+        ("Option A is too small and option B is smaller still. The answer is C.", "C"),
+        ("Option C looks tempting, but it is ruled out. The answer is B.", "B"),
+        ("Final answer: C. At first I thought the answer is B.", "C"),
+    ],
+)
+def test_extract_letter_ignores_lowercase_words_and_earlier_option_mentions(response, expected):
+    assert _extract_letter_from_response(response, DEFAULT_VALID_LETTERS) == expected
+
+
 # ---------------------------------------------------------------------------
 # compute_gpqa_reward
 # ---------------------------------------------------------------------------
@@ -101,6 +120,27 @@ def test_reward_letter_label_match():
 @pytest.mark.unit
 def test_reward_letter_label_mismatch_returns_zero():
     assert compute_gpqa_reward("The answer is C.", label="D") == 0.0
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "response,expected",
+    [
+        ("Option A can be ruled out. The answer is C.", 1.0),
+        ("The answer is definitely C.", 1.0),
+        ("Option C looks tempting, but it is ruled out. The answer is A.", 0.0),
+        ("My answer is clearly D.", 0.0),
+    ],
+)
+def test_reward_scores_the_stated_answer_on_gpqa_diamond_rows(response, expected):
+    """Row shape of the gpqa_diamond file used by examples/eval_multi_task."""
+    metadata = {
+        "choices": {"A": "10^-8 eV", "B": "10^-11 eV", "C": "10^-4 eV", "D": "10^-9 eV"},
+        "correct_letter": "C",
+        "correct_answer": "10^-4 eV",
+        "valid_letters": ["A", "B", "C", "D"],
+    }
+    assert compute_gpqa_reward(response, label="C", metadata=metadata) == expected
 
 
 @pytest.mark.unit
