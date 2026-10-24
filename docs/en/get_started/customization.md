@@ -491,6 +491,7 @@ Stabilize MoE RL training by recording and replaying expert routing decisions to
 | --- | --- |
 | `--use-routing-replay` | Forward-backward routing consistency in training. ([arXiv:2507.18071](https://arxiv.org/abs/2507.18071)) |
 | `--use-rollout-routing-replay` | R3: Replay routing from rollout during training. Supported by slime's default `sglang_router` path. ([arXiv:2510.11370](https://arxiv.org/abs/2510.11370)) |
+| `--log-r3-route-mismatch` | Log, each train step, the fraction of real tokens in each MoE layer whose replayed expert set differs from the trainer router's own top-k (`train/r3_route_mismatch`, `_max`, `_layer_<i>`). Requires `--use-rollout-routing-replay`. |
 
 ---
 
