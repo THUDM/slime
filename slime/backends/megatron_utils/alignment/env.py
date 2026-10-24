@@ -53,4 +53,7 @@ def alignment_env(*, kv_fp8_qat: bool = False) -> dict[str, str]:
         # DSA KV cache dtype.
         "DSA_KV_FP8_QAT": "1" if kv_fp8_qat else "0",
         "DSA_KV_FP8_QAT_BLOCK_SIZE": "128",
+        # Colocated mode: Megatron occupies GPU memory before SGLang initialises;
+        # disable the balanced-memory guard that is only meaningful for standalone SGLang.
+        "SGLANG_ENABLE_TP_MEMORY_INBALANCE_CHECK": "0",
     }
