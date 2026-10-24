@@ -11,7 +11,7 @@ SGLang, Megatron and dependency revisions below.
 
 Current build configuration:
 
-- sglang v0.5.21 (e00930c5489053f26d86b179cee0d087f846acbb), Megatron Core v0.19.2 (4b4acac9a1d28ea6829c8d4f566d75698a21249d)
+- sglang v0.5.21 (e00930c5489053f26d86b179cee0d087f846acbb), Megatron Core v0.20.0 (ae76c60e6c35d913867d6dd7bad0f30b128b54e7)
 - Base: `lmsysorg/sglang:v0.5.21`, CUDA 13.0.3, PyTorch 2.13.0.
 - Build version: `nightly-dev-20261016b` in `docker/version.txt` (Slime `0.4.0`).
 
@@ -86,8 +86,8 @@ host: run the PD/Mooncake test with the intended driver and GPUs.
 
 The following components are pinned in the image:
 
-- Megatron-LM / NVIDIA Megatron Core `0.19.2`
-  (`4b4acac9a1d28ea6829c8d4f566d75698a21249d`), plus
+- Megatron-LM / NVIDIA Megatron Core `0.20.0` (`dev`)
+  (`ae76c60e6c35d913867d6dd7bad0f30b128b54e7`), plus
   `docker/patch/<version>/megatron.patch` and `megatron-sglang-aligned.patch`.
   The `latest` and `v0.5.21` patches refresh all HybridDeviceOptimizer copies
   after model checkpoint loading, including parameters that are already FP32

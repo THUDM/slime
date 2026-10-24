@@ -147,7 +147,9 @@ ARG MEGATRON_COMMIT=3714d81d418c9f1bca4594fc35f9e8289f652862
 RUN git clone https://github.com/NVIDIA/Megatron-LM.git /root/src/Megatron-LM \
     && cd /root/src/Megatron-LM \
     && git checkout ${MEGATRON_COMMIT}
-COPY docker/patch/latest/megatron.patch /tmp/megatron.patch
+# Frozen copy of the patch cut for Megatron 4b4acac9a: `latest` now targets ae76c60e6, which this
+# image (pinned to 3714d81d) does not use.
+COPY docker/patch/gb10/megatron.patch /tmp/megatron.patch
 RUN cd /root/src/Megatron-LM \
     && git apply /tmp/megatron.patch --3way \
     && ! grep -R -n '^<<<<<<< ' . \
