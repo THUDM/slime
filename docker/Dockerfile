@@ -113,6 +113,13 @@ RUN pip install --ignore-installed PyJWT && \
 # Pin both packages together so downgrading NumPy does not leave an incompatible SciPy.
 RUN pip install "numpy==1.26.4" "scipy==1.17.1"
 
+# requirements.txt leaves opentelemetry-api unpinned, so pip can resolve 1.45.1 next to
+# opentelemetry-sdk 1.43.0. That sdk then fails with `ImportError: cannot import name
+# '_ExtendedAttributes'`, which kills the Ray dashboard and with it `ray start --head`.
+# Keep the api and semantic-conventions at the versions that match the sdk.
+RUN pip install "opentelemetry-api==1.43.0" "opentelemetry-semantic-conventions==0.64b0" && \
+    python -c "import opentelemetry.sdk.metrics"
+
 RUN pip install https://github.com/zhuzilin/sgl-router/releases/download/v0.3.2-9daabcd/sglang_router-0.3.2-cp38-abi3-manylinux_2_28_x86_64.whl --force-reinstall
 RUN python -c "import sglang_router; assert 'slime' in sglang_router.__version__"
 
