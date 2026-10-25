@@ -40,7 +40,7 @@ generator/
 
 ### 示例脚本
 
-请仿照 [示例：Qwen3-4B 模型](../../docs/zh/models/qwen3-4B.md) 文档中配置好 slime 的运行环境，下载数据，并转换模型 ckpt。之后分别运行
+请仿照 [示例：Qwen3-4B 模型](../../docs/zh/examples/qwen3-4B.md) 文档中配置好 slime 的运行环境，下载数据，并转换模型 ckpt。之后分别运行
 
 ```bash
 cd slime_plugins/rollout_buffer
