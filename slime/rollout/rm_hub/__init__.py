@@ -67,8 +67,12 @@ async def async_rm(args, sample: Sample, **kwargs):
     response = sample.response
     label = sample.label
     if rm_type.startswith("boxed_"):
-        response = extract_boxed_answer(response) or ""
         rm_type = rm_type[len("boxed_") :]
+        # math / dapo / deepscaler already extract \boxed{} themselves.
+        # Pre-stripping here makes grade_answer_verl / extract_answer miss
+        # the answer and score a correct boxed response as 0.
+        if rm_type not in ("math", "dapo", "deepscaler"):
+            response = extract_boxed_answer(response) or ""
 
     # This function is intended for remote or time-consuming reward model evaluation.
     # Implement the actual logic as needed.
