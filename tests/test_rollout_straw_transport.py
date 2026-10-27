@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 import torch
-from straw.errors import StorageUnavailable
+from straw.errors import IndeterminateCommit, StorageUnavailable
 
 from slime.data.queue_data_source import RolloutQueueController
 from slime.data.transport import (
@@ -687,9 +687,11 @@ def test_failed_flush_does_not_publish_a_reference(args, tmp_path, monkeypatch):
 
     with monkeypatch.context() as m:
         m.setattr(store.backend, "fault", fail)
-        with pytest.raises(StorageUnavailable, match="shared storage flush failed"):
+        # Since straw 0.1.4, this persistent fault also blocks rollback's
+        # directory sync, leaving cleanup pending with IndeterminateCommit.
+        with pytest.raises((StorageUnavailable, IndeterminateCommit), match="shared storage flush failed"):
             pack_rollout_payload({"tensor": torch.arange(16)}, args, 0)
-    # No commit marker was published. A later successful write remains readable.
+    # Once the fault clears, the same writer finishes cleanup and can publish.
     assert not list(tmp_path.rglob("*.pack"))
     restored = pack_rollout_payload({"tensor": torch.arange(16)}, args, 0).load()
     assert restored["tensor"].tolist() == list(range(16))
