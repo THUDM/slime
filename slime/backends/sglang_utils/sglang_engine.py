@@ -302,6 +302,7 @@ class SGLangEngine(RayActor):
         load_format: str | None = None,
         flush_cache: bool = False,
         weight_version: str | None = None,
+        disable_draft_model: bool = False,
     ):
         """
         Update model weights from tensor data. The HTTP server will only post meta data, and the real weights will be copied directly from GPUs.
@@ -316,6 +317,9 @@ class SGLangEngine(RayActor):
         }
         if weight_version is not None:
             payload["weight_version"] = weight_version
+        if disable_draft_model:
+            # target-only update; the draft runner keeps its own weights
+            payload["disable_draft_model"] = True
         return self._make_request(
             "update_weights_from_tensor",
             payload,
