@@ -33,6 +33,7 @@ def test_missing_straw_startup_hint(monkeypatch, caplog, transport):
 def _run_default_without_straw():
     import importlib.abc
     from types import SimpleNamespace
+    from unittest.mock import patch
 
     class NoStraw(importlib.abc.MetaPathFinder):
         def find_spec(self, fullname, path=None, target=None):
@@ -87,8 +88,12 @@ def _run_default_without_straw():
 
     fully_async_rollout._generate_rollout_async = generate
     # The source owns its consumer; no distributed (straw) imports are needed.
-    source = SimpleNamespace(consumers={"fully_async": object.__new__(fully_async_rollout.AsyncRolloutWorker)})
-    assert fully_async_rollout.generate_rollout_fully_async(args, 0, source) is groups
+    source = SimpleNamespace(consumers={})
+    with patch.object(fully_async_rollout, "GenerateState", return_value=SimpleNamespace(sampling_params={})):
+        source.consumers["fully_async"] = fully_async_rollout.AsyncRolloutWorker(args, source)
+    output = fully_async_rollout.generate_rollout_fully_async(args, 0, source)
+    assert output.samples is groups
+    assert output.metrics["fully_async/policy/current_version"] == 0
 
     ray.init(address="local", num_cpus=1, include_dashboard=False, object_store_memory=128 * 1024**2)
     try:
