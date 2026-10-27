@@ -228,5 +228,34 @@ def test_source_rank_pads_empty_colocated_bucket_entries(monkeypatch):
     ]
 
 
+def test_disable_draft_model_is_forwarded_to_engine(monkeypatch):
+    module, dist_state = _load_update_weight_module(monkeypatch)
+    remote_serialized_bucket = {"flattened_tensor": ("remote",), "metadata": ("remote_weight",)}
+    dist_state.gathered = lambda local: [local, [remote_serialized_bucket]]
+    engine = _FakeEngine()
+
+    module._send_to_colocated_engine(
+        [],
+        ipc_engine=engine,
+        ipc_gather_src=0,
+        ipc_gather_group=object(),
+        weight_version=7,
+        disable_draft_model=True,
+    )
+
+    assert [call["disable_draft_model"] for call in engine.update_weights_from_tensor.calls] == [True]
+
+
+@pytest.mark.parametrize(
+    "algorithm, expected",
+    [("DFLASH", True), ("dflash", True), ("EAGLE", False), ("EAGLE3", False), (None, False)],
+)
+def test_only_dflash_keeps_draft_out_of_weight_update(monkeypatch, algorithm, expected):
+    module, _ = _load_update_weight_module(monkeypatch)
+
+    assert module._target_only_weight_update(types.SimpleNamespace(sglang_speculative_algorithm=algorithm)) is expected
+    assert module._target_only_weight_update(types.SimpleNamespace()) is False
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
