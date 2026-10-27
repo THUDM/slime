@@ -186,6 +186,13 @@ class Attention(HuggingfaceAttention):
 
             self.input_layernorm = RMSNorm(self.hf_config.hidden_size, eps=self.hf_config.rms_norm_eps)
 
+        # linear_attn and input_layernorm are replicated, not sharded, across TP ranks.
+        # Average their gradients across TP so the replicas stay identical; without this,
+        # nondeterministic kernels let them drift apart a little more every step.
+        for module in (self.linear_attn, self.input_layernorm):
+            for param in module.parameters():
+                param.average_gradients_across_tp_domain = True
+
     def hf_forward(self, hidden_states, packed_seq_params):
         hidden_states = self.input_layernorm(hidden_states)
         hidden_states = self.linear_attn(
