@@ -9,6 +9,7 @@ import torch
 import torch.distributed as dist
 
 import slime.utils.eval_config
+from slime.observability.communication_timeline import configure_communication_timeline
 from slime.observability.logging_utils import configure_logger
 from slime.ray.ray_actor import RayActor
 from slime.utils import accelerator
@@ -70,6 +71,15 @@ class TrainRayActor(RayActor):
 
         args.rank = dist.get_rank()
         args.world_size = dist.get_world_size()
+        configure_communication_timeline(
+            getattr(args, "communication_timeline", None),
+            rank=args.rank,
+            local_rank=local_rank,
+            world_size=args.world_size,
+            role=role,
+            run_id=getattr(args, "communication_timeline_run_id", None),
+        )
+        self._communication_rollout_id = None
 
         try:
             if torch.version.hip is not None:
@@ -119,6 +129,9 @@ class TrainRayActor(RayActor):
     @abc.abstractmethod
     def update_weights(self):
         raise NotImplementedError
+
+    def set_communication_rollout_id(self, rollout_id):
+        self._communication_rollout_id = rollout_id
 
     def set_rollout_manager(self, rollout_manager):
         self.rollout_manager = rollout_manager
