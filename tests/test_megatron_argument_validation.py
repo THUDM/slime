@@ -768,5 +768,34 @@ def test_force_fp8_ue8m0_scale_argument(monkeypatch):
     assert configured.force_fp8_ue8m0_scale is True
 
 
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"colocate": True},
+        {"train_backend": "fsdp"},
+        {"update_weight_mode": "delta"},
+        {"update_weight_p2p_timeout": 0},
+        {"update_weight_p2p_timeout": float("inf")},
+        {"update_weight_p2p_timeout": float("nan")},
+        {"update_weight_buffer_size": 0},
+    ],
+)
+def test_p2p_validation_rejects_invalid_configuration(monkeypatch, overrides):
+    module = load_slime_arguments_module(monkeypatch)
+    options = dict(update_weight_transport="p2p", update_weight_p2p_timeout=120, update_weight_buffer_size=1024)
+    options.update(overrides)
+    with pytest.raises(ValueError, match="P2P|p2p"):
+        module.slime_validate_args(make_slime_validate_args(**options))
+
+
+def test_p2p_validation_accepts_disaggregated_megatron(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    module.slime_validate_args(
+        make_slime_validate_args(
+            update_weight_transport="p2p", update_weight_p2p_timeout=120, update_weight_buffer_size=1024
+        )
+    )
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))

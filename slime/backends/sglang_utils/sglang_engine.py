@@ -211,6 +211,14 @@ class SGLangEngine(RayActor):
                 ), f"{name=} {expect_value=} {actual_value=} {expect_server_args=} {actual_server_args=}"
 
         actual_server_args = get_server_info(f"http://{self.server_host}:{self.server_port}")
+        if getattr(self.args, "update_weight_transport", None) == "p2p":
+            from .p2p import LOADER, validate_server_args
+
+            validate_server_args(
+                actual_server_args, flush_cache_interval=getattr(self.args, "flush_cache_interval", 1)
+            )
+            if LOADER not in (actual_server_args.get("custom_weight_loader") or []):
+                raise ValueError(f"External P2P engines must start with --custom-weight-loader {LOADER}")
         _sanity_check_server_args(actual_server_args, expect_server_args)
         self._register_to_router(expect_server_args)
 
@@ -319,6 +327,28 @@ class SGLangEngine(RayActor):
         return self._make_request(
             "update_weights_from_tensor",
             payload,
+        )
+
+    def update_weights_from_p2p(self, serialized_manifests):
+        from .p2p import LOADER
+
+        return self._make_request(
+            "update_weights_from_tensor",
+            {
+                "serialized_named_tensors": serialized_manifests,
+                "load_format": LOADER,
+                "flush_cache": False,
+                "disable_draft_model": True,
+            },
+            timeout=self.args.update_weight_p2p_timeout,
+        )
+
+    def set_weight_version(self, new_version: str):
+        """Commit the version after every P2P receiver has finished loading."""
+        return self._make_request(
+            "update_weight_version",
+            {"new_version": str(new_version)},
+            timeout=self.args.update_weight_p2p_timeout,
         )
 
     def flush_cache(self):
@@ -716,6 +746,17 @@ def _compute_server_args(
         logger.info(f"Warning: The following arguments is not supported in the current sglang: {unused_keys}.")
         for key in unused_keys:
             kwargs.pop(key)
+
+    if getattr(args, "update_weight_transport", None) == "p2p" and worker_type != "encoder":
+        from .p2p import LOADER, validate_server_args
+
+        validate_server_args(kwargs, flush_cache_interval=getattr(args, "flush_cache_interval", 1))
+        if "custom_weight_loader" not in server_arg_field_names:
+            raise ValueError("P2P weight updates require SGLang's custom_weight_loader API")
+        loaders = list(kwargs.get("custom_weight_loader") or [])
+        if LOADER not in loaders:
+            loaders.append(LOADER)
+        kwargs["custom_weight_loader"] = loaders
 
     return kwargs, external_engine_need_check_fields
 
