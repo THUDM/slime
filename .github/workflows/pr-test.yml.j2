@@ -90,7 +90,8 @@
       'cpu': True,
       'extra_pip_deps': 'transformers wandb zstandard',
       'tests': [
-        {'test_file': 'test_megatron_argument_validation.py', 'num_gpus': 0, 'straw': True},
+        {'test_file': 'test_megatron_argument_validation.py', 'num_gpus': 0, 'straw': True, 'ci_group': 4},
+        {'test_file': 'ci/test_run_cpu_tests.py', 'num_gpus': 0},
         {'test_file': 'test_megatron_tokenizer_init.py', 'num_gpus': 0},
         {'test_file': 'test_megatron_grad_sync_memory.py', 'num_gpus': 0},
         {'test_file': 'test_qwen3_5_native_weights.py', 'num_gpus': 0},
@@ -116,9 +117,9 @@
         {'test_file': 'test_ppo_kl_metric.py', 'num_gpus': 0},
         {'test_file': 'test_cispo_loss.py', 'num_gpus': 0},
         {'test_file': 'test_policy_loss.py', 'num_gpus': 0},
-        {'test_file': 'test_score_centering.py', 'num_gpus': 0, 'straw': True},
+        {'test_file': 'test_score_centering.py', 'num_gpus': 0, 'straw': True, 'ci_group': 3},
         {'test_file': 'test_score_centering_binary.py', 'num_gpus': 0},
-        {'test_file': 'test_score_centering_transport.py', 'num_gpus': 0, 'straw': True},
+        {'test_file': 'test_score_centering_transport.py', 'num_gpus': 0, 'straw': True, 'ci_group': 3},
         {'test_file': 'test_ppo_logprob_entropy.py', 'num_gpus': 0},
         {'test_file': 'test_discounted_returns.py', 'num_gpus': 0},
         {'test_file': 'test_block_fp8_zero_block.py', 'num_gpus': 0},
@@ -135,23 +136,23 @@
         {'test_file': 'test_read_file_slicing.py', 'num_gpus': 0},
         {'test_file': 'test_fully_async_rollout.py', 'num_gpus': 0},
         {'test_file': 'test_pipeline_rl.py', 'num_gpus': 0},
-        {'test_file': 'test_training_recovery.py', 'num_gpus': 0, 'straw': True},
+        {'test_file': 'test_training_recovery.py', 'num_gpus': 0, 'straw': True, 'ci_group': 3},
         {'test_file': 'test_disk_delta_recovery.py', 'num_gpus': 0},
         {'test_file': 'test_disk_delta_checkpoint_index.py', 'num_gpus': 0},
-        {'test_file': 'test_rollout_manager_recovery.py', 'num_gpus': 0, 'straw': True},
-        {'test_file': 'test_distributed_rollout.py', 'num_gpus': 0, 'straw': True},
-        {'test_file': 'test_straw_fully_async_recovery.py', 'num_gpus': 0, 'straw': True},
+        {'test_file': 'test_rollout_manager_recovery.py', 'num_gpus': 0, 'straw': True, 'ci_group': 1},
+        {'test_file': 'test_distributed_rollout.py', 'num_gpus': 0, 'straw': True, 'ci_group': 2},
+        {'test_file': 'test_straw_fully_async_recovery.py', 'num_gpus': 0, 'straw': True, 'ci_group': 4},
         {'test_file': 'test_rollout_buffer_order.py', 'num_gpus': 0},
         {'test_file': 'test_server_control.py', 'num_gpus': 0},
         {'test_file': 'test_sglang_runtime.py', 'num_gpus': 0},
         {'test_file': 'test_cuda_stack_offload.py', 'num_gpus': 0},
-        {'test_file': 'test_straw_r3.py', 'num_gpus': 0, 'straw': True},
-        {'test_file': 'test_routed_experts_disk_layout.py', 'num_gpus': 0, 'straw': True},
-        {'test_file': 'test_rollout_straw_transport.py', 'num_gpus': 0, 'straw': True},
-        {'test_file': 'test_published_payload_retry.py', 'num_gpus': 0, 'straw': True},
-        {'test_file': 'test_rollout_metadata_index.py', 'num_gpus': 0, 'straw': True},
+        {'test_file': 'test_straw_r3.py', 'num_gpus': 0, 'straw': True, 'ci_group': 4},
+        {'test_file': 'test_routed_experts_disk_layout.py', 'num_gpus': 0, 'straw': True, 'ci_group': 3},
+        {'test_file': 'test_rollout_straw_transport.py', 'num_gpus': 0, 'straw': True, 'ci_group': 4},
+        {'test_file': 'test_published_payload_retry.py', 'num_gpus': 0, 'straw': True, 'ci_group': 2},
+        {'test_file': 'test_rollout_metadata_index.py', 'num_gpus': 0, 'straw': True, 'ci_group': 2},
         {'test_file': 'test_optional_straw.py', 'num_gpus': 0},
-        {'test_file': 'test_queue_sample_codec.py', 'num_gpus': 0, 'straw': True},
+        {'test_file': 'test_queue_sample_codec.py', 'num_gpus': 0, 'straw': True, 'ci_group': 2},
         {'test_file': 'test_rollout_sample_hooks.py', 'num_gpus': 0},
         {'test_file': 'test_hf_to_megatron.py', 'num_gpus': 0},
         {'test_file': 'test_qwen3_5_vl_native.py', 'num_gpus': 0},
@@ -208,6 +209,10 @@
       'tests': megatron_tests,
     },
 } %>
+<% set cpu_shards = namespace(
+    unit=build_cpu_test_shards(jobs['cpu-unittest'].tests, 'cpu', split_straw=True),
+    agent=build_cpu_test_shards(jobs['agent-test'].tests, 'agent'),
+) %>
 name: PR Test
 
 on:
@@ -270,7 +275,7 @@ jobs:
           python docs/tests/test_browser.py
 
 <% for job_name, config in jobs.items() %>
-  << job_name >>:
+  << job_name >>:<< ("\n    name: " ~ job_name ~ " (${{ matrix.info.shard }})") if job_name == 'cpu-unittest' or job_name == 'agent-test' else "" >>
 <% if config.get('always') %>
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.event_name == 'push'
 <% else %>
@@ -290,7 +295,7 @@ jobs:
       fail-fast: false
       matrix:
         info:
-<< config.tests | tojson(indent=2) | indent(10, true) >>
+<< (cpu_shards.unit if job_name == 'cpu-unittest' else cpu_shards.agent if job_name == 'agent-test' else config.tests) | tojson(indent=2) | indent(10, true) >>
     defaults:
       run:
         working-directory: ${{ github.workspace }}
@@ -298,9 +303,15 @@ jobs:
       GITHUB_COMMIT_NAME: ${{ github.sha }}_${{ github.event.pull_request.number || 'non-pr' }}
       WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
       SLIME_TEST_ENABLE_INFINITE_RUN: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.infinite_run) || 'false' }}
+<% if config.get('cpu') %>
+      SLIME_TEST_USE_DEEPEP: '0'
+      SLIME_TEST_USE_FP8_ROLLOUT: '0'
+      SLIME_TEST_ENABLE_EVAL: '1'
+<% else %>
       SLIME_TEST_USE_DEEPEP: ${{ matrix.info.use_deepep || '0' }}
       SLIME_TEST_USE_FP8_ROLLOUT: ${{ matrix.info.use_fp8_rollout || '0' }}
       SLIME_TEST_ENABLE_EVAL: ${{ matrix.info.enable_eval || '1' }}
+<% endif %>
 
     steps:
       - name: Checkout repository
@@ -337,24 +348,12 @@ jobs:
 
       - name: Execute
         shell: bash
-        run: |
 <% if config.get('cpu') %>
-          TEST_PATH="${{ matrix.info.test_file }}"
-          if [[ "$TEST_PATH" != tests/* ]]; then
-            TEST_PATH="tests/$TEST_PATH"
-          fi
-          TEST_ARGS="${{ matrix.info.test_args || '' }}"
-          if [[ -n "$TEST_ARGS" ]]; then
-            read -r -a TEST_ARGS_ARRAY < <(printf '%s\n' "$TEST_ARGS")
-          else
-            TEST_ARGS_ARRAY=()
-          fi
-          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
-            python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
-          else
-            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH" "${TEST_ARGS_ARRAY[@]}"
-          fi
-<% else %>
+        env:
+          SLIME_CPU_TESTS: ${{ toJSON(matrix.info) }}
+        run: |
+          python tests/ci/run_cpu_tests.py
+<% else -%><< "        run: |\n" >>
           # Checkpoints and Ray spill files can exceed the runner's root disk.
           mkdir -p /mnt/nvme0n1/slime_ci
           SLIME_CI_CONTAINER_DIR=$(mktemp -d /mnt/nvme0n1/slime_ci/run.XXXXXX)
@@ -429,6 +428,7 @@ jobs:
               fi
             '
 <% endif %>
+<% if not config.get('cpu') %>
       - name: Package agent E2E evidence
         if: always() && matrix.info.test_file == 'test_agent_sunabako_codex_e2e.py'
         run: |
@@ -444,6 +444,7 @@ jobs:
           path: ${{ github.workspace }}/.agent-e2e/evidence.tar.gz
           include-hidden-files: true
           if-no-files-found: ignore
+<% endif %>
 <% endfor %>
 
   e2e-test-changed-detect:
