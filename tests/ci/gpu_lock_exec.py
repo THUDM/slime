@@ -43,26 +43,21 @@ def _run_command(args):
     child = subprocess.Popen(cmd, start_new_session=True)
 
     def terminate_child(signum, _frame):
-        if child.poll() is None:
-            child.terminate()
+        for group_signal in (signum, signal.SIGKILL):
             try:
-                child.wait(timeout=5)
-                sys.exit(128 + signum)
-            except subprocess.TimeoutExpired:
-                pass
-
-            try:
-                os.killpg(child.pid, signum)
+                os.killpg(child.pid, group_signal)
             except ProcessLookupError:
-                pass
-            try:
-                child.wait(timeout=5)
-            except subprocess.TimeoutExpired:
+                break
+
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                child.poll()
                 try:
-                    os.killpg(child.pid, signal.SIGKILL)
+                    os.killpg(child.pid, 0)
                 except ProcessLookupError:
-                    pass
-                child.wait()
+                    sys.exit(128 + signum)
+                time.sleep(0.05)
+        child.poll()
         sys.exit(128 + signum)
 
     previous_handlers = {}
