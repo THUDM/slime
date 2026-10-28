@@ -172,16 +172,20 @@ def _run_case(dp_size, cp_size, tmp_path):
     return merged
 
 
+@pytest.fixture(scope="module")
+def single_rank_whitened_baseline(tmp_path_factory):
+    baseline = _run_case(1, 1, tmp_path_factory.mktemp("whiten_baseline"))
+    assert len(baseline) == len(SEQS), "baseline should cover every sample"
+    return baseline
+
+
 @pytest.mark.unit
 @pytest.mark.parametrize("dp_size,cp_size", WHITEN_CASES)
-def test_whitened_advantages_are_cp_invariant(dp_size, cp_size, tmp_path):
-    baseline = _run_case(1, 1, tmp_path)
-    assert len(baseline) == len(SEQS), "baseline should cover every sample"
-
+def test_whitened_advantages_are_cp_invariant(dp_size, cp_size, single_rank_whitened_baseline, tmp_path):
     got = _run_case(dp_size, cp_size, tmp_path)
 
-    assert sorted(got) == sorted(baseline)
-    for sample_idx, expected in baseline.items():
+    assert sorted(got) == sorted(single_rank_whitened_baseline)
+    for sample_idx, expected in single_rank_whitened_baseline.items():
         assert got[sample_idx] == pytest.approx(expected, abs=1e-5), (
             f"dp={dp_size} cp={cp_size}: sample {sample_idx} whitened to {got[sample_idx]}, "
             f"single-rank baseline is {expected}"
