@@ -1,3 +1,4 @@
+import inspect
 import logging
 import os
 import re
@@ -94,10 +95,20 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["save_checkpoint"]
 
+_LOAD_HAS_RESTORE_TRAINING_STATE = "restore_training_state" in inspect.signature(_load_checkpoint_megatron).parameters
+
+
+def _async_writer_class(async_strategy):
+    if async_strategy == "nvrx":
+        from nvidia_resiliency_ext.checkpointing.async_ckpt.filesystem_async import FileSystemWriterAsync
+    else:
+        from megatron.core.dist_checkpointing.strategies.filesystem_async import FileSystemWriterAsync
+    return FileSystemWriterAsync
+
 
 @contextmanager
-def _stage_async_save_on_cpu():
-    from megatron.core.dist_checkpointing.strategies.filesystem_async import FileSystemWriterAsync
+def _stage_async_save_on_cpu(async_strategy="mcore"):
+    FileSystemWriterAsync = _async_writer_class(async_strategy)
 
     get_save_function_and_args = FileSystemWriterAsync.get_save_function_and_args
 
@@ -119,8 +130,9 @@ def _stage_async_save_on_cpu():
 
 def save_checkpoint(iteration, model, optimizer, opt_param_scheduler, **kwargs):
     args = get_args()
-    stage_on_cpu = args.async_save and args.offload_train and getattr(args, "async_strategy", "mcore") == "mcore"
-    with _stage_async_save_on_cpu() if stage_on_cpu else nullcontext():
+    async_strategy = getattr(args, "async_strategy", "mcore")
+    stage_on_cpu = args.async_save and args.offload_train
+    with _stage_async_save_on_cpu(async_strategy) if stage_on_cpu else nullcontext():
         _save_checkpoint_megatron(iteration, model, optimizer, opt_param_scheduler, **kwargs)
     if getattr(args, "use_stateless_adam", False) and opt_param_scheduler is not None and dist.get_rank() == 0:
         # Megatron omits the scheduler together with --no-save-optim. Stateless
@@ -153,6 +165,8 @@ def load_checkpoint(ddp_model, optimizer, opt_param_scheduler, checkpointing_con
             opt_param_scheduler=opt_param_scheduler,
             checkpointing_context=checkpointing_context,
             skip_load_to_model_and_opt=False,
+            # Newer Megatron only restores optimizer / scheduler / data progress on request.
+            **({"restore_training_state": optimizer is not None} if _LOAD_HAS_RESTORE_TRAINING_STATE else {}),
         )
         if getattr(args, "ckpt_step", None) is not None and not args.finetune and result[0] != args.ckpt_step:
             raise ValueError(

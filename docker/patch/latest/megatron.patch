@@ -190,6 +190,20 @@ index 0789ce36a..f8f9a405b 100644
                          # Main param & optimizer states.
                          self._set_main_param_and_optimizer_states(model_param, src_tensors)
  
+diff --git a/megatron/core/transformer/multi_token_prediction.py b/megatron/core/transformer/multi_token_prediction.py
+index 153c24aff..774c4e51a 100755
+--- a/megatron/core/transformer/multi_token_prediction.py
++++ b/megatron/core/transformer/multi_token_prediction.py
+@@ -3313,7 +3313,8 @@ class MultiTokenPredictionLayer(MegatronModule):
+         """
+         assert context is None, "multi token prediction + cross attention is not yet supported."
+         if decoder_input is None:
+-            assert input_ids is not None and position_ids is not None
++            assert input_ids is not None
++            assert position_ids is not None or not getattr(embedding, 'add_position_embedding', True)
+             (
+                 input_ids,
+                 position_ids,
 diff --git a/megatron/training/argument_utils.py b/megatron/training/argument_utils.py
 index 68dc306e0..c5064e3d7 100644
 --- a/megatron/training/argument_utils.py

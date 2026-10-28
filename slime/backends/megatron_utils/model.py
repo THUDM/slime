@@ -883,13 +883,21 @@ def train(
 
             mtp_loss_scale = 1 / num_microbatches[step_id]
             tracker = MTPLossLoggingHelper.tracker
+            # Newer Megatron accumulates into "loss_sums" and reduces across ranks itself;
+            # "values" only exists after reduce_loss_in_tracker().
+            reduced_by_megatron = "loss_sums" in tracker and hasattr(MTPLossLoggingHelper, "reduce_loss_in_tracker")
+            if reduced_by_megatron:
+                MTPLossLoggingHelper.reduce_loss_in_tracker()
             loss_key = "loss_values" if "loss_values" in tracker else "values"
             if loss_key in tracker:
                 values = tracker[loss_key]
-                if tracker.get("reduce_group") is not None:
-                    torch.distributed.all_reduce(values, group=tracker.get("reduce_group"))
-                if tracker.get("avg_group") is not None:
-                    torch.distributed.all_reduce(values, group=tracker["avg_group"], op=torch.distributed.ReduceOp.AVG)
+                if not reduced_by_megatron:
+                    if tracker.get("reduce_group") is not None:
+                        torch.distributed.all_reduce(values, group=tracker.get("reduce_group"))
+                    if tracker.get("avg_group") is not None:
+                        torch.distributed.all_reduce(
+                            values, group=tracker["avg_group"], op=torch.distributed.ReduceOp.AVG
+                        )
                 # Multi-head MTP losses have shape [num_mtp_layers]; aggregate below.
                 mtp_losses = values * mtp_loss_scale
                 if hasattr(MTPLossLoggingHelper, "clean_metrics_in_tracker"):
