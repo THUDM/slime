@@ -1,5 +1,10 @@
+import sys
 from pathlib import Path
+
 import jinja2
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tests" / "ci"))
+from run_cpu_tests import build_cpu_test_shards
 
 
 def main():
@@ -15,6 +20,7 @@ def main():
         variable_start_string="<<",
         variable_end_string=">>",
     )
+    env.globals["build_cpu_test_shards"] = build_cpu_test_shards
 
     for template_path in workflows_dir.glob("*.yml.j2"):
         template = env.get_template(template_path.name)
