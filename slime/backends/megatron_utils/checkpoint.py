@@ -95,7 +95,12 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["save_checkpoint"]
 
-_LOAD_HAS_RESTORE_TRAINING_STATE = "restore_training_state" in inspect.signature(_load_checkpoint_megatron).parameters
+
+def _load_supports_restore_training_state():
+    try:
+        return "restore_training_state" in inspect.signature(_load_checkpoint_megatron).parameters
+    except (TypeError, ValueError):
+        return False
 
 
 def _async_writer_class(async_strategy):
@@ -166,7 +171,7 @@ def load_checkpoint(ddp_model, optimizer, opt_param_scheduler, checkpointing_con
             checkpointing_context=checkpointing_context,
             skip_load_to_model_and_opt=False,
             # Newer Megatron only restores optimizer / scheduler / data progress on request.
-            **({"restore_training_state": optimizer is not None} if _LOAD_HAS_RESTORE_TRAINING_STATE else {}),
+            **({"restore_training_state": optimizer is not None} if _load_supports_restore_training_state() else {}),
         )
         if getattr(args, "ckpt_step", None) is not None and not args.finetune and result[0] != args.ckpt_step:
             raise ValueError(
