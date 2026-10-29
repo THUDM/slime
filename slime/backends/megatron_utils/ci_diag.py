@@ -50,12 +50,10 @@ def log_environment(tag: str) -> None:
     parts.append(f"meminfo: {_meminfo()}")
     parts.append(f"pin_memory calls={_pinned['calls']} bytes_GiB={_pinned['bytes'] / 2**30:.2f}")
     try:
+        # Key names differ across torch versions, so report every non-zero byte counter as-is.
         s = torch.cuda.memory.host_memory_stats()
-        parts.append(
-            f"host_alloc_GiB={s.get('allocated_bytes.all.current', 0) / 2**30:.2f} "
-            f"peak_GiB={s.get('allocated_bytes.all.peak', 0) / 2**30:.2f} "
-            f"reserved_GiB={s.get('reserved_bytes.all.current', 0) / 2**30:.2f}"
-        )
+        nonzero = {k: round(v / 2**30, 2) for k, v in s.items() if "bytes" in k and v}
+        parts.append(f"host_memory_stats_GiB={nonzero}")
     except Exception as e:
         parts.append(f"host_memory_stats=<error {e}>")
     parts.append("env CUDA_LAUNCH_BLOCKING=" + os.environ.get("CUDA_LAUNCH_BLOCKING", "unset"))

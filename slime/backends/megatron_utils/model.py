@@ -1047,11 +1047,12 @@ def initialize_model_and_optimizer(
         filesystem_async_module.FileSystemWriterAsync = ROCmFileSystemWriterAsync
         print("[ROCm] Applied FileSystemWriterAsync patch for HIP compatibility")
 
+    # Install before the optimizer is built: HybridDeviceOptimizer pins its master params in __init__.
+    ci_diag.install_pin_memory_probe()
     model, optimizer, opt_param_scheduler = setup_model_and_optimizer(args, role)
     model[0].role = role
     reinit_critic_output_layer = _critic_output_layer_needs_reinit(args, model, role)
     clear_memory()
-    ci_diag.install_pin_memory_probe()
     ci_diag.log_environment("before-load_checkpoint")
     try:
         iteration, _ = load_checkpoint(
