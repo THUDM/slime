@@ -35,6 +35,7 @@ On ROCm, the shared conversion script requires `--use-cpu-initialization` so tha
 ```bash
 cd /root/slime
 source scripts/models/qwen3-4B-Instruct-2507.sh
+unset NVTE_FLASH_ATTN NVTE_FUSED_ATTN NVTE_UNFUSED_ATTN
 PYTHONPATH=/workspace/Megatron-LM-amd_version python tools/convert_hf_to_torch_dist.py \
   "${MODEL_ARGS[@]}" \
   --no-gradient-accumulation-fusion \
