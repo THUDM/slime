@@ -645,9 +645,16 @@ def train_one_step(
                 loss_mask=batch["full_loss_masks"],
             )
         else:
+            position_ids = None
+            if args.enable_mtp_training:
+                # Newer Megatron asserts position_ids is not None in the MTP layer even for
+                # rope models, where it is otherwise unused.
+                tokens = batch["tokens"]
+                position_ids = torch.arange(tokens.size(-1), device=tokens.device).expand_as(tokens)
+
             forward_kwargs = {
                 "input_ids": batch["tokens"],
-                "position_ids": None,
+                "position_ids": position_ids,
                 "attention_mask": None,
                 "labels": None,
                 "packed_seq_params": batch["packed_seq_params"],
