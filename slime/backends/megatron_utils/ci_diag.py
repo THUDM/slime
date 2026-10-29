@@ -44,7 +44,9 @@ def log_environment(tag: str) -> None:
     parts.append("driver=" + _read("/proc/driver/nvidia/version", 200).splitlines()[0])
     parts.append(f"torch={torch.__version__} cuda={torch.version.cuda}")
     parts.append(f"memlock={resource.getrlimit(resource.RLIMIT_MEMLOCK)}")
-    parts.append(f"cgroup.memory.max={_read('/sys/fs/cgroup/memory.max')} current={_read('/sys/fs/cgroup/memory.current')}")
+    parts.append(
+        f"cgroup.memory.max={_read('/sys/fs/cgroup/memory.max')} current={_read('/sys/fs/cgroup/memory.current')}"
+    )
     parts.append(f"meminfo: {_meminfo()}")
     parts.append(f"pin_memory calls={_pinned['calls']} bytes_GiB={_pinned['bytes'] / 2**30:.2f}")
     try:
