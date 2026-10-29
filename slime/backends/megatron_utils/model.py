@@ -32,6 +32,7 @@ from slime.observability import logging_utils, train_metric_utils
 from slime.utils import accelerator
 from slime.utils.memory_utils import clear_memory
 
+from . import ci_diag
 from .checkpoint import load_checkpoint, save_checkpoint
 from .data import DataIterator, get_batch
 from .loss import ROLLOUT_TOP_P_TOKEN_KEYS, get_rollout_top_p_logprob_kwargs, loss_function
@@ -1050,12 +1051,19 @@ def initialize_model_and_optimizer(
     model[0].role = role
     reinit_critic_output_layer = _critic_output_layer_needs_reinit(args, model, role)
     clear_memory()
-    iteration, _ = load_checkpoint(
-        model,
-        optimizer,
-        opt_param_scheduler,
-        checkpointing_context={},
-    )
+    ci_diag.install_pin_memory_probe()
+    ci_diag.log_environment("before-load_checkpoint")
+    try:
+        iteration, _ = load_checkpoint(
+            model,
+            optimizer,
+            opt_param_scheduler,
+            checkpointing_context={},
+        )
+    except torch.AcceleratorError:
+        ci_diag.log_environment("load_checkpoint-failed")
+        raise
+    ci_diag.log_environment("after-load_checkpoint")
     if reinit_critic_output_layer:
         _reinitialize_critic_output_layer(args, model)
         if (args.fp16 or args.bf16) and optimizer is not None:

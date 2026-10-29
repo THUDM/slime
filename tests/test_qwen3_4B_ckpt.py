@@ -130,10 +130,16 @@ def execute(mode: str = "", optimizer: str = "cpu", checkpoint_dir: str = ""):
         f"{misc_args} "
     )
 
+    # Diagnostics for the pin_memory "invalid argument" failure on load (see slime/backends/megatron_utils/ci_diag.py).
+    diag_env = {"SLIME_CI_DIAG": "1"}
+    if mode == "load":
+        diag_env.update({"CUDA_LAUNCH_BLOCKING": "1", "CUDA_LOG_FILE": "stderr"})
+
     U.execute_train(
         train_args=train_args,
         num_gpus_per_node=NUM_GPUS,
         megatron_model_type=MODEL_TYPE,
+        extra_env_vars=diag_env,
     )
 
 
