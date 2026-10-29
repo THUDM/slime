@@ -1,16 +1,16 @@
 # 容灾
 
-slime 会检查 SGLang 推理引擎是否正常工作，移除失效的引擎，并在下次更新权重前重启它们。使用 straw 传输或保存 rollout 调试数据时，还支持在 Megatron 训练失败后保留推理集群，调整训练配置，再继续训练。
+slime 会检查 SGLang 推理引擎是否正常工作，移除失效的引擎，并在下次更新权重前重启它们。内置推理集群默认跨 Ray job 保留，包括训练失败或执行 `ray job stop` 后；传入 `--disable-retain-serving` 可将其改为与 job 同生命周期。使用 straw 传输或保存 rollout 调试数据后还可以重放训练批次。
 
-这些能力默认对 slime 启动的推理集群生效，不需要传入 `--use-fault-tolerance`。该参数保留用于兼容旧命令；使用外部推理集群时，仍按原来的策略处理。
+跨 job 恢复不需要 `--use-fault-tolerance`；后者仅用于兼容旧命令和外部推理集群策略。`--disable-retain-serving` 不改变外部推理集群的资源归属。
 
 ## Megatron 失败后如何继续训练
 
-这个恢复流程要求 **Ray 集群仍在运行**。训练入口进程或 `RolloutManager` 退出，不会销毁 SGLang 引擎和路由器；重新提交训练任务后，slime 会找到原来的推理集群并继续使用。整个流程不需要修改 SGLang，也不会自动重试训练任务。
+这个恢复流程要求未传入 `--disable-retain-serving`，并且 **Ray 集群仍在运行**。训练入口进程或 `RolloutManager` 退出时不会销毁 SGLang 引擎和路由器；重新提交训练任务后，slime 会找到原来的推理集群并继续使用。整个流程不需要修改 SGLang，也不会自动重试训练任务。
 
 ### 首次启动时保留恢复数据
 
-以下两种方式任选其一。选择后，slime 会自动保存恢复所需的数据，不依赖 `--use-fault-tolerance`。
+恢复数据以下两种方式任选其一；选择后，slime 会自动保存恢复所需的数据，不依赖 `--use-fault-tolerance`。
 
 使用 straw 保存 rollout 和训练数据：
 
@@ -56,7 +56,7 @@ Megatron 会在并行布局兼容时恢复随机数状态；TP/PP 改变时会�
 
 ## 如何找到原来的推理集群
 
-slime 使用具名 Ray actor 管理推理集群。新任务根据会话名称找到该 actor，由它返回已有的路由器和引擎信息，不需要扫描路由器进程。
+默认情况下，slime 使用具名 Ray actor 管理推理集群。新任务根据会话名称找到该 actor，由它返回已有的路由器和引擎信息，不需要扫描路由器进程。传入 `--disable-retain-serving` 后不再创建可跨 job 查找的具名 actor。
 
 可以用 `--rollout-session-id` 显式指定会话标识。未指定时，按以下顺序选择标识来源，再计算哈希得到稳定的名称：
 
@@ -69,17 +69,23 @@ slime 使用具名 Ray actor 管理推理集群。新任务根据会话名称找
 
 代码中有三个组件负责恢复：
 
-- `ServingCluster` 管理路由器、SGLang 引擎、GPU 资源、straw 队列控制器和权重更新锁。它是具名的 detached Ray actor，不会随创建它的训练任务退出。
-- `RolloutManager` 负责生成、读取数据、转换样本和划分训练数据。它可以继续使用，也可以在退出后重建；重建不会销毁 `ServingCluster` 持有的资源。
+- `ServingCluster` 管理路由器、SGLang 引擎、GPU 资源、straw 队列控制器和权重更新锁。默认它是具名的 detached Ray actor，不会随创建它的训练任务退出。
+- `RolloutManager` 负责生成、读取数据、转换样本和划分训练数据。默认的 retained 模式下它可以继续使用，也可以在退出后重建；重建不会销毁 `ServingCluster` 持有的资源。
 - `TrainingRecovery` 管理模型 checkpoint 边界，并保留该边界之后需要重放的批次。原始批次和转换结果是否已接收，由 straw 接收日志中的回执决定；manager 或 RPC 在更新恢复日志前失败时，会根据回执补齐记录。转换结果只存一份，各 DP rank 获取自己的索引视图，改变并行配置只需重建视图。
 
-如果 `RolloutManager` 还活着，它会暂停接收新的生成任务。如果它已经退出，新实例会接回 `ServingCluster`，恢复数据源进度，并由队列控制器阻止旧读取进程继续取任务。已经完成、但尚未交给训练的预取结果仍可使用。训练进程也登记在 `ServingCluster` 中，因此 manager 退出后仍能清理旧训练进程。
+在默认 retained 模式下，如果 `RolloutManager` 还活着，它会暂停接收新的生成任务。如果它已经退出，新实例会接回 `ServingCluster`，恢复数据源进度，并由队列控制器阻止旧读取进程继续取任务。已经完成、但尚未交给训练的预取结果仍可使用。训练进程也登记在 `ServingCluster` 中，因此 manager 退出后仍能清理旧训练进程。
 
-训练 driver 负责本次训练尝试的退出策略，也负责启动中途失败后的回滚。失败时，先限时等待 manager 暂停，再直接通知 serving 释放 trainer；无法暂停的 manager 会被终止，由下一次尝试重建。正常结束时分别清理 manager 和 serving，因此自定义 data source 的 `close()` 报错也不会跳过 serving 清理。清理失败会记录日志，保留原始训练异常。
+训练 driver 负责本次训练尝试的退出策略，也负责启动中途失败后的回滚。保留 serving 时，失败会先限时等待 manager 暂停，再直接通知 serving 释放 trainer；无法暂停的 manager 会被终止，由下一次尝试重建。传入 `--disable-retain-serving` 时，失败会在清理超时限制内尝试 dispose manager 和 serving，并终止相应 actor。正常结束时同样分别清理两个 owner，因此自定义 data source 的 `close()` 报错也不会跳过 serving 清理。清理失败会记录日志，保留原始训练异常。
 
 `--rollout-cleanup-timeout` 默认 **60 秒**，限制一次 detach 或 dispose 的等待时间，与健康检查超时和预热等待独立。某个步骤失败后仍会尝试释放其余资源；无法正常退出的 actor 会被终止。
 
 Checkpoint 选择会返回独立的配置与恢复计划。恢复边界通过不可变对象交接，每次训练尝试根据它和 serving 权重版本生成自己的配置副本；data source 和长驻 rollout worker 保留原来的配置。所有 custom function 仍使用原有的 args 接口。
+
+### 清理保留的会话
+
+`--disable-retain-serving` 只影响新任务，已有的 detached session 需要单独清理。若要释放某个保留会话，先停止对应训练任务，再清理 `slime-training-recovery` namespace 中的两个 actor：`<session>`（`RolloutManager`）和 `<session>:serving`（`ServingCluster`）。这里的 `<session>` 是完整的 `rollout:<hash>` actor 名称，不是 `--rollout-session-id` 的原始值。
+
+先处理 manager，再处理 serving。对每个 actor 调用 `ray.get(actor.dispose.remote(60), timeout=90)`，随后调用 `ray.kill(actor, no_restart=True)`，即使 dispose 失败或超时也应如此。两个 actor 的清理都应尝试执行。
 
 ## 推理引擎的健康检查与重启
 
@@ -122,7 +128,7 @@ rollout 过程中，slime 定期请求 SGLang 的 `/health_generate` 接口，�
 
 ## 恢复范围与限制
 
-未使用 straw、也未保存 rollout 调试数据时，仍可保留推理集群，但无法重放未保存到 checkpoint 的训练批次。
+未使用 straw、也未保存 rollout 调试数据时，仍会默认保留推理集群，但无法重放未保存到 checkpoint 的训练批次。
 
 `RolloutManager` 重建支持内置数据源。自定义数据源需要提供兼容的 `state_dict` / `load_state_dict`，并让自己的队列控制器独立于 manager 存活；数据源构造函数和 rollout hook 的签名不变。
 

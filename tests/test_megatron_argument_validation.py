@@ -160,6 +160,16 @@ def load_slime_arguments_module(monkeypatch):
     return module
 
 
+def test_retain_serving_is_enabled_unless_explicitly_disabled(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    parser = argparse.ArgumentParser()
+    module.get_slime_extra_args_provider()(parser)
+    required = ["--rollout-batch-size", "1"]
+
+    assert parser.parse_args(required).retain_serving is True
+    assert parser.parse_args([*required, "--disable-retain-serving"]).retain_serving is False
+
+
 @pytest.mark.parametrize("strategy", [None, "mcore", "nvrx"])
 def test_native_async_checkpoint_default_preserves_explicit_strategy(monkeypatch, strategy):
     module = load_slime_arguments_module(monkeypatch)

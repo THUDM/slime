@@ -33,7 +33,7 @@ class ServingDeployment:
 
 @ray.remote
 class ServingCluster:
-    """A named, detached owner for routers, engines and their GPU placements."""
+    """Own routers, engines and GPU placements for a job or retained session."""
 
     def __init__(self, args, restore_plan):
         from slime.backends.sglang_utils.deployment import start_rollout_servers
@@ -294,8 +294,8 @@ class ServingCluster:
     def dispose(self, timeout=None):
         from ray.util.placement_group import remove_placement_group
 
-        # Full teardown is for successful completion. Failure cleanup uses
-        # detach_training instead, preserving the resources needed to resume.
+        # Full teardown is for completion or failure with retention disabled.
+        # Retained failures use detach_training to preserve serving for resume.
         with Cleanup(getattr(self.args, "rollout_cleanup_timeout", 60) if timeout is None else timeout) as cleanup:
             cleanup.run("release trainers", self.release_trainers)
             for monitor in self._health_monitors:

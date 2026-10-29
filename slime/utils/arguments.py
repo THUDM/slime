@@ -666,6 +666,16 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
 
         def add_fault_tolerance_arguments(parser):
             parser.add_argument(
+                "--disable-retain-serving",
+                dest="retain_serving",
+                action="store_false",
+                default=True,
+                help=(
+                    "Make internal serving share the Ray job lifetime instead of keeping it alive for a later job. "
+                    "Retained serving remains the default for compatibility."
+                ),
+            )
+            parser.add_argument(
                 "--rollout-session-id",
                 type=str,
                 default=None,

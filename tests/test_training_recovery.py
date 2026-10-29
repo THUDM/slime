@@ -26,6 +26,7 @@ NUM_GPUS = 0
 @pytest.fixture
 def args(tmp_path):
     return SimpleNamespace(
+        retain_serving=True,
         use_fault_tolerance=True,
         rollout_data_transport="straw",
         rollout_data_dir=str(tmp_path / "pool"),
@@ -82,6 +83,27 @@ def test_session_identity_survives_output_directory_and_parallelism_changes(args
     assert training_session_name(args) == name
     args.rollout_queue_run_id = "another-run"
     assert training_session_name(args) != name
+
+
+def test_session_identity_survives_serving_lifetime_mode_switch(args):
+    args.rollout_data_transport = "object-store"
+    args.rollout_session_id = None
+    args.save_debug_rollout_data = None
+    args.save = None
+    name = training_session_name(args)
+
+    args.retain_serving = False
+
+    assert training_session_name(args) == name
+
+
+def test_serving_lifetime_mode_switch_keeps_journal_configuration_compatible(args):
+    TrainingRecovery(args, RestorePlan()).persist()
+
+    args.retain_serving = False
+
+    recovery = TrainingRecovery(args, RestorePlan(), retained_serving=False)
+    assert recovery.configuration == retained_rollout_configuration(args)
 
 
 def test_configuration_allows_trainer_parallelism_and_memory_changes(args):
@@ -692,12 +714,14 @@ def test_failed_attempt_releases_trainers_despite_manager_failure(args, monkeypa
     assert len(waits) == 2 and all(0 < wait <= 2 for wait in waits)
 
 
+@pytest.mark.parametrize("failed,retain_serving", [(False, True), (True, False)])
 @pytest.mark.parametrize("broken_owner", ["manager", "serving"])
-def test_successful_attempt_cleans_both_owners_after_dispose_error(args, monkeypatch, broken_owner):
+def test_attempt_cleans_both_owners_after_dispose_error(args, monkeypatch, broken_owner, failed, retain_serving):
     from unittest.mock import Mock
 
     from slime.ray import placement_group
 
+    args.retain_serving = retain_serving
     args.rollout_cleanup_timeout = 2
     owners = {name: Mock() for name in ("manager", "serving")}
 
@@ -710,7 +734,7 @@ def test_successful_attempt_cleans_both_owners_after_dispose_error(args, monkeyp
     monkeypatch.setattr(placement_group.ray, "kill", Mock())
     startup = placement_group.RolloutStartup(args, **owners)
     with pytest.raises(RuntimeError, match="dispose failed"):
-        startup.close(failed=False)
+        startup.close(failed=failed)
     for owner in owners.values():
         owner.dispose.remote.assert_called_once()
         placement_group.ray.kill.assert_any_call(owner, no_restart=True)

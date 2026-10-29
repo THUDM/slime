@@ -108,7 +108,7 @@ def execute_train(
     master_addr = os.environ.get("MASTER_ADDR", "127.0.0.1")
 
     # Launching another trainer must preserve independently owned serving.
-    # Successful training cleans up its own resources; failures retain them.
+    # Successful training cleans up its own resources; failures retain them by default.
     if not external_ray:
         # A manual trainer restart must leave the Ray head and its detached
         # rollout session alive. A stale address file alone is not proof of a

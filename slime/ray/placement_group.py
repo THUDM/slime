@@ -254,7 +254,8 @@ class RolloutStartup:
     def close(self, *, failed):
         timeout = getattr(self.args, "rollout_cleanup_timeout", 60)
         with Cleanup(timeout) as cleanup:
-            if failed and self.serving is not None:
+            retain_serving = getattr(self.args, "retain_serving", True)
+            if failed and retain_serving and self.serving is not None:
                 # A live but wedged manager must not prevent the independent
                 # serving owner from releasing this driver's training actors.
                 if self.manager is not None:
@@ -302,7 +303,7 @@ def create_rollout_manager(args, *, restore_plan=None):
         try:
             startup.close(failed=True)
         except Exception:
-            logger.exception("Failed to detach partially started training")
+            logger.exception("Failed to clean up partially started training")
         raise
     return startup
 
@@ -320,21 +321,27 @@ def _attach_rollout_manager(startup):
     args, restore_plan = startup.args, startup.restore_plan
     serving = None
     deployment = None
+    retain_serving = bool(getattr(args, "retain_serving", True))
+    session_name = None
     if args.rollout_external:
         # External serving retains its existing startup and ownership contract.
         placements = startup.placements = create_placement_groups(args)
     else:
-        # Ray resolves these stable names in one namespace. Reuse the detached
-        # owner first, then recreate/attach the manager against its deployment;
-        # manager death never requires discovering individual router processes.
-        name = training_session_name(args)
-        serving = startup.serving = ServingCluster.options(
-            **options,
-            name=name + ":serving",
-            namespace=RECOVERY_NAMESPACE,
-            lifetime="detached",
-            get_if_exists=True,
-        ).remote(args, restore_plan)
+        serving_options = options.copy()
+        if retain_serving:
+            # Ray resolves these stable names in one namespace. Reuse the detached
+            # owner first, then recreate/attach the manager against its deployment;
+            # manager death never requires discovering individual router processes.
+            session_name = training_session_name(args)
+            options.update(
+                name=session_name,
+                namespace=RECOVERY_NAMESPACE,
+                lifetime="detached",
+                get_if_exists=True,
+            )
+            serving_options.update(options, name=session_name + ":serving")
+        # Without retention, both owners use the default Ray job lifetime.
+        serving = startup.serving = ServingCluster.options(**serving_options).remote(args, restore_plan)
         # get_if_exists may return an old actor without running its constructor.
         # Attachment checks ownership and applies the new training configuration.
         deployment = ray.get(serving.attach_training.remote(args, ray.get_runtime_context().get_job_id()))
@@ -342,7 +349,6 @@ def _attach_rollout_manager(startup):
         startup.placements = placements
         for key, value in deployment.routers.items():
             setattr(args, key, value)
-        options.update(name=name, namespace=RECOVERY_NAMESPACE, lifetime="detached", get_if_exists=True)
     if args.rollout_data_transport == "nixl":
         options["enable_tensor_transport"] = True
     manager = startup.manager = RolloutManager.options(**options).remote(
@@ -359,7 +365,7 @@ def _attach_rollout_manager(startup):
         resume = ray.get(manager.attach_training.remote(args, deployment))
         restore_plan, reused = resume.restore_plan, resume.reused
         args = startup.args = resume.apply(args)
-        logger.info("%s serving session %s", "Reusing" if reused else "Created", name)
+        logger.info("%s serving session %s", "Reusing" if reused else "Created", session_name or "<job-scoped>")
     num_rollout_per_epoch = None
     if args.num_rollout is None:
         num_rollout_per_epoch = ray.get(manager.get_num_rollout_per_epoch.remote())

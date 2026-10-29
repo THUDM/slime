@@ -27,7 +27,7 @@ RECOVERY_NAMESPACE = "slime-training-recovery"
 
 
 def training_recovery_enabled(args):
-    # Serving is always retained internally. Trainer replay additionally needs
+    # Serving is retained internally by default. Trainer replay additionally needs
     # durable batches, regardless of the legacy --use-fault-tolerance flag.
     replay_storage = (
         getattr(args, "rollout_data_transport", "object-store") == "straw"
@@ -116,6 +116,7 @@ def retained_rollout_configuration(args):
         "ddp_bucket_size",
         "ddp_num_buckets",
         "use_fault_tolerance",
+        "retain_serving",
         "distributed_backend",
         "distributed_timeout_minutes",
         "rank",

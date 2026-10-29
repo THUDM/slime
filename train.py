@@ -111,8 +111,8 @@ def main(args, restore_plan):
                 startup.args, startup.placements, startup.manager, startup.num_rollout_per_epoch, startup.restore_plan
             )
         except BaseException:
-            # Failures and interruptions retain serving and replay data for a manual
-            # restart. Detach this driver's trainers instead of disposing the session.
+            # By default, failures and interruptions retain serving and replay data for a
+            # manual restart. Detach this driver's trainers instead of disposing the session.
             if startup is not None:
                 try:
                     startup.close(failed=True)
