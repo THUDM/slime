@@ -134,6 +134,10 @@ def execute(mode: str = "", optimizer: str = "cpu", checkpoint_dir: str = ""):
     diag_env = {"SLIME_CI_DIAG": "1"}
     if mode == "load":
         diag_env.update({"CUDA_LAUNCH_BLOCKING": "1", "CUDA_LOG_FILE": "stderr"})
+        if optimizer == "cpu":
+            # Workaround: cuMemHostAlloc fails ("Failed to allocate physical memory") in the post-load
+            # HybridDeviceOptimizer re-init on the CI runner, so do not pin the CPU optimizer params on load.
+            train_args += "--no-pin-cpu-params "
 
     U.execute_train(
         train_args=train_args,
