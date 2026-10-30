@@ -13,6 +13,9 @@ pkill -9 python
 
 set -euxo pipefail
 
+# rocm/primus base image presets these and they conflict with --attention-backend
+unset NVTE_FLASH_ATTN NVTE_FUSED_ATTN NVTE_UNFUSED_ATTN
+
 
 ### AMD Support ###
 SLIME_DIR="${SLIME_DIR:-/root}" # Default path if not set in environment
@@ -51,11 +54,12 @@ ROLLOUT_ARGS=(
    --label-key label
    --apply-chat-template
    --rollout-shuffle
-   --rm-type deepscaler
-   --num-rollout 3000
+   --rm-type dapo
+   --reward-key score
+   --num-rollout 100
    --rollout-batch-size 32
    --n-samples-per-prompt 8
-   --rollout-max-response-len 131072
+   --rollout-max-response-len 8192
    --rollout-temperature 1
 
    --global-batch-size 256
@@ -63,10 +67,11 @@ ROLLOUT_ARGS=(
 )
 
 EVAL_ARGS=(
-   --eval-interval 20
+   --eval-interval 10
+   --skip-eval-before-train
    --eval-prompt-data aime ${DATA_DIR}/aime-2024/aime-2024.jsonl
    --n-samples-per-eval-prompt 16
-   --eval-max-response-len 131072
+   --eval-max-response-len 8192
    --eval-top-p 1
 )
 
