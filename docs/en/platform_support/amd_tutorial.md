@@ -4,18 +4,24 @@ This tutorial uses the ROCm image for MI300/MI325.
 
 ## Environment Setup
 
-Build the image and start a container:
+Build the image or pull the image:
 
 ```bash
 cd docker
-docker build -f Dockerfile.rocm -t rlsys/slime:latest .
+docker build -f Dockerfile.rocm -t amdagi/slime:rocm7.15_torch2.12_py3.12 .
+or
+docker pull amdagi/slime:rocm7.15_torch2.12_py3.12
+```
+
+Start the container
+```bash
 docker run --rm -it \
   --device /dev/dri --device /dev/kfd \
   --group-add video --cap-add SYS_PTRACE \
   --security-opt seccomp=unconfined \
   --ipc=host --shm-size=128g \
   --ulimit memlock=-1 --ulimit stack=67108864 \
-  rlsys/slime:latest /bin/bash
+  amdagi/slime:rocm7.15_torch2.12_py3.12 /bin/bash
 ```
 
 ## Model and Data
@@ -35,7 +41,6 @@ On ROCm, the shared conversion script requires `--use-cpu-initialization` so tha
 ```bash
 cd /root/slime
 source scripts/models/qwen3-4B-Instruct-2507.sh
-unset NVTE_FLASH_ATTN NVTE_FUSED_ATTN NVTE_UNFUSED_ATTN
 PYTHONPATH=/workspace/Megatron-LM-amd_version python tools/convert_hf_to_torch_dist.py \
   "${MODEL_ARGS[@]}" \
   --no-gradient-accumulation-fusion \

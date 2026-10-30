@@ -1,16 +1,17 @@
 # slime (THUDM) + SGLang v0.5.21 + Megatron-LM core_v0.19.2 on ROCm, FROM the locked rocm/primus:v26.5.
 #
-# Mirrors slime docker/Dockerfile (the CUDA baseline): same SGLang tag, Megatron commit and slime
-# patch stack (docker/patch/v0.5.21), same sgl-router fork wheel. ROCm differences: torch, triton,
-# aiter, flash-attn and Transformer Engine come from the base image unchanged; sgl-kernel is built
-# from SGLang's AOT sources with setup_rocm.py; torch_memory_saver is built for HIP.
+# Mirrors slime docker/Dockerfile (the CUDA baseline): same SGLang tag, Megatron commit and
+# sgl-router fork wheel. slime is cloned from THUDM/slime main at build time, and the
+# docker/patch/v0.5.21 patches are applied from that clone rather than from the build context.
+# ROCm differences: torch, triton, aiter, flash-attn and Transformer Engine come from the base image
+# unchanged; sgl-kernel is built from SGLang's AOT sources with setup_rocm.py; torch_memory_saver is
+# built for HIP.
 FROM rocm/primus:v26.5
 
 ARG SGLANG_TAG=v0.5.21
 ARG SGLANG_COMMIT=e00930c5489053f26d86b179cee0d087f846acbb
 ARG MEGATRON_TAG=core_v0.19.2
 ARG MEGATRON_COMMIT=4b4acac9a1d28ea6829c8d4f566d75698a21249d
-ARG SLIME_COMMIT=18868a79b0b083a093798a94ed0f8cb4f71b9c14
 ARG TMS_COMMIT=118b09b3bc7b0cf386745db1eac2601d4aa7e681
 ARG GPU_TARGET=gfx942
 ARG BUILD_JOBS=64
@@ -39,12 +40,11 @@ RUN SP="$(python -c 'import site; print(site.getsitepackages()[0])')" && \
     fi && \
     python -c 'import amdsmi; print("amdsmi", amdsmi.__file__)'
 
-# ---- slime source (its docker/patch/${PATCH_VERSION} carries the SGLang + Megatron patch stack) ----
+# ---- slime source (latest main; docker/patch/${PATCH_VERSION} carries the SGLang + Megatron patch stack)
+# A cached layer keeps the commit from the last build. Pass --no-cache to pick up a newer main.
 ARG PATCH_VERSION=v0.5.21
-RUN git init -q /root/slime && cd /root/slime && \
-    git remote add origin https://github.com/THUDM/slime.git && \
-    git fetch -q --depth 1 origin "${SLIME_COMMIT}" && git checkout -q FETCH_HEAD && \
-    test "$(git rev-parse HEAD)" = "${SLIME_COMMIT}"
+RUN git clone --depth 1 https://github.com/THUDM/slime.git /root/slime && \
+    git -C /root/slime log -1 --oneline
 
 # ---- SGLang v0.5.21 + slime's SGLang patch stack --------------------------------------------------
 RUN git clone --depth 1 --branch "${SGLANG_TAG}" https://github.com/sgl-project/sglang.git /sgl-workspace/sglang && \
@@ -57,7 +57,7 @@ RUN git clone --depth 1 --branch "${SGLANG_TAG}" https://github.com/sgl-project/
     done
 
 # sgl-kernel replacement, as in SGLang's own docker/rocm.Dockerfile: build the AOT kernels with
-# setup_rocm.py. AMDGPU_TARGET is the validated arch (8x MI308X).
+# setup_rocm.py. AMDGPU_TARGET follows GPU_TARGET (gfx942 by default, the MI300 series).
 RUN cd /sgl-workspace/sglang/python/sglang/kernels/aot && \
     cp pyproject.toml /tmp/aot_pyproject.toml.orig && \
     cp pyproject_rocm.toml pyproject.toml && \
@@ -65,8 +65,9 @@ RUN cd /sgl-workspace/sglang/python/sglang/kernels/aot && \
     cp /tmp/aot_pyproject.toml.orig pyproject.toml && \
     python -c 'import sgl_kernel; print("sgl_kernel", sgl_kernel.__file__)'
 
-# SGLang itself. runtime_common instead of srt_hip*: those extras pin torch==2.11.0 and would replace
-# the image's torch 2.12. The rust extension only serves multimodal processors and needs cargo.
+# SGLang itself. runtime_common instead of srt_hip*: srt_hip_rocm724 pins torch==2.11.0, and srt_hip
+# adds petit_kernel and wave-lang on top of an unpinned torch; torch has to stay the base image's
+# build. The rust extension only serves multimodal processors and needs cargo.
 RUN cd /sgl-workspace/sglang && \
     cp python/pyproject.toml /tmp/sgl_pyproject.toml.orig && \
     cp python/pyproject_other.toml python/pyproject.toml && \
@@ -121,5 +122,17 @@ ENV LD_LIBRARY_PATH=/opt/venv/lib/python3.12/site-packages/_rocm_sdk_core/lib:/o
     RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES=1 \
     CUDA_DEVICE_MAX_CONNECTIONS=1 \
     PYTHONPATH=/root/Megatron-LM:/root/slime
+
+# Primus exports NVTE_FLASH_ATTN=0 and NVTE_FUSED_ATTN=1; NVTE_UNFUSED_ATTN is cleared too in
+# case anything sets it. Transformer Engine reads all three with int(os.getenv(name, "1")), so
+# the variables have to be absent for that default to apply. An empty ENV value is not absent
+# and makes int("") raise. Drop them here so every process started by `docker run` inherits the
+# cleared environment.
+RUN printf '%s\n' \
+      '#!/bin/bash' \
+      'unset NVTE_FLASH_ATTN NVTE_FUSED_ATTN NVTE_UNFUSED_ATTN' \
+      'exec "$@"' \
+      > /opt/slime/entrypoint.sh && chmod +x /opt/slime/entrypoint.sh
+ENTRYPOINT ["/opt/slime/entrypoint.sh"]
 
 WORKDIR /root/slime
