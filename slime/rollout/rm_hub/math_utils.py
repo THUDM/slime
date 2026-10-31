@@ -5,6 +5,7 @@ Answer checker API that uses sympy to simplify expressions and check for equalit
 Call grade_answer(given_answer: str, ground_truth: str).
 """
 import re
+from decimal import Decimal, InvalidOperation
 
 import sympy
 from pylatexenc import latex2text
@@ -197,21 +198,6 @@ def _parse_latex(expr: str) -> str:
     return expr.strip()
 
 
-def _is_float(num: str) -> bool:
-    try:
-        float(num)
-        return True
-    except Exception:
-        return False
-
-
-def _is_int(x: float) -> bool:
-    try:
-        return abs(x - int(round(x))) <= 1e-7
-    except Exception:
-        return False
-
-
 def _is_frac(expr: str) -> bool:
     return bool(re.search(r"^-?[0-9]+.?/0*[1-9][0-9]*.?$", expr))
 
@@ -219,16 +205,15 @@ def _is_frac(expr: str) -> bool:
 def _str_is_int(x: str) -> bool:
     try:
         x = _strip_properly_formatted_commas(x)
-        x = float(x)
-        return abs(x - int(round(x))) <= 1e-7
-    except Exception:
+        number = Decimal(x)
+        return number.is_finite() and number == number.to_integral_value()
+    except (InvalidOperation, ValueError):
         return False
 
 
 def _str_to_int(x: str) -> int:
     x = x.replace(",", "")
-    x = float(x)
-    return int(x)
+    return int(Decimal(x))
 
 
 def _inject_implicit_mixed_number(step: str):
@@ -298,8 +283,6 @@ def _normalize(expr: str) -> str:
         expr = expr[1:-1]
 
     expr = re.sub(",\\\\! *", "", expr)
-    if _is_float(expr) and _is_int(float(expr)):
-        expr = str(int(round(float(expr))))
     if "\\" in expr:
         try:
             expr = _parse_latex(expr)
