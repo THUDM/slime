@@ -4,8 +4,8 @@ Answer checker API that uses sympy to simplify expressions and check for equalit
 
 Call grade_answer(given_answer: str, ground_truth: str).
 """
-from decimal import Decimal, InvalidOperation
 import re
+from decimal import Decimal, InvalidOperation
 
 import sympy
 from pylatexenc import latex2text
