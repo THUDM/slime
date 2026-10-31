@@ -930,6 +930,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "utils/test_runtime_env_quoting.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_deep_ep_tms_patch.py"
             },
             {
@@ -1289,7 +1293,7 @@ jobs:
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install pytest numpy packaging pyyaml omegaconf tqdm httpx requests ray pybase64 pylatexenc sympy aiohttp pillow safetensors psutil
 
-          pip install transformers wandb zstandard
+          pip install transformers wandb zstandard typer
 
 
 
