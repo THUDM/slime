@@ -202,18 +202,21 @@ def _is_frac(expr: str) -> bool:
     return bool(re.search(r"^-?[0-9]+.?/0*[1-9][0-9]*.?$", expr))
 
 
+_INTEGER_TOLERANCE = Decimal("1e-7")
+
+
 def _str_is_int(x: str) -> bool:
     try:
         x = _strip_properly_formatted_commas(x)
         number = Decimal(x)
-        return number.is_finite() and number == number.to_integral_value()
+        return number.is_finite() and abs(number - number.to_integral_value()) <= _INTEGER_TOLERANCE
     except (InvalidOperation, ValueError):
         return False
 
 
 def _str_to_int(x: str) -> int:
     x = x.replace(",", "")
-    return int(Decimal(x))
+    return int(Decimal(x).to_integral_value())
 
 
 def _inject_implicit_mixed_number(step: str):
