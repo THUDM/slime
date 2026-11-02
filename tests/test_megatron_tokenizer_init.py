@@ -22,6 +22,8 @@ def load_init(cache_dir, build_tokenizer):
     )
     namespace = {
         "set_args": lambda args: None,
+        "set_run_config": None,
+        "pretrain_cfg_container_from_args": None,
         "_initialize_distributed": lambda args: None,
         "_set_random_seed": lambda *args: None,
         "_build_tokenizer": build_tokenizer,

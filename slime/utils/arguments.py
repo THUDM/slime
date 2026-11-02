@@ -1705,7 +1705,13 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
         # New Megatron versions default to NVRX, which requires an optional
         # dependency. Keep native async checkpointing as the default while
         # allowing an explicit --async-strategy choice on versions that support it.
-        if parser.get_default("async_strategy") is not None:
+        # Megatron releases that dropped the native strategy only accept "nvrx".
+        async_strategy_action = next((a for a in parser._actions if a.dest == "async_strategy"), None)
+        if (
+            parser.get_default("async_strategy") is not None
+            and async_strategy_action is not None
+            and (async_strategy_action.choices is None or "mcore" in async_strategy_action.choices)
+        ):
             parser.set_defaults(async_strategy="mcore")
 
         return parser

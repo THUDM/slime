@@ -645,9 +645,16 @@ def train_one_step(
                 loss_mask=batch["full_loss_masks"],
             )
         else:
+            position_ids = None
+            if args.enable_mtp_training:
+                # Newer Megatron asserts position_ids is not None in the MTP layer even for
+                # rope models, where it is otherwise unused.
+                tokens = batch["tokens"]
+                position_ids = torch.arange(tokens.size(-1), device=tokens.device).expand_as(tokens)
+
             forward_kwargs = {
                 "input_ids": batch["tokens"],
-                "position_ids": None,
+                "position_ids": position_ids,
                 "attention_mask": None,
                 "labels": None,
                 "packed_seq_params": batch["packed_seq_params"],
@@ -883,13 +890,21 @@ def train(
 
             mtp_loss_scale = 1 / num_microbatches[step_id]
             tracker = MTPLossLoggingHelper.tracker
+            # Newer Megatron accumulates into "loss_sums" and reduces across ranks itself;
+            # "values" only exists after reduce_loss_in_tracker().
+            reduced_by_megatron = "loss_sums" in tracker and hasattr(MTPLossLoggingHelper, "reduce_loss_in_tracker")
+            if reduced_by_megatron:
+                MTPLossLoggingHelper.reduce_loss_in_tracker()
             loss_key = "loss_values" if "loss_values" in tracker else "values"
             if loss_key in tracker:
                 values = tracker[loss_key]
-                if tracker.get("reduce_group") is not None:
-                    torch.distributed.all_reduce(values, group=tracker.get("reduce_group"))
-                if tracker.get("avg_group") is not None:
-                    torch.distributed.all_reduce(values, group=tracker["avg_group"], op=torch.distributed.ReduceOp.AVG)
+                if not reduced_by_megatron:
+                    if tracker.get("reduce_group") is not None:
+                        torch.distributed.all_reduce(values, group=tracker.get("reduce_group"))
+                    if tracker.get("avg_group") is not None:
+                        torch.distributed.all_reduce(
+                            values, group=tracker["avg_group"], op=torch.distributed.ReduceOp.AVG
+                        )
                 # Multi-head MTP losses have shape [num_mtp_layers]; aggregate below.
                 mtp_losses = values * mtp_loss_scale
                 if hasattr(MTPLossLoggingHelper, "clean_metrics_in_tracker"):
