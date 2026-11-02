@@ -169,6 +169,16 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--update-weight-broadcast-mode",
+                choices=["per-param", "flattened-bucket"],
+                default="per-param",
+                help=(
+                    "NCCL full-weight broadcast granularity. 'per-param' (default) broadcasts each "
+                    "parameter separately; 'flattened-bucket' flattens each update bucket and broadcasts "
+                    "it once. The latter requires an SGLang build with flattened_bucket support."
+                ),
+            )
+            parser.add_argument(
                 "--release-train",
                 action="store_true",
                 default=False,
@@ -2241,6 +2251,13 @@ def slime_validate_args(args):
         raise ValueError(
             "--update-weight-transport=disk requires --update-weight-disk-dir to point at "
             "a filesystem shared between the trainer and the rollout engines."
+        )
+    if getattr(args, "update_weight_broadcast_mode", "per-param") == "flattened-bucket" and (
+        args.update_weight_mode != "full" or args.update_weight_transport != "nccl"
+    ):
+        raise ValueError(
+            "--update-weight-broadcast-mode=flattened-bucket requires "
+            "--update-weight-mode=full and --update-weight-transport=nccl."
         )
     if args.release_train:
         if args.use_critic:

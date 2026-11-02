@@ -27,6 +27,8 @@ from .update_weight_from_distributed import (
     update_weights_from_distributed,
 )
 
+UPDATE_WEIGHT_BROADCAST_MODE_PER_PARAM = "per-param"
+
 
 def _build_flattened_tensor_data(
     named_tensors: list[tuple[str, torch.Tensor]],
@@ -368,6 +370,11 @@ class UpdateWeightFromTensor:
                 self.weight_version,
                 self.distributed_rollout_engines,
                 hf_named_tensors,
+                broadcast_mode=getattr(
+                    self.args,
+                    "update_weight_broadcast_mode",
+                    UPDATE_WEIGHT_BROADCAST_MODE_PER_PARAM,
+                ),
             )
             if refs_distributed:
                 all_refs.extend(refs_distributed)
