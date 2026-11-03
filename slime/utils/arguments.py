@@ -1597,6 +1597,17 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
             )
             parser.add_argument(
+                "--megatron-deepgemm-cache-weights",
+                action="store_true",
+                default=False,
+                help=(
+                    "Cache quantized dense and grouped-MoE weights within each Megatron "
+                    "forward/backward step or log-prob evaluation. Reuses FP8 weights across "
+                    "microbatches and recomputation; releases them before optimizer updates. "
+                    "Uses additional GPU memory for FP8 weights and scales. Default: disabled."
+                ),
+            )
+            parser.add_argument(
                 "--megatron-deepgemm-forward-layers",
                 nargs="+",
                 type=int,

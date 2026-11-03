@@ -32,6 +32,7 @@ from slime.observability import logging_utils, train_metric_utils
 from slime.utils import accelerator
 from slime.utils.memory_utils import clear_memory
 
+from .alignment.weight_cache import deepgemm_weight_cache_scope
 from .checkpoint import load_checkpoint, save_checkpoint
 from .data import DataIterator, get_batch
 from .loss import ROLLOUT_TOP_P_TOKEN_KEYS, get_rollout_top_p_logprob_kwargs, loss_function
@@ -492,16 +493,18 @@ def forward_only(
         disable=_disable_tqdm_for_non_main_rank(),
     )
     forward_step_with_progress = _wrap_forward_step_with_microbatch_pbar(forward_step, microbatch_pbar)
-    for step_id in range(num_steps_per_rollout):
-        forward_data_store += forward_backward_func(
-            forward_step_func=forward_step_with_progress,
-            data_iterator=data_iterator,
-            model=model,
-            num_microbatches=num_microbatches[step_id],
-            seq_length=args.seq_length,
-            micro_batch_size=args.micro_batch_size,
-            forward_only=True,
-        )
+    # Each evaluation call owns a separate cache (actor/ref/old-policy safe).
+    with deepgemm_weight_cache_scope(getattr(args, "megatron_deepgemm_cache_weights", False)):
+        for step_id in range(num_steps_per_rollout):
+            forward_data_store += forward_backward_func(
+                forward_step_func=forward_step_with_progress,
+                data_iterator=data_iterator,
+                model=model,
+                num_microbatches=num_microbatches[step_id],
+                seq_length=args.seq_length,
+                micro_batch_size=args.micro_batch_size,
+                forward_only=True,
+            )
     microbatch_pbar.close()
 
     # Move model back to the train mode.
@@ -669,16 +672,19 @@ def train_one_step(
 
     # Forward pass.
     forward_backward_func = get_forward_backward_func()
-    losses_reduced = forward_backward_func(
-        forward_step_func=_wrap_forward_step_with_microbatch_pbar(forward_step, microbatch_pbar),
-        data_iterator=data_iterator,
-        model=model,
-        num_microbatches=num_microbatches,
-        seq_length=args.seq_length,
-        micro_batch_size=args.micro_batch_size,
-        decoder_seq_length=args.decoder_seq_length,
-        forward_only=False,
-    )
+    # Reuse weights across microbatches and checkpoint recomputation. Exit
+    # before optimizer.step(), including when fused updates bypass _version.
+    with deepgemm_weight_cache_scope(getattr(args, "megatron_deepgemm_cache_weights", False)):
+        losses_reduced = forward_backward_func(
+            forward_step_func=_wrap_forward_step_with_microbatch_pbar(forward_step, microbatch_pbar),
+            data_iterator=data_iterator,
+            model=model,
+            num_microbatches=num_microbatches,
+            seq_length=args.seq_length,
+            micro_batch_size=args.micro_batch_size,
+            decoder_seq_length=args.decoder_seq_length,
+            forward_only=False,
+        )
 
     valid_step = True
     grad_norm = float("nan")

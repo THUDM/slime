@@ -76,3 +76,24 @@ DeepEP 对齐参考结果为 `x e-7` 量级）。
 另有一个较短的 EP8 gate `tests/test_glm52_layerwise_zero_e2e.py`，会同时
 记录训推两侧 decoder layer 0–5 的可见输出，并要求所有匹配 hidden-state
 元素的绝对误差严格等于 0。
+
+### DeepGEMM 训练前向的 FP8 权重缓存
+
+使用自定义 DeepGEMM 前向时，可添加 `--megatron-deepgemm-cache-weights`
+（默认关闭）。该开关不负责安装 DeepGEMM hook；仍需配置所需层和 hook。
+
+开启后，Dense Linear 和 grouped MoE 的权重在每个训练 step 的
+forward/backward 调度范围内按需量化一次，供后续 microbatch 和 activation
+checkpoint 重算复用。缓存只包含 FP8 权重及 scale，不缓存激活。同一调度中
+权重版本、存储位置或布局改变会重新量化；MoE 按 expert 分组保存缓存。
+
+缓存会在进入 optimizer 更新前释放，异常退出也会释放。每次 logprob/value
+前向评估使用独立缓存，结束后释放，避免 actor/ref/old-policy 切换时复用旧值。
+它不依赖优化器是否更新 Tensor 的版本计数，也不跨训练 step 持久保存。
+在标准调度之外直接调用低层函数时，可用
+`deepgemm_weight_cache_scope(True)` 显式限定权重不变的范围；不要在这个范围内
+通过 `.data` 原地改写权重。
+
+开关开启会增加存活 FP8 权重（约每参数 1 字节）及 scale 的显存占用；MoE
+缓存拥有独立存储，不再将缓存内容放入随后被激活覆盖的临时工作区。关闭时
+保留原有每次前向量化和工作区复用行为。它不改变激活量化、前向精度或反向规则。

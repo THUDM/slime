@@ -13,12 +13,18 @@ import pytest
 import torch
 from torch.multiprocessing import reductions
 
+from slime.backends.megatron_utils.alignment.weight_cache import (
+    deepgemm_weight_cache_scope,
+    is_deepgemm_weight_cache_enabled,
+)
+
 NUM_GPUS = 0
 
 
 @pytest.mark.parametrize("norm_type", ["float", "scalar_tensor", "vector_tensor"])
 @pytest.mark.parametrize("finite", [False, True])
-def test_optimizer_step_returns_scalar_norm_and_skips_invalid_gradients(norm_type, finite):
+@pytest.mark.parametrize("cache_weights", [None, False, True])
+def test_optimizer_step_returns_scalar_norm_and_skips_invalid_gradients(norm_type, finite, cache_weights):
     path = Path(__file__).resolve().parents[1] / "slime/backends/megatron_utils/model.py"
     function = next(
         node
@@ -37,9 +43,16 @@ def test_optimizer_step_returns_scalar_norm_and_skips_invalid_gradients(norm_typ
         decoder_seq_length=None,
         calculate_per_token_loss=False,
     )
+    if cache_weights is not None:
+        args.megatron_deepgemm_cache_weights = cache_weights
     updates, samples = [], []
 
+    def forward_backward(**kwargs):
+        assert is_deepgemm_weight_cache_enabled() is bool(cache_weights)
+        return []
+
     def step():
+        assert not is_deepgemm_weight_cache_enabled()
         updates.append(True)
         return True, norm, 0
 
@@ -50,7 +63,8 @@ def test_optimizer_step_returns_scalar_norm_and_skips_invalid_gradients(norm_typ
         "get_args": lambda: args,
         "torch": torch,
         "math": math,
-        "get_forward_backward_func": lambda: lambda **kwargs: [],
+        "get_forward_backward_func": lambda: forward_backward,
+        "deepgemm_weight_cache_scope": deepgemm_weight_cache_scope,
         "_wrap_forward_step_with_microbatch_pbar": lambda forward, progress: forward,
         "mpu": types.SimpleNamespace(
             is_pipeline_last_stage=lambda **kwargs: True,
@@ -75,6 +89,7 @@ def test_optimizer_step_returns_scalar_norm_and_skips_invalid_gradients(norm_typ
         1,
         16,
     )
+    assert not is_deepgemm_weight_cache_enabled()
     assert losses == {"loss": 1.0} and isinstance(grad_norm, float)
     assert grad_norm == value if finite else math.isnan(grad_norm)
     assert updates == ([True] if finite else [])

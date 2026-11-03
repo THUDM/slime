@@ -320,6 +320,10 @@ jobs:
               "test_file": "test_glm5_next_gpu.py"
             },
             {
+              "num_gpus": 1,
+              "test_file": "test_deepgemm_weight_cache.py"
+            },
+            {
               "num_gpus": 4,
               "test_file": "test_glm5_next_cp.py"
             },
@@ -1582,6 +1586,10 @@ jobs:
             {
               "num_gpus": 1,
               "test_file": "test_glm5_next_gpu.py"
+            },
+            {
+              "num_gpus": 1,
+              "test_file": "test_deepgemm_weight_cache.py"
             },
             {
               "num_gpus": 4,

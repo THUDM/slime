@@ -23,6 +23,8 @@ from collections.abc import Iterable
 import torch
 from megatron.core import parallel_state
 
+from .weight_cache import get_quantized_weight
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -477,22 +479,32 @@ def _deepgemm_linear(
         raise RuntimeError(f"DeepGEMM input/weight K mismatch: {input_.shape[-1]} != {weight.shape[-1]}")
 
     with torch.no_grad():
-        if deep_gemm_wrapper.DEEPGEMM_SCALE_UE8M0:
-            # Blackwell (sm100/sm103): the block-FP8 GEMM requires UE8M0
-            # (power-of-two) weight scales. The SGLang rollout produces these by
-            # quantizing the BF16 weight to FP8 (slime quantizer_fp8 ->
-            # quant_weight_ue8m0) and then *requantizing* in
-            # process_weights_after_loading (requant_weight_ue8m0). That requant
-            # is lossy (recomputes per-block scales on the rounded values), so a
-            # single quant_weight_ue8m0 here would NOT bit-match the rollout.
-            # Replicate the same quant -> requant chain to align to ~e-7.
-            from sglang.srt.layers.quantization.fp8_utils import quant_weight_ue8m0, requant_weight_ue8m0
+        scale_ue8m0 = bool(deep_gemm_wrapper.DEEPGEMM_SCALE_UE8M0)
 
-            qweight, weight_scale = quant_weight_ue8m0(weight.detach().contiguous(), [128, 128])
-            qweight, weight_scale = requant_weight_ue8m0(qweight, weight_scale, [128, 128])
-        else:
-            # Hopper (sm90): FP32 block scales. Unchanged.
-            qweight, weight_scale = blockwise_cast_to_fp8_triton(weight.detach().contiguous(), (128, 128))
+        def quantize_weight():
+            if scale_ue8m0:
+                # Blackwell (sm100/sm103): the block-FP8 GEMM requires UE8M0
+                # (power-of-two) weight scales. The SGLang rollout produces these by
+                # quantizing the BF16 weight to FP8 (slime quantizer_fp8 ->
+                # quant_weight_ue8m0) and then *requantizing* in
+                # process_weights_after_loading (requant_weight_ue8m0). That requant
+                # is lossy (recomputes per-block scales on the rounded values), so a
+                # single quant_weight_ue8m0 here would NOT bit-match the rollout.
+                # Replicate the same quant -> requant chain to align to ~e-7.
+                from sglang.srt.layers.quantization.fp8_utils import quant_weight_ue8m0, requant_weight_ue8m0
+
+                qweight, weight_scale = quant_weight_ue8m0(weight.detach().contiguous(), [128, 128])
+                qweight, weight_scale = requant_weight_ue8m0(qweight, weight_scale, [128, 128])
+            else:
+                # Hopper (sm90): FP32 block scales. Unchanged.
+                qweight, weight_scale = blockwise_cast_to_fp8_triton(weight.detach().contiguous(), (128, 128))
+            return qweight, weight_scale
+
+        # Checkpoint recomputation can pass a detached Tensor sharing the
+        # Parameter's storage. Reuse that storage, not its Python object id.
+        qweight, weight_scale = get_quantized_weight(
+            ("dense", weight.device, weight.data_ptr(), scale_ue8m0), (weight,), quantize_weight
+        )
         return deepgemm_w8a8_block_fp8_linear_with_fallback(
             input_.detach().contiguous(),
             qweight,
