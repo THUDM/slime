@@ -172,6 +172,14 @@ def test_native_async_checkpoint_default_preserves_explicit_strategy(monkeypatch
     assert parser.parse_args(command).async_strategy == (strategy or "mcore")
 
 
+def test_nvrx_only_megatron_parser_keeps_nvrx_default(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--async-strategy", choices=["nvrx"], default="nvrx")
+    module.get_slime_extra_args_provider()(parser)
+    assert parser.parse_args(["--rollout-batch-size", "1"]).async_strategy == "nvrx"
+
+
 def test_legacy_megatron_parser_does_not_gain_async_strategy(monkeypatch):
     module = load_slime_arguments_module(monkeypatch)
     parser = argparse.ArgumentParser()
