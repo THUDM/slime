@@ -13,7 +13,7 @@ from megatron.training.global_vars import _build_tokenizer, set_args
 from transformers.utils import HF_MODULES_CACHE
 
 try:
-    # Newer Megatron keeps a run config next to args; get_model and the training loop read it.
+    # Megatron ae76c60e6 keeps a run config next to args; get_model and the training loop read it.
     from megatron.training.argument_utils import pretrain_cfg_container_from_args
     from megatron.training.global_vars import set_run_config
 except ImportError:

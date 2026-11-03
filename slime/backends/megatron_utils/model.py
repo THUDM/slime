@@ -645,16 +645,9 @@ def train_one_step(
                 loss_mask=batch["full_loss_masks"],
             )
         else:
-            position_ids = None
-            if args.enable_mtp_training:
-                # Newer Megatron asserts position_ids is not None in the MTP layer even for
-                # rope models, where it is otherwise unused.
-                tokens = batch["tokens"]
-                position_ids = torch.arange(tokens.size(-1), device=tokens.device).expand_as(tokens)
-
             forward_kwargs = {
                 "input_ids": batch["tokens"],
-                "position_ids": position_ids,
+                "position_ids": None,
                 "attention_mask": None,
                 "labels": None,
                 "packed_seq_params": batch["packed_seq_params"],
@@ -888,11 +881,26 @@ def train(
         if args.enable_mtp_training:
             from megatron.core.transformer.multi_token_prediction import MTPLossLoggingHelper
 
-            mtp_loss_scale = 1 / num_microbatches[step_id]
+            # This block reproduces Megatron's MTPLossLoggingHelper.track_mtp_metrics: reduce the tracker across
+            # ranks, take the reduced values, multiply by a scale, then clean the tracker. slime does not call it
+            # directly because it uses its own scale (1 / num_microbatches) and its own logging and CI check
+            # (check_mtp_loss).
             tracker = MTPLossLoggingHelper.tracker
-            # Newer Megatron accumulates into "loss_sums" and reduces across ranks itself;
+            # Megatron ae76c60e6 accumulates into "loss_sums" and reduces across ranks itself;
             # "values" only exists after reduce_loss_in_tracker().
             reduced_by_megatron = "loss_sums" in tracker and hasattr(MTPLossLoggingHelper, "reduce_loss_in_tracker")
+            if reduced_by_megatron and args.calculate_per_token_loss:
+                # tracker already holds sum(loss) / sum(tokens) after reduce_loss_in_tracker(), so it must not be
+                # averaged by the microbatch count again. Same rule as Megatron's own training loop
+                # (commit ae76c60e6c35d913867d6dd7bad0f30b128b54e7, megatron/training/training.py L5409-L5418):
+                # https://github.com/NVIDIA/Megatron-LM/blob/ae76c60e6c35d913867d6dd7bad0f30b128b54e7/megatron/training/training.py#L5409-L5418  # noqa: E501
+                # The division by the token count is in MTPLossLoggingHelper.reduce_loss_in_tracker()
+                # (megatron/core/transformer/multi_token_prediction.py L1647-L1673, same commit):
+                # https://github.com/NVIDIA/Megatron-LM/blob/ae76c60e6c35d913867d6dd7bad0f30b128b54e7/megatron/core/transformer/multi_token_prediction.py#L1647-L1673  # noqa: E501
+                mtp_loss_scale = 1.0
+            else:
+                # Microbatch-normalized losses were summed over the microbatches, so average them.
+                mtp_loss_scale = 1 / num_microbatches[step_id]
             if reduced_by_megatron:
                 MTPLossLoggingHelper.reduce_loss_in_tracker()
             loss_key = "loss_values" if "loss_values" in tracker else "values"

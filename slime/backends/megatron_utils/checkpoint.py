@@ -170,7 +170,7 @@ def load_checkpoint(ddp_model, optimizer, opt_param_scheduler, checkpointing_con
             opt_param_scheduler=opt_param_scheduler,
             checkpointing_context=checkpointing_context,
             skip_load_to_model_and_opt=False,
-            # Newer Megatron only restores optimizer / scheduler / data progress on request.
+            # Megatron ae76c60e6 only restores optimizer / scheduler / data progress on request.
             **({"restore_training_state": optimizer is not None} if _load_supports_restore_training_state() else {}),
         )
         if getattr(args, "ckpt_step", None) is not None and not args.finetune and result[0] != args.ckpt_step:

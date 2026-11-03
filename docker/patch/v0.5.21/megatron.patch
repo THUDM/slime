@@ -3,7 +3,7 @@ index b01f466f1..b9902a534 100644
 --- a/megatron/core/dist_checkpointing/strategies/common.py
 +++ b/megatron/core/dist_checkpointing/strategies/common.py
 @@ -45,7 +45,7 @@ def load_common(checkpoint_dir: str):
- 
+
      load_path = os.path.join(checkpoint_dir, COMMON_STATE_FNAME)
      try:
 -        return maybe_msc.torch.load(load_path, map_location='cpu')
@@ -50,11 +50,11 @@ index bb2a7784f..300ebede7 100644
 +++ b/megatron/core/inference/contexts/dynamic_context.py
 @@ -80,8 +80,9 @@ except ImportError:
      HAVE_FLASHINFER = False
- 
+
  try:
 -    from torch_memory_saver import torch_memory_saver
 +    from torch_memory_saver import TorchMemorySaver
- 
+
 +    torch_memory_saver = TorchMemorySaver()
      torch_memory_saver.hook_mode = "torch"
      HAVE_TORCH_MEMORY_SAVER = True
@@ -77,7 +77,7 @@ index c0aac7eb1..b04f14a3b 100644
              output_processor_context=output_processor_context,
 +            mtp_kwargs=mtp_kwargs,
          )
- 
+
      def _postprocess(
 @@ -783,6 +785,7 @@ class GPTModel(LanguageModule, GraphableMegatronModule):
          mhc_multistream=None,
@@ -86,11 +86,11 @@ index c0aac7eb1..b04f14a3b 100644
 +        mtp_kwargs=None,
      ):
          """Postprocesses decoder hidden states to generate logits or compute loss.
- 
+
 @@ -848,12 +851,20 @@ class GPTModel(LanguageModule, GraphableMegatronModule):
                      mtp_input_mask=mtp_input_mask if mtp_in_postprocess else None,
                  )
- 
+
 +        # RL-style callers run several label-free forward passes over the same batch
 +        # (reference / old-actor log probs). MTP is only meaningful when labels are
 +        # available, so it is opt-in per forward: either `labels`, or `mtp_labels`
@@ -103,7 +103,7 @@ index c0aac7eb1..b04f14a3b 100644
          output_weight = None
          if self.share_embeddings_and_output_weights:
              output_weight = self.shared_embedding_or_output_weight()
- 
+
 -        if mtp_in_postprocess and not (in_inference_mode or is_spec_decode):
 +        if mtp_in_postprocess and run_mtp and not (in_inference_mode or is_spec_decode):
              hidden_states = self.mtp(
@@ -112,7 +112,7 @@ index c0aac7eb1..b04f14a3b 100644
 @@ -876,7 +887,7 @@ class GPTModel(LanguageModule, GraphableMegatronModule):
          if not self.post_process:
              return hidden_states
- 
+
 -        if self.config.mtp_num_layers:
 +        if self.config.mtp_num_layers and run_mtp:
              assert self.config.mtp_num_layers > 0
@@ -134,7 +134,7 @@ index 052bcb0d9..307883f93 100644
 @@ -380,12 +380,18 @@ class HybridDeviceOptimizer(torch.optim.Optimizer):
              if fp32_param is not None:
                  fp32_param.data.copy_(v["master_param"])
- 
+
 +    @torch.no_grad()
      def update_fp32_param_by_new_param(self):
          """
@@ -150,7 +150,7 @@ index 052bcb0d9..307883f93 100644
 +        for param, inner_param in self.param_to_inner_param.items():
 +            if inner_param is not param:
 +                inner_param.copy_(param)
- 
+
      def _register_load_state_dict_hooks(self):
          def pre_load_state_dict_hook(self, state_dict):
 diff --git a/megatron/core/optimizer/distrib_optimizer.py b/megatron/core/optimizer/distrib_optimizer.py
@@ -163,7 +163,7 @@ index 0789ce36a..f8f9a405b 100644
                  param_group["step"] = int(step)
 +            if "step" in param_group and param_group["step"] is None:
 +                del param_group["step"]
- 
+
          # Grad scaler state.
          if self.grad_scaler:
 @@ -1469,6 +1471,11 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
@@ -189,7 +189,7 @@ index 0789ce36a..f8f9a405b 100644
 +
                          # Main param & optimizer states.
                          self._set_main_param_and_optimizer_states(model_param, src_tensors)
- 
+
 diff --git a/megatron/core/transformer/multi_token_prediction.py b/megatron/core/transformer/multi_token_prediction.py
 index 153c24aff..774c4e51a 100755
 --- a/megatron/core/transformer/multi_token_prediction.py
@@ -216,7 +216,7 @@ index 68dc306e0..c5064e3d7 100644
 -            self.field_docstrings[attribute.name] if attribute.name in self.field_docstrings else ""
 -        )
 +        argparse_kwargs["help"] = self.field_docstrings.get(attribute.name, "").replace("%", "%%")
- 
+
          # dataclasses specifies that both should not be set
          if isinstance(attribute.default, type(dataclasses.MISSING)):
 diff --git a/megatron/training/checkpointing.py b/megatron/training/checkpointing.py
@@ -225,15 +225,15 @@ index c0e32ebfb..ae3c9e99e 100644
 +++ b/megatron/training/checkpointing.py
 @@ -349,8 +349,8 @@ def get_load_checkpoint_path_by_args(args, load_arg='load'):
              iteration, release = read_metadata(tracker_filename)
- 
+
      # Allow user to specify the loaded iteration.
 -    if getattr(args, 'ckpt_step', None):
 -        iteration = args.ckpt_step
 +    if getattr(args, "ckpt_step", None) is not None:
 +        iteration, release = args.ckpt_step, False
- 
+
      return get_checkpoint_name(load_dir, iteration, release, return_base_dir=True)
- 
+
 @@ -2260,8 +2260,10 @@ def _load_base_checkpoint(
          if args.non_persistent_global_ckpt_dir or load_dir is None
          else os.path.join(load_dir, _NON_PERSISTENT_CKPT_SUBDIR)
@@ -249,13 +249,13 @@ index c0e32ebfb..ae3c9e99e 100644
      tracker_filename = 'because load directory is not defined'
 @@ -2271,8 +2273,8 @@ def _load_base_checkpoint(
              iteration, release = read_metadata(tracker_filename)
- 
+
      # Allow user to specify the loaded iteration.
 -    if getattr(args, 'ckpt_step', None):
 -        iteration = args.ckpt_step
 +    if getattr(args, "ckpt_step", None) is not None:
 +        iteration, release = args.ckpt_step, False
- 
+
      # Record the iteration loaded (stored separately from args to avoid
      # polluting checkpoints, since args is saved in checkpoints).
 diff --git a/megatron/training/training.py b/megatron/training/training.py
@@ -264,11 +264,11 @@ index 0fc70f6d5..e07b8af66 100644
 +++ b/megatron/training/training.py
 @@ -247,8 +247,9 @@ except ImportError:
      HAVE_FSDP2 = False
- 
+
  try:
 -    from torch_memory_saver import torch_memory_saver
 +    from torch_memory_saver import TorchMemorySaver
- 
+
 +    torch_memory_saver = TorchMemorySaver()
      torch_memory_saver.hook_mode = "torch"
      HAVE_TORCH_MEMORY_SAVER = True

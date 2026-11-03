@@ -3,7 +3,7 @@ index 3ffb97dac..866f75715 100644
 --- a/megatron/core/transformer/transformer_layer.py
 +++ b/megatron/core/transformer/transformer_layer.py
 @@ -3,6 +3,7 @@ from __future__ import annotations
- 
+
  import functools
  import logging
 +import os
@@ -12,8 +12,8 @@ index 3ffb97dac..866f75715 100644
  from contextlib import AbstractContextManager, nullcontext
 @@ -78,6 +79,22 @@ def _get_offloading_interface():
      return FineGrainedActivationOffloadingInterface
- 
- 
+
+
 +def _use_sglang_fused_residual_rmsnorm() -> bool:
 +    """Whether to match SGLang's FP32 residual-add/RMSNorm boundary."""
 +
@@ -50,7 +50,7 @@ index 3ffb97dac..866f75715 100644
 +                        input_layernorm_output = (input_layernorm_output, hidden_states)
 +                else:
 +                    input_layernorm_output = apply_module(self.input_layernorm)(hidden_states)
- 
+
          if recompute_context is not None and self.config.fine_grained_activation_offloading:
              output = (
 @@ -1109,6 +1137,16 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer, TwoStageAt
@@ -115,11 +115,11 @@ index 3ffb97dac..866f75715 100644
 @@ -1732,6 +1796,10 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer, TwoStageAt
              inp=hidden_states, requires_grad=hidden_states.requires_grad, keep_graph=True
          )
- 
+
 +        exact_layer_sum = getattr(self, "_sglang_residual_sum_fp32", None)
 +        if _use_sglang_fused_residual_rmsnorm() and exact_layer_sum is not None:
 +            output._sglang_residual_sum_fp32 = exact_layer_sum
 +
          return output
- 
+
      def sharded_state_dict(

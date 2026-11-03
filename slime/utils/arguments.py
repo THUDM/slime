@@ -1702,10 +1702,10 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             help="Path to the YAML config for custom function arguments.",
         )
         reset_arg(parser, "--padded-vocab-size", type=int, default=None)
-        # New Megatron versions default to NVRX, which requires an optional
+        # Megatron 4b4acac9a defaults --async-strategy to NVRX, which requires an optional
         # dependency. Keep native async checkpointing as the default while
         # allowing an explicit --async-strategy choice on versions that support it.
-        # Megatron releases that dropped the native strategy only accept "nvrx".
+        # Megatron ae76c60e6 dropped the native strategy and only accepts "nvrx".
         async_strategy_action = next((a for a in parser._actions if a.dest == "async_strategy"), None)
         if (
             parser.get_default("async_strategy") is not None
