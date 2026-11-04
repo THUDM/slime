@@ -169,15 +169,19 @@ def named_params_and_buffers(args: Namespace, model: Sequence[torch.nn.Module]) 
 
                 # MTP layer indices start from 0
                 layer_idx, rest = match.groups()
-                expert_pattern = r"transformer_layer\.mlp\.experts\.(.+)\.(weight|bias)(\d+)"
-                match = re.match(expert_pattern, rest)
+                # GPT MTP: `transformer_layer.mlp.experts.*`. Hybrid (Nemotron-H) MTP nests a
+                # HybridStack: `mtp_model_layer.layers.{k}.mlp.experts.*`. Both need the EP-local
+                # expert index turned into the global one, or every EP rank publishes the same
+                # names and the weight sync silently overwrites itself.
+                expert_pattern = r"(.*?)mlp\.experts\.(.+)\.(weight|bias)(\d+)"
+                match = re.fullmatch(expert_pattern, rest)
                 if not match:
                     yield name, param
                     continue
 
-                rest, param_type, expert_idx = match.groups()
+                layer_path, rest, param_type, expert_idx = match.groups()
                 expert_idx = int(expert_idx) + expert_offset
-                yield f"{prefix}mtp.layers.{layer_idx}.transformer_layer.mlp.experts.{rest}.{param_type}{expert_idx}", param
+                yield f"{prefix}mtp.layers.{layer_idx}.{layer_path}mlp.experts.{rest}.{param_type}{expert_idx}", param
                 continue
 
             layer_idx, rest = match.groups()
