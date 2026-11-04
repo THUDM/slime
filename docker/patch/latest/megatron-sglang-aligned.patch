@@ -1,5 +1,5 @@
 diff --git a/megatron/core/transformer/transformer_layer.py b/megatron/core/transformer/transformer_layer.py
-index 3ffb97dac..866f75715 100644
+index 0f8d0ccc1..1797721c2 100644
 --- a/megatron/core/transformer/transformer_layer.py
 +++ b/megatron/core/transformer/transformer_layer.py
 @@ -3,6 +3,7 @@ from __future__ import annotations
@@ -33,7 +33,7 @@ index 3ffb97dac..866f75715 100644
  def get_transformer_layer_offset(
      config: TransformerConfig, vp_stage: Optional[int] = None, pp_rank: Optional[int] = None
  ):
-@@ -1021,7 +1038,18 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer, TwoStageAt
+@@ -1005,7 +1022,18 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer, TwoStageAt
                  )
          else:
              with self.attn_norm_manager as hidden_states:
@@ -53,7 +53,7 @@ index 3ffb97dac..866f75715 100644
 
          if recompute_context is not None and self.config.fine_grained_activation_offloading:
              output = (
-@@ -1109,6 +1137,16 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer, TwoStageAt
+@@ -1082,6 +1110,16 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer, TwoStageAt
                          dropout_probability=self.hidden_dropout,
                          training=self.training,
                      )
@@ -70,7 +70,7 @@ index 3ffb97dac..866f75715 100644
          else:
              with self.bias_dropout_add_exec_handler():
                  hidden_states = self.self_attn_bda(self.training, self.config.bias_dropout_fusion)(
-@@ -1212,7 +1250,23 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer, TwoStageAt
+@@ -1185,7 +1223,23 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer, TwoStageAt
              or replay_pre_mlp_layernorm
              or (mhc_recompute_manager is not None and self.mhc_checkpoint_pre_mlp_layernorm)
          )
@@ -95,7 +95,7 @@ index 3ffb97dac..866f75715 100644
              self.pre_mlp_norm_checkpoint = tensor_parallel.CheckpointWithoutOutput(
                  ckpt_manager=(
                      residual_stream_recompute_context.manager
-@@ -1707,6 +1761,16 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer, TwoStageAt
+@@ -1669,6 +1723,16 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer, TwoStageAt
                          dropout_probability=self.hidden_dropout,
                          training=self.training,
                      )
@@ -112,7 +112,7 @@ index 3ffb97dac..866f75715 100644
          else:
              with self.bias_dropout_add_exec_handler():
                  hidden_states = self.mlp_bda(self.training, self.config.bias_dropout_fusion)(
-@@ -1732,6 +1796,10 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer, TwoStageAt
+@@ -1694,6 +1758,10 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer, TwoStageAt
              inp=hidden_states, requires_grad=hidden_states.requires_grad, keep_graph=True
          )
 
