@@ -6,6 +6,7 @@ so they need a Megatron install with `megatron.core.models.hybrid` (MCore >= 0.2
 """
 
 import dataclasses
+import re
 import types
 from unittest import mock
 
@@ -169,9 +170,111 @@ def test_a_single_tensor_of_images_takes_the_same_path():
 
 @pytest.mark.unit
 def test_token_and_feature_counts_must_agree():
+    # A run of 3 <image> tokens for an image that projects to 2 features.
     input_ids = torch.tensor([[IMAGE_TOKEN, IMAGE_TOKEN, IMAGE_TOKEN, 1]])
-    with pytest.raises(ValueError, match="3 <image> tokens, 2 projected features"):
+    with pytest.raises(ValueError, match=r"matched 0 of 1 images; <image> runs \[3\], expected \[2\]"):
         _inject([torch.full((1, 3, 2), 1.0)], input_ids)
+
+
+@pytest.mark.unit
+def test_an_image_token_in_the_response_is_not_a_vision_position():
+    # Prompt image run of 3, then text, then the model sampled one <image> itself.
+    input_ids = torch.tensor([[1, IMAGE_TOKEN, IMAGE_TOKEN, IMAGE_TOKEN, 2, IMAGE_TOKEN, 3]])
+    embeddings = _inject([torch.full((1, 3, 3), 10.0)], input_ids)
+    assert embeddings[[1, 2, 3], 0].eq(10).all()
+    assert embeddings[[0, 4, 5, 6], 0].eq(0).all()  # the stray stays a plain token
+
+
+@pytest.mark.unit
+def test_strays_between_packed_samples_are_skipped_in_image_order():
+    # sample 1: image run of 3, response with a stray <image>; sample 2: image run of 2.
+    input_ids = torch.tensor([[IMAGE_TOKEN, IMAGE_TOKEN, IMAGE_TOKEN, 1, IMAGE_TOKEN, 2, IMAGE_TOKEN, IMAGE_TOKEN, 3]])
+    embeddings = _inject([torch.full((1, 3, 3), 10.0), torch.full((1, 3, 2), 20.0)], input_ids)
+    assert embeddings[[0, 1, 2], 0].eq(10).all()
+    assert embeddings[[6, 7], 0].eq(20).all()
+    assert embeddings[[3, 4, 5, 8], 0].eq(0).all()
+
+
+@pytest.mark.unit
+def test_a_missing_image_run_is_an_error_not_a_guess():
+    # Two images expected, but only one run of the right length exists.
+    input_ids = torch.tensor([[IMAGE_TOKEN, IMAGE_TOKEN, 1, IMAGE_TOKEN]])
+    with pytest.raises(ValueError, match="matched 1 of 2 images"):
+        _inject([torch.full((1, 3, 2), 1.0), torch.full((1, 3, 3), 2.0)], input_ids)
+
+
+@pytest.mark.unit
+def test_a_chw_image_is_given_a_batch_dim():
+    # The processor returns variable-resolution images one CHW tensor at a time.
+    input_ids = torch.tensor([[IMAGE_TOKEN, IMAGE_TOKEN, 1]])
+    embeddings = _inject([torch.full((3, 4, 2), 5.0)], input_ids)
+    assert embeddings[[0, 1], 0].eq(5).all() and embeddings[2, 0].eq(0).all()
+
+
+@pytest.mark.unit
+def test_images_must_be_chw_or_nchw():
+    with pytest.raises(ValueError, match="CHW or NCHW"):
+        _inject([torch.full((2, 3, 4, 5, 6), 1.0)], torch.tensor([[IMAGE_TOKEN, 1]]))
+
+
+# ------------------------------------------- select_prompt_vision_positions, directly
+
+
+def _positions(tokens, counts):
+    return vl_plugin.select_prompt_vision_positions(torch.tensor(tokens), IMAGE_TOKEN, counts).tolist()
+
+
+@pytest.mark.unit
+def test_no_images_and_no_image_tokens_select_nothing():
+    assert _positions([1, 2, 3], []) == []
+
+
+@pytest.mark.unit
+def test_image_tokens_with_no_expected_images_are_all_strays():
+    # Text-only features but the response contains <image>: nothing is a vision position.
+    assert _positions([1, IMAGE_TOKEN, IMAGE_TOKEN, 2], []) == []
+
+
+@pytest.mark.unit
+def test_positions_come_back_in_image_order():
+    tokens = [IMAGE_TOKEN] * 2 + [0] + [IMAGE_TOKEN] * 3 + [0] + [IMAGE_TOKEN] * 2
+    assert _positions(tokens, [2, 3, 2]) == [0, 1, 3, 4, 5, 7, 8]
+
+
+@pytest.mark.unit
+def test_a_stray_run_ahead_of_the_images_is_skipped_when_its_length_differs():
+    # e.g. an <image> in the system prompt, before the real image of 3 tokens.
+    assert _positions([IMAGE_TOKEN, 0, IMAGE_TOKEN, IMAGE_TOKEN, IMAGE_TOKEN], [3]) == [2, 3, 4]
+
+
+@pytest.mark.unit
+def test_a_stray_run_of_exactly_the_expected_length_is_taken_for_the_image():
+    # Documents the assumption in the docstring: matching is by run length, so a stray of the
+    # same length ahead of the image wins. Real images are at least 256 tokens long.
+    assert _positions([IMAGE_TOKEN, IMAGE_TOKEN, 0, IMAGE_TOKEN, IMAGE_TOKEN], [2]) == [0, 1]
+
+
+@pytest.mark.unit
+def test_touching_runs_merge_and_are_reported_not_guessed():
+    # The processor puts <img></img> between images, so runs never touch. If they did, the two
+    # runs read as one and the match must fail loudly rather than split it.
+    with pytest.raises(ValueError, match=r"matched 0 of 2 images; <image> runs \[4\], expected \[2, 2\]"):
+        _positions([IMAGE_TOKEN] * 4, [2, 2])
+
+
+@pytest.mark.unit
+def test_the_error_lists_at_most_sixteen_runs():
+    tokens = [IMAGE_TOKEN, 0] * 40  # forty runs of one token
+    with pytest.raises(ValueError, match="matched 0 of 1 images") as error:
+        _positions(tokens, [5])
+    listed = re.search(r"<image> runs \[([^\]]*)\]", str(error.value)).group(1).split(", ")
+    assert len(listed) == 16
+
+
+@pytest.mark.unit
+def test_selected_positions_are_a_long_tensor_on_the_input_device():
+    selected = vl_plugin.select_prompt_vision_positions(torch.tensor([0, IMAGE_TOKEN, IMAGE_TOKEN]), IMAGE_TOKEN, [2])
+    assert selected.dtype == torch.long and selected.device == torch.device("cpu")
 
 
 # ------------------------------------------------------ mark_ungated_linear_fc1_sections

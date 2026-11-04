@@ -126,6 +126,44 @@ def _load_vision_modules(hf_checkpoint: str, hf_config, dtype: torch.dtype, use_
     return vision_model, vision_projector
 
 
+def select_prompt_vision_positions(
+    full_input_ids: torch.Tensor, img_context_token_id: int, feature_counts: list[int]
+) -> torch.Tensor:
+    """Positions of the <image> tokens that stand for input images, in order.
+
+    The processor expands every image into <img> + <image> x n_i + </img>, so each
+    input image is one contiguous run of exactly n_i <image> tokens, and the runs
+    appear in the order of the images. A response can also contain <image> -- it is
+    an ordinary token the model may sample -- and counting every <image> then
+    disagrees with the number of projected features. Such a token is not a run of
+    the length the next image expects, so it is skipped. Runs are matched to
+    ``feature_counts`` (n_i per image, in image order) first to last.
+
+    Raises if some image finds no run, instead of guessing. Assumes the dynamic
+    resolution path (one run per image, n_i >= 256 with min_num_patches 1024), where
+    a one-token stray cannot be mistaken for an image.
+    """
+    is_image = full_input_ids == img_context_token_id
+    padded = torch.cat([is_image.new_zeros(1), is_image, is_image.new_zeros(1)]).to(torch.int8)
+    edges = padded[1:] - padded[:-1]
+    starts = (edges == 1).nonzero(as_tuple=False).flatten().tolist()
+    ends = (edges == -1).nonzero(as_tuple=False).flatten().tolist()
+
+    kept = []
+    for start, end in zip(starts, ends, strict=True):
+        if len(kept) < len(feature_counts) and end - start == feature_counts[len(kept)]:
+            kept.append(torch.arange(start, end, device=full_input_ids.device))
+    if len(kept) != len(feature_counts):
+        raise ValueError(
+            f"Nemotron 3.5 VL token/feature mismatch: matched {len(kept)} of {len(feature_counts)} images; "
+            f"<image> runs {[end - start for start, end in zip(starts, ends, strict=True)][:16]}, "
+            f"expected {list(feature_counts)[:16]}"
+        )
+    if not kept:
+        return full_input_ids.new_empty(0)
+    return torch.cat(kept)
+
+
 class NemotronHVLModel(MegatronModule):
     """MCore HybridModel decoder with a replicated RADIO tower and projector."""
 
@@ -283,22 +321,28 @@ class NemotronHVLModel(MegatronModule):
         projector_dtype = next(self.vision_projector.parameters()).dtype
         if isinstance(pixel_values, (list, tuple)):
             per_image = []
+            feature_counts = []
             for image in pixel_values:
+                # Variable-resolution processors hand back one CHW image per entry;
+                # the projector wants NCHW.
+                if image.ndim == 3:
+                    image = image.unsqueeze(0)
+                if image.ndim != 4:
+                    raise ValueError(f"Nemotron 3.5 VL images must be CHW or NCHW, got {tuple(image.shape)}")
                 features = self.vision_projector(image.to(dtype=projector_dtype), self.vision_model)
                 per_image.append(features.reshape(-1, features.shape[-1]))
+                feature_counts.extend([features.shape[1]] * features.shape[0])
             vision_output = torch.cat(per_image, dim=0)
         else:
             vision_output = self.vision_projector(pixel_values.to(dtype=projector_dtype), self.vision_model)
+            feature_counts = [vision_output.shape[1]] * vision_output.shape[0]
         vision_embeddings = vision_output.reshape(-1, vision_output.shape[-1]).to(
             device=embeddings.device, dtype=embeddings.dtype
         )
 
-        full_vision_positions = (full_input_ids[0] == self.img_context_token_id).nonzero(as_tuple=False).flatten()
-        if full_vision_positions.numel() != vision_embeddings.shape[0]:
-            raise ValueError(
-                f"Nemotron 3.5 VL token/feature mismatch: {full_vision_positions.numel()} "
-                f"<image> tokens, {vision_embeddings.shape[0]} projected features"
-            )
+        full_vision_positions = select_prompt_vision_positions(
+            full_input_ids[0], self.img_context_token_id, feature_counts
+        )
 
         feature_indices = torch.full(
             (full_input_ids.shape[1],),
@@ -309,7 +353,9 @@ class NemotronHVLModel(MegatronModule):
         feature_indices[full_vision_positions] = torch.arange(vision_embeddings.shape[0], device=input_ids.device)
         local_feature_indices = feature_indices if local_indices is None else feature_indices[local_indices]
         local_vision_mask = local_feature_indices >= 0
-        if not torch.equal(local_vision_mask, input_ids[0] == self.img_context_token_id):
+        # Not equality: an <image> the model generated in a response is a plain
+        # token and stays out of the mask, so the mask is a subset of <image> tokens.
+        if (local_vision_mask & (input_ids[0] != self.img_context_token_id)).any():
             raise ValueError("Nemotron 3.5 VL CP token layout does not match its full packed sequence")
         embeddings_bsh[0, local_vision_mask] = vision_embeddings[local_feature_indices[local_vision_mask]]
 
