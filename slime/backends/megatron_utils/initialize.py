@@ -12,6 +12,8 @@ from megatron.core.num_microbatches_calculator import init_num_microbatches_calc
 from megatron.training.global_vars import _build_tokenizer, set_args
 from transformers.utils import HF_MODULES_CACHE
 
+from .arguments import use_gloo_process_groups
+
 try:
     # Megatron ae76c60e6 keeps a run config next to args; get_model and the training loop read it.
     from megatron.training.argument_utils import pretrain_cfg_container_from_args
@@ -61,7 +63,7 @@ def _initialize_distributed(args, get_embedding_ranks=None, get_position_embeddi
         order="tp-cp-ep-dp-pp" if not args.use_tp_pp_dp_mapping else "tp-cp-ep-pp-dp",
         get_embedding_ranks=get_embedding_ranks,
         get_position_embedding_ranks=get_position_embedding_ranks,
-        create_gloo_process_groups=args.enable_gloo_process_groups,
+        create_gloo_process_groups=use_gloo_process_groups(args),
     )
 
 

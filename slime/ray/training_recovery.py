@@ -144,6 +144,7 @@ def retained_rollout_configuration(args):
         "dist_ckpt_optim_fully_reshardable",
         "distrib_optim_fully_reshardable_mem_efficient",
         "enable_gloo_process_groups",
+        "use_gloo_process_groups",
         "exit_interval",
         "exit_duration_in_mins",
     }

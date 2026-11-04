@@ -11,9 +11,21 @@ try:
 except ImportError:
     from megatron.training.tokenizer.tokenizer import _vocab_size_with_padding
 
-__all__ = ["validate_args", "megatron_parse_args", "set_default_megatron_args"]
+__all__ = ["validate_args", "megatron_parse_args", "set_default_megatron_args", "use_gloo_process_groups"]
 
 logger = logging.getLogger(__name__)
+
+
+def use_gloo_process_groups(args) -> bool:
+    """Whether Gloo process groups should be created.
+
+    Megatron ae76c60e6 renamed ``enable_gloo_process_groups`` to ``use_gloo_process_groups``
+    (the ``--disable-gloo-process-groups`` flag is unchanged). Megatron's validate_args may also
+    turn it off (fake process group), so read it at the point of use instead of caching a copy.
+    """
+    if hasattr(args, "use_gloo_process_groups"):
+        return args.use_gloo_process_groups
+    return getattr(args, "enable_gloo_process_groups", True)
 
 
 _ALLGATHER_CP_DSA_ARCHITECTURES = {
@@ -162,8 +174,6 @@ def _set_default_megatron_args(args):
         args.mtp_detach_heads = True
     if hasattr(args, "trust_remote_code"):
         args.trust_remote_code = True
-    if not hasattr(args, "enable_gloo_process_groups"):
-        args.enable_gloo_process_groups = True
     # TODO: maybe change this after megatron has good fp8 support
     args.bf16 = not args.fp16
     # Checkpoint I/O defaults: these keep checkpoint contents unchanged while

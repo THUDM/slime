@@ -32,6 +32,7 @@ from slime.observability import logging_utils, train_metric_utils
 from slime.utils import accelerator
 from slime.utils.memory_utils import clear_memory
 
+from .arguments import use_gloo_process_groups
 from .checkpoint import load_checkpoint, save_checkpoint
 from .data import DataIterator, get_batch
 from .loss import ROLLOUT_TOP_P_TOKEN_KEYS, get_rollout_top_p_logprob_kwargs, loss_function
@@ -330,7 +331,7 @@ def setup_model_and_optimizer(
         optimizer = get_megatron_optimizer(
             config=config,
             model_chunks=model,
-            use_gloo_process_groups=args.enable_gloo_process_groups,
+            use_gloo_process_groups=use_gloo_process_groups(args),
         )
     if config.use_precision_aware_optimizer:
         from .transformer_engine import patch_precision_aware_optimizer_checkpointing
