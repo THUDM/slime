@@ -792,8 +792,12 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
         rewards = []
         kl_coef = -args.kl_coef
         cp_rank = mpu.get_context_parallel_rank()
-        for reward, per_token_kl in zip(old_rewards, kl, strict=False):
-            token_level_rewards = per_token_kl * kl_coef
+        for reward, per_token_kl, loss_mask, total_length, response_length in zip(
+            old_rewards, kl, loss_masks, total_lengths, response_lengths, strict=False
+        ):
+            # Mask out env/tool tokens so their KL does not propagate through GAE.
+            local_loss_mask = slice_log_prob_with_cp(loss_mask, total_length, response_length)
+            token_level_rewards = per_token_kl * local_loss_mask * kl_coef
             if cp_rank == 0:
                 token_level_rewards[-1] += reward
             rewards.append(token_level_rewards)
