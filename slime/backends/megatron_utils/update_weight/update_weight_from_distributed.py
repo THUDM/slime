@@ -19,6 +19,7 @@ from slime.utils.http_utils import _wrap_ipv6
 from slime.utils.weight_sync import should_flush_cache
 
 from ..megatron_to_hf import convert_to_hf
+from ..sglang import FlattenedTensorBucket
 from .common import all_gather_param, named_params_and_buffers
 
 
@@ -344,6 +345,15 @@ def update_weights_from_distributed(
     """
     Send metadata through Ray and tensors through the configured transport.
     """
+    # Custom load formats (e.g. delta updates) retain their per-parameter wire format.
+    # Older SGLang builds lack the multi-dtype flattened-bucket protocol.
+    use_flattened_bucket = (
+        bool(converted_named_tensors)
+        and load_format is None
+        and getattr(FlattenedTensorBucket, "supports_multi_dtypes", False)
+    )
+    remote_load_format = "flattened_bucket" if use_flattened_bucket else load_format
+
     refs = [
         engine.update_weights_from_distributed.remote(
             names=[name for name, _ in converted_named_tensors],
@@ -351,13 +361,17 @@ def update_weights_from_distributed(
             shapes=[param.shape for _, param in converted_named_tensors],
             group_name=group_name,
             weight_version=str(weight_version),
-            load_format=load_format,
+            load_format=remote_load_format,
         )
         for engine in rollout_engines
     ]
     handles = []
-    for _, param in converted_named_tensors:
-        handles.append(dist.broadcast(param.data, 0, group=group, async_op=True))
+    if use_flattened_bucket:
+        flattened_tensor = FlattenedTensorBucket(named_tensors=list(converted_named_tensors)).get_flattened_tensor()
+        handles.append(dist.broadcast(flattened_tensor, 0, group=group, async_op=True))
+    else:
+        for _, param in converted_named_tensors:
+            handles.append(dist.broadcast(param.data, 0, group=group, async_op=True))
     for handle in handles:
         handle.wait()
 
