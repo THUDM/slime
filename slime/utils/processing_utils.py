@@ -1,13 +1,19 @@
+import asyncio
 import base64
 import io
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from PIL import Image
 from transformers import AutoProcessor, AutoTokenizer, PreTrainedTokenizerBase, ProcessorMixin
 
 logger = logging.getLogger(__name__)
+
+# Keep blocking image and processor work off both the event loop and asyncio's
+# shared default executor.
+_MULTIMODAL_EXECUTOR = ThreadPoolExecutor(thread_name_prefix="slime-multimodal")
 
 # Default image patch size for vision-language models
 # Note: Qwen3-VL uses 16, Qwen2.5-VL uses 14
@@ -160,3 +166,9 @@ def encode_image_for_rollout_engine(image) -> str:
     image.save(buffer, format="PNG")
     image_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
     return f"data:image/png;base64,{image_base64}"
+
+
+async def async_encode_image_for_rollout_engine(image) -> str:
+    """Encode an image without blocking the asyncio event loop."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_MULTIMODAL_EXECUTOR, encode_image_for_rollout_engine, image)
