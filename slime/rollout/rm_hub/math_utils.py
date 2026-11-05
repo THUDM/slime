@@ -4,6 +4,9 @@ Answer checker API that uses sympy to simplify expressions and check for equalit
 
 Call grade_answer(given_answer: str, ground_truth: str).
 """
+import ast
+import math
+import operator
 import re
 
 import sympy
@@ -162,6 +165,8 @@ def _strip_string(string):
 # sympy might hang -- we don't care about trying to be lenient in these cases
 BAD_SUBSTRINGS = ["^{", "^("]
 BAD_REGEXES = [r"\^[0-9]+\^", r"\^[0-9][0-9]+"]
+# Bound numeric exponent/factorial arguments while allowing symbolic expressions.
+MAX_NUMERIC_ARGUMENT = 1000
 TUPLE_CHARS = "()[]"
 
 
@@ -332,6 +337,64 @@ def count_unknown_letters_in_expr(expr: str):
     return len(letters_in_expr)
 
 
+def _check_numeric_cost(node):
+    """Estimate numeric subexpressions without constructing unbounded integers.
+
+    Symbolic values return None, but their children are still checked. Float
+    overflow is treated conservatively for later exponents/factorial arguments.
+    This supplements the text heuristics; it is not a general SymPy timeout.
+    """
+    if isinstance(node, ast.Constant):
+        return float(node.value) if isinstance(node.value, int | float) else None
+    if isinstance(node, ast.UnaryOp):
+        value = _check_numeric_cost(node.operand)
+        if value is not None and isinstance(node.op, ast.UAdd | ast.USub):
+            return -value if isinstance(node.op, ast.USub) else value
+        return None
+    if isinstance(node, ast.BinOp):
+        left, right = _check_numeric_cost(node.left), _check_numeric_cost(node.right)
+        if isinstance(node.op, ast.Pow) and right is not None and abs(right) > MAX_NUMERIC_ARGUMENT:
+            raise ValueError("exponent too large for symbolic grading")
+        operations = {
+            ast.Add: operator.add,
+            ast.Sub: operator.sub,
+            ast.Mult: operator.mul,
+            ast.Div: operator.truediv,
+            ast.Pow: operator.pow,
+        }
+        if left is not None and right is not None and type(node.op) in operations:
+            try:
+                value = operations[type(node.op)](left, right)
+                if isinstance(value, float):
+                    # inf/inf or inf-inf must not turn a large argument into an unchecked NaN.
+                    return value if math.isfinite(value) else math.inf
+                return None
+            except OverflowError:
+                return math.inf
+        return None
+    if isinstance(node, ast.Call):
+        values = [_check_numeric_cost(arg) for arg in node.args]
+        name = node.func.id if isinstance(node.func, ast.Name) else None
+        if name in ("Integer", "Float") and len(node.args) == 1 and isinstance(node.args[0], ast.Constant):
+            return float(node.args[0].value)
+        if name in ("factorial", "factorial2") and len(values) == 1 and values[0] is not None:
+            value = values[0]
+            if not math.isfinite(value) or abs(value) > MAX_NUMERIC_ARGUMENT:
+                raise ValueError("factorial argument too large for symbolic grading")
+            if value >= 0 and value.is_integer():
+                try:
+                    result = math.factorial(int(value)) if name == "factorial" else math.prod(range(int(value), 0, -2))
+                    return float(result)
+                except OverflowError:
+                    return math.inf
+        if name == "sqrt" and len(values) == 1 and values[0] is not None and values[0] >= 0:
+            return math.sqrt(values[0])
+        return None
+    for child in ast.iter_child_nodes(node):
+        _check_numeric_cost(child)
+    return None
+
+
 def should_allow_eval(expr: str):
     # we don't want to try parsing unknown text or functions of more than two variables
     if count_unknown_letters_in_expr(expr) > 2:
@@ -343,6 +406,22 @@ def should_allow_eval(expr: str):
 
     for bad_regex in BAD_REGEXES:
         if re.search(bad_regex, expr) is not None:
+            return False
+
+    if "^" in expr or "**" in expr or "!" in expr:
+        try:
+            # Token transformations expand ! and implicit multiplication without evaluating
+            # SymPy. Inspect the resulting syntax tree before parse_expr eagerly computes it.
+            code = sympy_parser.stringify_expr(
+                expr.replace("^", "**"),
+                local_dict={},
+                global_dict={k: v for k, v in sympy.__dict__.items() if not k.startswith("_")},
+                transformations=(
+                    sympy_parser.standard_transformations + (sympy_parser.implicit_multiplication_application,)
+                ),
+            )
+            _check_numeric_cost(ast.parse(code, mode="eval"))
+        except Exception:
             return False
 
     return True
