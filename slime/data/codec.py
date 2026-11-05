@@ -187,11 +187,15 @@ class SampleCodec:
             return node
 
         active = set()
+        # Exact primitive types are returned unchanged and can never be refs.
+        primitive_types = {int, str, bool, type(None)}
+
+        from slime.data.transport import DiskPayloadRef, RawRolloutRef, RolloutGroupRef, TrainBatchRef
 
         def visit(value):
             nonlocal token_count
-            from slime.data.transport import DiskPayloadRef, RawRolloutRef, RolloutGroupRef, TrainBatchRef
-
+            if type(value) in primitive_types:
+                return value
             if isinstance(value, DiskPayloadRef):
                 if value.manifest not in dependency_positions:
                     dependency_positions[value.manifest] = len(dependencies)
@@ -226,8 +230,6 @@ class SampleCodec:
                     dependency_index,
                     visit(extra),
                 ]
-            if value is None or type(value) in (str, bool, int):
-                return value
             if type(value) is float:
                 return value if math.isfinite(value) else ["float", repr(value)]
             if isinstance(value, (QueueTensorRef, torch.Tensor)):
@@ -290,13 +292,21 @@ class SampleCodec:
                 if isinstance(value, dict):
                     return [
                         "dict",
-                        [[visit(key), visit(item)] for key, item in value.items()],
+                        [
+                            [
+                                key if type(key) in primitive_types else visit(key),
+                                item if type(item) in primitive_types else visit(item),
+                            ]
+                            for key, item in value.items()
+                        ],
                     ]
                 if isinstance(value, (list, tuple)):
-                    return [
-                        "tuple" if isinstance(value, tuple) else "list",
-                        [visit(item) for item in value],
-                    ]
+                    # Flat primitive sequences (token ids, masks) are copied in one C-level pass.
+                    if primitive_types.issuperset(map(type, value)):
+                        items = list(value)
+                    else:
+                        items = [item if type(item) in primitive_types else visit(item) for item in value]
+                    return ["tuple" if isinstance(value, tuple) else "list", items]
                 # Preserve raw multimodal images losslessly using an explicit codec.
                 from PIL import Image
 
