@@ -1,0 +1,47 @@
+diff --git a/python/sglang/srt/multimodal/processors/nano_nemotron_vl.py b/python/sglang/srt/multimodal/processors/nano_nemotron_vl.py
+index cd3e62c2a6..59a3b7d3b4 100644
+--- a/python/sglang/srt/multimodal/processors/nano_nemotron_vl.py
++++ b/python/sglang/srt/multimodal/processors/nano_nemotron_vl.py
+@@ -176,6 +176,24 @@ class NanoNemotronVLImageProcessor(BaseMultimodalProcessor):
+     def render_image_dynamic(self, *, num_tokens: int):
+         return f"{self.IMG_START_TOKEN}{self.IMG_CONTEXT_TOKEN * num_tokens}{self.IMG_END_TOKEN}"
+ 
++    def expand_image_placeholders(self, prompt, rendered_images):
++        # TODO(shifangx): upstream to SGLang, then drop this patch.
++        parts = prompt.split(self.IMG_CONTEXT_TOKEN)
++        count = len(parts) - 1
++        if count == 1:
++            # One placeholder: keep the grouped-image contract (all images go there).
++            return parts[0] + "".join(rendered_images) + parts[1]
++        if count != len(rendered_images):
++            raise ValueError(
++                f"Image placeholder count {count} does not match "
++                f"image count {len(rendered_images)}"
++            )
++        # Split once: the expansions themselves contain the image token.
++        return parts[0] + "".join(
++            image + tail
++            for image, tail in zip(rendered_images, parts[1:], strict=True)
++        )
++
+     def render_tubelet(
+         self,
+         tubelet_index: int,
+@@ -308,7 +326,7 @@ class NanoNemotronVLImageProcessor(BaseMultimodalProcessor):
+             rendered_images = [
+                 self.render_image_dynamic(num_tokens=nt) for nt in num_tokens_per_image
+             ]
+-            prompt = prompt.replace(self.IMG_CONTEXT_TOKEN, "".join(rendered_images), 1)
++            prompt = self.expand_image_placeholders(prompt, rendered_images)
+             image_feature = preprocessed_images
+         elif base_output.images:
+             preprocessed_images = [
+@@ -318,7 +336,7 @@ class NanoNemotronVLImageProcessor(BaseMultimodalProcessor):
+                 self.render_image(num_tiles=image.shape[0])
+                 for image in preprocessed_images
+             ]
+-            prompt = prompt.replace(self.IMG_CONTEXT_TOKEN, "".join(rendered_images), 1)
++            prompt = self.expand_image_placeholders(prompt, rendered_images)
+             image_feature = torch.cat(preprocessed_images, dim=0)
+ 
+         video_feature = None
