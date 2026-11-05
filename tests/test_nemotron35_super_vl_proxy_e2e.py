@@ -273,19 +273,33 @@ def _skip_reason(megatron_root: str) -> str | None:
     return None
 
 
-def _hf_download(repo: str, destination: str, *extra: str) -> None:
-    subprocess.run(["hf", "download", repo, "--local-dir", destination, *extra], check=True)
+def _hf_download(
+    repo: str, destination: str, expected_file: str, *, repo_type: str | None = None, ignore=None
+) -> None:
+    # The Python API, not the `hf` CLI: the CLI's `--exclude` takes one pattern per flag in newer
+    # releases, so `--exclude A B C` reads B and C as file names and fetches only those (CI then
+    # got the pngs and mds but no config.json). ignore_patterns means the same in every version.
+    from huggingface_hub import snapshot_download
+
+    snapshot_download(repo_id=repo, repo_type=repo_type, local_dir=destination, ignore_patterns=ignore)
+    if not Path(expected_file).exists():
+        raise FileNotFoundError(f"Downloaded {repo} but {expected_file} is still missing")
 
 
 def _prepare_assets(proxy_checkpoint: str, prompt_data: str) -> None:
     if not Path(prompt_data).exists():
         if prompt_data != DEFAULT_PROMPT_DATA:
             raise FileNotFoundError(f"prompt data missing: {prompt_data}")
-        _hf_download(DEFAULT_PROMPT_REPO, str(Path(prompt_data).parent), "--repo-type", "dataset")
+        _hf_download(DEFAULT_PROMPT_REPO, str(Path(prompt_data).parent), prompt_data, repo_type="dataset")
     with tempfile.TemporaryDirectory(prefix="nemotron_vl_files_") as downloaded:
         files = os.environ.get("NEMOTRON_VL_FILES")
         if not files:
-            _hf_download(DEFAULT_REAL_REPO, downloaded, "--exclude", "*.safetensors", "*.png", "*.md")
+            _hf_download(
+                DEFAULT_REAL_REPO,
+                downloaded,
+                str(Path(downloaded, "config.json")),
+                ignore=["*.safetensors", "*.png", "*.md"],
+            )
             files = downloaded
         write_proxy_checkpoint(files, proxy_checkpoint, PROXY)
 
