@@ -450,19 +450,6 @@ def make_slime_validate_args(**overrides):
     return types.SimpleNamespace(**values)
 
 
-@pytest.mark.unit
-def test_flattened_bucket_broadcast_requires_full_nccl(monkeypatch):
-    module = load_slime_arguments_module(monkeypatch)
-    args = make_slime_validate_args(
-        update_weight_mode="delta",
-        update_weight_transport="nccl",
-        update_weight_broadcast_mode="flattened-bucket",
-    )
-
-    with pytest.raises(ValueError, match="requires --update-weight-mode=full"):
-        module.slime_validate_args(args)
-
-
 def test_trainer_fault_tolerance_saves_reshardable_optimizer(monkeypatch, tmp_path):
     module = load_slime_arguments_module(monkeypatch)
     args = make_slime_validate_args(
@@ -790,16 +777,15 @@ def test_force_fp8_ue8m0_scale_argument(monkeypatch):
 
 
 @pytest.mark.unit
-def test_update_weight_broadcast_mode_argument(monkeypatch):
+def test_update_weight_broadcast_mode_argument_removed(monkeypatch):
     module = load_slime_arguments_module(monkeypatch)
     parser = argparse.ArgumentParser()
     module.get_slime_extra_args_provider()(parser)
 
     defaults = parser.parse_args(["--rollout-batch-size", "1"])
-    configured = parser.parse_args(["--rollout-batch-size", "1", "--update-weight-broadcast-mode", "flattened-bucket"])
-
-    assert defaults.update_weight_broadcast_mode == "per-param"
-    assert configured.update_weight_broadcast_mode == "flattened-bucket"
+    assert not hasattr(defaults, "update_weight_broadcast_mode")
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--rollout-batch-size", "1", "--update-weight-broadcast-mode", "flattened-bucket"])
 
 
 if __name__ == "__main__":

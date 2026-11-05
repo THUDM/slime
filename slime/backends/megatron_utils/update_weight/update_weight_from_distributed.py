@@ -23,18 +23,6 @@ from ..sglang import FlattenedTensorBucket
 from .common import all_gather_param, named_params_and_buffers
 
 
-UPDATE_WEIGHT_BROADCAST_MODE_PER_PARAM = "per-param"
-UPDATE_WEIGHT_BROADCAST_MODE_FLATTENED_BUCKET = "flattened-bucket"
-
-
-def _validate_flattened_bucket_support() -> None:
-    if not getattr(FlattenedTensorBucket, "supports_multi_dtypes", False):
-        raise RuntimeError(
-            "--update-weight-broadcast-mode=flattened-bucket requires an SGLang "
-            "FlattenedTensorBucket with multi-dtype support"
-        )
-
-
 class UpdateWeightFromDistributed:
     """
     Update distributed engines through a device process group. Each PP rank: group "slime-pp_{pp_rank}",
@@ -279,11 +267,6 @@ class UpdateWeightFromDistributed:
             self.rollout_engines,
             converted_named_tensors,
             load_format=load_format,
-            broadcast_mode=(
-                getattr(self.args, "update_weight_broadcast_mode", UPDATE_WEIGHT_BROADCAST_MODE_PER_PARAM)
-                if load_format is None
-                else UPDATE_WEIGHT_BROADCAST_MODE_PER_PARAM
-            ),
         )
 
         ray.get(refs)
@@ -358,23 +341,18 @@ def update_weights_from_distributed(
     rollout_engines: Sequence[ActorHandle],
     converted_named_tensors: Sequence[tuple[str, torch.Tensor]],
     load_format: str | None = None,
-    broadcast_mode: str = UPDATE_WEIGHT_BROADCAST_MODE_PER_PARAM,
 ) -> list[ObjectRef]:
     """
     Send metadata through Ray and tensors through the configured transport.
     """
-    if broadcast_mode not in {
-        UPDATE_WEIGHT_BROADCAST_MODE_PER_PARAM,
-        UPDATE_WEIGHT_BROADCAST_MODE_FLATTENED_BUCKET,
-    }:
-        raise ValueError(f"Unknown update-weight broadcast mode: {broadcast_mode!r}")
-    if broadcast_mode == UPDATE_WEIGHT_BROADCAST_MODE_FLATTENED_BUCKET:
-        if load_format is not None:
-            raise ValueError("flattened-bucket broadcast is only supported for full weight updates")
-        _validate_flattened_bucket_support()
-        remote_load_format = "flattened_bucket"
-    else:
-        remote_load_format = load_format
+    # Custom load formats (e.g. delta updates) retain their per-parameter wire format.
+    # Older SGLang builds lack the multi-dtype flattened-bucket protocol.
+    use_flattened_bucket = (
+        bool(converted_named_tensors)
+        and load_format is None
+        and getattr(FlattenedTensorBucket, "supports_multi_dtypes", False)
+    )
+    remote_load_format = "flattened_bucket" if use_flattened_bucket else load_format
 
     refs = [
         engine.update_weights_from_distributed.remote(
@@ -388,7 +366,7 @@ def update_weights_from_distributed(
         for engine in rollout_engines
     ]
     handles = []
-    if broadcast_mode == UPDATE_WEIGHT_BROADCAST_MODE_FLATTENED_BUCKET:
+    if use_flattened_bucket:
         flattened_tensor = FlattenedTensorBucket(named_tensors=list(converted_named_tensors)).get_flattened_tensor()
         handles.append(dist.broadcast(flattened_tensor, 0, group=group, async_op=True))
     else:
