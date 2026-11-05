@@ -10,7 +10,7 @@ async def reward_func(args, sample, **kwargs):
         # "text": sample.prompt + sample.response,
         "input_ids": sample.tokens,
         "sampling_params": {
-            "temperature": args.rollout_temperature,
+            "temperature": 1.0,
             "max_new_tokens": 0,
             "skip_special_tokens": False,
         },
