@@ -22,7 +22,10 @@ async def reward_func(args, sample, **kwargs):
         image_data = sample.multimodal_inputs["images"]
         payload["image_data"] = [encode_image_for_rollout_engine(image) for image in image_data]
 
+    timeout_secs = getattr(args, "rm_timeout_secs", None)
     session_kwargs = {}
+    if timeout_secs is not None:
+        session_kwargs["timeout"] = aiohttp.ClientTimeout(total=timeout_secs)
     async with aiohttp.ClientSession(**session_kwargs) as session:
         async with session.post(args.rm_url, json=payload) as resp:
             resp.raise_for_status()
