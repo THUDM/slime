@@ -427,23 +427,29 @@ async def _run_f2p_script(ev: Sandbox, workdir: str, script: str, timeout: int) 
     return 1.0 if ec == 0 else 0.0
 
 
-# Mirror of swebench.harness.run_evaluation.GIT_APPLY_CMDS: try each in order,
+# Based on swebench.harness.run_evaluation.GIT_APPLY_CMDS: try each in order,
 # first success wins. The `patch --fuzz` tier rescues diffs `git apply` rejects.
+# Upstream resets the tree to HEAD before each fallback; that would discard the
+# image's own edits the patch is relative to (see _repository_tree), so here a
+# fallback must start from an untouched tree instead. `git apply` is atomic, and
+# the `git apply --reject` tier is left out: it exits 0 only when plain
+# `git apply` would, so it can only leave hunks for `patch --batch` to revert.
+# --forward stops `patch` from reverting hunks it takes for already applied.
 _GIT_APPLY_CMDS = (
     "git apply --verbose",
-    "git apply --verbose --reject",
-    "patch --batch --fuzz=5 -p1 -i",
+    "patch --batch --forward --fuzz=5 -p1 -i",
 )
+_MODEL_PATCH = "/tmp/patch.diff"
 
 
 async def _apply_model_patch(ev: Sandbox, workdir: str) -> bool:
-    """Apply /tmp/patch.diff via the GIT_APPLY_CMDS ladder; True if applied
+    """Apply _MODEL_PATCH via the GIT_APPLY_CMDS ladder; True if applied
     (or empty). Empty patch is a no-op success -- eval then scores it 0 on its
     own (no source change -> tests still fail)."""
-    ladder = " || ".join(f"{cmd} /tmp/patch.diff" for cmd in _GIT_APPLY_CMDS)
+    ladder = " || ".join(f"{cmd} {_MODEL_PATCH}" for cmd in _GIT_APPLY_CMDS)
     cmd = (
         f"cd {workdir} && git config --global --add safe.directory {workdir} "
-        f"&& if [ -s /tmp/patch.diff ]; then {ladder}; fi"
+        f"&& if [ -s {_MODEL_PATCH} ]; then {ladder}; fi"
     )
     ec, _, _ = await ev.exec(cmd, user="root", check=False, timeout=120)
     return ec == 0
@@ -540,7 +546,7 @@ async def _grade_swebench(md: dict, diff_text: str, timeout_sec: int, *, trace=N
     async with _evaluation_sandbox(image, trace) as ev:
         with trace_span(trace or [], "evaluation_prepare", record_error=False):
             await asyncio.gather(
-                ev.write_file("/tmp/patch.diff", diff_text or "", user="root"),
+                ev.write_file(_MODEL_PATCH, diff_text or "", user="root"),
                 ev.write_file("/tmp/eval.sh", eval_sh, user="root"),
             )
             # Apply the model patch first (eval_script assumes it is already applied);
