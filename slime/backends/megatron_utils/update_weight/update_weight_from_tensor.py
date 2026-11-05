@@ -28,6 +28,13 @@ from .update_weight_from_distributed import (
 )
 
 
+def _target_only_weight_update(args: Namespace) -> bool:
+    # DFLASH drafts are standalone checkpoints that slime does not train. SGLang fans tensor updates out to the
+    # draft runner by default, and the DFLASH draft's load_weights maps the target's `model.layers.N.*` onto its own
+    # `layers.N.*`, so the first sync would overwrite the draft with target layers (acceptance length drops to ~1).
+    return str(getattr(args, "sglang_speculative_algorithm", None) or "").upper() == "DFLASH"
+
+
 def _build_flattened_tensor_data(
     named_tensors: list[tuple[str, torch.Tensor]],
 ) -> dict[str, Any]:
@@ -78,6 +85,7 @@ class UpdateWeightFromTensor:
         self.quantization_config = quantization_config
         self.weight_version = 0
         self.update_weight_metrics: dict[str, float] = {}
+        self._disable_draft_model = _target_only_weight_update(args)
 
         self._hf_weight_iterator = HfWeightIteratorDirect(
             args=args, model=model, model_name=model_name, quantization_config=quantization_config
@@ -358,6 +366,7 @@ class UpdateWeightFromTensor:
             ipc_gather_src=self._ipc_gather_src,
             ipc_gather_group=self._ipc_gather_group,
             weight_version=self.weight_version,
+            disable_draft_model=self._disable_draft_model,
         )
         all_refs.extend(refs_colocated)
 
@@ -382,6 +391,7 @@ def _send_to_colocated_engine(
     ipc_gather_src,
     ipc_gather_group,
     weight_version,
+    disable_draft_model: bool = False,
 ) -> tuple[list[ObjectRef], Any]:
     # Placeholder ranks (GPU slots reserved but no engine) have no gather group.
     # gather_object is only collective among group members, so we skip entirely.
@@ -438,6 +448,8 @@ def _send_to_colocated_engine(
                 "load_format": "flattened_bucket",
                 "weight_version": str(weight_version),
             }
+            if disable_draft_model:
+                kwargs["disable_draft_model"] = True
             refs.append(ipc_engine.update_weights_from_tensor.remote(**kwargs))
 
     return refs, long_live_tensors
