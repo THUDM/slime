@@ -435,6 +435,20 @@ jobs:
             },
             {
               "num_gpus": 4,
+              "test_file": "test_p2p_qwen3_moe.py"
+            },
+            {
+              "num_gpus": 6,
+              "test_args": "--pd",
+              "test_file": "test_p2p_qwen3_moe.py"
+            },
+            {
+              "num_gpus": 6,
+              "test_args": "--pd --offload-rollout",
+              "test_file": "test_p2p_qwen3_moe.py"
+            },
+            {
+              "num_gpus": 4,
               "straw": true,
               "test_file": "test_straw_checkpoint_rewind.py"
             },
@@ -939,6 +953,22 @@ jobs:
             {
               "num_gpus": 0,
               "test_file": "test_update_weight_factory.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_p2p_stream.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_p2p_mooncake_transport.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_p2p_weight_loader.py"
+            },
+            {
+              "num_gpus": 0,
+              "test_file": "test_p2p_weight_update.py"
             },
             {
               "num_gpus": 0,
@@ -1696,6 +1726,20 @@ jobs:
               "num_gpus": 8,
               "straw": true,
               "test_file": "test_qwen3_30B_A3B_training_recovery.py"
+            },
+            {
+              "num_gpus": 4,
+              "test_file": "test_p2p_qwen3_moe.py"
+            },
+            {
+              "num_gpus": 6,
+              "test_args": "--pd",
+              "test_file": "test_p2p_qwen3_moe.py"
+            },
+            {
+              "num_gpus": 6,
+              "test_args": "--pd --offload-rollout",
+              "test_file": "test_p2p_qwen3_moe.py"
             },
             {
               "num_gpus": 4,

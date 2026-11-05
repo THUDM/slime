@@ -11,6 +11,7 @@ External rollout engine 指的是：SGLang engine 不由 slime 训练任务启�
 | engine 已经由外部系统启动，只想让 slime 连接并做 rollout | `--rollout-external-engine-addrs` |
 | 希望 slime 使用独立 Python 或激活后的 conda 环境启动 engine | [`--sglang-python-executable`](sglang-config.md#独立的-sglang-python-环境) |
 | engine 仍由 slime 启动，但需要 PD 分离、多模型、异构 server group 或 per-group overrides | [SGLang Config](sglang-config.md) |
+| 独立的 Megatron 和 SGLang 环境，可通过 GPU RDMA 互通 | [P2P 参数同步](p2p-weight-sync.md) |
 | 训练器和 external engine 可以建立 NCCL group | 默认的 `--update-weight-mode full --update-weight-transport nccl` |
 | 训练器和 external engine 不能建立 NCCL group，但能共享同一路径的文件系统 | `--update-weight-mode full --update-weight-transport disk` |
 | 大模型跨集群或跨数据中心同步，full checkpoint 太重 | `--update-weight-mode delta --update-weight-transport disk` |

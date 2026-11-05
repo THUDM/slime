@@ -32,6 +32,10 @@ def create_weight_updater(
         from .update_weight_from_disk import UpdateWeightFromDisk
 
         update_weight_cls = UpdateWeightFromDisk
+    elif update_weight_mode == "full" and update_weight_transport == "p2p":
+        from .update_weight_from_p2p import UpdateWeightFromP2P
+
+        update_weight_cls = UpdateWeightFromP2P
     elif args.colocate:
         from .update_weight_from_tensor import UpdateWeightFromTensor
 
