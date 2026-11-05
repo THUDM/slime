@@ -12,6 +12,7 @@ from slime.data.tensor import TensorRef
 from slime.utils.distributed_utils import distributed_masked_whiten
 from slime.utils.misc import load_function
 from slime.utils.ppo_utils import (
+    calculate_joint_log_probs_and_entropy,
     calculate_log_probs_and_entropy,
     calculate_ragged_log_probs,
     calculate_topk_log_probs,
@@ -147,7 +148,7 @@ def get_responses(
             end += total_length
             start = end - response_length
             logits_chunk = logits[start - 1 : end - 1]
-            tokens_chunk = tokens[-response_length:]
+            tokens_chunk = tokens[-response_length:] if response_length else tokens[:0]
         elif args.allgather_cp:
             # DSA: global concat then contiguous CP split. Each rank owns logits for
             # global positions [chunk_start, chunk_end).
@@ -975,12 +976,15 @@ def _slice_allgather_response_rows(
     return sliced
 
 
-def get_score_centering_terms(args, batch, logits):
+def get_score_centering_terms(args, batch, logits, *, joint_log_probs=False):
     """Compute per-token centering corrections and head-mass diagnostics.
 
     With top-p replay, sum over the complete recorded support. Otherwise use
     the paper's top-k approximation. Redistribute the scalar correction before
     multiplying by zigzag-CP advantages.
+
+    For the top-k path, joint_log_probs also returns per-sample log_probs and
+    entropy lists, sharing their normalization and backward with the SC heads.
     """
     total_lengths, response_lengths = batch["total_lengths"], batch["response_lengths"]
     if args.rollout_top_p < 1:
@@ -1093,7 +1097,9 @@ def get_score_centering_terms(args, batch, logits):
         ids, sampler_head = local_heads(ids), local_heads(sampler_head)
     weighting = get_score_centering_is_config(args)
     res = {"sc_correction": [], "sc_sampler_head_mass": [], "sc_train_head_mass": []}
-    for (rows, _), head_ids, q in zip(
+    if joint_log_probs:
+        res.update(log_probs=[], entropy=[])
+    for (rows, tokens), head_ids, q in zip(
         get_responses(
             logits,
             args=args,
@@ -1108,21 +1114,36 @@ def get_score_centering_terms(args, batch, logits):
     ):
         head_ids = head_ids.to(device=logits.device, dtype=torch.long, non_blocking=True)
         q = q.to(device=logits.device, non_blocking=True)
-        p = calculate_topk_log_probs(
-            rows,
-            head_ids,
-            mpu.get_tensor_model_parallel_group(),
-            chunk_size=args.log_probs_chunk_size,
-            temperature=args.rollout_temperature,
-        )
+        if joint_log_probs:
+            sampled, p, entropy = calculate_joint_log_probs_and_entropy(
+                rows,
+                tokens,
+                head_ids,
+                mpu.get_tensor_model_parallel_group(),
+                chunk_size=args.log_probs_chunk_size,
+                temperature=args.rollout_temperature,
+                with_entropy_grad=args.entropy_coef != 0,
+            )
+            res["log_probs"].append(sampled)
+            res["entropy"].append(entropy)
+        else:
+            p = calculate_topk_log_probs(
+                rows,
+                head_ids,
+                mpu.get_tensor_model_parallel_group(),
+                chunk_size=args.log_probs_chunk_size,
+                temperature=args.rollout_temperature,
+            )
         correction, q_mass, p_mass = score_centering_correction(p, q, **weighting)
-        for key, value in zip(res, (correction, q_mass, p_mass), strict=True):
+        for key, value in zip(
+            ("sc_correction", "sc_sampler_head_mass", "sc_train_head_mass"), (correction, q_mass, p_mass), strict=True
+        ):
             res[key].append(value)
     if allgather_cp:
         _allgather_cp_redistribute(
             res, logits_local_len=logits.size(1), total_lengths=total_lengths, response_lengths=response_lengths
         )
-    return {key: torch.cat(values) for key, values in res.items()}
+    return {key: values if key in ("log_probs", "entropy") else torch.cat(values) for key, values in res.items()}
 
 
 def policy_loss_function(
@@ -1163,15 +1184,20 @@ def policy_loss_function(
     response_lengths = batch["response_lengths"]
     total_lengths = batch["total_lengths"]
 
-    _, log_probs_and_entropy = get_log_probs_and_entropy(
-        logits,
-        args=args,
-        unconcat_tokens=batch["unconcat_tokens"],
-        total_lengths=total_lengths,
-        response_lengths=response_lengths,
-        with_entropy=True,
-        **get_rollout_top_p_logprob_kwargs(args, batch),
-    )
+    sc_terms = {}
+    if use_score_centering and args.rollout_top_p == 1.0:
+        sc_terms = get_score_centering_terms(args, batch, logits, joint_log_probs=True)
+        log_probs_and_entropy = {key: sc_terms.pop(key) for key in ("log_probs", "entropy")}
+    else:
+        _, log_probs_and_entropy = get_log_probs_and_entropy(
+            logits,
+            args=args,
+            unconcat_tokens=batch["unconcat_tokens"],
+            total_lengths=total_lengths,
+            response_lengths=response_lengths,
+            with_entropy=True,
+            **get_rollout_top_p_logprob_kwargs(args, batch),
+        )
 
     log_probs = log_probs_and_entropy["log_probs"]
     # Snapshot the per-sample policy log-probs for the train debug dump (no-op
@@ -1290,11 +1316,11 @@ def policy_loss_function(
             args.calculate_per_token_loss,
         )
 
-    sc_terms = {}
     if use_score_centering:
         # Add the correction AFTER weighting the sampled score. The head/tail
         # coefficients already contain the same IS rule and must not be weighted twice.
-        sc_terms = get_score_centering_terms(args, batch, logits)
+        if not sc_terms:
+            sc_terms = get_score_centering_terms(args, batch, logits)
         pg_loss = pg_loss + advantages.detach() * sc_terms["sc_correction"]
         with torch.no_grad():
             sampled_ratio = (log_probs - torch.cat(batch["rollout_log_probs"])).exp()
