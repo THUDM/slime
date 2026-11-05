@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="2026 年 10 月 19 日"/>
+    <meta name="docbuild:last-update" content="2026 年 11 月 05 日"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -460,6 +460,7 @@
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#reproduce">Reproduce</a><ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#configuration">Configuration</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#qwen3-5-series">Qwen3.5 Series</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#nemotron-3-5-series">Nemotron 3.5 Series</a></li>
 </ul>
 </li>
 </ul>
@@ -487,12 +488,14 @@
 <p>Supported models:</p>
 <ul class="simple">
 <li><p>Qwen3.5-35B-A3B</p></li>
+<li><p>NVIDIA Nemotron 3.5 Super VL</p></li>
 </ul>
 <p>Note: Please make sure the cudnn version in the environment is 9.16.0.29 to prevent severe performance regression in conv3d in torch 2.9 mentioned in <a class="github reference external" href="https://github.com/pytorch/pytorch/issues/168167">pytorch/pytorch#168167</a>. Otherwise, you can reinstall cudnn with:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>nvidia-cudnn-cu12<span class="o">==</span><span class="m">9</span>.16.0.29
 </pre></div>
 </div>
 <p>Qwen3.5 uses slime's native Megatron language model plus the Transformers vision model. Vision parameters retain their HuggingFace names and are loaded and synchronized directly.</p>
+<p>Nemotron 3.5 Super VL (<code class="docutils literal notranslate"><span class="pre">nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16</span></code>) uses MCore's <code class="docutils literal notranslate"><span class="pre">HybridModel</span></code> (Mamba2, MoE and attention layers) as the language model, plus the Transformers (remote-code) RADIO vision tower and projector. Its vision parameters are renamed when they are loaded and when they are synchronized: the checkpoint's fused <code class="docutils literal notranslate"><span class="pre">attn.qkv</span></code> is split into query/key/value for the Transformers module and fused again when syncing to SGLang (whose <code class="docutils literal notranslate"><span class="pre">QKVParallelLinear</span></code> accepts only the fused form), and the projector's <code class="docutils literal notranslate"><span class="pre">mlp1.*</span></code> keys are mapped to <code class="docutils literal notranslate"><span class="pre">vision_projector.*</span></code>. The vision tower's LayerScale is removed on both sides: C-RADIO ships no LayerScale weights and <code class="docutils literal notranslate"><span class="pre">layerscale_value</span></code> is 1.0, so it would only be an identity.</p>
 <p align="center">
   <img src="fsdp_vs_megatron.png" alt="Reward Plot" width="800">
 </p>
@@ -565,6 +568,19 @@
 <p>We provide a native <a class="reference download internal" download="" href="../../_downloads/0f13019d14c4d0a78490d2da1f138af5/run_geo3k_qwen35.sh"><span class="xref download myst">example</span></a> for Qwen3.5-35B-A3B. It loads the Transformers ViT directly and converts only the Megatron language-model parameters. To support another Qwen3.5 model, add its model config under <code class="docutils literal notranslate"><span class="pre">scripts/models/</span></code> and update the example.</p>
 <p>The native path supports tensor, pipeline, context, sequence, and expert parallelism. Context parallelism follows Megatron's packed THD zigzag layout.</p>
 <p>For GDN training, use <code class="docutils literal notranslate"><span class="pre">--micro-batch-size</span> <span class="pre">1</span></code> and remove <code class="docutils literal notranslate"><span class="pre">--use-dynamic-batch-size</span></code>.</p>
+</section>
+<section id="nemotron-3-5-series">
+<h4>Nemotron 3.5 Series<a class="headerlink" href="#nemotron-3-5-series" title="Link to this heading">#</a></h4>
+<p>Compared with <code class="docutils literal notranslate"><span class="pre">run_geo3k_qwen35.sh</span></code>, a Nemotron 3.5 Super VL run needs the following (the training hyperparameters can stay the same):</p>
+<ul class="simple">
+<li><p><strong>Model config and spec.</strong> Pass <code class="docutils literal notranslate"><span class="pre">--spec</span> <span class="pre">slime_plugins.models.nemotron_h_vl</span> <span class="pre">get_nemotron_h_vl_model_provider</span></code> together with the model config <code class="docutils literal notranslate"><span class="pre">scripts/models/nemotron3.5-super-120B-A12B.sh</span></code>.</p></li>
+<li><p><strong>Four nodes, expert parallelism 32.</strong> The model has 512 routed experts, and EP x ETP must divide the number of GPUs, so use <code class="docutils literal notranslate"><span class="pre">--expert-model-parallel-size</span> <span class="pre">32</span></code> on 32 GPUs (TP2 x CP2, DP8). A single node of 8 GPUs fits only the small proxy model. A multi-node run needs a Ray cluster that already spans the nodes, not the script's own one-node <code class="docutils literal notranslate"><span class="pre">ray</span> <span class="pre">start</span> <span class="pre">--head</span></code>.</p></li>
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">mamba-ssm</span></code> and <code class="docutils literal notranslate"><span class="pre">causal-conv1d</span></code> must be installed.</strong> MCore's <code class="docutils literal notranslate"><span class="pre">MambaMixer</span></code> requires them for the Mamba2 layers. They replace <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">-U</span> <span class="pre">transformers</span></code>, and the <code class="docutils literal notranslate"><span class="pre">docker/Dockerfile</span></code> image builds them. The SGLang side needs the patches in <code class="docutils literal notranslate"><span class="pre">docker/patch/*/</span></code> (<code class="docutils literal notranslate"><span class="pre">sglang-radio_layerscale.patch</span></code>, <code class="docutils literal notranslate"><span class="pre">sglang-nemotron-multi-image.patch</span></code>), which the image applies.</p></li>
+<li><p><strong>Offload the optimizer states</strong> (<code class="docutils literal notranslate"><span class="pre">--optimizer-cpu-offload</span> <span class="pre">--use-precision-aware-optimizer</span></code> on Megatron 0.20) to fit 80 GB GPUs. slime parses Megatron's arguments with <code class="docutils literal notranslate"><span class="pre">ignore_unknown_args=True</span></code>, so a flag spelling the installed Megatron does not have is dropped without an error and the offload silently stops happening.</p></li>
+<li><p><strong>MTP.</strong> The checkpoint has one MTP layer, used by SGLang as the EAGLE draft and trained by Megatron: <code class="docutils literal notranslate"><span class="pre">--mtp-num-layers</span> <span class="pre">N</span> <span class="pre">--mtp-use-repeated-layer</span> <span class="pre">--enable-mtp-training</span> <span class="pre">--mtp-loss-scaling-factor</span> <span class="pre">0.2</span></code>, with one <code class="docutils literal notranslate"><span class="pre">/*E</span></code> segment per depth appended to <code class="docutils literal notranslate"><span class="pre">--hybrid-override-pattern</span></code>, and <code class="docutils literal notranslate"><span class="pre">--sglang-speculative-algorithm</span> <span class="pre">EAGLE</span></code> with <code class="docutils literal notranslate"><span class="pre">--sglang-speculative-moe-runner-backend</span> <span class="pre">triton</span></code>. The weight sync keeps the draft on the trained layer.</p></li>
+<li><p><strong>No Qwen-specific SGLang pins.</strong> <code class="docutils literal notranslate"><span class="pre">--sglang-moe-runner-backend</span> <span class="pre">triton</span></code> and <code class="docutils literal notranslate"><span class="pre">--sglang-mm-attention-backend</span> <span class="pre">sdpa</span></code> are for Qwen's gated experts and vision tower; Nemotron's experts are not gated (squared ReLU, no <code class="docutils literal notranslate"><span class="pre">gate_proj</span></code>) and its vision tower is served by SGLang's own <code class="docutils literal notranslate"><span class="pre">radio.py</span></code>.</p></li>
+</ul>
+<p>For more details, see <code class="docutils literal notranslate"><span class="pre">tests/test_nemotron35_super_vl_proxy_e2e.py</span></code>, which runs the same GRPO path on a random-weight proxy of the model on one node of 8 GPUs.</p>
 </section>
 </section>
 </section>
@@ -643,6 +659,7 @@
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#reproduce">Reproduce</a><ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#configuration">Configuration</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#qwen3-5-series">Qwen3.5 Series</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#nemotron-3-5-series">Nemotron 3.5 Series</a></li>
 </ul>
 </li>
 </ul>
@@ -686,7 +703,7 @@
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 10 月 19 日.
+  最后更新于 2026 年 11 月 05 日.
   <br/>
 </p>
   </div>
