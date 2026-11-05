@@ -11,3 +11,4 @@
    ../developer_guide/profiling.md
    ../advanced/observability.md
    ../advanced/fault-tolerance.md
+   ../advanced/weight-sync-wave-scheduling.md

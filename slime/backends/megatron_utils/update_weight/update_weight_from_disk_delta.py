@@ -22,6 +22,7 @@ from ray.actor import ActorHandle
 from slime.utils import accelerator
 from slime.utils.disk_delta import NUM_WORKERS, checksum, overwrite_encode
 from slime.utils.distributed_utils import get_gloo_group
+from slime.utils.engine_group_wave import run_engine_group_waves
 from slime.utils.weight_sync import should_flush_cache
 
 from ..hf_checkpoint_saver import _copy_hf_assets, _finalize_distributed_shards, _SafetensorShardWriter
@@ -190,7 +191,13 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
                 self.weight_version,
                 getattr(self.args, "update_weight_start_version", 0),
             )
-            ray.get([engine.pull_weights.remote(self.weight_version) for engine in self.rollout_engines])
+            max_inflight_engine_groups = self.args.update_weight_max_inflight_engine_groups
+            run_engine_group_waves(
+                self.rollout_engines,
+                max_inflight_engine_groups,
+                lambda _index, engine: engine.pull_weights.remote(self.weight_version),
+                ray.get,
+            )
             ray.get(
                 [
                     engine.pause_generation.remote(mode="abort" if flush_cache else "in_place")
@@ -199,15 +206,15 @@ class UpdateWeightFromDiskDelta(UpdateWeightFromDistributed):
             )
             if flush_cache:
                 ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
-            ray.get(
-                [
-                    engine.update_weights_from_disk.remote(
-                        model_path=self.args.update_weight_local_checkpoint_dir,
-                        weight_version=str(self.weight_version),
-                        flush_cache=flush_cache,
-                    )
-                    for engine in self.rollout_engines
-                ]
+            run_engine_group_waves(
+                self.rollout_engines,
+                max_inflight_engine_groups,
+                lambda _index, engine: engine.update_weights_from_disk.remote(
+                    model_path=self.args.update_weight_local_checkpoint_dir,
+                    weight_version=str(self.weight_version),
+                    flush_cache=flush_cache,
+                ),
+                ray.get,
             )
             ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
         dist.barrier(group=get_gloo_group())
