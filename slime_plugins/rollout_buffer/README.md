@@ -40,7 +40,7 @@ In addition, Rollout Buffer also provides some customizable functions to meet sp
 
 ### Example Script
 
-First, you need to follow [Example: Qwen3-4B Model](../../docs/en/models/qwen3-4B.md) to configure the environment, download data and convert model checkpoints. And then run the following scripts:
+First, you need to follow [Example: Qwen3-4B Model](../../docs/en/examples/qwen3-4B.md) to configure the environment, download data and convert model checkpoints. And then run the following scripts:
 ```bash
 cd slime_plugins/rollout_buffer
 bash rollout_buffer_example.sh
