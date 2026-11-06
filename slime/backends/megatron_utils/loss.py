@@ -136,9 +136,6 @@ def get_responses(
     assert logits.size(0) == 1, f"{logits.shape}"
     logits = logits.squeeze(0)
 
-    if apply_temperature and args.rollout_temperature != 1.0:
-        logits = logits.div(args.rollout_temperature)
-
     cp_size = mpu.get_context_parallel_world_size()
     end = 0
     seq_start = 0
@@ -198,6 +195,11 @@ def get_responses(
             assert logits_chunk.size(0) == tokens_chunk.size(0), f"{logits_chunk.size(0)} vs {tokens_chunk.size(0)}"
 
         seq_start += total_length
+
+        # Apply temperature per-chunk instead of on the full [T, V] logits to avoid
+        # a single ~16GiB allocation that OOMs under fragmentation.
+        if apply_temperature and args.rollout_temperature != 1.0:
+            logits_chunk = logits_chunk.div(args.rollout_temperature)
 
         yield logits_chunk, tokens_chunk
 
