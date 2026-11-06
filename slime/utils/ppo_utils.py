@@ -208,7 +208,8 @@ def compute_approx_kl(
         # http://joschu.net/blog/kl-approx.html
         # Besides non negative, it is also unbiased and have lower variance.
         log_ratio = -log_ratio
-        kl = log_ratio.exp() - 1 - log_ratio
+        # Avoid cancellation in exp(x) - 1 when the policies are close.
+        kl = torch.expm1(log_ratio) - log_ratio
     else:
         raise ValueError(f"Unknown kl_loss_type: {kl_loss_type}")
 
