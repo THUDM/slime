@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 import traceback
 from pathlib import Path
@@ -11,18 +12,35 @@ from slime.utils.memory_utils import print_memory
 logger = logging.getLogger(__name__)
 
 
+def _env_flag(name: str) -> bool:
+    """Read a boolean env var. Accepts 1/true/yes (case-insensitive) as truthy."""
+    return os.environ.get(name, "0").lower() not in ("0", "", "false", "no")
+
+
+def _should_profile_this_rank() -> bool:
+    """Rank 0 only by default; per-rank profiler buffers can host-OOM on large MoE
+    (an all-ranks trace of a 397B MoE writes one ~150 MB file per rank and holds the
+    buffers in host RAM). Set SLIME_PROFILE_ALL_RANKS=1 to profile every rank."""
+    if _env_flag("SLIME_PROFILE_ALL_RANKS"):
+        return True
+    if not torch.distributed.is_initialized():
+        return True
+    return torch.distributed.get_rank() == 0
+
+
 class TrainProfiler:
     def __init__(self, args):
         self.args = args
         self._torch_profiler_overall = None
         self._memory_profiler_overall = None
 
-        if args.use_pytorch_profiler:
-            self._torch_profiler_overall = _create_torch_profiler(args, name="train_overall")
+        if _should_profile_this_rank():
+            if args.use_pytorch_profiler:
+                self._torch_profiler_overall = _create_torch_profiler(args, name="train_overall")
 
-        if args.record_memory_history:
-            self._memory_profiler_overall = _BaseMemoryProfiler.create(args)
-            self._memory_profiler_overall.start()
+            if args.record_memory_history:
+                self._memory_profiler_overall = _BaseMemoryProfiler.create(args)
+                self._memory_profiler_overall.start()
 
     def on_init_end(self):
         if self._torch_profiler_overall is not None:
@@ -46,6 +64,13 @@ def _create_torch_profiler(args, name):
     if hasattr(torch.profiler.ProfilerActivity, activity_name):
         activities.append(getattr(torch.profiler.ProfilerActivity, activity_name))
 
+    # record_shapes/with_flops/with_stack/profile_memory can produce 10+ GB traces
+    # and OOM the host on large MoE — all off by default, opt in via env var.
+    record_shapes = _env_flag("SLIME_PROFILE_RECORD_SHAPES")
+    with_flops = _env_flag("SLIME_PROFILE_WITH_FLOPS")
+    with_stack = _env_flag("SLIME_PROFILE_WITH_STACK")
+    profile_memory = _env_flag("SLIME_PROFILE_MEMORY")
+
     return torch.profiler.profile(
         activities=activities,
         schedule=torch.profiler.schedule(
@@ -59,10 +84,10 @@ def _create_torch_profiler(args, name):
             worker_name=f"{name}_rank_{torch.distributed.get_rank()}",
             use_gzip=True,
         ),
-        record_shapes=True,
-        with_stack=True,
-        profile_memory=True,
-        with_flops=True,
+        record_shapes=record_shapes,
+        with_flops=with_flops,
+        with_stack=with_stack,
+        profile_memory=profile_memory,
     )
 
 
