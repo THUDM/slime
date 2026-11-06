@@ -99,6 +99,39 @@ def test_disabled_normalization_preserves_outcome_rewards():
     assert builder(rewards_normalization=False)._post_process_rewards(samples) == ([1, 1, 0], [1, 1, 0])
 
 
+@pytest.mark.parametrize("estimator", ["grpo", "gspo", "cispo", "reinforce_plus_plus_baseline"])
+@pytest.mark.parametrize("std", [False, True])
+@pytest.mark.parametrize("reward", [0.3, 0.1 + 0.2, 0.9])
+def test_uniform_fractional_rewards_have_exactly_zero_advantage(estimator, std, reward):
+    # Every rollout in the group got the same reward, so there is no
+    # preference between them and every advantage must be exactly zero.
+    # Centering identical float32 rewards used to leave a residue of
+    # about an ulp, which the std division amplified into a small
+    # nonzero advantage shared by the whole group (about +0.03 for 0.3).
+    samples = [segment(1, i, reward) for i in range(16)]
+    raw, normalized = builder(advantage_estimator=estimator, grpo_std_normalization=std)._post_process_rewards(samples)
+    assert raw == [reward] * 16
+    assert normalized == [0.0] * 16
+
+
+def test_uniform_group_next_to_mixed_group():
+    samples = [segment(1, i, 0.3) for i in range(4)] + [
+        segment(2, 10, 1),
+        segment(2, 11, 0),
+        segment(2, 12, 0),
+        segment(2, 13, 0),
+    ]
+    _, normalized = builder()._post_process_rewards(samples)
+    assert normalized == pytest.approx([0, 0, 0, 0, 0.75, -0.25, -0.25, -0.25])
+
+
+@pytest.mark.parametrize("reward", [float("nan"), float("inf")])
+def test_uniform_nonfinite_rewards_stay_nonfinite(reward):
+    samples = [segment(1, i, reward) for i in range(4)]
+    _, normalized = builder(grpo_std_normalization=True)._post_process_rewards(samples)
+    assert all(math.isnan(v) for v in normalized)
+
+
 def test_conversion_aggregates_loss_denominators_over_original_rollout():
     samples = [segment(5, 2, 1, (1, 0, 1)), segment(5, 3, 0), segment(5, 2, 1, (1, 1, 1))]
     # An omitted rollout_id falls back to index, as the Sample contract specifies.
