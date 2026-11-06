@@ -89,7 +89,7 @@
       'label': 'run-ci-cpu-unittest',
       'always': True,
       'cpu': True,
-      'extra_pip_deps': 'transformers wandb zstandard',
+      'extra_pip_deps': 'transformers wandb zstandard typer',
       'tests': [
         {'test_file': 'test_megatron_argument_validation.py', 'num_gpus': 0, 'straw': True},
         {'test_file': 'test_megatron_tokenizer_init.py', 'num_gpus': 0},
@@ -98,6 +98,7 @@
         {'test_file': 'test_megatron_checkpoint.py', 'num_gpus': 0},
         {'test_file': 'test_reference_top_p_replay.py', 'num_gpus': 0},
         {'test_file': 'utils/test_megatron_role_config.py', 'num_gpus': 0},
+        {'test_file': 'utils/test_runtime_env_quoting.py', 'num_gpus': 0},
         {'test_file': 'test_deep_ep_tms_patch.py', 'num_gpus': 0},
         {'test_file': 'test_stateless_adam.py', 'num_gpus': 0},
         {'test_file': 'test_update_weight_factory.py', 'num_gpus': 0},
