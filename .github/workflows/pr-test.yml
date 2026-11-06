@@ -1121,6 +1121,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_rollout_buffer_cleanup.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_server_control.py"
             },
             {
@@ -1297,6 +1301,11 @@ jobs:
           pip install transformers wandb zstandard
 
 
+
+      - name: Install rollout buffer server dependencies
+        if: matrix.info.test_file == 'test_rollout_buffer_cleanup.py'
+        shell: bash
+        run: python -m pip install fastapi uvicorn
 
       - name: Install straw for queue tests
         if: matrix.info.straw == true
