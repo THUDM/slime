@@ -76,3 +76,19 @@ DeepEP 对齐参考结果为 `x e-7` 量级）。
 另有一个较短的 EP8 gate `tests/test_glm52_layerwise_zero_e2e.py`，会同时
 记录训推两侧 decoder layer 0–5 的可见输出，并要求所有匹配 hidden-state
 元素的绝对误差严格等于 0。
+
+## 确定性训练的采样 seed
+
+启用 `--sglang-enable-deterministic-inference` 后，默认
+`--deterministic-sampling-seed-mode group` 保留原有策略：每个 prompt group
+重复使用 `rollout_seed + response_index`。
+
+使用 `--deterministic-sampling-seed-mode sample` 时，训练样本的 seed 为
+`rollout_seed + sample.index`。`RolloutDataSource` 在异步请求开始前分配全局编号，
+并随 rollout dataset state 保存。重试保留同一编号；续跑必须恢复该状态，
+缺失状态或 sample_index 时直接报错，避免静默重用旧 seed。自定义数据源也必须
+提供稳定、全局唯一、非负整数的 sample.index；seed 超出范围时报错而不循环取模。
+此选项不改变评估 seed 或非确定性采样行为。
+
+同一训练链内应保持模式不变。切换模式会改变生成轨迹；不同请求使用不同 seed
+不保证 reward 必然提高。

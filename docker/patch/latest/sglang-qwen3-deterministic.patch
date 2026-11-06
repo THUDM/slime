@@ -1,0 +1,432 @@
+diff --git a/python/sglang/jit_kernel/csrc/gemm/glm5_router_gemm.cuh b/python/sglang/jit_kernel/csrc/gemm/glm5_router_gemm.cuh
+new file mode 100644
+index 000000000..db467cbe7
+--- /dev/null
++++ b/python/sglang/jit_kernel/csrc/gemm/glm5_router_gemm.cuh
+@@ -0,0 +1,136 @@
++#include <sgl_kernel/tensor.h>
++#include <sgl_kernel/utils.h>
++
++#include <cuda_bf16.h>
++#include <cuda_runtime.h>
++
++namespace device::glm5_router_gemm {
++
++constexpr int kNumExperts = 256;
++constexpr int kHiddenDim = 6144;
++constexpr int kBlockSize = 128;
++constexpr int kWarpSize = 32;
++constexpr int kNumWarps = kBlockSize / kWarpSize;
++constexpr int kValuesPerThread = 8;
++
++template <int kNumTokens>
++__global__
++__launch_bounds__(kBlockSize, 1) void kernel(float* output, const __nv_bfloat16* input, const __nv_bfloat16* weight) {
++  const int expert = blockIdx.x;
++  const int tid = threadIdx.x;
++  const int warp = tid / kWarpSize;
++  const int lane = tid % kWarpSize;
++  constexpr int kValuesPerIteration = kValuesPerThread * kBlockSize;
++  constexpr int kIterations = kHiddenDim / kValuesPerIteration;
++
++  float accumulators[kNumTokens] = {};
++  __shared__ float warp_sums[kNumTokens][kNumWarps];
++  const __nv_bfloat16* weight_row = weight + expert * kHiddenDim;
++
++#pragma unroll
++  for (int iteration = 0; iteration < kIterations; ++iteration) {
++    const int k_base = iteration * kValuesPerIteration + tid * kValuesPerThread;
++    const uint4 weight_vector = *reinterpret_cast<const uint4*>(weight_row + k_base);
++    const __nv_bfloat16* weight_values = reinterpret_cast<const __nv_bfloat16*>(&weight_vector);
++
++#pragma unroll
++    for (int token = 0; token < kNumTokens; ++token) {
++      const uint4 input_vector = *reinterpret_cast<const uint4*>(input + token * kHiddenDim + k_base);
++      const __nv_bfloat16* input_values = reinterpret_cast<const __nv_bfloat16*>(&input_vector);
++#pragma unroll
++      for (int value = 0; value < kValuesPerThread; ++value) {
++        accumulators[token] += __bfloat162float(input_values[value]) * __bfloat162float(weight_values[value]);
++      }
++    }
++  }
++
++#pragma unroll
++  for (int token = 0; token < kNumTokens; ++token) {
++    float sum = accumulators[token];
++#pragma unroll
++    for (int offset = kWarpSize / 2; offset > 0; offset /= 2) {
++      sum += __shfl_xor_sync(0xffffffff, sum, offset);
++    }
++    if (lane == 0) {
++      warp_sums[token][warp] = sum;
++    }
++  }
++  __syncthreads();
++
++  if (tid == 0) {
++#pragma unroll
++    for (int token = 0; token < kNumTokens; ++token) {
++      float sum = 0.0f;
++#pragma unroll
++      for (int source_warp = 0; source_warp < kNumWarps; ++source_warp) {
++        sum += warp_sums[token][source_warp];
++      }
++      output[token * kNumExperts + expert] = sum;
++    }
++  }
++}
++
++template <int kNumTokens>
++void launch(float* output, const __nv_bfloat16* input, const __nv_bfloat16* weight, cudaStream_t stream) {
++  kernel<kNumTokens><<<kNumExperts, kBlockSize, 0, stream>>>(output, input, weight);
++}
++
++}  // namespace device::glm5_router_gemm
++
++namespace {
++
++void glm5_router_gemm(tvm::ffi::TensorView output, tvm::ffi::TensorView input, tvm::ffi::TensorView weight) {
++  using namespace host;
++
++  RuntimeCheck(input.device().device_type == kDLCUDA, "input must be CUDA");
++  RuntimeCheck(input.is_contiguous(), "input must be contiguous");
++  RuntimeCheck(input.dtype().code == kDLBfloat && input.dtype().bits == 16, "input must be bfloat16");
++  RuntimeCheck(input.ndim() == 2, "input must be 2D");
++  RuntimeCheck(input.size(1) == 6144, "input hidden dimension must be 6144");
++
++  RuntimeCheck(weight.device().device_type == kDLCUDA, "weight must be CUDA");
++  RuntimeCheck(weight.is_contiguous(), "weight must be contiguous");
++  RuntimeCheck(weight.dtype().code == kDLBfloat && weight.dtype().bits == 16, "weight must be bfloat16");
++  RuntimeCheck(
++      weight.ndim() == 2 && weight.size(0) == 256 && weight.size(1) == 6144, "weight must have shape [256, 6144]");
++
++  RuntimeCheck(output.device().device_type == kDLCUDA, "output must be CUDA");
++  RuntimeCheck(output.is_contiguous(), "output must be contiguous");
++  RuntimeCheck(output.dtype().code == kDLFloat && output.dtype().bits == 32, "output must be float32");
++  RuntimeCheck(
++      output.ndim() == 2 && output.size(0) == input.size(0) && output.size(1) == 256,
++      "output must have shape [num_tokens, 256]");
++
++  const int num_tokens = static_cast<int>(input.size(0));
++  RuntimeCheck(num_tokens >= 1 && num_tokens <= 16, "num_tokens must be in [1, 16]");
++  const cudaStream_t stream = LaunchKernel::resolve_device(input.device());
++  auto* output_ptr = static_cast<float*>(output.data_ptr());
++  const auto* input_ptr = reinterpret_cast<const __nv_bfloat16*>(input.data_ptr());
++  const auto* weight_ptr = reinterpret_cast<const __nv_bfloat16*>(weight.data_ptr());
++
++#define LAUNCH_GLM5_ROUTER_GEMM(M)                                                  \
++  case M:                                                                           \
++    device::glm5_router_gemm::launch<M>(output_ptr, input_ptr, weight_ptr, stream); \
++    break
++  switch (num_tokens) {
++    LAUNCH_GLM5_ROUTER_GEMM(1);
++    LAUNCH_GLM5_ROUTER_GEMM(2);
++    LAUNCH_GLM5_ROUTER_GEMM(3);
++    LAUNCH_GLM5_ROUTER_GEMM(4);
++    LAUNCH_GLM5_ROUTER_GEMM(5);
++    LAUNCH_GLM5_ROUTER_GEMM(6);
++    LAUNCH_GLM5_ROUTER_GEMM(7);
++    LAUNCH_GLM5_ROUTER_GEMM(8);
++    LAUNCH_GLM5_ROUTER_GEMM(9);
++    LAUNCH_GLM5_ROUTER_GEMM(10);
++    LAUNCH_GLM5_ROUTER_GEMM(11);
++    LAUNCH_GLM5_ROUTER_GEMM(12);
++    LAUNCH_GLM5_ROUTER_GEMM(13);
++    LAUNCH_GLM5_ROUTER_GEMM(14);
++    LAUNCH_GLM5_ROUTER_GEMM(15);
++    LAUNCH_GLM5_ROUTER_GEMM(16);
++  }
++#undef LAUNCH_GLM5_ROUTER_GEMM
++}
++
++}  // namespace
+diff --git a/python/sglang/srt/layers/moe/moe_runner/deep_gemm.py b/python/sglang/srt/layers/moe/moe_runner/deep_gemm.py
+index 32552c5e0..b99396674 100644
+--- a/python/sglang/srt/layers/moe/moe_runner/deep_gemm.py
++++ b/python/sglang/srt/layers/moe/moe_runner/deep_gemm.py
+@@ -870,7 +870,6 @@ def _varlen_deep_gemm_silu_mul_quant(
+     swiglu_limit: Optional[float] = None,
+     swizzle: bool = False,
+ ) -> Tuple[torch.Tensor, torch.Tensor]:
+-    from sglang.srt.layers.moe.ep_moe.kernels import silu_and_mul_masked_post_quant_fwd
+     from sglang.srt.layers.quantization.fp8_kernel import (
+         sglang_per_token_group_quant_8bit,
+     )
+@@ -939,19 +938,47 @@ def _varlen_deep_gemm_silu_mul_quant(
+         assert (
+             not swizzle
+         ), "SGLANG_OPT_FIX_MEGA_MOE_MEMORY requires SGLANG_OPT_USE_JIT_EP_ACTIVATION=True"
+-        down_input_scale = torch.empty(
+-            (E, N, G),
++        # Qwen3 moe_ffn=768 -> 6 scale groups: FAST_ACT v2 and JIT EP both
++        # refuse G%16/G%4. The fused Triton silu+quant fallback writes unpacked
++        # float32 (E, N, G) scales, which do not bit-match Megatron's
++        # silu_and_mul + sglang_per_token_group_quant_fp8 (packed UE8M0 TMA).
++        # Flatten to 2D, use those same kernels, then restack into masked layout.
++        from sgl_kernel import silu_and_mul
++
++        from sglang.srt.layers.quantization.fp8_kernel import (
++            create_per_token_group_quant_fp8_output_scale,
++            sglang_per_token_group_quant_fp8,
++        )
++
++        ue8m0 = bool(deep_gemm_wrapper.DEEPGEMM_SCALE_UE8M0)
++        down_bf16 = torch.empty(
++            (E * N, D),
++            dtype=gateup_output.dtype,
+             device=hidden_states_device,
+-            dtype=torch.float32,
+         )
+-        silu_and_mul_masked_post_quant_fwd(
+-            gateup_output,
+-            down_input,
+-            down_input_scale,
++        silu_and_mul(gateup_output.reshape(E * N, D * 2), down_bf16)
++        q, s = sglang_per_token_group_quant_fp8(
++            down_bf16,
+             group_size,
+-            masked_m,
+-            scale_ue8m0=deep_gemm_wrapper.DEEPGEMM_SCALE_UE8M0,
++            column_major_scales=ue8m0,
++            scale_tma_aligned=ue8m0,
++            scale_ue8m0=ue8m0,
+         )
++        down_input = q.view(E, N, D)
++        if ue8m0:
++            down_input_scale = create_per_token_group_quant_fp8_output_scale(
++                x_shape=(E, N, D),
++                device=hidden_states_device,
++                group_size=group_size,
++                column_major_scales=True,
++                scale_tma_aligned=True,
++                scale_ue8m0=True,
++            )
++            down_input_scale.copy_(
++                s.contiguous().view(E, N, down_input_scale.shape[-1])
++            )
++        else:
++            down_input_scale = s.reshape(E, N, G)
+     return down_input, down_input_scale
+ 
+ 
+diff --git a/python/sglang/srt/models/qwen3_moe.py b/python/sglang/srt/models/qwen3_moe.py
+index a7d0ae45e..61b2e1c8d 100644
+--- a/python/sglang/srt/models/qwen3_moe.py
++++ b/python/sglang/srt/models/qwen3_moe.py
+@@ -22,6 +22,7 @@ import math
+ from typing import Any, Dict, Iterable, List, Optional, Tuple, TypeVar
+ 
+ import torch
++import torch.nn.functional as F
+ from torch import nn
+ from transformers import PretrainedConfig
+ 
+@@ -38,7 +39,6 @@ from sglang.srt.layers.cp.utils import is_cp_v2_active
+ from sglang.srt.layers.layernorm import RMSNorm
+ from sglang.srt.layers.linear import (
+     QKVParallelLinear,
+-    ReplicatedLinear,
+     RowParallelLinear,
+ )
+ from sglang.srt.layers.logits_processor import LogitsProcessor
+@@ -225,6 +225,40 @@ def compute_yarn_parameters(
+     return factor, low, high, attention_factor
+ 
+ 
++class Qwen3MoeGate(nn.Module):
++    """Qwen3 MoE router projection.
++
++    Production serving keeps bf16 ``F.linear``.  When deterministic inference
++    and ``--enable-fp32-moe-router`` are both set, logits come from
++    ``router_gemm_batch_invariant`` so Megatron's
++    ``MEGATRON_USE_SGLANG_ROUTER_GEMM`` wrap computes the same fp32 GEMM.
++    """
++
++    def __init__(self, config, prefix: str = ""):
++        super().__init__()
++        del prefix
++        self.weight = nn.Parameter(
++            torch.empty(
++                (config.num_experts, config.hidden_size),
++                dtype=torch.get_default_dtype(),
++            )
++        )
++
++    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
++        server_args = get_global_server_args()
++        if (
++            server_args.enable_deterministic_inference
++            and server_args.enable_fp32_moe_router
++        ):
++            from sglang.srt.batch_invariant_ops import router_gemm_batch_invariant
++
++            return router_gemm_batch_invariant(
++                hidden_states.contiguous(),
++                self.weight.contiguous(),
++            )
++        return F.linear(hidden_states, self.weight, None)
++
++
+ class Qwen3MoeSparseMoeBlock(nn.Module):
+     def __init__(
+         self,
+@@ -268,13 +302,7 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
+             routing_method_type=RoutingMethodType.Renormalize,
+         )
+ 
+-        self.gate = ReplicatedLinear(
+-            config.hidden_size,
+-            config.num_experts,
+-            bias=False,
+-            quant_config=None,
+-            prefix=add_prefix("gate", prefix),
+-        )
++        self.gate = Qwen3MoeGate(config=config, prefix=add_prefix("gate", prefix))
+ 
+         if get_moe_a2a_backend().is_deepep():
+             # TODO: we will support tp < ep in the future
+@@ -322,7 +350,7 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
+         hidden_states = hidden_states.view(-1, hidden_dim)
+ 
+         # router_logits: (num_tokens, n_experts)
+-        router_logits, _ = self.gate(hidden_states)
++        router_logits = self.gate(hidden_states)
+         topk_output = self.topk(hidden_states, router_logits)
+         final_hidden_states = self.experts(hidden_states, topk_output)
+ 
+@@ -349,7 +377,7 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
+     ) -> torch.Tensor:
+         if hidden_states.shape[0] > 0:
+             # router_logits: (num_tokens, n_experts)
+-            router_logits, _ = self.gate(hidden_states)
++            router_logits = self.gate(hidden_states)
+             topk_output = self.topk(
+                 hidden_states,
+                 router_logits,
+@@ -371,7 +399,7 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
+             state.forward_batch.forward_mode, state.hidden_states_mlp_input
+         ):
+             # router_logits: (num_tokens, n_experts)
+-            state.router_logits, _ = self.gate(state.hidden_states_mlp_input)
++            state.router_logits = self.gate(state.hidden_states_mlp_input)
+         else:
+             state.router_logits = None
+ 
+diff --git a/python/sglang/srt/server_args.py b/python/sglang/srt/server_args.py
+index de398a854..30c28ec0b 100644
+--- a/python/sglang/srt/server_args.py
++++ b/python/sglang/srt/server_args.py
+@@ -198,12 +198,19 @@ ATTENTION_BACKEND_CHOICES = [
+ DETERMINISTIC_ATTENTION_BACKEND_CHOICES = [
+     "flashinfer",
+     "fa3",
++    "fa4",
+     "triton",
+     "dsa",
+     "ascend",
+ ]
+ 
+-RADIX_SUPPORTED_DETERMINISTIC_ATTENTION_BACKEND = ["fa3", "triton", "dsa", "ascend"]
++RADIX_SUPPORTED_DETERMINISTIC_ATTENTION_BACKEND = [
++    "fa3",
++    "fa4",
++    "triton",
++    "dsa",
++    "ascend",
++]
+ 
+ DISAGG_TRANSFER_BACKEND_CHOICES = [
+     "mooncake",
+diff --git a/test/registered/unit/models/test_qwen3_moe_gate.py b/test/registered/unit/models/test_qwen3_moe_gate.py
+new file mode 100644
+index 000000000..92d7fc03f
+--- /dev/null
++++ b/test/registered/unit/models/test_qwen3_moe_gate.py
+@@ -0,0 +1,87 @@
++"""Qwen3 MoE gate must match Megatron's SGLang fp32 router wrap.
++
++With --enable-fp32-moe-router plus deterministic inference, logits come from
++router_gemm_batch_invariant (same helper Megatron's gating wrap calls).
++Without those flags the gate stays bf16 F.linear, matching production Qwen3.
++"""
++
++from types import SimpleNamespace
++from unittest.mock import patch
++
++import torch
++
++from sglang.test.ci.ci_register import register_cpu_ci
++from sglang.test.test_utils import CustomTestCase
++
++register_cpu_ci(est_time=4, suite="base-a-test-cpu")
++
++
++def _qwen3_30b_a3b_config():
++    return SimpleNamespace(num_experts=128, hidden_size=2048)
++
++
++class TestQwen3MoeGate(CustomTestCase):
++    def setUp(self):
++        from sglang.srt.models.qwen3_moe import Qwen3MoeGate
++
++        torch.manual_seed(0)
++        self.gate = Qwen3MoeGate(_qwen3_30b_a3b_config())
++        self.gate.weight = torch.nn.Parameter(
++            torch.randn(128, 2048, dtype=torch.bfloat16) * 0.02
++        )
++        self.hidden = torch.randn(7, 2048, dtype=torch.bfloat16)
++
++    def test_fp32_router_uses_batch_invariant_gemm(self):
++        sentinel = torch.full((7, 128), 3.25, dtype=torch.float32)
++        server_args = SimpleNamespace(
++            enable_deterministic_inference=True,
++            enable_fp32_moe_router=True,
++        )
++
++        with (
++            patch(
++                "sglang.srt.models.qwen3_moe.get_global_server_args",
++                return_value=server_args,
++            ),
++            patch(
++                "sglang.srt.batch_invariant_ops.router_gemm_batch_invariant",
++                return_value=sentinel,
++            ) as mocked,
++        ):
++            logits = self.gate(self.hidden)
++
++        mocked.assert_called_once()
++        hidden_arg, weight_arg = mocked.call_args.args
++        torch.testing.assert_close(hidden_arg, self.hidden.contiguous())
++        torch.testing.assert_close(weight_arg, self.gate.weight.contiguous())
++        self.assertEqual(logits.dtype, torch.float32)
++        torch.testing.assert_close(logits, sentinel)
++
++    def test_default_path_stays_bf16_linear(self):
++        server_args = SimpleNamespace(
++            enable_deterministic_inference=False,
++            enable_fp32_moe_router=False,
++        )
++        expected = torch.nn.functional.linear(self.hidden, self.gate.weight, None)
++
++        with patch(
++            "sglang.srt.models.qwen3_moe.get_global_server_args",
++            return_value=server_args,
++        ):
++            logits = self.gate(self.hidden)
++
++        self.assertEqual(logits.dtype, torch.bfloat16)
++        torch.testing.assert_close(logits, expected)
++
++    def test_gate_returns_logits_tensor_not_tuple(self):
++        server_args = SimpleNamespace(
++            enable_deterministic_inference=False,
++            enable_fp32_moe_router=False,
++        )
++        with patch(
++            "sglang.srt.models.qwen3_moe.get_global_server_args",
++            return_value=server_args,
++        ):
++            logits = self.gate(self.hidden)
++        self.assertIsInstance(logits, torch.Tensor)
++        self.assertEqual(tuple(logits.shape), (7, 128))
