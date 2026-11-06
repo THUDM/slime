@@ -17,6 +17,9 @@ the number of sglang engines to match the per-sample semaphore cap in
 so slow group members do not leave sample slots idle. It does not enlarge
 the per-sample semaphore.
 
+The worker snapshots the current training-side ``policy_version`` when each
+group is admitted and preserves it on completion.
+
 Admission pause leaves in-flight tasks alive across training rounds. Agent
 adapters with ``--partial-rollout`` continue interrupted model turns within
 those tasks, retaining the live sandbox and CLI. A generator that does return
@@ -37,6 +40,7 @@ import logging
 import queue
 import threading
 import time
+from dataclasses import dataclass
 
 from slime.data.transport import discard_rollout_group, publish_rollout_async
 from slime.rollout.base_types import RolloutFnTrainOutput, finalize_rollout_groups, iter_samples, prepare_retry_group
@@ -49,10 +53,20 @@ from slime.utils.types import Sample
 
 __all__ = [
     "AsyncRolloutWorker",
+    "CompletedSampleRecord",
     "generate_rollout_fully_async",
 ]
 
 logger = logging.getLogger("slime.rollout.fully_async")
+
+
+@dataclass(frozen=True)
+class CompletedSampleRecord:
+    """A completed group and the immutable policy version captured at admission."""
+
+    gid: int
+    group: list[Sample]
+    policy_version: int | None
 
 
 def _get_worker(args, data_buffer):
@@ -68,22 +82,50 @@ def _get_worker(args, data_buffer):
             worker = DistributedRollout(args, data_buffer)
         else:
             worker = AsyncRolloutWorker(
-                args, data_buffer, concurrency=args.sglang_server_concurrency * get_rollout_num_engines(args)
+                args,
+                data_buffer,
+                concurrency=args.sglang_server_concurrency * get_rollout_num_engines(args),
+                policy_version=getattr(data_buffer, "policy_version", getattr(args, "policy_version", 0)),
             )
         if hasattr(data_buffer, "register_consumer"):
             data_buffer.register_consumer("fully_async", worker)
         else:
             data_buffer.consumers["fully_async"] = worker
+        worker.publish_policy_version(getattr(data_buffer, "policy_version", getattr(args, "policy_version", 0)))
         if isinstance(worker, AsyncRolloutWorker):
             worker.start()
     return worker
+
+
+def before_weight_update(*, data_source, policy_version: int) -> None:
+    """Lifecycle hook called before training publishes a new actor policy."""
+
+    logger.debug("fully-async: preparing to update policy version %d", policy_version)
+
+
+def after_weight_update(*, data_source, policy_version: int, succeeded: bool) -> None:
+    """Publish ``policy_version`` after a successful actor weight update."""
+
+    if not succeeded:
+        logger.warning("fully-async: weight update failed; policy remains unpublished")
+        return
+
+    current = getattr(data_source, "policy_version", 0)
+    if policy_version < current:
+        raise ValueError(f"policy version must be monotonic: current={current}, new={policy_version}")
+    worker = getattr(data_source, "consumers", {}).get("fully_async")
+    if worker is not None:
+        worker.publish_policy_version(policy_version)
+    # Publication can precede the first generate call. Keep it with this source,
+    # so independent managers and closed/replaced sources cannot share a worker.
+    data_source.policy_version = policy_version
 
 
 class AsyncRolloutWorker:
     """Background thread + asyncio loop that continuously consumes groups
     from ``data_buffer`` and runs :func:`generate_and_rm_group` on each."""
 
-    def __init__(self, args, data_buffer, concurrency: int = 10):
+    def __init__(self, args, data_buffer, concurrency: int = 10, policy_version: int = 0):
         self.args = args
         self.data_buffer = data_buffer
         self.concurrency = max(1, concurrency // getattr(args, "n_samples_per_prompt", 1))
@@ -99,10 +141,12 @@ class AsyncRolloutWorker:
         # and freeze every in-flight generation. Backpressure lives in _loop()
         # instead, which stops topping up while a full pool of completed groups
         # is already waiting to be consumed.
-        self.output_queue: queue.Queue[tuple[int, list[Sample]]] = queue.Queue()
+        self.output_queue: queue.Queue[CompletedSampleRecord] = queue.Queue()
         self.poll_interval = 0.01
         self.worker_thread: threading.Thread | None = None
         self.state = GenerateState(args)
+        self._policy_version = policy_version
+        self._policy_version_lock = threading.Lock()
 
     # -- public --------------------------------------------------------------
 
@@ -135,6 +179,10 @@ class AsyncRolloutWorker:
         if self.worker_thread is not None:
             raise RuntimeError("Restore worker state before starting generation")
         for result in state["ready"]:
+            if isinstance(result, tuple):
+                # Older source checkpoints contain (gid, group) without policy
+                # provenance. Keep it unknown rather than assigning new weights.
+                result = CompletedSampleRecord(*result, policy_version=None)
             self.output_queue.put(result)
 
     def close(self):
@@ -144,7 +192,7 @@ class AsyncRolloutWorker:
             if self.worker_thread.is_alive():
                 raise TimeoutError("Generation did not stop within 35 seconds")
 
-    def get_completed_groups(self, limit: int | None = None) -> list[tuple[int, list[Sample]]]:
+    def get_completed_groups(self, limit: int | None = None) -> list[CompletedSampleRecord]:
         """Pop up to ``limit`` completed groups (all of them when ``None``).
 
         Callers that only need a fixed number of groups must pass ``limit`` —
@@ -152,7 +200,7 @@ class AsyncRolloutWorker:
         these groups are fully generated and reward-scored, with their prompts
         already consumed from ``data_buffer``.
         """
-        completed: list[tuple[int, list[Sample]]] = []
+        completed: list[CompletedSampleRecord] = []
         while limit is None or len(completed) < limit:
             try:
                 completed.append(self.output_queue.get_nowait())
@@ -162,6 +210,23 @@ class AsyncRolloutWorker:
 
     def queue_size(self) -> int:
         return self.output_queue.qsize()
+
+    @property
+    def policy_version(self) -> int:
+        """Return the latest successfully published policy version."""
+
+        with self._policy_version_lock:
+            return self._policy_version
+
+    def publish_policy_version(self, policy_version: int) -> None:
+        """Publish a monotonic policy version for future admissions."""
+
+        with self._policy_version_lock:
+            if policy_version < self._policy_version:
+                raise ValueError(
+                    f"policy version must be monotonic: current={self._policy_version}, new={policy_version}"
+                )
+            self._policy_version = policy_version
 
     # -- internals -----------------------------------------------------------
 
@@ -211,6 +276,8 @@ class AsyncRolloutWorker:
                     for group in groups:
                         gid = gid_counter
                         gid_counter += 1
+                        policy_version = self.policy_version
+                        callback = self._make_done_cb(gid, group, policy_version)
                         task = asyncio.create_task(
                             generate_and_rm_group(
                                 self.args,
@@ -219,7 +286,7 @@ class AsyncRolloutWorker:
                                 evaluation=False,
                             )
                         )
-                        task.add_done_callback(self._make_done_cb(gid, group))
+                        task.add_done_callback(callback)
                         active_tasks.add(task)
 
                 with self.condition:
@@ -243,11 +310,20 @@ class AsyncRolloutWorker:
             except Exception:  # noqa: BLE001
                 pass
 
-    def _make_done_cb(self, gid: int, input_group: list[Sample]):
+    def _make_done_cb(self, gid: int, input_group: list[Sample], policy_version: int):
         # Interrupted segments cannot reopen their closed agent sessions.
         # Save their inputs before generation mutates them; completed siblings
         # will retain their results when the group is retried.
         retry_group = [sample if isinstance(sample, list) else copy.deepcopy(sample) for sample in input_group]
+        # Retries may include already completed siblings. Their original policy
+        # remains valid because the generator reuses them without new inference.
+        retained_versions = {
+            id(sample): sample.policy_version
+            for sample in iter_samples(input_group)
+            if sample.status in (Sample.Status.COMPLETED, Sample.Status.TRUNCATED) and sample.reward is not None
+        }
+        for sample in iter_samples(input_group):
+            sample.policy_version = retained_versions.get(id(sample), policy_version)
 
         def _cb(done_task: asyncio.Task) -> None:
             try:
@@ -263,6 +339,11 @@ class AsyncRolloutWorker:
                     type(result).__name__,
                 )
                 return
+            # Custom generators may replace the admitted Sample objects. Stamp
+            # their outputs from the admission snapshot, never from mutable
+            # worker state observed at completion time.
+            for sample in iter_samples(result):
+                sample.policy_version = retained_versions.get(id(sample), policy_version)
             # The early weight-update exit may return untouched PENDING inputs.
             if any(s.status in (Sample.Status.ABORTED, Sample.Status.PENDING) for s in iter_samples(result)):
                 try:
@@ -270,7 +351,7 @@ class AsyncRolloutWorker:
                 except Exception:  # noqa: BLE001
                     logger.exception("fully-async: failed to requeue aborted group")
                 return
-            self.output_queue.put((gid, result))
+            self.output_queue.put(CompletedSampleRecord(gid=gid, group=result, policy_version=policy_version))
 
         return _cb
 
@@ -309,7 +390,8 @@ async def _generate_rollout_async(args, rollout_id: int, data_buffer) -> Rollout
         # Pull only what this rollout still needs; the surplus stays queued for
         # the next rollout (that is the "queue stays warm" contract).
         drained = 0
-        for _gid, group in worker.get_completed_groups(limit=target - len(collected)):
+        for record in worker.get_completed_groups(limit=target - len(collected)):
+            group = record.group
             drained += 1
             verdict = call_dynamic_filter(dynamic_filter, args, group)
             metric_gatherer.on_group_completed(verdict)

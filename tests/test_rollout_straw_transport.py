@@ -350,7 +350,7 @@ def test_fully_async_stores_groups_while_collecting_the_batch(args, monkeypatch)
         # Producing the next group requires the previous one to be on disk.
         if saved:
             assert saved[0].load()[0].index == 2
-        return [(len(saved), [Sample(index=2 - len(saved), reward=1)])]
+        return [fa.CompletedSampleRecord(len(saved), [Sample(index=2 - len(saved), reward=1)], policy_version=0)]
 
     worker = SimpleNamespace(queue_size=lambda: 0, get_completed_groups=take, resume=lambda: None, error=None)
     monkeypatch.setattr(fa, "_get_worker", lambda *a: worker)
