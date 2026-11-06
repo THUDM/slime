@@ -71,14 +71,18 @@ def get_model_url(args: Namespace, model_name: str, endpoint: str = "/generate")
         url = get_model_url(args, "ref", "/generate")
         resp = await post(url, json=payload)
 
-    Falls back to the default router if *model_name* is not found or
-    ``sglang_model_routers`` is not set.
+    Falls back to the default router only when ``sglang_model_routers`` is
+    not set or empty. If routers are registered, an unknown model name is a
+    configuration error.
     """
     routers = getattr(args, "sglang_model_routers", None)
-    if routers and model_name in routers:
-        ip, port = routers[model_name]
-        return f"http://{ip}:{port}{endpoint}"
-    return f"http://{args.sglang_router_ip}:{args.sglang_router_port}{endpoint}"
+    if not routers:
+        return f"http://{args.sglang_router_ip}:{args.sglang_router_port}{endpoint}"
+    if model_name not in routers:
+        available = ", ".join(sorted(routers))
+        raise ValueError(f"Unknown SGLang model '{model_name}'. Available models: {available}")
+    ip, port = routers[model_name]
+    return f"http://{ip}:{port}{endpoint}"
 
 
 class GenerateState(metaclass=SingletonMeta):
