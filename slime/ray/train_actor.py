@@ -14,6 +14,7 @@ from slime.ray.ray_actor import RayActor
 from slime.utils import accelerator
 from slime.utils.distributed_utils import init_gloo_group
 from slime.utils.memory_utils import clear_memory, print_memory
+from slime.utils.numa_utils import _set_cpu_affinity
 
 logger = logging.getLogger(__name__)
 
@@ -71,27 +72,7 @@ class TrainRayActor(RayActor):
         args.rank = dist.get_rank()
         args.world_size = dist.get_world_size()
 
-        try:
-            if torch.version.hip is not None:
-                logger.info("Detected ROCm/HIP environment, skipping NUMA affinity setup")
-                # will find the coresponding API to implement ROCm version as below
-            else:
-                import pynvml
-
-                pynvml.nvmlInit()
-
-                local_rank = int(os.environ["RANK"]) % args.num_gpus_per_node
-
-                handle = pynvml.nvmlDeviceGetHandleByIndex(local_rank)
-                pynvml.nvmlDeviceSetCpuAffinity(handle)
-
-                logger.info(f"Set NUMA affinity for GPU {local_rank}")
-                pynvml.nvmlShutdown()
-
-        except ImportError:
-            logger.info("Warning: pynvml not available, skipping NUMA affinity setup")
-        except Exception as e:
-            logger.info(f"Warning: Failed to set NUMA affinity: {e}")
+        _set_cpu_affinity(args.rank)
 
     def clear_memory(self):
         if self.args.debug_rollout_only:
