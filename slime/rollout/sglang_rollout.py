@@ -201,9 +201,14 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     images = sample.multimodal_inputs.get("images") if sample.multimodal_inputs else None
     if images:
         payload["image_data"] = [encode_image_for_rollout_engine(image) for image in images]
+    if images and not sample.response_length:
         # For single-turn multimodal requests, send text so SGLang expands the
         # image placeholders with its own processor rules.
         payload["text"] = sample.prompt
+    elif images:
+        # A partial-rollout continuation must be conditioned on the response
+        # generated so far, which only sample.tokens carries.
+        payload["input_ids"] = list(sample.tokens)
     else:
         payload["input_ids"] = prompt_ids
 
