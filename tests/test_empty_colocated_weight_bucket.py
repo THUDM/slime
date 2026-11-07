@@ -228,6 +228,68 @@ def test_source_rank_pads_empty_colocated_bucket_entries(monkeypatch):
     ]
 
 
+@pytest.mark.parametrize("support", [True, False, None])
+@pytest.mark.parametrize("load_format", [None, "custom"])
+@pytest.mark.parametrize("empty", [False, True])
+def test_distributed_broadcast_selects_compatible_format(monkeypatch, support, load_format, empty):
+    _install_fake_deps(monkeypatch)
+    distributed_utils = sys.modules["slime.utils.distributed_utils"]
+    distributed_utils.init_process_group = lambda **kwargs: None
+    common_name = "slime.backends.megatron_utils.update_weight.common"
+    common = types.ModuleType(common_name)
+    common.all_gather_param = lambda *args: None
+    common.named_params_and_buffers = lambda *args: []
+    monkeypatch.setitem(sys.modules, common_name, common)
+
+    if support is None:
+        monkeypatch.delattr(_FakeFlattenedTensorBucket, "supports_multi_dtypes")
+    else:
+        monkeypatch.setattr(_FakeFlattenedTensorBucket, "supports_multi_dtypes", support)
+
+    module_name = "slime.backends.megatron_utils.update_weight.update_weight_from_distributed"
+    module_path = REPO_ROOT / "slime/backends/megatron_utils/update_weight/update_weight_from_distributed.py"
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, module_name, module)
+    spec.loader.exec_module(module)
+
+    broadcasts, waited = [], []
+    group = object()
+
+    def broadcast(tensor, src, group, async_op):
+        broadcasts.append((tensor, src, group, async_op))
+        return types.SimpleNamespace(wait=lambda: waited.append(tensor))
+
+    monkeypatch.setattr(module.dist, "broadcast", broadcast, raising=False)
+    engines = [types.SimpleNamespace(update_weights_from_distributed=_FakeRemoteMethod()) for _ in range(2)]
+    tensors = (
+        []
+        if empty
+        else [
+            ("weight", types.SimpleNamespace(dtype="float16", shape=(2, 3), data="weight-data")),
+            ("scale", types.SimpleNamespace(dtype="float32", shape=(2,), data="scale-data")),
+        ]
+    )
+    refs = module.update_weights_from_distributed("test-group", group, 4, engines, tensors, load_format=load_format)
+
+    flattened = bool(tensors) and support and load_format is None
+    expected_tensors = [("flattened", ("weight", "scale"))] if flattened else [t.data for _, t in tensors]
+    assert broadcasts == [(tensor, 0, group, True) for tensor in expected_tensors]
+    assert waited == expected_tensors
+    assert refs == ["ref-1", "ref-1"]
+    for engine in engines:
+        assert engine.update_weights_from_distributed.calls == [
+            {
+                "names": [name for name, _ in tensors],
+                "dtypes": [tensor.dtype for _, tensor in tensors],
+                "shapes": [tensor.shape for _, tensor in tensors],
+                "group_name": "test-group",
+                "weight_version": "4",
+                "load_format": "flattened_bucket" if flattened else load_format,
+            }
+        ]
+
+
 def test_disable_draft_model_is_forwarded_to_engine(monkeypatch):
     module, dist_state = _load_update_weight_module(monkeypatch)
     remote_serialized_bucket = {"flattened_tensor": ("remote",), "metadata": ("remote_weight",)}

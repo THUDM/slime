@@ -172,6 +172,14 @@ def test_native_async_checkpoint_default_preserves_explicit_strategy(monkeypatch
     assert parser.parse_args(command).async_strategy == (strategy or "mcore")
 
 
+def test_nvrx_only_megatron_parser_keeps_nvrx_default(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--async-strategy", choices=["nvrx"], default="nvrx")
+    module.get_slime_extra_args_provider()(parser)
+    assert parser.parse_args(["--rollout-batch-size", "1"]).async_strategy == "nvrx"
+
+
 def test_legacy_megatron_parser_does_not_gain_async_strategy(monkeypatch):
     module = load_slime_arguments_module(monkeypatch)
     parser = argparse.ArgumentParser()
@@ -766,6 +774,18 @@ def test_force_fp8_ue8m0_scale_argument(monkeypatch):
 
     assert defaults.force_fp8_ue8m0_scale is False
     assert configured.force_fp8_ue8m0_scale is True
+
+
+@pytest.mark.unit
+def test_update_weight_broadcast_mode_argument_removed(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    parser = argparse.ArgumentParser()
+    module.get_slime_extra_args_provider()(parser)
+
+    defaults = parser.parse_args(["--rollout-batch-size", "1"])
+    assert not hasattr(defaults, "update_weight_broadcast_mode")
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--rollout-batch-size", "1", "--update-weight-broadcast-mode", "flattened-bucket"])
 
 
 if __name__ == "__main__":

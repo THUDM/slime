@@ -271,6 +271,11 @@ jobs:
               "test_file": "test_glm52_layerwise_zero_e2e.py"
             },
             {
+              "num_gpus": 8,
+              "test_file": "test_nemotron35_super_vl_proxy_e2e.py",
+              "timeout_minutes": 45
+            },
+            {
               "enable_eval": "0",
               "num_gpus": 8,
               "test_file": "test_qwen3_30B_A3B.py",
@@ -1533,6 +1538,11 @@ jobs:
             {
               "num_gpus": 8,
               "test_file": "test_glm52_layerwise_zero_e2e.py"
+            },
+            {
+              "num_gpus": 8,
+              "test_file": "test_nemotron35_super_vl_proxy_e2e.py",
+              "timeout_minutes": 45
             },
             {
               "enable_eval": "0",
