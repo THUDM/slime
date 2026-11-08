@@ -536,6 +536,17 @@ def test_negative_flush_cache_interval_disables_training_flush(monkeypatch, inte
     assert args.rollout_function_path == "slime.rollout.fully_async_rollout.generate_rollout_fully_async"
 
 
+@pytest.mark.parametrize(
+    ("interval", "expected"),
+    [(0, True), (-1, True), (1, False), (8, False)],
+)
+def test_never_flushing_pipeline_rl_disables_radix_cache(monkeypatch, interval, expected):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(flush_cache_interval=interval, sglang_disable_radix_cache=False)
+    args, _ = module.slime_validate_args(args)
+    assert args.sglang_disable_radix_cache is expected
+
+
 def test_distributed_fully_async_is_opt_in(monkeypatch):
     module = load_slime_arguments_module(monkeypatch)
     parser = module.get_slime_extra_args_provider()(argparse.ArgumentParser())
