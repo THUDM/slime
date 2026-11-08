@@ -46,10 +46,11 @@ class _VocabParallelTopKLogProbs(torch.autograd.Function):
     """
 
     @staticmethod
-    def forward(ctx, logits, token_ids, process_group, chunk_size, temperature):
+    def forward(ctx, logits, token_ids, process_group, chunk_size, temperature, global_vocab_size):
         n, vocab_size = logits.shape
         rank, _ = _get_vocab_parallel_rank_size(process_group)
         vocab_start = rank * vocab_size
+        num_unpadded = _num_unpadded_vocab_columns(vocab_size, rank, global_vocab_size)
         chunk_size = chunk_size if chunk_size > 0 else max(n, 1)
         output = torch.empty(token_ids.shape, device=logits.device, dtype=torch.float32)
         maxima = torch.empty((n, 1), device=logits.device, dtype=torch.float32)
@@ -61,7 +62,7 @@ class _VocabParallelTopKLogProbs(torch.autograd.Function):
             work = logits[start:end].to(dtype=torch.float32, copy=True)
             if temperature != 1.0:
                 work.div_(temperature)
-            maximum = work.max(dim=-1, keepdim=True).values
+            maximum = _unpadded_row_max(work, num_unpadded)
             _maybe_all_reduce(maximum, dist.ReduceOp.MAX, process_group)
             ids = token_ids[start:end]
             local_mask = (ids >= vocab_start) & (ids < vocab_start + vocab_size)
@@ -69,6 +70,8 @@ class _VocabParallelTopKLogProbs(torch.autograd.Function):
             targets = work.gather(-1, local_ids).masked_fill_(~local_mask, 0.0)
             _maybe_all_reduce(targets, dist.ReduceOp.SUM, process_group)
             work.sub_(maximum).exp_()
+            if num_unpadded < vocab_size:
+                work[:, num_unpadded:] = 0.0
             denominator = work.sum(dim=-1, keepdim=True)
             _maybe_all_reduce(denominator, dist.ReduceOp.SUM, process_group)
             # Normalize over the full distributed vocabulary.
@@ -80,6 +83,7 @@ class _VocabParallelTopKLogProbs(torch.autograd.Function):
         ctx.chunk_size = chunk_size
         ctx.temperature = temperature
         ctx.vocab_start = vocab_start
+        ctx.num_unpadded = num_unpadded
         return output
 
     @staticmethod
@@ -95,7 +99,10 @@ class _VocabParallelTopKLogProbs(torch.autograd.Function):
             work = logits[start:end].to(dtype=torch.float32, copy=True)
             if ctx.temperature != 1.0:
                 work.div_(ctx.temperature)
-            work.sub_(maxima[start:end]).exp_().div_(denominators[start:end])
+            work.sub_(maxima[start:end]).exp_()
+            if ctx.num_unpadded < vocab_size:
+                work[:, ctx.num_unpadded :] = 0.0
+            work.div_(denominators[start:end])
             grad = grad_output[start:end].float()
             work.mul_(-grad.sum(dim=-1, keepdim=True))
             ids = token_ids[start:end]
@@ -108,7 +115,7 @@ class _VocabParallelTopKLogProbs(torch.autograd.Function):
             del work
         # Every TP rank differentiates the replicated loss. No backward
         # all-reduce: that would multiply the gradient by the TP world size.
-        return grad_input, None, None, None, None
+        return grad_input, None, None, None, None, None
 
 
 def calculate_topk_log_probs(
@@ -117,6 +124,7 @@ def calculate_topk_log_probs(
     process_group,
     chunk_size: int = -1,
     temperature: float = 1.0,
+    global_vocab_size: int | None = None,
 ) -> torch.Tensor:
     """Full-vocab-normalized log-probs at arbitrary token ids under vocab parallelism.
 
@@ -126,12 +134,16 @@ def calculate_topk_log_probs(
         token_ids: `[N, k]` global token ids.
         temperature: Divisor applied to the logits after the per-chunk FP32 cast,
             matching the RL log-prob path's cast-then-scale order.
+        global_vocab_size: Optional unpadded vocab size. If set, columns at or
+            past it (Megatron's vocab padding) are left out of the normalization.
 
     Returns `[N, k]` FP32 log-probs; first-order gradients flow to the local
     logits shard only. Saved state shares the original logits storage plus
     O(N * k + N) ids/normalizers; FP32 workspace is O(chunk_size * V_p).
     """
-    return _VocabParallelTopKLogProbs.apply(logits, token_ids, process_group, chunk_size, temperature)
+    return _VocabParallelTopKLogProbs.apply(
+        logits, token_ids, process_group, chunk_size, temperature, global_vocab_size
+    )
 
 
 class _VocabParallelRaggedLogProbs(torch.autograd.Function):
@@ -356,6 +368,30 @@ def _get_vocab_parallel_rank_size(process_group) -> tuple[int, int]:
     return 0, 1
 
 
+def _num_unpadded_vocab_columns(vocab_parallel_size: int, rank: int, global_vocab_size: int | None) -> int:
+    """Number of this rank's vocab-shard columns below ``global_vocab_size``.
+
+    Megatron pads the output layer to a multiple of
+    ``make_vocab_size_divisible_by * tensor_model_parallel_size``, so the last
+    shard(s) can end in columns that are not tokens. The rollout engine never
+    has them, so they must take no probability mass in the trainer either.
+    """
+    if global_vocab_size is None:
+        return vocab_parallel_size
+    if global_vocab_size <= 0:
+        raise ValueError(f"global_vocab_size must be > 0, got {global_vocab_size}")
+    return max(min(global_vocab_size - rank * vocab_parallel_size, vocab_parallel_size), 0)
+
+
+def _unpadded_row_max(logits: torch.Tensor, num_unpadded: int) -> torch.Tensor:
+    """Row max over the unpadded columns only; ``-inf`` on a shard that is all padding."""
+    if num_unpadded == logits.size(-1):
+        return logits.max(dim=-1, keepdim=True).values
+    if num_unpadded > 0:
+        return logits[:, :num_unpadded].max(dim=-1, keepdim=True).values
+    return logits.new_full((logits.size(0), 1), float("-inf"))
+
+
 class _VocabParallelLogProbEntropy(torch.autograd.Function):
     @staticmethod
     def forward(
@@ -366,6 +402,7 @@ class _VocabParallelLogProbEntropy(torch.autograd.Function):
         process_group,
         with_entropy: bool,
         with_entropy_grad: bool,
+        global_vocab_size: int | None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         with_entropy_grad = with_entropy and with_entropy_grad
         vocab_parallel_logits = vocab_parallel_logits.float()
@@ -373,6 +410,7 @@ class _VocabParallelLogProbEntropy(torch.autograd.Function):
         rank, _world_size = _get_vocab_parallel_rank_size(process_group)
         vocab_start_index = rank * vocab_parallel_size
         vocab_end_index = vocab_start_index + vocab_parallel_size
+        num_unpadded = _num_unpadded_vocab_columns(vocab_parallel_size, rank, global_vocab_size)
 
         target_mask = (target < vocab_start_index) | (target >= vocab_end_index)
         masked_target_1d = (target - vocab_start_index).clone()
@@ -383,7 +421,9 @@ class _VocabParallelLogProbEntropy(torch.autograd.Function):
             logits: torch.Tensor,
             inplace: bool = False,
         ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-            logits_max = logits.max(dim=-1, keepdim=True).values
+            # Padding columns stay out of the max: when every real logit is very
+            # negative, a padding logit near 0 would otherwise set the scale.
+            logits_max = _unpadded_row_max(logits, num_unpadded)
             _maybe_all_reduce(logits_max, dist.ReduceOp.MAX, process_group)
             # Subtract the max for numerical stability. When ``inplace`` is set, the
             # caller passed a scratch buffer it owns, so overwrite it instead of
@@ -395,6 +435,10 @@ class _VocabParallelLogProbEntropy(torch.autograd.Function):
             # Reuse the ``normalized_logits`` storage for exp and softmax so the whole
             # softmax costs a single [seq_len, vocab] buffer instead of three.
             exp_logits = normalized_logits.exp_()
+            if num_unpadded < vocab_parallel_size:
+                # Vocab padding gets zero probability, so zero log-prob and
+                # entropy gradient in backward.
+                exp_logits[:, num_unpadded:] = 0.0
             sum_exp_logits = exp_logits.sum(dim=-1, keepdim=True)
             _maybe_all_reduce(sum_exp_logits, dist.ReduceOp.SUM, process_group)
             softmax = exp_logits.div_(sum_exp_logits)
@@ -470,7 +514,7 @@ class _VocabParallelLogProbEntropy(torch.autograd.Function):
     @staticmethod
     def backward(
         ctx, grad_log_prob: torch.Tensor | None, grad_entropy: torch.Tensor | None
-    ) -> tuple[torch.Tensor, None, None, None, None, None]:
+    ) -> tuple[torch.Tensor, None, None, None, None, None, None]:
         (
             log_prob_softmax,
             target_mask,
@@ -505,7 +549,7 @@ class _VocabParallelLogProbEntropy(torch.autograd.Function):
         if grad_entropy_input is not None:
             grad_input.add_(grad_entropy_input)
 
-        return grad_input, None, None, None, None, None
+        return grad_input, None, None, None, None, None, None
 
 
 def _calculate_log_probs_and_entropy_chunk(
@@ -516,6 +560,7 @@ def _calculate_log_probs_and_entropy_chunk(
     with_entropy: bool,
     with_entropy_grad: bool = True,
     log_prob_keep_mask: torch.Tensor | None,
+    global_vocab_size: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     log_prob, entropy = _VocabParallelLogProbEntropy.apply(
         logits,
@@ -524,6 +569,7 @@ def _calculate_log_probs_and_entropy_chunk(
         tp_group,
         with_entropy,
         with_entropy_grad,
+        global_vocab_size,
     )
     if not with_entropy:
         entropy = None
@@ -894,7 +940,9 @@ class _ChunkedLogProbEntropy(torch.autograd.Function):
     """
 
     @staticmethod
-    def forward(ctx, logits, tokens, keep_mask, tp_group, with_entropy, with_entropy_grad, chunk_size):
+    def forward(
+        ctx, logits, tokens, keep_mask, tp_group, with_entropy, with_entropy_grad, chunk_size, global_vocab_size
+    ):
         log_prob = torch.empty((logits.size(0), 1), device=logits.device, dtype=torch.float32)
         entropy = log_prob.new_empty((logits.size(0),) if with_entropy else (0,))
         for start in range(0, logits.size(0), chunk_size):
@@ -906,6 +954,7 @@ class _ChunkedLogProbEntropy(torch.autograd.Function):
                 with_entropy=with_entropy,
                 with_entropy_grad=with_entropy_grad,
                 log_prob_keep_mask=None if keep_mask is None else keep_mask[start:end],
+                global_vocab_size=global_vocab_size,
             )
             log_prob[start:end] = values
             if with_entropy:
@@ -914,6 +963,7 @@ class _ChunkedLogProbEntropy(torch.autograd.Function):
         ctx.tp_group = tp_group
         ctx.with_entropy_grad = with_entropy and with_entropy_grad
         ctx.chunk_size = chunk_size
+        ctx.global_vocab_size = global_vocab_size
         if not ctx.with_entropy_grad:
             ctx.mark_non_differentiable(entropy)
         return log_prob, entropy
@@ -934,6 +984,7 @@ class _ChunkedLogProbEntropy(torch.autograd.Function):
                     with_entropy=ctx.with_entropy_grad,
                     with_entropy_grad=ctx.with_entropy_grad,
                     log_prob_keep_mask=None if keep_mask is None else keep_mask[start:end],
+                    global_vocab_size=ctx.global_vocab_size,
                 )
                 outputs, gradients = [values], [grad_log_prob[start:end]]
                 if ctx.with_entropy_grad:
@@ -942,7 +993,7 @@ class _ChunkedLogProbEntropy(torch.autograd.Function):
                 (gradient,) = torch.autograd.grad(outputs, chunk, grad_outputs=gradients)
             grad_input[start:end] = gradient
             del gradient, outputs, gradients, values, entropies, chunk
-        return grad_input, None, None, None, None, None, None
+        return grad_input, None, None, None, None, None, None, None
 
 
 def calculate_log_probs_and_entropy(
@@ -953,13 +1004,28 @@ def calculate_log_probs_and_entropy(
     chunk_size: int = -1,
     log_prob_keep_mask=None,
     with_entropy_grad: bool = True,
+    global_vocab_size: int | None = None,
 ):
+    """Per-token log-probs (and optionally entropy) from a vocab-parallel logits shard.
+
+    ``global_vocab_size`` is the unpadded vocab size (``args.vocab_size``). If
+    set, columns at or past it (Megatron's vocab padding) get zero probability,
+    so the log-probs and entropy match the distribution the rollout engine
+    samples from. If None, every column of every shard counts.
+    """
     logits = logits.contiguous()
     entropy = None
     if logits.size(0) != 0:
         if chunk_size > 0:
             log_prob, entropy = _ChunkedLogProbEntropy.apply(
-                logits, tokens, log_prob_keep_mask, tp_group, with_entropy, with_entropy_grad, chunk_size
+                logits,
+                tokens,
+                log_prob_keep_mask,
+                tp_group,
+                with_entropy,
+                with_entropy_grad,
+                chunk_size,
+                global_vocab_size,
             )
             if not with_entropy:
                 entropy = None
@@ -971,6 +1037,7 @@ def calculate_log_probs_and_entropy(
                 with_entropy=with_entropy,
                 with_entropy_grad=with_entropy_grad,
                 log_prob_keep_mask=log_prob_keep_mask,
+                global_vocab_size=global_vocab_size,
             )
     else:
         log_prob = logits.new_zeros((0,))
