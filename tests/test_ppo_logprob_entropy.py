@@ -448,5 +448,175 @@ def test_calculate_log_probs_and_entropy_matches_unfused_reference_vocab_paralle
     )
 
 
+def _logits_with_vocab_padding(rows: int, vocab: int, padding: int, seed: int) -> tuple[torch.Tensor, torch.Tensor]:
+    """Real logits and the same logits with Megatron-style padding columns appended.
+
+    The later rows put every real logit far below zero, where padding columns
+    at logit 0 would otherwise take almost all of the probability mass.
+    """
+    generator = torch.Generator().manual_seed(seed)
+    real = torch.randn(rows, vocab, generator=generator)
+    real[rows // 2 :] -= 30.0
+    padded = torch.cat([real, torch.zeros(rows, padding)], dim=-1)
+    return real, padded
+
+
+@pytest.mark.parametrize("chunk_size", [-1, 3])
+@pytest.mark.parametrize("with_keep_mask", [False, True])
+@pytest.mark.parametrize("with_entropy_grad", [False, True])
+def test_padded_vocab_columns_take_no_probability_mass(chunk_size, with_keep_mask, with_entropy_grad):
+    vocab, padding = 13, 3
+    real, padded = _logits_with_vocab_padding(7, vocab, padding, seed=0)
+    tokens = torch.tensor([0, 12, 5, 7, 3, 11, 1])
+    keep_mask = None
+    padded_keep_mask = None
+    if with_keep_mask:
+        keep_mask = torch.rand(7, vocab, generator=torch.Generator().manual_seed(1)) > 0.5
+        keep_mask[torch.arange(7), tokens] = True
+        padded_keep_mask = torch.cat([keep_mask, torch.zeros(7, padding, dtype=torch.bool)], dim=-1)
+
+    real = real.requires_grad_()
+    padded = padded.requires_grad_()
+    kwargs = dict(with_entropy=True, with_entropy_grad=with_entropy_grad, chunk_size=chunk_size)
+    expected_log_probs, expected_entropy = calculate_log_probs_and_entropy(
+        real, tokens, None, log_prob_keep_mask=keep_mask, **kwargs
+    )
+    log_probs, entropy = calculate_log_probs_and_entropy(
+        padded, tokens, None, log_prob_keep_mask=padded_keep_mask, global_vocab_size=vocab, **kwargs
+    )
+    torch.testing.assert_close(log_probs, expected_log_probs, atol=1e-6, rtol=1e-6)
+    # Entropy is max + log(sum exp) - sum(p * logit); with logits near -30 those
+    # terms cancel, so a different FP32 summation order moves it by a few ulps of 30.
+    torch.testing.assert_close(entropy, expected_entropy, atol=2e-5, rtol=1e-6)
+
+    # Without global_vocab_size the padding takes the mass on the shifted rows.
+    unmasked_entropy = calculate_log_probs_and_entropy(padded.detach(), tokens, None, with_entropy=True)[1]
+    assert (unmasked_entropy - expected_entropy.detach()).abs().max() > 1.0
+    if not with_keep_mask:
+        unmasked_log_probs = calculate_log_probs_and_entropy(padded.detach(), tokens, None)[0]
+        assert (unmasked_log_probs - expected_log_probs.detach()).abs().max() > 1.0
+
+    logprob_weights = torch.linspace(-1.0, 1.5, 7)
+    entropy_weights = torch.linspace(0.5, -0.8, 7)
+    loss = _weighted_loss(
+        log_probs,
+        entropy if with_entropy_grad else None,
+        logprob_weights=logprob_weights,
+        entropy_weights=entropy_weights,
+    )
+    expected_loss = _weighted_loss(
+        expected_log_probs,
+        expected_entropy if with_entropy_grad else None,
+        logprob_weights=logprob_weights,
+        entropy_weights=entropy_weights,
+    )
+    loss.backward()
+    expected_loss.backward()
+    # The entropy gradient p * (sum(p * logit) - logit) has the same cancellation.
+    torch.testing.assert_close(padded.grad[:, :vocab], real.grad, atol=1e-5, rtol=1e-6)
+    assert padded.grad[:, vocab:].count_nonzero() == 0
+
+
+def _padded_vocab_parallel_worker(
+    rank: int,
+    world_size: int,
+    global_vocab_size: int,
+    chunk_size: int,
+    master_port: int,
+) -> None:
+    import torch.distributed as dist
+
+    torch.set_num_threads(1)
+    os.environ["MASTER_ADDR"] = "127.0.0.1"
+    os.environ["MASTER_PORT"] = str(master_port)
+    dist.init_process_group(backend="gloo", rank=rank, world_size=world_size)
+    try:
+        padded_vocab = 12
+        real, padded = _logits_with_vocab_padding(4, global_vocab_size, padded_vocab - global_vocab_size, seed=2)
+        tokens = torch.tensor([0, 4, 3, 1]) % global_vocab_size
+        vocab_per_rank = padded_vocab // world_size
+        vocab_start = rank * vocab_per_rank
+        local_logits = padded[:, vocab_start : vocab_start + vocab_per_rank].clone().requires_grad_()
+
+        log_probs, entropy = calculate_log_probs_and_entropy(
+            local_logits,
+            tokens,
+            tp_group=None,
+            with_entropy=True,
+            chunk_size=chunk_size,
+            global_vocab_size=global_vocab_size,
+        )
+
+        # Dense reference over the real vocabulary only, without any collective.
+        ref_logits = real.clone().requires_grad_()
+        ref_log_softmax = ref_logits.log_softmax(dim=-1)
+        expected_log_probs = ref_log_softmax.gather(-1, tokens.unsqueeze(-1))
+        expected_entropy = -(ref_log_softmax.exp() * ref_log_softmax).sum(dim=-1)
+        torch.testing.assert_close(log_probs, expected_log_probs, atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(entropy, expected_entropy, atol=1e-5, rtol=1e-5)
+
+        logprob_weights = torch.tensor([0.25, -0.5, 1.5, -0.75])
+        entropy_weights = torch.tensor([0.55, -0.2, 1.8, 0.4])
+        _weighted_loss(log_probs, entropy, logprob_weights=logprob_weights, entropy_weights=entropy_weights).backward()
+        _weighted_loss(
+            expected_log_probs, expected_entropy, logprob_weights=logprob_weights, entropy_weights=entropy_weights
+        ).backward()
+        expected_grad = torch.zeros_like(padded)
+        expected_grad[:, :global_vocab_size] = ref_logits.grad
+        torch.testing.assert_close(
+            local_logits.grad,
+            expected_grad[:, vocab_start : vocab_start + vocab_per_rank],
+            atol=1e-5,
+            rtol=1e-5,
+        )
+    finally:
+        dist.destroy_process_group()
+
+
+@pytest.mark.parametrize(
+    "global_vocab_size,chunk_size",
+    [
+        pytest.param(10, -1, id="padding_in_last_shard_no_chunks"),
+        pytest.param(10, 2, id="padding_in_last_shard_chunks"),
+        pytest.param(5, -1, id="last_shard_all_padding"),
+    ],
+)
+def test_padded_vocab_columns_take_no_probability_mass_vocab_parallel(global_vocab_size: int, chunk_size: int):
+    import torch.multiprocessing as mp
+
+    world_size = 2
+    mp.spawn(
+        _padded_vocab_parallel_worker,
+        args=(world_size, global_vocab_size, chunk_size, _free_port()),
+        nprocs=world_size,
+        join=True,
+    )
+
+
+@pytest.mark.parametrize("chunk_size", [-1, 2])
+def test_topk_log_probs_ignore_padded_vocab_columns(chunk_size):
+    from slime.utils.ppo_utils import calculate_topk_log_probs
+
+    vocab, padding = 13, 3
+    real, padded = _logits_with_vocab_padding(5, vocab, padding, seed=3)
+    ids = torch.stack([torch.randperm(vocab, generator=torch.Generator().manual_seed(row))[:4] for row in range(5)])
+    real = real.requires_grad_()
+    padded = padded.requires_grad_()
+
+    expected = calculate_topk_log_probs(real, ids, None, chunk_size=chunk_size, temperature=0.8)
+    actual = calculate_topk_log_probs(
+        padded, ids, None, chunk_size=chunk_size, temperature=0.8, global_vocab_size=vocab
+    )
+    torch.testing.assert_close(actual, expected, atol=1e-6, rtol=1e-6)
+    unmasked = calculate_topk_log_probs(padded.detach(), ids, None, chunk_size=chunk_size, temperature=0.8)
+    assert (unmasked - expected.detach()).abs().max() > 1.0
+
+    weights = torch.linspace(-1.0, 1.0, 20).reshape(5, 4)
+    (actual * weights).sum().backward()
+    (expected * weights).sum().backward()
+    torch.testing.assert_close(padded.grad[:, :vocab], real.grad, atol=1e-6, rtol=1e-6)
+    assert padded.grad[:, vocab:].count_nonzero() == 0
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
