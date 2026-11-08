@@ -150,6 +150,39 @@ def test_replay_survives_exact_prefix_extensions_and_context_limit(top_p, sc, r3
             assert sample.rollout_routed_experts.shape == (6, 2, 2)
 
 
+@pytest.mark.parametrize("top_p", [0.95, 1.0])
+def test_many_turn_sampler_replays_materialize_exactly(top_p):
+    base_turn = capture(top_p, True, False)
+    manager = TrajectoryManager()
+    messages = [{"role": "user", "content": "repair"}]
+    held_tokens = []
+    turns = []
+
+    for turn_index in range(8):
+        gap = [] if turn_index == 0 else [700 + turn_index]
+        prompt_ids = [51, 52, 53] if turn_index == 0 else held_tokens + gap
+        replay = copy.deepcopy(base_turn.replay)
+        if top_p < 1:
+            replay["rollout_top_p_token_ids"][1::2] += turn_index * 10
+        else:
+            replay["rollout_topk_token_ids"][:, 1] += turn_index * 10
+        turn = replace(base_turn, prompt_ids=prompt_ids, replay=replay)
+        response = {"role": "assistant", "content": f"turn-{turn_index}"}
+        manager.record_turn(
+            "many-turns",
+            turn=turn,
+            prompt_messages=messages,
+            response_message=response,
+        )
+        turns.append(turn)
+        held_tokens = prompt_ids + turn.output_ids
+        messages = [*messages, response, {"role": "tool", "content": f"result-{turn_index}"}]
+
+    sample = manager.get_trajectory("many-turns", base_sample=Sample(index=0))[0]
+    assert sample.loss_mask == [1, 1] + [0, 1, 1] * 7
+    assert audit_token_records([sample], [asdict(turn) for turn in turns])["sampled_tokens"] == 16
+
+
 @pytest.mark.parametrize("missing", ["nucleus", "probabilities", "routes"])
 def test_missing_requested_replay_metadata_fails_closed(missing):
     with pytest.raises(ValueError):

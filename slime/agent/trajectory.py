@@ -181,7 +181,8 @@ class _SampleBuilder:
         self.logprobs: list[float] = []
         self.last_response_start_idx: int | None = None
         self.leading_prompt_len: int = 0
-        self.replay: dict[str, Any] | None = None
+        self.replay: dict[str, list[torch.Tensor]] | None = None
+        self._replay_dtypes: dict[str, torch.dtype] | None = None
         self.weight_versions: list[str] = []
         self.spec_info = Sample.SpecInfo()
         self.prefix_cache_info = Sample.PrefixCacheInfo()
@@ -208,7 +209,7 @@ class _SampleBuilder:
         ):
             return DriftKind.FORK
         if "rollout_topk_token_ids" in held_replay and (
-            torch.as_tensor(held_replay["rollout_topk_token_ids"]).shape[1:]
+            held_replay["rollout_topk_token_ids"][0].shape[1:]
             != torch.as_tensor(new_replay["rollout_topk_token_ids"]).shape[1:]
         ):
             return DriftKind.FORK
@@ -266,29 +267,51 @@ class _SampleBuilder:
         """Keep sampler distributions aligned across masked tool/context tokens."""
         incoming = {key: torch.as_tensor(value) for key, value in replay.items()}
         if self.replay is None:
-            self.replay = incoming
+            self.replay = {key: [value] for key, value in incoming.items()}
+            self._replay_dtypes = {key: value.dtype for key, value in incoming.items()}
             return
         assert gap >= 0 and self.replay.keys() == incoming.keys()
+        assert self._replay_dtypes is not None
         assert "rollout_routed_experts" not in incoming
         if "rollout_top_p_token_offsets" in incoming:
-            offsets = self.replay["rollout_top_p_token_offsets"]
-            end = int(offsets[-1])
-            self.replay["rollout_top_p_token_offsets"] = torch.cat(
-                (offsets, offsets.new_full((gap,), end), incoming["rollout_top_p_token_offsets"][1:] + end)
-            )
+            offset_chunks = self.replay["rollout_top_p_token_offsets"]
+            last_nonempty = next((chunk for chunk in reversed(offset_chunks) if chunk.numel()), offset_chunks[-1])
+            end = int(last_nonempty[-1])
+            if gap:
+                offset_chunks.append(
+                    offset_chunks[0].new_full((gap,), end, dtype=self._replay_dtypes["rollout_top_p_token_offsets"])
+                )
+            shifted_offsets = incoming["rollout_top_p_token_offsets"][1:] + end
+            self._append_replay_chunk("rollout_top_p_token_offsets", shifted_offsets)
             for key in ("rollout_top_p_token_ids", "rollout_top_p_log_probs"):
                 if key in incoming:
-                    self.replay[key] = torch.cat((self.replay[key], incoming[key]))
+                    self._append_replay_chunk(key, incoming[key])
         if "rollout_topk_token_ids" in incoming:
             k = incoming["rollout_topk_token_ids"].shape[-1]
             for key in ("rollout_topk_token_ids", "rollout_topk_log_probs"):
-                value = self.replay[key]
+                chunks = self.replay[key]
+                value = chunks[0]
                 padding = (
-                    torch.arange(k, device=value.device, dtype=value.dtype).expand(gap, k)
+                    torch.arange(k, device=value.device, dtype=self._replay_dtypes[key]).expand(gap, k)
                     if key.endswith("token_ids")
-                    else value.new_full((gap, k), -math.log(k))
+                    else value.new_full((gap, k), -math.log(k), dtype=self._replay_dtypes[key])
                 )
-                self.replay[key] = torch.cat((value, padding, incoming[key]))
+                if gap:
+                    chunks.append(padding)
+                self._append_replay_chunk(key, incoming[key])
+
+    def _append_replay_chunk(self, key: str, chunk: torch.Tensor) -> None:
+        assert self.replay is not None and self._replay_dtypes is not None
+        prototype = self.replay[key][0]
+        # Preserve torch.cat validation without copying the accumulated replay.
+        torch.cat((prototype.narrow(0, 0, 0), chunk.narrow(0, 0, 0)))
+        self.replay[key].append(chunk)
+        self._replay_dtypes[key] = torch.promote_types(self._replay_dtypes[key], chunk.dtype)
+
+    def _materialize_replay(self) -> dict[str, torch.Tensor] | None:
+        if self.replay is None:
+            return None
+        return {key: chunks[0] if len(chunks) == 1 else torch.cat(chunks) for key, chunks in self.replay.items()}
 
     def _align_to_prompt(self, prompt_ids: list[int]) -> None:
         """Heal REALIGN drift by overwriting the most-recent response span with
@@ -342,20 +365,21 @@ class _SampleBuilder:
         if getattr(base_sample, "trace", None) is not None:
             # Retain the carrier until the orchestrator closes cleanup spans.
             sample.trace = base_sample.trace
-        if self.replay is not None:
+        replay = self._materialize_replay()
+        if replay is not None:
             count = sample.response_length
             for key in ("rollout_topk_token_ids", "rollout_topk_log_probs"):
-                if key in self.replay:
-                    setattr(sample, key, self.replay[key][:count])
-            if "rollout_top_p_token_offsets" in self.replay:
-                offsets = self.replay["rollout_top_p_token_offsets"][: count + 1]
+                if key in replay:
+                    setattr(sample, key, replay[key][:count])
+            if "rollout_top_p_token_offsets" in replay:
+                offsets = replay["rollout_top_p_token_offsets"][: count + 1]
                 end = int(offsets[-1])
                 sample.rollout_top_p_token_offsets = offsets
-                sample.rollout_top_p_token_ids = self.replay["rollout_top_p_token_ids"][:end]
-                if "rollout_top_p_log_probs" in self.replay:
-                    sample.rollout_top_p_log_probs = self.replay["rollout_top_p_log_probs"][:end]
-            if "rollout_routed_experts" in self.replay:
-                sample.rollout_routed_experts = self.replay["rollout_routed_experts"][: max(0, len(tokens) - 1)]
+                sample.rollout_top_p_token_ids = replay["rollout_top_p_token_ids"][:end]
+                if "rollout_top_p_log_probs" in replay:
+                    sample.rollout_top_p_log_probs = replay["rollout_top_p_log_probs"][:end]
+            if "rollout_routed_experts" in replay:
+                sample.rollout_routed_experts = replay["rollout_routed_experts"][: max(0, len(tokens) - 1)]
         return sample
 
 
