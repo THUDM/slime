@@ -138,10 +138,16 @@ class RolloutDataSource(DataSource):
         # The cursor includes prompts already borrowed by background workers.
         # Drain admission and snapshot their ready queues with that cursor so a
         # checkpoint cannot skip prefetched samples when the source is restored.
-        paused = []
+        # Workers with a snapshot_lock record unfinished groups instead, which
+        # are requeued into the buffer on restore, so they need not drain.
+        live = [c for c in self.consumers.values() if hasattr(c, "snapshot_lock") and hasattr(self, "buffer")]
+        paused, locked = [], []
         try:
             for consumer in self.consumers.values():
-                paused.append((consumer, consumer.pause()))
+                paused.append((consumer, consumer.pause(drain=False) if consumer in live else consumer.pause()))
+            for consumer in live:
+                consumer.snapshot_lock.acquire()
+                locked.append(consumer)
             state = {
                 name: copy.deepcopy(getattr(self, name))
                 for name in ("sample_offset", "epoch_id", "sample_group_index", "sample_index", "metadata")
@@ -154,6 +160,8 @@ class RolloutDataSource(DataSource):
             }
             return state
         finally:
+            for consumer in locked:
+                consumer.snapshot_lock.release()
             for consumer, was_paused in paused:
                 if not was_paused:
                     consumer.resume()
