@@ -1048,12 +1048,19 @@ def initialize_model_and_optimizer(
     """
 
     if torch.version.hip:
-        import megatron.core.dist_checkpointing.strategies.filesystem_async as filesystem_async_module
+        # Megatron ae76c60e6 moved its async filesystem writer into nvidia_resiliency_ext; the HIP writer below
+        # replaces Megatron's own writer, so there is nothing to patch on newer Megatron.
+        try:
+            import megatron.core.dist_checkpointing.strategies.filesystem_async as filesystem_async_module
+        except ModuleNotFoundError:
+            filesystem_async_module = None
+        if filesystem_async_module is not None:
+            from slime.utils.rocm_checkpoint_writer import ROCmFileSystemWriterAsync
 
-        from slime.utils.rocm_checkpoint_writer import ROCmFileSystemWriterAsync
-
-        filesystem_async_module.FileSystemWriterAsync = ROCmFileSystemWriterAsync
-        print("[ROCm] Applied FileSystemWriterAsync patch for HIP compatibility")
+            filesystem_async_module.FileSystemWriterAsync = ROCmFileSystemWriterAsync
+            print("[ROCm] Applied FileSystemWriterAsync patch for HIP compatibility")
+        else:
+            print("[ROCm] Megatron has no filesystem_async module; FileSystemWriterAsync patch skipped")
 
     model, optimizer, opt_param_scheduler = setup_model_and_optimizer(args, role)
     model[0].role = role
