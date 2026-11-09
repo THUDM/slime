@@ -19,6 +19,7 @@ from __future__ import annotations
 import pytest
 
 from slime.rollout.rm_hub.math_utils import (
+    _normalize,
     _strip_string,
     extract_answer,
     extract_boxed_answer,
@@ -207,6 +208,26 @@ def test_grade_answer_sympy_fraction_must_match_exactly():
     """Reducible fractions are intentionally NOT considered equal — pinning
     the explicit ``_is_frac`` short-circuit at math_utils.py:453-456."""
     assert grade_answer_sympy(r"\frac{2}{4}", r"\frac{1}{2}") is False
+
+
+@pytest.mark.unit
+def test_grade_answer_sympy_preserves_large_integer_precision():
+    assert _normalize("9007199254740993") == "9007199254740993"
+    assert grade_answer_sympy("9007199254740993", "9007199254740992") is False
+    assert grade_answer_sympy("9007199254740993", "9007199254740993") is True
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("given", ["41.99999999", "42.00000001"])
+def test_grade_answer_sympy_preserves_legacy_integer_tolerance(given):
+    assert _normalize(given) == "42"
+    assert grade_answer_sympy(given, "42") is True
+
+
+@pytest.mark.unit
+def test_grade_answer_sympy_rejects_values_outside_integer_tolerance():
+    assert grade_answer_sympy("41.9999998", "42") is False
+    assert grade_answer_sympy("42.0000002", "42") is False
 
 
 @pytest.mark.unit
