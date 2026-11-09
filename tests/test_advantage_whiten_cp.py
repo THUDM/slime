@@ -23,6 +23,7 @@ is bounded so that regression surfaces as a failure rather than a stuck job.
 
 from __future__ import annotations
 
+import gc
 import json
 import os
 import time
@@ -129,7 +130,14 @@ def _whiten_worker(rank, world_size, cp_size, dp_size, master_port, result_dir):
         with open(os.path.join(result_dir, f"rank{rank}.json"), "w") as f:
             json.dump(out, f)
     finally:
+        if "mpu" in locals():
+            mpu.__dict__.pop("get_data_parallel_group", None)
+        if "dp_only_groups" in locals():
+            del dp_only_groups
+        if "dp_cp_group" in locals():
+            del dp_cp_group
         _dist.destroy_process_group()
+        gc.collect()
 
 
 def _run_case(dp_size, cp_size, tmp_path):
