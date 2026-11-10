@@ -36,6 +36,7 @@ def test_optimizer_step_returns_scalar_norm_and_skips_invalid_gradients(norm_typ
         micro_batch_size=1,
         decoder_seq_length=None,
         calculate_per_token_loss=False,
+        consumed_train_samples=0,
     )
     updates, samples = [], []
 
@@ -64,21 +65,26 @@ def test_optimizer_step_returns_scalar_norm_and_skips_invalid_gradients(norm_typ
         type_ignores=[],
     )
     exec(compile(ast.fix_missing_locations(isolated), str(path), "exec"), namespace)
-    losses, grad_norm = namespace["train_one_step"](
-        args,
-        0,
-        0,
-        None,
-        [types.SimpleNamespace(zero_grad_buffer=lambda: None)],
-        optimizer,
-        types.SimpleNamespace(step=lambda *, increment: samples.append(increment)),
-        1,
-        16,
-    )
-    assert losses == {"loss": 1.0} and isinstance(grad_norm, float)
-    assert grad_norm == value if finite else math.isnan(grad_norm)
-    assert updates == ([True] if finite else [])
-    assert samples == ([16] if finite else [])
+    # Two optimizer steps of one rollout (num_steps_per_rollout > 1, per-step batch sizes may differ).
+    for step_id, step_global_batch_size in enumerate((16, 8)):
+        losses, grad_norm = namespace["train_one_step"](
+            args,
+            0,
+            step_id,
+            None,
+            [types.SimpleNamespace(zero_grad_buffer=lambda: None)],
+            optimizer,
+            types.SimpleNamespace(step=lambda *, increment: samples.append(increment)),
+            1,
+            step_global_batch_size,
+        )
+        assert losses == {"loss": 1.0} and isinstance(grad_norm, float)
+        assert grad_norm == value if finite else math.isnan(grad_norm)
+    assert updates == ([True, True] if finite else [])
+    assert samples == ([16, 8] if finite else [])
+    # Megatron saves consumed_train_samples in the checkpoint args and, with
+    # --override-opt-param-scheduler, resets the scheduler's num_steps to it on resume.
+    assert args.consumed_train_samples == sum(samples)
 
 
 def load_module(name, filename):
