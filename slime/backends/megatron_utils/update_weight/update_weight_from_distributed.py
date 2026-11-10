@@ -41,6 +41,8 @@ class UpdateWeightFromDistributed:
         self.quantization_config = quantization_config
         self.weight_version = 0
         self._model_update_groups = None
+        # Pipelined expert IPC: (refs, tensors_keepalive) while lock is held.
+        self._pending_weight_ipc: tuple[list[ObjectRef], list[tuple[str, torch.Tensor]]] | None = None
 
     def connect_rollout_engines(
         self,
@@ -128,6 +130,8 @@ class UpdateWeightFromDistributed:
 
         if named_tensors:
             self._update_expert_bucket_weights_from_distributed(named_tensors, pbar=pbar)
+        # Finish the last pipelined expert IPC send before post-process / continue.
+        self._wait_pending_weight_ipc(pbar=pbar)
 
         dist.barrier(group=get_gloo_group())
         if dist.get_rank() == 0:
@@ -223,18 +227,54 @@ class UpdateWeightFromDistributed:
             return
 
         all_gathered_params = sum(all_gathered_params, [])
+        # Defer NVFP4 quant until the whole expert bucket is converted so MoE
+        # gate/up/down can use grouped miniTE launches instead of per-expert kernels.
+        from ..megatron_to_hf.processors import (
+            is_nvfp4_quant_config,
+            quantize_converted_hf_params_nvfp4,
+        )
+
+        defer_nvfp4 = is_nvfp4_quant_config(self.quantization_config)
+        quant_cfg = None if defer_nvfp4 else self.quantization_config
         converted_hf_tensors = []
         for name, param in all_gathered_params:
-            converted_hf_tensors += convert_to_hf(self.args, self.model_name, name, param, self.quantization_config)
+            converted_hf_tensors += convert_to_hf(self.args, self.model_name, name, param, quant_cfg)
+        if defer_nvfp4:
+            converted_hf_tensors = quantize_converted_hf_params_nvfp4(
+                converted_hf_tensors, self.quantization_config
+            )
 
-        self._update_bucket_weights_from_distributed(converted_hf_tensors, pbar)
+        # Overlap: wait previous IPC only after this bucket's convert/quant is done,
+        # then fire the new send without blocking so the next bucket can compute.
+        self._update_bucket_weights_from_distributed(converted_hf_tensors, pbar, wait=False)
+
+    def _wait_pending_weight_ipc(self, pbar: tqdm | None = None) -> None:
+        """Wait for a previously started async weight IPC broadcast."""
+        if self._pending_weight_ipc is None:
+            return
+        refs, keepalive = self._pending_weight_ipc
+        ray.get(refs)
+        del keepalive
+        ray.get(self.rollout_engine_lock.release.remote())
+        if pbar is not None:
+            pbar.update(1)
+        self._pending_weight_ipc = None
 
     def _update_bucket_weights_from_distributed(
-        self, converted_named_tensors: list[tuple[str, torch.Tensor]], pbar: tqdm | None = None
+        self,
+        converted_named_tensors: list[tuple[str, torch.Tensor]],
+        pbar: tqdm | None = None,
+        wait: bool = True,
     ) -> None:
         """
         Lock → broadcast → clear → unlock → pbar++. Lock prevents NCCL deadlock.
+
+        When ``wait=False``, only starts the broadcast and keeps the lock until
+        ``_wait_pending_weight_ipc`` so the next bucket's convert/quant can overlap.
         """
+        # Ensure any previous async send completed before acquiring the lock again.
+        self._wait_pending_weight_ipc(pbar=pbar)
+
         # lock the rollout engines to prevent dead lock on broadcast.
         while not ray.get(self.rollout_engine_lock.acquire.remote()):
             time.sleep(0.1)
@@ -247,10 +287,18 @@ class UpdateWeightFromDistributed:
             converted_named_tensors,
         )
 
-        ray.get(refs)
+        # Keep tensor storages alive until Ray/NCCL consumers finish.
+        keepalive = list(converted_named_tensors)
         converted_named_tensors.clear()
-        ray.get(self.rollout_engine_lock.release.remote())
-        pbar.update(1)
+
+        if wait:
+            ray.get(refs)
+            del keepalive
+            ray.get(self.rollout_engine_lock.release.remote())
+            if pbar is not None:
+                pbar.update(1)
+        else:
+            self._pending_weight_ipc = (refs, keepalive)
 
 
 def connect_rollout_engines_from_distributed(

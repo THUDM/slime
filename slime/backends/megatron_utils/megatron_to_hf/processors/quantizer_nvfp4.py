@@ -43,6 +43,66 @@ def _is_ignored_module_or_param(name: str, ignore_list: list[str]) -> bool:
     return False
 
 
+def _is_expert_weight_name(name: str) -> bool:
+    # Qwen/DeepSeek-style MoE expert (and shared-expert) weights are quantized;
+    # modelopt ignore lists typically cover attn/router/norms only.
+    return (
+        ".experts." in name
+        or ".shared_expert." in name
+        or ".shared_experts." in name
+    )
+
+
+def is_nvfp4_quant_config(quantization_config) -> bool:
+    if not quantization_config:
+        return False
+    if quantization_config.get("quant_algo") == "NVFP4":
+        return True
+    return quantization_config.get("quant_method") == "nvfp4"
+
+
+def quantize_converted_hf_params_nvfp4(converted_named_params, quantization_config):
+    """Batch-quantize already-converted HF named params (no megatron-name routing).
+
+    Intended for update-weight buckets where many expert tensors are available at once,
+    so MoE gate/up/down can share grouped miniTE launches.
+    """
+    assert quantization_config is not None
+    group_size = _resolve_group_size(quantization_config)
+    ignore_list = _get_ignore_list(quantization_config)
+
+    moe_params = []
+    qkv_params = []
+    mlp_fc1_params = []
+    dense_params = []
+    passthrough = []
+
+    for item in converted_named_params:
+        name = item[0]
+        if _is_expert_weight_name(name):
+            moe_params.append(item)
+        elif _split_qkv_triplet_name(name)[0] is not None:
+            qkv_params.append(item)
+        elif _split_gated_pair_name(name)[0] is not None and ".mlp." in name:
+            mlp_fc1_params.append(item)
+        elif _split_w2_name(name) is not None or name.endswith(".o_proj.weight"):
+            dense_params.append(item)
+        else:
+            passthrough.append(item)
+
+    out = []
+    if moe_params:
+        out.extend(_quantize_moe_params(moe_params, group_size, ignore_list))
+    if qkv_params:
+        out.extend(_quantize_qkv_params(qkv_params, group_size, ignore_list))
+    if mlp_fc1_params:
+        out.extend(_quantize_mlp_params(mlp_fc1_params, group_size, ignore_list))
+    if dense_params:
+        out.extend(_quantize_dense_single_params(dense_params, group_size, ignore_list))
+    out.extend(passthrough)
+    return out
+
+
 def quantize_params_nvfp4(args, megatron_name, converted_named_params, quantization_config):
     assert quantization_config is not None
     assert quantization_config.get("quant_algo") == "NVFP4" or quantization_config.get("quant_method") == "nvfp4"
@@ -127,6 +187,35 @@ def _emit_quantized(result_list, name, param, global_amax, group_size):
     )
 
 
+def _append_quantized_outputs(result_list, name, qweight, block_scale, weight_scale_2):
+    result_list.append((name, qweight))
+    result_list.append((name.replace(".weight", ".weight_scale"), block_scale))
+    result_list.append((name.replace(".weight", ".weight_scale_2"), weight_scale_2))
+    result_list.append(
+        (name.replace(".weight", ".input_scale"), torch.ones_like(weight_scale_2, dtype=torch.float32))
+    )
+
+
+def _emit_quantized_grouped(result_list, names, params, global_amaxs):
+    """Quantize same-shaped 2D weights in one grouped miniTE launch."""
+    if not names:
+        return
+    if len(names) == 1:
+        amax = None if global_amaxs is None else global_amaxs[0]
+        _emit_quantized(result_list, names[0], params[0], amax, NVFP4_GROUP_SIZE)
+        return
+
+    if isinstance(params, torch.Tensor):
+        # Already stacked [E, M, K].
+        qweights, block_scales, weight_scale_2s = _quantize_nvfp4_miniTE_grouped_stacked(
+            params, global_amaxs
+        )
+    else:
+        qweights, block_scales, weight_scale_2s = _quantize_nvfp4_miniTE_grouped(params, global_amaxs)
+    for i, name in enumerate(names):
+        _append_quantized_outputs(result_list, name, qweights[i], block_scales[i], weight_scale_2s[i])
+
+
 def _quantize_moe_params(converted_named_params, group_size, ignore_list):
     """
     Quantize MoE expert weights for SGLang's HF-style MoE weight-loader path.
@@ -140,58 +229,123 @@ def _quantize_moe_params(converted_named_params, group_size, ignore_list):
     the fused w13 = [gate, up] is quantized with a single per-expert amax).
     This works both when gate+up arrive in the same call *and* when they
     arrive in separate consecutive calls (streaming weight-sync path).
+
+    When many experts are present in one call, gate/up/down are quantized with
+    grouped miniTE launches (one launch per role) instead of per-tensor launches.
     """
     quantize_named_params = []
-    shared_global_amax = {}
-    gated_candidates = {}
+    passthrough = []
+    gate_by_base = {}
+    up_by_base = {}
+    down_items = []
+    other_items = []
 
-    # Collect gate/up pairs so they share the same global scale.
     for converted_name, param in converted_named_params:
-        if not _should_quantize_param(converted_name, param, group_size, ignore_list):
+        # Expert weights are not in the modelopt ignore list; skip O(N_ignore) scans.
+        if _is_expert_weight_name(converted_name):
+            if not _should_quantize_param(converted_name, param, group_size, ignore_list=None):
+                passthrough.append((converted_name, param))
+                continue
+        elif not _should_quantize_param(converted_name, param, group_size, ignore_list):
+            passthrough.append((converted_name, param))
             continue
 
         base, role = _split_gated_pair_name(converted_name)
-        if base is not None and role in ("gate", "up"):
-            gated_candidates.setdefault(base, {})[role] = param
+        if base is not None and role == "gate":
+            gate_by_base[base] = (converted_name, param)
+            continue
+        if base is not None and role == "up":
+            up_by_base[base] = (converted_name, param)
+            continue
+        if _split_w2_name(converted_name) is not None:
+            down_items.append((converted_name, param))
+            continue
+        other_items.append((converted_name, param))
 
-    for base, roles in gated_candidates.items():
-        if "gate" in roles and "up" in roles:
-            gate_amax = roles["gate"].abs().max().to(torch.float32)
-            up_amax = roles["up"].abs().max().to(torch.float32)
-            shared_global_amax[base] = torch.max(gate_amax, up_amax)
+    # Resolve gate/up pairs (same-call) and streaming pending pairs.
+    # Keep deterministic order so stacked amax/quant stay stable across runs.
+    paired_gate_names, paired_gate_params = [], []
+    paired_up_names, paired_up_params = [], []
 
-    for converted_name, param in converted_named_params:
-        if not _should_quantize_param(converted_name, param, group_size, ignore_list):
-            quantize_named_params.append((converted_name, param))
+    all_bases = sorted(set(gate_by_base) | set(up_by_base))
+    for base in all_bases:
+        gate_item = gate_by_base.get(base)
+        up_item = up_by_base.get(base)
+
+        if gate_item is not None and up_item is not None:
+            gate_name, gate_param = gate_item
+            up_name, up_param = up_item
+            paired_gate_names.append(gate_name)
+            paired_gate_params.append(gate_param)
+            paired_up_names.append(up_name)
+            paired_up_params.append(up_param)
             continue
 
-        base, role = _split_gated_pair_name(converted_name)
-        w2_base = _split_w2_name(converted_name)
+        # Streaming mode: only one side present in this call.
+        name, param = gate_item if gate_item is not None else up_item
+        current_amax = param.reshape(-1).abs().max().to(torch.float32)
+        if base in _gated_pair_pending:
+            cached_name, cached_param, cached_amax = _gated_pair_pending.pop(base)
+            global_amax = torch.maximum(cached_amax, current_amax)
+            # Emit cached + current with shared amax (usually E==1 streaming).
+            _emit_quantized_grouped(
+                quantize_named_params,
+                [cached_name, name],
+                [cached_param, param],
+                [global_amax, global_amax],
+            )
+        else:
+            _gated_pair_pending[base] = (name, param, current_amax)
 
-        if base is not None and role in ("gate", "up"):
-            global_amax = shared_global_amax.get(base)
+    if paired_gate_names:
+        # Fused w13 path: pack gate/up as [E, 2M, K], one grouped launch, kernel-side amax.
+        # Matches training-style fused w13 = cat(gate, up) with a single per-expert amax.
+        gate_w = torch.stack(paired_gate_params, dim=0)  # [E, M, K]
+        up_w = torch.stack(paired_up_params, dim=0)
+        if gate_w.shape != up_w.shape:
+            raise ValueError(
+                f"gate/up shape mismatch for fused NVFP4 w13: {tuple(gate_w.shape)} vs {tuple(up_w.shape)}"
+            )
+        m = gate_w.shape[1]
+        w13 = torch.cat([gate_w, up_w], dim=1)  # [E, 2M, K]
+        qweights, block_scales, weight_scale_2s = _quantize_nvfp4_miniTE_grouped_stacked(w13, None)
+        for i, name in enumerate(paired_gate_names):
+            _append_quantized_outputs(
+                quantize_named_params,
+                name,
+                qweights[i, :m],
+                block_scales[i, :m],
+                weight_scale_2s[i],
+            )
+        for i, name in enumerate(paired_up_names):
+            _append_quantized_outputs(
+                quantize_named_params,
+                name,
+                qweights[i, m:],
+                block_scales[i, m:],
+                weight_scale_2s[i],
+            )
 
-            if global_amax is None:
-                # Streaming mode: gate/up arrived in separate calls.
-                current_amax = param.abs().max().to(torch.float32)
+    if down_items:
+        # Group downs by shape so mixed shared-expert / expert sizes stay valid.
+        by_shape = {}
+        for name, param in down_items:
+            by_shape.setdefault(tuple(param.shape), []).append((name, param))
+        for items in by_shape.values():
+            names = [n for n, _ in items]
+            params = [p for _, p in items]
+            if len(params) == 1:
+                _emit_quantized_grouped(quantize_named_params, names, params, None)
+            else:
+                stacked = torch.stack(params, dim=0)
+                _emit_quantized_grouped(quantize_named_params, names, stacked, None)
 
-                if base in _gated_pair_pending:
-                    cached_name, cached_param, cached_amax = _gated_pair_pending.pop(base)
-                    global_amax = torch.max(cached_amax, current_amax)
-                    _emit_quantized(quantize_named_params, cached_name, cached_param, global_amax, group_size)
-                else:
-                    _gated_pair_pending[base] = (converted_name, param, current_amax)
-                    continue
+    for name, param in other_items:
+        _emit_quantized(quantize_named_params, name, param, None, group_size)
 
-            _emit_quantized(quantize_named_params, converted_name, param, global_amax, group_size)
-            continue
-
-        if w2_base is not None:
-            _emit_quantized(quantize_named_params, converted_name, param, None, group_size)
-            continue
-
-        _emit_quantized(quantize_named_params, converted_name, param, None, group_size)
-
+    # Preserve a stable-ish order: quantized experts first (gate batch, up batch,
+    # down batch, others), then passthrough. Callers key by name.
+    quantize_named_params.extend(passthrough)
     return quantize_named_params
 
 
@@ -358,6 +512,25 @@ def cast_to_fp4x2(x: torch.Tensor) -> torch.Tensor:
     return result[:, ::2] + result[:, 1::2] * 16
 
 
+# Cache (device, E, rows, cols) -> (row_offsets, scale_offsets, n_padded, sf_stride)
+_GROUPED_OFFSET_CACHE: dict[tuple, tuple[torch.Tensor, torch.Tensor, int, int]] = {}
+
+
+def _get_grouped_offsets(device, E: int, rows: int, cols: int):
+    key = (str(device), E, rows, cols)
+    cached = _GROUPED_OFFSET_CACHE.get(key)
+    if cached is not None:
+        return cached
+    T = 128
+    n_padded = ((rows + T - 1) // T) * T
+    sf_stride = n_padded * (cols // 16)
+    row_offsets = torch.arange(0, (E + 1) * rows, rows, dtype=torch.int32, device=device)
+    scale_offsets = torch.arange(0, (E + 1) * sf_stride, sf_stride, dtype=torch.int64, device=device)
+    cached = (row_offsets, scale_offsets, n_padded, sf_stride)
+    _GROUPED_OFFSET_CACHE[key] = cached
+    return cached
+
+
 def _quantize_nvfp4_miniTE(
     x: torch.Tensor,
     global_amax: torch.Tensor | None,
@@ -367,36 +540,78 @@ def _quantize_nvfp4_miniTE(
     Returns (fp4_data, block_scale_rowmajor, weight_scale_2) matching the
     Python _quantize_nvfp4 interface.
     """
+    qweights, block_scales, weight_scale_2s = _quantize_nvfp4_miniTE_grouped_stacked(
+        x.unsqueeze(0), None if global_amax is None else global_amax.reshape(1)
+    )
+    return qweights[0], block_scales[0], weight_scale_2s[0]
+
+
+def _quantize_nvfp4_miniTE_grouped(
+    weights: list[torch.Tensor],
+    global_amaxs: torch.Tensor | list[torch.Tensor] | None,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Stack same-shaped 2D weights then call grouped miniTE quant."""
+    if not weights:
+        empty = torch.empty(0)
+        return empty, empty, empty
+    if len(weights) == 1:
+        stacked = weights[0].unsqueeze(0)
+    else:
+        stacked = torch.stack(weights, dim=0)
+    if isinstance(global_amaxs, list):
+        global_amaxs = torch.stack(
+            [a.to(dtype=torch.float32).reshape(()) for a in global_amaxs]
+        )
+    return _quantize_nvfp4_miniTE_grouped_stacked(stacked, global_amaxs)
+
+
+def _quantize_nvfp4_miniTE_grouped_stacked(
+    weights_emk: torch.Tensor,
+    global_amaxs: torch.Tensor | None,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Grouped NVFP4 quant for a packed ``[E, M, K]`` weight tensor.
+
+    Returns:
+      qweights: ``[E, M, K/2]`` uint8
+      block_scales: ``[E, M, K/16]`` float8_e4m3fn (row-major, unpadded rows only)
+      weight_scale_2s: ``[E]`` float32
+    """
     import fp4_gemm
 
-    x = x.contiguous()
-    rows, cols = x.shape
-    device = x.device
+    if weights_emk.ndim != 3:
+        raise ValueError(f"Expected [E,M,K] weights, got shape {tuple(weights_emk.shape)}")
 
-    T = 128
-    n_padded = ((rows + T - 1) // T) * T
-    sf_stride = n_padded * (cols // 16)
+    weights_emk = weights_emk.contiguous()
+    E, rows, cols = weights_emk.shape
+    device = weights_emk.device
+    x = weights_emk.reshape(E * rows, cols)
 
-    data = torch.empty((rows, cols // 2), dtype=torch.uint8, device=device)
-    gs_out = torch.empty(1, dtype=torch.float32, device=device)
-    scale_flat = torch.zeros(sf_stride, dtype=torch.float8_e4m3fn, device=device)
+    row_offsets, scale_offsets, n_padded, sf_stride = _get_grouped_offsets(device, E, rows, cols)
 
-    row_offsets = torch.tensor([0, rows], dtype=torch.int32, device=device)
-    scale_offsets = torch.tensor([0, sf_stride], dtype=torch.int64, device=device)
+    data = torch.empty((E * rows, cols // 2), dtype=torch.uint8, device=device)
+    gs_out = torch.empty(E, dtype=torch.float32, device=device)
+    scale_flat = torch.empty(E * sf_stride, dtype=torch.float8_e4m3fn, device=device)
 
-    if global_amax is None:
-        amax = x.abs().max().to(torch.float32).reshape(1).contiguous()
+    if global_amaxs is None:
+        amax = x.view(E, -1).abs().amax(dim=1).to(torch.float32).contiguous()
     else:
-        amax = global_amax.to(device=device, dtype=torch.float32).reshape(1).contiguous()
+        amax = global_amaxs.to(device=device, dtype=torch.float32).reshape(E).contiguous()
 
     fp4_gemm.rtn_fp4_group_tensor_global(
-        data, scale_flat, gs_out, x,
-        row_offsets, scale_offsets, amax, 1.0,
+        data,
+        scale_flat,
+        gs_out,
+        x,
+        row_offsets,
+        scale_offsets,
+        amax,
+        1.0,
         swizzle=False,
     )
 
-    block_scale = scale_flat.view(n_padded, cols // 16)[:rows]
-    return data, block_scale, gs_out.squeeze()
+    qweights = data.view(E, rows, cols // 2)
+    block_scales = scale_flat.view(E, n_padded, cols // 16)[:, :rows, :].contiguous()
+    return qweights, block_scales, gs_out
 
 
 def _quantize_nvfp4(

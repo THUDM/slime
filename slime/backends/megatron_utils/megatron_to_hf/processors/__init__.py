@@ -1,9 +1,20 @@
 from .padding_remover import remove_padding
 from .quantizer_compressed_tensors import quantize_params_compressed_tensors
 from .quantizer_fp8 import quantize_params_fp8
-from .quantizer_nvfp4 import quantize_params_nvfp4
+from .quantizer_nvfp4 import (
+    is_nvfp4_quant_config,
+    quantize_converted_hf_params_nvfp4,
+    quantize_params_nvfp4,
+)
 
-__all__ = ["remove_padding", "quantize_param", "quantize_params_fp8", "quantize_params_compressed_tensors"]
+__all__ = [
+    "remove_padding",
+    "quantize_param",
+    "quantize_params_fp8",
+    "quantize_params_compressed_tensors",
+    "is_nvfp4_quant_config",
+    "quantize_converted_hf_params_nvfp4",
+]
 
 
 def quantize_params(args, megatron_name, converted_named_params, quantization_config):
