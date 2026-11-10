@@ -119,7 +119,7 @@ def get_responses(
 
     Args:
         logits: Model outputs with shape `[1, T, V]` (policy) or `[1, T, 1]`
-            (value). Must be float32.
+            (value). May be bf16 when `logits_dtype` is bf16.
         args: Configuration containing `rollout_temperature` for optional scaling.
         unconcat_tokens: List of token tensors (prompt+response) per sample.
         total_lengths: Total sequence lengths (prompt+response) per sample.
@@ -127,16 +127,17 @@ def get_responses(
         apply_temperature: Whether to divide outputs by `rollout_temperature`.
 
     Yields:
-        Tuple of `(logits_chunk, tokens_chunk)` where `logits_chunk` is shape
+        Tuple of `(logits_chunk, tokens_chunk)` where `logits_chunk` is fp32 with shape
         `[R, V]` (policy) or `[R, 1]` (value) and `tokens_chunk` is shape `[R]`
         (1D int64), both aligned to response tokens for one sample.
     """
-    assert logits.dtype == torch.float32, f"{logits.dtype}"
+    bf16_logits = logits.dtype == torch.bfloat16 and getattr(args, "logits_dtype", "fp32") == "bf16"
+    assert logits.dtype == torch.float32 or bf16_logits, f"{logits.dtype}"
     assert len(logits.shape) == 3, f"{logits.shape}"
     assert logits.size(0) == 1, f"{logits.shape}"
     logits = logits.squeeze(0)
 
-    if apply_temperature and args.rollout_temperature != 1.0:
+    if not bf16_logits and apply_temperature and args.rollout_temperature != 1.0:
         logits = logits.div(args.rollout_temperature)
 
     cp_size = mpu.get_context_parallel_world_size()
@@ -199,6 +200,10 @@ def get_responses(
 
         seq_start += total_length
 
+        if bf16_logits:
+            logits_chunk = logits_chunk.float()
+            if apply_temperature and args.rollout_temperature != 1.0:
+                logits_chunk = logits_chunk.div(args.rollout_temperature)
         yield logits_chunk, tokens_chunk
 
 
@@ -553,14 +558,15 @@ def get_log_probs_and_entropy(
     log-probabilities; entropy is always computed from the unmasked logits.
     """
     assert non_loss_data
-    assert logits.dtype == torch.float32, f"{logits.dtype}"
+    bf16_logits = logits.dtype == torch.bfloat16 and getattr(args, "logits_dtype", "fp32") == "bf16"
+    assert logits.dtype == torch.float32 or bf16_logits, f"{logits.dtype}"
     assert len(logits.shape) == 3, f"{logits.shape}"
     assert logits.size(0) == 1, f"{logits.shape}"
     logits = logits.squeeze(0)
 
     # Apply rollout temperature scaling to logits to match rollout-time log-probs.
     rollout_temperature = getattr(args, "rollout_temperature", 1.0)
-    if rollout_temperature != 1.0:
+    if not bf16_logits and rollout_temperature != 1.0:
         logits = logits / rollout_temperature
     logits = logits.contiguous()
     T = logits.size(0)
@@ -597,6 +603,7 @@ def get_log_probs_and_entropy(
         with_entropy_grad=with_entropy_grad,
         chunk_size=chunk_size,
         log_prob_keep_mask=top_p_keep_mask,
+        **({"temperature": rollout_temperature} if bf16_logits else {}),
     )
     log_prob_full = log_prob_full.squeeze(-1)  # [T, 1] -> [T]
 
@@ -1340,7 +1347,7 @@ def policy_loss_function(
 
     # make sure the gradient could backprop correctly.
     if log_probs.numel() == 0:
-        loss += 0 * logits.sum()
+        loss += 0 * (logits.sum(dtype=torch.float32) if logits.dtype == torch.bfloat16 else logits.sum())
 
     train_rollout_logprob_abs_diff = None
     if "rollout_log_probs" in batch and batch["rollout_log_probs"]:
@@ -1482,7 +1489,7 @@ def sft_loss_function(
 
     # make sure the gradient could backprop correctly.
     if log_probs.numel() == 0:
-        loss += 0 * logits.sum()
+        loss += 0 * (logits.sum(dtype=torch.float32) if logits.dtype == torch.bfloat16 else logits.sum())
 
     return (
         loss,
@@ -1559,7 +1566,7 @@ def loss_function(
     # ranks that call it. Adding this zero loss forces autograd to traverse the full
     # graph on every rank without changing gradient values.
     if args.allgather_cp and mpu.get_context_parallel_world_size() > 1:
-        loss = loss + 0 * logits.sum()
+        loss = loss + 0 * (logits.sum(dtype=torch.float32) if logits.dtype == torch.bfloat16 else logits.sum())
 
     # Here we need to divide by cp_size because to cancel the multiply in Megatron.
     if not args.calculate_per_token_loss:

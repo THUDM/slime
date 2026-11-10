@@ -416,6 +416,11 @@ def forward_only(
     if use_rollout_top_p_replay:
         batch_keys = _with_rollout_top_p_token_keys(args, batch_keys)
 
+    bf16_logits = getattr(args, "logits_dtype", "fp32") == "bf16" and args.loss_type not in (
+        "value_loss",
+        "custom_loss",
+    )
+
     def forward_step(
         data_iterator: DataIterator, model: GPTModel, return_schedule_plan: bool = False
     ) -> tuple[torch.Tensor, Callable[[torch.Tensor], dict[str, list[torch.Tensor]]]]:
@@ -455,6 +460,8 @@ def forward_only(
         }
         if batch["multimodal_train_inputs"] is not None:
             forward_kwargs.update(batch["multimodal_train_inputs"])
+        if bf16_logits:
+            forward_kwargs["fp32_output"] = False
         output_tensor = model(**forward_kwargs)
 
         output_kwargs = {
@@ -582,6 +589,11 @@ def train_one_step(
         custom_before_train_step_hook = load_function(args.custom_megatron_before_train_step_hook_path)
         custom_before_train_step_hook(args, rollout_id, step_id, model, optimizer, opt_param_scheduler)
 
+    bf16_logits = getattr(args, "logits_dtype", "fp32") == "bf16" and args.loss_type not in (
+        "value_loss",
+        "custom_loss",
+    )
+
     def forward_step(data_iterator: DataIterator, model: GPTModel, return_schedule_plan: bool = False) -> tuple[
         torch.Tensor,
         Callable[[torch.Tensor], tuple[torch.Tensor, int, dict[str, torch.Tensor | list[str]]]],
@@ -635,6 +647,7 @@ def train_one_step(
             os.environ["ROUTING_REPLAY_STAGE"] = "replay_forward"
 
         if return_schedule_plan:
+            assert not bf16_logits, "--logits-dtype bf16 does not support combined 1F1B"
             assert not args.enable_mtp_training, "MTP training should not be enabled when using combined 1f1b"
             position_ids = None
             output_tensor = model.build_schedule_plan(
@@ -661,6 +674,8 @@ def train_one_step(
             if args.enable_mtp_training:
                 forward_kwargs["mtp_kwargs"] = {"mtp_labels": batch["tokens"]}
 
+            if bf16_logits:
+                forward_kwargs["fp32_output"] = False
             output_tensor = model(**forward_kwargs)
 
         if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":

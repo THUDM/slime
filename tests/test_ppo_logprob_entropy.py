@@ -448,5 +448,56 @@ def test_calculate_log_probs_and_entropy_matches_unfused_reference_vocab_paralle
     )
 
 
+@pytest.mark.parametrize("chunk_size", [-1, 2])
+@pytest.mark.parametrize("temperature", [1.0, 0.8])
+@pytest.mark.parametrize("with_entropy,with_entropy_grad", [(False, False), (True, False), (True, True)])
+@pytest.mark.parametrize("with_mask", [False, True])
+@pytest.mark.parametrize("vocab_size", [19, 65536])
+def test_bf16_logits_bitwise_equal(chunk_size, temperature, with_entropy, with_entropy_grad, with_mask, vocab_size):
+    generator = torch.Generator().manual_seed(42)
+    data = torch.randn(4, vocab_size, generator=generator).bfloat16()
+    tokens = torch.tensor([0, 3, 7, 1])
+    # Include targets whose probability rounds to one, as well as ordinary rows.
+    data[0, 0] = 30
+    data[1, 3] = 15
+    keep = torch.rand(data.shape, generator=generator) > 0.5 if with_mask else None
+    results = []
+    for bf16 in (False, True):
+        leaf = data.clone().requires_grad_()
+        logits = leaf if bf16 else leaf.float() / temperature
+        log_probs, entropy = calculate_log_probs_and_entropy(
+            logits,
+            tokens,
+            None,
+            with_entropy=with_entropy,
+            with_entropy_grad=with_entropy_grad,
+            chunk_size=chunk_size,
+            log_prob_keep_mask=keep,
+            temperature=temperature if bf16 else 1.0,
+        )
+        loss = (log_probs.flatten() * torch.tensor([0.25, -0.5, 1.5, -0.75])).sum()
+        if with_entropy_grad:
+            loss = loss + (entropy * torch.tensor([0.55, -0.2, 1.8, 0.4])).sum()
+        loss.backward()
+        results.append((log_probs.detach(), None if entropy is None else entropy.detach(), leaf.grad))
+    for reference, actual in zip(*results, strict=True):
+        assert (reference is None and actual is None) or torch.equal(reference, actual)
+    assert results[1][-1].dtype == torch.bfloat16
+
+
+def test_bf16_unmasked_kernel_retains_input_and_row_normalizers():
+    logits = torch.randn(5, 19).bfloat16().requires_grad_()
+    saved = []
+    with torch.autograd.graph.saved_tensors_hooks(lambda value: saved.append(value) or value, lambda value: value):
+        log_probs, _ = calculate_log_probs_and_entropy(
+            logits, torch.arange(5), None, with_entropy=True, with_entropy_grad=False, temperature=0.8
+        )
+    full_vocab = [value for value in saved if value.shape == logits.shape]
+    assert len(full_vocab) == 1
+    assert full_vocab[0].untyped_storage().data_ptr() == logits.untyped_storage().data_ptr()
+    assert sum(value.shape == (5, 1) for value in saved) == 2
+    log_probs.sum().backward()
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
