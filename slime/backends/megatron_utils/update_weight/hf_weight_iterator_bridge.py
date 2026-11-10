@@ -56,7 +56,31 @@ class HfWeightIteratorBridge(HfWeightIteratorBase):
 
             named_weights = self._bridge.export_hf_weights(self.model, cpu=False, conversion_tasks=conversion_tasks)
 
+            from ..megatron_to_hf.processors import (
+                is_nvfp4_quant_config,
+                quantize_converted_hf_params_nvfp4,
+            )
+
+            defer_nvfp4 = is_nvfp4_quant_config(self.quantization_config)
+
             def _streaming_quantized():
+                pending_hf = []
+                pending_bytes = 0
+                chunk_size = self.args.update_weight_buffer_size
+
+                def _flush_pending():
+                    nonlocal pending_hf, pending_bytes
+                    if not pending_hf:
+                        return
+                    if defer_nvfp4:
+                        yield from quantize_converted_hf_params_nvfp4(
+                            pending_hf, self.quantization_config
+                        )
+                    else:
+                        yield from pending_hf
+                    pending_hf = []
+                    pending_bytes = 0
+
                 for hf_param_name, weight, megatron_param_name in named_weights:
                     processed_weight = postprocess_hf_param(
                         args=self.args,
@@ -65,13 +89,23 @@ class HfWeightIteratorBridge(HfWeightIteratorBase):
                         param=weight,
                     )
                     converted_named_params = [(hf_param_name, processed_weight)]
-                    quantized_batch = quantize_params(
-                        args=self.args,
-                        megatron_name=megatron_param_name,
-                        converted_named_params=converted_named_params,
-                        quantization_config=self.quantization_config,
-                    )
-                    yield from quantized_batch
+                    if defer_nvfp4:
+                        # Accumulate BF16 HF tensors, then batch-quantize on flush.
+                        for name, tensor in converted_named_params:
+                            pending_hf.append((name, tensor))
+                            pending_bytes += tensor.numel() * tensor.element_size()
+                        if pending_bytes >= chunk_size:
+                            yield from _flush_pending()
+                    else:
+                        quantized_batch = quantize_params(
+                            args=self.args,
+                            megatron_name=megatron_param_name,
+                            converted_named_params=converted_named_params,
+                            quantization_config=self.quantization_config,
+                        )
+                        yield from quantized_batch
+
+                yield from _flush_pending()
 
             yield from chunk_named_params_by_size(
                 _streaming_quantized(), chunk_size=self.args.update_weight_buffer_size

@@ -33,10 +33,21 @@ class HfWeightIteratorDirect(HfWeightIteratorBase):
             del megatron_full_params
 
     def _convert_to_hf_named_tensors(self, megatron_full_params: Sequence[torch.Tensor], param_infos: list[ParamInfo]):
+        from ..megatron_to_hf.processors import (
+            is_nvfp4_quant_config,
+            quantize_converted_hf_params_nvfp4,
+        )
+
+        defer_nvfp4 = is_nvfp4_quant_config(self.quantization_config)
+        quant_cfg = None if defer_nvfp4 else self.quantization_config
         hf_named_tensors = []
         for info, param in zip(param_infos, megatron_full_params, strict=False):
             hf_named_tensors.extend(
-                convert_to_hf(self.args, self.model_name, info.name, param, self.quantization_config)
+                convert_to_hf(self.args, self.model_name, info.name, param, quant_cfg)
+            )
+        if defer_nvfp4:
+            hf_named_tensors = quantize_converted_hf_params_nvfp4(
+                hf_named_tensors, self.quantization_config
             )
         return hf_named_tensors
 
