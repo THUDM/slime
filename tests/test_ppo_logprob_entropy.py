@@ -49,6 +49,27 @@ def test_chunking_retains_inputs_without_full_vocab_softmax_buffers(with_mask, w
     assert torch.isfinite(logits.grad).all()
 
 
+def test_chunked_backward_reuses_only_non_leaf_logits():
+    torch.manual_seed(0)
+    values = torch.randn(10, 33)
+    tokens = torch.randint(0, 33, (10,))
+
+    leaf = values.clone().requires_grad_()
+    log_probs, _ = calculate_log_probs_and_entropy(leaf, tokens, None, chunk_size=4)
+    log_probs.sum().backward()
+    # The caller keeps its input; the gradient gets a buffer of its own.
+    assert torch.equal(leaf.detach(), values)
+    assert leaf.grad.untyped_storage().data_ptr() != leaf.untyped_storage().data_ptr()
+
+    source = values.clone().requires_grad_()
+    output = source * 1  # a non-leaf, like the model output
+    log_probs, _ = calculate_log_probs_and_entropy(output, tokens, None, chunk_size=4)
+    log_probs.sum().backward()
+    # Written into the storage of the non-leaf itself, with the same values.
+    assert torch.equal(output.detach(), leaf.grad)
+    assert torch.equal(source.grad, leaf.grad)
+
+
 def _free_port() -> int:
     sock = socket.socket()
     sock.bind(("", 0))
