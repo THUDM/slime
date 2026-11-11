@@ -246,6 +246,32 @@ patch extraction, fresh-sandbox grading and trajectory export.
 | `ADAPTER_PUBLIC_HOST` / `ADAPTER_PORT` | `auto` / `0` | Advertised node address and dynamically assigned port |
 | `SAVE_INTERVAL` | `0` | Checkpoint interval; zero disables saving |
 
+## Runta sandboxes
+
+Set `SWE_SANDBOX_PROVIDER=runta` to run rollouts and grading in
+[Runta](https://runta.com/docs/) cloud runtimes instead of self-hosted Sunabako
+nodes. Install the SDK with
+`python -m pip install -r examples/coding_agent_rl/requirements-runta.txt` and
+authenticate every rollout process with `RUNTA_TOKEN`; `RUNTA_ENDPOINT` selects
+a non-default API endpoint.
+
+Each sandbox is one runtime. The task image is pulled from its registry and run
+as a container inside the runtime, so no image preparation step or `images.json`
+is needed; private registries require Docker credentials inside the runtime. The
+runtimes must be able to reach the adapter address advertised through
+`ADAPTER_PUBLIC_HOST`.
+
+| Environment variable | Default | Purpose |
+| --- | --- | --- |
+| `RUNTA_VCPUS` / `RUNTA_MEMORY_MIB` | `2` / `4096` | Per-sandbox resource requests |
+| `RUNTA_CREATE_TIMEOUT_SEC` | `600` | Runtime boot and image pull deadline |
+| `SLIME_AGENT_SANDBOX_LIFETIME_SEC` | `3600` | Server-side lifetime after which Runta stops a runtime whose trainer died |
+
+`run_qwen38_27b_fully_async.sh` is written for Sunabako: it selects that provider,
+checks its cluster files and forwards only its settings to the Ray workers. Use
+the Runta provider from a launcher that exports `SWE_SANDBOX_PROVIDER=runta` and
+the `RUNTA_*` variables to the rollout processes.
+
 ## Outputs and restart
 
 `$LOG_ROOT/run.log` contains trainer, rollout and inference logs. W&B files,
@@ -286,8 +312,8 @@ to their segments. Shared generated prefixes contribute loss only once, and all
 segments of a trajectory stay in the same optimizer step.
 
 `generate.py` coordinates the harness, adapter and grading. `swe.py` prepares
-workspaces and evaluates patches. `sandbox.py` selects the provider, and
-`sunabako_sandbox.py` implements the shared sandbox interface. `check_rollout.py`
+workspaces and evaluates patches. `sandbox.py` selects the provider;
+`sunabako_sandbox.py` and `runta_sandbox.py` implement the shared sandbox interface. `check_rollout.py`
 can validate real trajectories against an already-running SGLang server without
 starting trainers; run it with `--help` for its inputs. The
 [coding-agent CI test](https://thudm.github.io/slime/developer_guide/ci.html#coding-agent-training)
