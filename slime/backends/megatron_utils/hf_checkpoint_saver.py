@@ -29,8 +29,14 @@ def save_hf_model_to_path(
     model_name: str | None = None,
     quantization_config: dict[str, Any] | None = None,
     progress_desc: str = "Save HF checkpoint",
+    require_shared_dir: bool = True,
 ) -> None:
-    """Save a Megatron model as an HF safetensors checkpoint."""
+    """Save a Megatron model as an HF safetensors checkpoint.
+
+    require_shared_dir fails on every rank when a writer cannot see the assets rank 0 copied into output_dir, as
+    the --save-hf export needs. Disk weight sync turns it off: its files may reach other nodes only after its
+    post-write hook publishes them.
+    """
     path = Path(output_dir)
     hf_checkpoint = Path(args.hf_checkpoint).resolve()
     save_path = path.resolve()
@@ -101,6 +107,8 @@ def save_hf_model_to_path(
         )
 
     writer = _SafetensorShardWriter(path, enabled=is_writer_rank)
+    if require_shared_dir:
+        _raise_if_writer_misses_assets(args.hf_checkpoint, path, is_writer_rank)
     pending_write = None
 
     for chunk_idx, hf_named_tensors in enumerate(
@@ -139,6 +147,10 @@ class _SafetensorShardWriter:
         self.total_size = 0
         self.weight_map: dict[str, str] = {}
         self.shard_files: list[str] = []
+        if enabled:
+            # Writers on other nodes may hold a cached negative NFS lookup of the directory that rank 0 created
+            # after every rank resolved the path; mkdir goes to the server and drops that cache entry.
+            path.mkdir(parents=True, exist_ok=True)
 
     def write(self, named_tensors, shard_idx: int) -> None:
         if not self.enabled:
@@ -356,6 +368,24 @@ def _get_node_save_layout(args) -> tuple[int, int, bool, list[int]]:
     writer_ranks = [node * gpus_per_node for node in range(num_nodes) if node * gpus_per_node < world_size]
     node_rank = min(rank // gpus_per_node, num_nodes - 1)
     return len(writer_ranks), node_rank, rank in writer_ranks, writer_ranks
+
+
+def _raise_if_writer_misses_assets(origin_hf_dir: str, output_dir: Path, is_writer_rank: bool) -> None:
+    """Fail on every rank when a writer cannot see the config.json rank 0 copied into the save directory: its
+    node does not share the directory, and writing on would leave rank 0 an index naming shards it lacks."""
+    import torch.distributed as dist
+
+    error = None
+    marker = "config.json"
+    if is_writer_rank and (Path(origin_hf_dir) / marker).is_file() and not (output_dir / marker).exists():
+        error = f"{os.uname().nodename} does not see {output_dir / marker}"
+    errors = [error]
+    if dist.is_available() and dist.is_initialized():
+        errors = [None] * dist.get_world_size()
+        dist.all_gather_object(errors, error)
+    missing = [e for e in errors if e]
+    if missing:
+        raise RuntimeError("--save-hf must point to a directory shared by every node: " + "; ".join(missing))
 
 
 def _raise_if_rank_zero_failed(context: str, error: str | None) -> None:
