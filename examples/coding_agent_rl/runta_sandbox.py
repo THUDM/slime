@@ -21,8 +21,10 @@ Settings (environment variables):
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import re
 import secrets
 import shlex
 from pathlib import Path
@@ -35,7 +37,14 @@ _CONTAINER = "slime-task"
 # Exit code the read helper uses for "no such file", so a missing completion
 # marker is told apart from a permission or lifecycle failure.
 _MISSING_FILE_EXIT = 44
+# The SDK keeps 4 MiB of each output stream unless told otherwise and marks the
+# rest as truncated; patches and file contents are data, so allow far more and
+# refuse a result that is still cut short.
 _READ_LIMIT_BYTES = 64 * 1024 * 1024
+# How the SDK reports a command it terminated at its timeout: this exit code
+# with this notice ending stderr.
+_TIMEOUT_EXIT = 124
+_TIMEOUT_NOTICE = re.compile(r"Command timed out after \S+ seconds\.$")
 _DELETE_AFTER_SHUTDOWN_SEC = 600
 
 
@@ -60,15 +69,8 @@ class RuntaSandbox:
         create_timeout = float(os.environ.get("RUNTA_CREATE_TIMEOUT_SEC", "600"))
         self._client = AsyncRunta()
         try:
-            self._runtime = await self._client.runtimes.create(
-                f"slime-{secrets.token_hex(6)}",
-                vcpus=int(os.environ.get("RUNTA_VCPUS", "2")),
-                memory_mib=int(os.environ.get("RUNTA_MEMORY_MIB", "4096")),
-                auto_shutdown_after_secs=_lifetime_sec(),
-                auto_delete_after_secs=_DELETE_AFTER_SHUTDOWN_SEC,
-                timeout=create_timeout,
-            )
-            self.sandbox_id = self._runtime.id
+            await self._create_runtime()
+            await self._runtime.wait_until_ready(timeout=create_timeout)
             # --network host: the container shares the runtime's network, so the
             # runtime's egress policy applies to the task unchanged.
             started = await self._runtime.exec(
@@ -82,6 +84,39 @@ class RuntaSandbox:
             raise
         logger.info("[runta] %s image=%s", self.sandbox_id, self.image)
         return self
+
+    async def _create_runtime(self) -> None:
+        """Create the runtime and keep its handle before waiting for it to boot.
+
+        The runtime exists server-side once the request lands, so a boot that
+        then fails, times out or is cancelled must still find the handle to
+        delete. The request itself is shielded for the same reason: a cancelled
+        caller waits for the handle and only then sees the cancellation.
+        """
+
+        async def create() -> None:
+            self._runtime = await self._client.runtimes.create(
+                f"slime-{secrets.token_hex(6)}",
+                vcpus=int(os.environ.get("RUNTA_VCPUS", "2")),
+                memory_mib=int(os.environ.get("RUNTA_MEMORY_MIB", "4096")),
+                auto_shutdown_after_secs=_lifetime_sec(),
+                auto_delete_after_secs=_DELETE_AFTER_SHUTDOWN_SEC,
+                wait=False,
+            )
+            self.sandbox_id = self._runtime.id
+
+        request = asyncio.ensure_future(create())
+        cancelled = None
+        while not request.done():
+            try:
+                await asyncio.shield(request)
+            except asyncio.CancelledError as error:
+                cancelled = error
+            except Exception:
+                break  # the request failed; raised from result() below
+        if cancelled is not None:
+            raise cancelled
+        request.result()
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
         await self._close()
@@ -140,9 +175,16 @@ class RuntaSandbox:
     ) -> ExecResult:
         # The Runta SDK reconnects to the same remote task after a dropped
         # connection instead of re-sending it, so ``idempotent`` needs no handling.
-        # A login shell matches the E2B provider's command environment; a command
-        # that outlives ``timeout`` is terminated and reported as exit 124.
-        result = await self._run([*self._docker_exec(user, env), "bash", "-lc", cmd], timeout=timeout)
+        # A login shell matches the E2B provider's command environment. As there,
+        # a command that outlives ``timeout`` raises instead of returning an exit
+        # code, so a grader that ran out of time is not scored as a failed test.
+        result = await self._run(
+            [*self._docker_exec(user, env), "bash", "-lc", cmd], timeout=timeout, max_output_bytes=_READ_LIMIT_BYTES
+        )
+        if result.exit_code == _TIMEOUT_EXIT and _TIMEOUT_NOTICE.search(result.stderr_text):
+            raise RuntimeError(f"runta exec timed out after {timeout}s: {cmd[:120]}")
+        if result.stdout_truncated or result.stderr_truncated:
+            raise RuntimeError(f"runta exec output exceeds {_READ_LIMIT_BYTES} bytes: {cmd[:120]}")
         if check and result.exit_code != 0:
             raise RuntimeError(f"runta exec failed (exit={result.exit_code}): {cmd[:120]}\n{result.stderr_text[:400]}")
         return result.exit_code, result.stdout_text, result.stderr_text
@@ -168,10 +210,12 @@ class RuntaSandbox:
         await self._runtime.files.upload(str(host_path), staged)
         path, target = shlex.quote(sandbox_path), shlex.quote(f"{_CONTAINER}:{sandbox_path}")
         owner = shlex.quote(user)
+        # -u root: the image's own USER may not be allowed to create the parent
+        # directory or to hand the file to ``user``.
         copy = (
-            f'docker exec {_CONTAINER} sh -c \'mkdir -p "$(dirname "$1")"\' sh {path}'
+            f'docker exec -u root {_CONTAINER} sh -c \'mkdir -p "$(dirname "$1")"\' sh {path}'
             f" && docker cp {staged} {target}"
-            f" && docker exec {_CONTAINER} chown {owner} {path}"
+            f" && docker exec -u root {_CONTAINER} chown {owner} {path}"
             f"; rc=$?; rm -f {staged}; exit $rc"
         )
         result = await self._run(["sh", "-c", copy], timeout=600)
