@@ -150,6 +150,21 @@ def save_checkpoint(iteration, model, optimizer, opt_param_scheduler, **kwargs):
         temporary.replace(path)
 
 
+@contextmanager
+def _optimizer_in_load_template(args):
+    """Keep the optimizer in Megatron's load template, which generate_state_dict drops under --no-save-optim.
+
+    --no-save-optim should only govern saving: a run resumed with it must still load the optimizer state in its
+    checkpoint.
+    """
+    no_save_optim = args.no_save_optim
+    args.no_save_optim = False
+    try:
+        yield
+    finally:
+        args.no_save_optim = no_save_optim
+
+
 def load_checkpoint(ddp_model, optimizer, opt_param_scheduler, checkpointing_context):
     # ref: how megatron `load_checkpoint` gets directory
     args = get_args()
@@ -164,15 +179,20 @@ def load_checkpoint(ddp_model, optimizer, opt_param_scheduler, checkpointing_con
             # The master parameters are rebuilt from the saved model. There are
             # no Adam moments to load, and Megatron must skip its optimizer keys.
             args.no_load_optim = True
-        result = _load_checkpoint_megatron(
-            ddp_model=ddp_model,
-            optimizer=optimizer,
-            opt_param_scheduler=opt_param_scheduler,
-            checkpointing_context=checkpointing_context,
-            skip_load_to_model_and_opt=False,
-            # Megatron ae76c60e6 only restores optimizer / scheduler / data progress on request.
-            **({"restore_training_state": optimizer is not None} if _load_supports_restore_training_state() else {}),
-        )
+        with _optimizer_in_load_template(args) if getattr(args, "no_save_optim", False) else nullcontext():
+            result = _load_checkpoint_megatron(
+                ddp_model=ddp_model,
+                optimizer=optimizer,
+                opt_param_scheduler=opt_param_scheduler,
+                checkpointing_context=checkpointing_context,
+                skip_load_to_model_and_opt=False,
+                # Megatron ae76c60e6 only restores optimizer / scheduler / data progress on request.
+                **(
+                    {"restore_training_state": optimizer is not None}
+                    if _load_supports_restore_training_state()
+                    else {}
+                ),
+            )
         if getattr(args, "ckpt_step", None) is not None and not args.finetune and result[0] != args.ckpt_step:
             raise ValueError(
                 f"Model loaded step {result[0]}, but checkpoint restoration requires step {args.ckpt_step}. "
