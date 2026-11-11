@@ -75,6 +75,8 @@ class LinearForLastLayer(torch.nn.Linear):
     ) -> None:
         super().__init__(in_features=input_size, out_features=output_size, bias=bias)
         self.sequence_parallel = config.sequence_parallel
+        # Megatron's GPTModel._postprocess reads output_layer.gather_output; the value head is never TP-sharded.
+        self.gather_output = True
         if self.sequence_parallel:
             self.weight.sequence_parallel = True
             if bias:

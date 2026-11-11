@@ -5,13 +5,16 @@ FROM ${SGLANG_IMAGE}:${SGLANG_IMAGE_TAG} AS sglang
 # ======================================== Arguments =============================================
 
 ARG PATCH_VERSION=v0.5.21
-ARG MEGATRON_COMMIT=4b4acac9a1d28ea6829c8d4f566d75698a21249d
+ARG MEGATRON_COMMIT=ae76c60e6c35d913867d6dd7bad0f30b128b54e7
 ARG DEEPGEMM_COMMIT=8965e4a5cded4041c8dbbe8d35b0be31fd8da90b
 ARG DEEPEP_COMMIT=6845ffd9d59126ec0030c13e0e155935a61e5b5a
 ARG DEEPEP_CUDA_ARCH_LIST="9.0 10.0 10.3"
 ARG TRANSFORMER_ENGINE_VERSION=2.18.0
 ARG SLIME_NCCL_VERSION=2.30.7
 ARG MOONCAKE_VERSION=0.3.11.post1
+# The two Mamba2 kernels Nemotron-H needs; both are megatron.core's own pins for its `ssm` extra.
+ARG MAMBA_COMMIT=0048fbf2e7b2f214dcbe703ea3dec2b9647595e1
+ARG CAUSAL_CONV1D_VERSION=1.5.3.post1
 ARG CUDA_COMPAT_VERSION=580.178.04-1ubuntu1
 ARG TMS_COMMIT=bdab8c55f490a00a746ec34e301391617f5ca878
 
@@ -61,6 +64,11 @@ RUN NVCC_APPEND_FLAGS="--threads 1" \
 RUN git clone https://github.com/NVIDIA/Megatron-LM.git --recursive && \
     cd Megatron-LM && git checkout ${MEGATRON_COMMIT} && \
     pip install -e .
+
+# Megatron dev reads cached checkpoint metadata (slime sets ckpt_assume_constant_structure)
+# and runs async checkpointing through nvidia-resiliency-ext, which sits in its `dev` extra
+# and is therefore not pulled in by `pip install -e .`. Keep the pin equal to Megatron's.
+RUN pip install --no-deps nvidia-resiliency-ext==0.7.0
 
 # zhuzilin fork builds, grouped together right after Megatron-LM:
 # torch_memory_saver, plus the GLM-5 train/rollout alignment kernels
@@ -113,6 +121,19 @@ RUN pip uninstall -y sgl-deep-ep deep-ep && \
     pip install --force-reinstall --no-deps dist/deep_ep-*.whl && \
     cd /root/ && rm -rf DeepEP
 
+# Nemotron-H has Mamba2 layers, and megatron.core's MambaMixer raises ImportError
+# without mamba-ssm; causal-conv1d is its conv1d kernel. Both carry CUDA extensions
+# and no prebuilt wheel matches this torch, so build them here against the image's
+# own torch and nvcc: FORCE_BUILD skips the wheel download that can only fail,
+# --no-build-isolation reuses the installed torch, and --no-deps keeps pip from
+# pulling a second torch/triton over the tested stack. mamba-ssm's setup.py adds its
+# own -gencode list, so this is a long build. Keep it before patches and Slime sources.
+RUN export MAMBA_FORCE_BUILD=TRUE CAUSAL_CONV1D_FORCE_BUILD=TRUE NVCC_APPEND_FLAGS="--threads 4" && \
+    pip install --no-build-isolation --no-deps "causal-conv1d==${CAUSAL_CONV1D_VERSION}" && \
+    pip install --no-build-isolation --no-deps "https://github.com/state-spaces/mamba/archive/${MAMBA_COMMIT}.tar.gz" && \
+    rm -rf /root/.cache/pip
+RUN python -c "import mamba_ssm, causal_conv1d; print('mamba_ssm', mamba_ssm.__version__, 'causal_conv1d', causal_conv1d.__version__)"
+
 # PyTorch's dependency metadata pins older NCCL. Restore the tested runtime
 # after resolving dependencies, before the frequently changed patches/sources.
 # The remaining Slime and int4 kernel installs do not resolve runtime dependencies.
@@ -147,7 +168,7 @@ ARG ENABLE_SGLANG_PATCH=1
 COPY docker/patch/${PATCH_VERSION}/sglang*.patch /sgl-workspace/sglang/
 RUN if [ "$ENABLE_SGLANG_PATCH" = "1" ]; then \
   cd /sgl-workspace/sglang && \
-  for patch in sglang.patch sglang-top_p.patch sglang-release_hicache.patch sglang-pull_weights.patch sglang-deterministic.patch; do \
+  for patch in sglang.patch sglang-top_p.patch sglang-release_hicache.patch sglang-pull_weights.patch sglang-deterministic.patch sglang-radio_layerscale.patch sglang-nemotron-multi-image.patch; do \
     if [ ! -f "$patch" ]; then \
       if [ "$patch" = "sglang.patch" ]; then \
         echo "Required patch is missing: $patch" >&2; \
