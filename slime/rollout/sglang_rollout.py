@@ -7,9 +7,11 @@ import uuid
 from argparse import Namespace
 from collections.abc import Awaitable, Callable
 from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 import numpy as np
+from PIL import Image
 from tqdm import tqdm
 
 from slime.backends.sglang_utils.server_control import abort_servers_until_idle, get_live_router_workers
@@ -38,6 +40,8 @@ __all__ = ["generate_rollout", "get_model_url"]
 logger = logging.getLogger(__name__)
 
 _PROCESSOR_PROMPT_KEYS = {"input_ids", "attention_mask"}
+_MAX_MEMO_IMAGE_BYTES = 3 * 1024 * 1024
+_JFIF_INFO_KEYS = frozenset({"jfif", "jfif_version", "jfif_unit", "jfif_density"})
 
 
 def _prepare_prompt_ids(sample: Sample, tokenizer, processor: Any) -> list[int]:
@@ -155,7 +159,46 @@ class GenerateState(metaclass=SingletonMeta):
         self.remaining_batch_size += len(samples)
 
 
-async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, Any]) -> Sample:
+class _GroupImageMemo:
+    """Reuse one plain RGB image payload within a native rollout group."""
+
+    def __init__(self) -> None:
+        self._entry: tuple[tuple[int, int], bytes, str] | None = None
+
+    def encode(self, image: Image.Image) -> str:
+        # Pillow does not write JPEG JFIF fields to PNG. Other image metadata
+        # or a custom PIL subclass may change the encoded payload.
+        # Bound the retained raw snapshot even for groups with many images.
+        if (
+            type(image) is not Image.Image
+            or image.mode != "RGB"
+            or not image.info.keys() <= _JFIF_INFO_KEYS
+            or image.width * image.height * 3 > _MAX_MEMO_IMAGE_BYTES
+        ):
+            return encode_image_for_rollout_engine(image)
+
+        pixels = image.tobytes()
+        if self._entry is not None:
+            size, cached_pixels, encoded = self._entry
+            if image.size == size and pixels == cached_pixels:
+                return encoded
+            return encode_image_for_rollout_engine(image)
+
+        encoded = encode_image_for_rollout_engine(image)
+        self._entry = (image.size, pixels, encoded)
+        return encoded
+
+
+_group_image_memo: ContextVar[_GroupImageMemo | None] = ContextVar("group_image_memo", default=None)
+
+
+async def generate(
+    args: Namespace,
+    sample: Sample,
+    sampling_params: dict[str, Any],
+    *,
+    image_memo: _GroupImageMemo | None = None,
+) -> Sample:
     """Generate using traditional SGLang router with token-based workflow"""
     if args.ci_test:
         assert isinstance(sample.prompt, str)
@@ -200,7 +243,8 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
 
     images = sample.multimodal_inputs.get("images") if sample.multimodal_inputs else None
     if images:
-        payload["image_data"] = [encode_image_for_rollout_engine(image) for image in images]
+        encode_image = image_memo.encode if image_memo is not None else encode_image_for_rollout_engine
+        payload["image_data"] = [encode_image(image) for image in images]
         # For single-turn multimodal requests, send text so SGLang expands the
         # image placeholders with its own processor rules.
         payload["text"] = sample.prompt
@@ -292,6 +336,12 @@ async def generate_and_rm(
     sampling_params: dict[str, Any],
     evaluation: bool = False,
 ) -> Sample | list[Sample]:
+    # The trace wrapper keeps arguments until reward completes. Take ownership
+    # from task context so the memo can be released before reward and hooks.
+    image_memo = _group_image_memo.get()
+    if image_memo is not None:
+        _group_image_memo.set(None)
+
     # mask previous off-policy generation for partial rollout
     if args.partial_rollout and args.mask_offpolicy_in_partial_rollout and sample.response_length > 0:
         sample.loss_mask = [0] * sample.response_length
@@ -338,7 +388,9 @@ async def generate_and_rm(
             custom_func_path = sample.generate_function_path or args.custom_generate_function_path
             generate_func = load_function(custom_func_path) if custom_func_path is not None else generate
 
-            if custom_func_path is not None and "evaluation" in inspect.signature(generate_func).parameters:
+            if custom_func_path is None and image_memo is not None:
+                generate_call = generate_func(args, sample, sampling_params, image_memo=image_memo)
+            elif custom_func_path is not None and "evaluation" in inspect.signature(generate_func).parameters:
                 generate_call = generate_func(args, sample, sampling_params, evaluation=evaluation)
             else:
                 generate_call = generate_func(args, sample, sampling_params)
@@ -349,6 +401,8 @@ async def generate_and_rm(
                 sample = await _run_server_abort_generate(state, generate_call)
     finally:
         state.semaphore.release()
+        # An image payload is needed for generation, not for hooks or rewards.
+        image_memo = None
 
     sample = inherit_queue_context(queue_input, sample)
     sample = await apply_rollout_sample_hooks(args, sample, evaluation=evaluation)
@@ -414,6 +468,7 @@ async def generate_and_rm_group(
         if sample.session_id is None:
             sample.session_id = str(uuid.uuid4())
 
+    image_memo = _GroupImageMemo() if len(group) > 1 else None
     tasks = {}
     for idx, sample in enumerate(group):
         if isinstance(sample, list):
@@ -422,7 +477,22 @@ async def generate_and_rm_group(
         if getattr(args, "sglang_enable_deterministic_inference", False):
             seed = state.group_sampling_seeds[idx]
             current_sampling_params["sampling_seed"] = seed
-        tasks[idx] = asyncio.create_task(generate_and_rm(args, sample, current_sampling_params, evaluation=evaluation))
+        generation = generate_and_rm(args, sample, current_sampling_params, evaluation=evaluation)
+        if (
+            image_memo is not None
+            and sample.multimodal_inputs
+            and sample.multimodal_inputs.get("images")
+            and not (sample.generate_function_path or getattr(args, "custom_generate_function_path", None))
+        ):
+            token = _group_image_memo.set(image_memo)
+            try:
+                tasks[idx] = asyncio.create_task(generation)
+            finally:
+                _group_image_memo.reset(token)
+        else:
+            tasks[idx] = asyncio.create_task(generation)
+    # Pending native generation tasks now own the memo.
+    del image_memo
 
     results = await asyncio.gather(*tasks.values())
     group = list(group)
