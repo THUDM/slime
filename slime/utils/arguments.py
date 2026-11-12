@@ -251,6 +251,18 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--custom-hf-weight-loader-path",
+                type=str,
+                default=None,
+                help="HF tensor mapper: function(name, safetensor_reader, hf_config) -> Tensor.",
+            )
+            parser.add_argument(
+                "--custom-hf-weight-converter-path",
+                type=str,
+                default=None,
+                help="HF export mapper: function(args, name, tensor) -> list[(hf_name, tensor)].",
+            )
+            parser.add_argument(
                 "--custom-model-provider-path",
                 type=str,
                 default=None,
@@ -1981,7 +1993,7 @@ def slime_validate_args(args):
     if load_is_hf:
         from slime.backends.megatron_utils.hf_to_megatron import supports_hf_weight_loading
 
-        load_is_hf = supports_hf_weight_loading(args.load)
+        load_is_hf = supports_hf_weight_loading(args.load, getattr(args, "custom_hf_weight_loader_path", None))
     if not load_is_megatron:
         args.no_load_optim = True
         args.no_load_rng = True
