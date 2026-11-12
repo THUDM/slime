@@ -146,13 +146,13 @@ NUM_GPUS=$(echo ${HIP_VISIBLE_DEVICES} | tr ',' '\n' | wc -l)
 ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus ${NUM_GPUS} --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
 
 
-# "PYTHONPATH": "/workspace/Megatron-LM/",
+# "PYTHONPATH": "/root/Megatron-LM/",
 MEGATRON_LM_PATH=$(pip list | grep megatron-core | awk '{print $NF}')
 
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json='{
      "env_vars": {
-        "PYTHONPATH": "/workspace/Megatron-LM/",
+        "PYTHONPATH": "/root/Megatron-LM/",
         "CUDA_DEVICE_MAX_CONNECTIONS": "1"
      }
    }' \

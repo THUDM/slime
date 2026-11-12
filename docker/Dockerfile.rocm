@@ -1,4 +1,4 @@
-# slime (THUDM) + SGLang v0.5.21 + Megatron-LM core_v0.19.2 on ROCm, FROM the locked rocm/primus:v26.5.
+# slime (THUDM) + SGLang v0.5.21 + Megatron-LM dev (ae76c60e) on ROCm, FROM the locked rocm/primus:v26.5.
 #
 # Mirrors slime docker/Dockerfile (the CUDA baseline): same SGLang tag, Megatron commit and
 # sgl-router fork wheel. slime is cloned from THUDM/slime main at build time, and the
@@ -10,8 +10,7 @@ FROM rocm/primus:v26.5
 
 ARG SGLANG_TAG=v0.5.21
 ARG SGLANG_COMMIT=e00930c5489053f26d86b179cee0d087f846acbb
-ARG MEGATRON_TAG=core_v0.19.2
-ARG MEGATRON_COMMIT=4b4acac9a1d28ea6829c8d4f566d75698a21249d
+ARG MEGATRON_COMMIT=ae76c60e6c35d913867d6dd7bad0f30b128b54e7
 ARG TMS_COMMIT=118b09b3bc7b0cf386745db1eac2601d4aa7e681
 ARG GPU_TARGET=gfx942
 ARG BUILD_JOBS=64
@@ -89,15 +88,21 @@ RUN git init -q /root/torch_memory_saver && cd /root/torch_memory_saver && \
     cd /root && rm -rf /root/torch_memory_saver
 
 # ---- Megatron-LM at slime's CUDA-side commit + slime's Megatron patches ----------------------------
-RUN git clone --depth 1 --branch "${MEGATRON_TAG}" https://github.com/NVIDIA/Megatron-LM.git /root/Megatron-LM && \
-    cd /root/Megatron-LM && \
-    test "$(git rev-parse "refs/tags/${MEGATRON_TAG}^{commit}")" = "${MEGATRON_COMMIT}" && \
+RUN git init -q /root/Megatron-LM && cd /root/Megatron-LM && \
+    git remote add origin https://github.com/NVIDIA/Megatron-LM.git && \
+    git fetch -q --depth 1 origin "${MEGATRON_COMMIT}" && git checkout -q FETCH_HEAD && \
     test "$(git rev-parse HEAD)" = "${MEGATRON_COMMIT}" && \
     for p in megatron megatron-sglang-aligned; do \
       f="/root/slime/docker/patch/${PATCH_VERSION}/${p}.patch" && \
       echo "applying $f" && patch -p1 --forward --batch < "$f"; \
     done && \
     pip install -e .
+
+# Megatron dev reads cached checkpoint metadata (slime sets ckpt_assume_constant_structure) and runs
+# async checkpointing through nvidia-resiliency-ext, which sits in its `dev` extra and is therefore not
+# pulled in by `pip install -e .`. Same pin as slime's docker/Dockerfile.
+RUN pip install --no-deps nvidia-resiliency-ext==0.7.0 && \
+    python -c 'import nvidia_resiliency_ext.checkpointing.async_ckpt.core'
 
 # ---- slime ------------------------------------------------------------------------------------------
 RUN cd /root/slime && pip install -r requirements.txt
