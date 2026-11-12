@@ -3,11 +3,42 @@ import os
 from abc import ABC, abstractmethod
 
 import torch
+import torch.distributed as dist
 import torch.distributed.nn.functional as dist_nn
 from megatron.core import mpu, tensor_parallel
 from megatron.core.inference.contexts import BaseInferenceContext
 from megatron.core.packed_seq_params import PackedSeqParams
 from megatron.core.transformer.module import MegatronModule
+
+
+class _AllGatherWithReduceScatter(torch.autograd.Function):
+    """All-gather across a process group whose backward uses reduce_scatter_tensor (SUM).
+
+    Unlike ``torch.distributed.nn.functional.all_gather``, which:
+      1. only takes the ``reduce_scatter`` backward path when
+         ``dist.get_backend(group) is dist.Backend.NCCL`` (falling back to
+         ``all_to_all + stack + sum`` on other accelerator backends such as MUSA ``mccl``), and
+      2. uses list-based ``dist.all_gather`` / ``dist.reduce_scatter`` (which allocate internal
+         ``newLikeFlat`` staging buffers and perform extra D2D copies on the communication stream),
+    this function uses single-tensor ``dist.all_gather_into_tensor`` in forward and
+    ``dist.reduce_scatter_tensor`` in backward.
+    """
+
+    @staticmethod
+    def forward(ctx, x: torch.Tensor, group: dist.ProcessGroup):
+        ctx.group = group
+        world_size = dist.get_world_size(group=group)
+        x = x.contiguous()
+        out = torch.empty((world_size,) + x.shape, dtype=x.dtype, device=x.device)
+        dist.all_gather_into_tensor(out, x, group=group)
+        return tuple(out.unbind(0))
+
+    @staticmethod
+    def backward(ctx, *grads: torch.Tensor):
+        grad_input = torch.stack(grads, dim=0)
+        gx = torch.empty_like(grads[0])
+        dist.reduce_scatter_tensor(gx, grad_input, op=dist.ReduceOp.SUM, group=ctx.group)
+        return gx, None
 
 
 def _load_hf_config(checkpoint_path):
@@ -103,10 +134,19 @@ class HuggingfaceAttention(MegatronModule, ABC):
             # layer on the whole sequence but keeps only its own output chunks (see the slicing after hf_forward),
             # so each rank backpropagates a different part of the output gradient. The input gradient of a chunk is
             # the sum over all CP ranks, which is what the reduce-scatter in all_gather's backward computes.
-            hidden_states_list = dist_nn.all_gather(
-                hidden_states,
-                group=mpu.get_context_parallel_group(),
-            )
+            cp_group = mpu.get_context_parallel_group()
+            # On MUSA (mccl), dist_nn.all_gather's backward falls back to
+            # all_to_all + stack + sum; use single-tensor collectives instead.
+            if dist.is_initialized() and dist.get_backend(cp_group) in ["mccl"]:
+                hidden_states_list = _AllGatherWithReduceScatter.apply(
+                    hidden_states,
+                    cp_group,
+                )
+            else:
+                hidden_states_list = dist_nn.all_gather(
+                    hidden_states,
+                    group=cp_group,
+                )
 
             whole_hidden_states_list = []
 
