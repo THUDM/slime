@@ -992,7 +992,7 @@ index d9a11737..6d1a4056 100644
          scheduler = self.scheduler
          assert self.is_fully_idle(
 diff --git a/python/sglang/srt/managers/tokenizer_control_mixin.py b/python/sglang/srt/managers/tokenizer_control_mixin.py
-index f5051295..2490ccb3 100644
+index f5051295..373926f9 100644
 --- a/python/sglang/srt/managers/tokenizer_control_mixin.py
 +++ b/python/sglang/srt/managers/tokenizer_control_mixin.py
 @@ -55,6 +55,10 @@ from sglang.srt.managers.io_struct import (
@@ -1024,10 +1024,10 @@ index f5051295..2490ccb3 100644
 +        obj: PostProcessWeightsReqInput,
 +        request: Optional[fastapi.Request] = None,
 +    ) -> Tuple[bool, str]:
-+        self.auto_create_handle_loop()
-+        async with self.model_update_lock.writer_lock:
-+            results = await self.post_process_weights_communicator(obj)
-+        return FanOutCommunicator.merge_results(results)
++        """Run post-load weight processing on the schedulers."""
++        return await self._weight_update_session_call(
++            self.post_process_weights_communicator, obj
++        )
 +
      async def check_weights(
          self: TokenizerManager,
