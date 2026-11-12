@@ -23,11 +23,16 @@ def convert_to_hf(args, model_name, name, param, quantization_config=None, trans
     hf_name = name
     while hf_name.startswith("module."):
         hf_name = hf_name.removeprefix("module.")
-    if hf_name.startswith("model.visual."):
+    if hf_name.startswith("model.visual.") and not getattr(args, "custom_hf_weight_converter_path", None):
         return [(hf_name, param)]
 
     param = remove_padding(name, param, args.vocab_size)
-    converted_named_tensors = _convert_to_hf_core(args, model_name, name, param)
+    if getattr(args, "custom_hf_weight_converter_path", None):
+        from slime.utils.misc import load_function
+
+        converted_named_tensors = load_function(args.custom_hf_weight_converter_path)(args, name, param)
+    else:
+        converted_named_tensors = _convert_to_hf_core(args, model_name, name, param)
 
     return quantize_params(args, name, converted_named_tensors, quantization_config, transform_ue8m0)
 
