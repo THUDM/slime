@@ -1,6 +1,7 @@
 import argparse
 import ast
 import importlib.util
+import logging
 import runpy
 import shlex
 import sys
@@ -208,6 +209,42 @@ def test_legacy_rope_is_resolved_before_mtp_validation(monkeypatch, legacy_rope,
     )
     module.set_default_megatron_args(args)
     assert args.position_embedding_type == expected
+
+
+@pytest.mark.parametrize(
+    "megatron_reader, nvrx_installed, expected", [(True, False, True), (False, True, True), (False, False, False)]
+)
+def test_metadata_cache_needs_a_cached_metadata_reader(monkeypatch, caplog, megatron_reader, nvrx_installed, expected):
+    module = load_arguments_module(monkeypatch)
+    find_spec = importlib.util.find_spec
+    present = {
+        "megatron.core.dist_checkpointing.strategies.cached_metadata_filesystem_reader": megatron_reader,
+        "nvidia_resiliency_ext": nvrx_installed,
+    }
+
+    def fake_find_spec(name, *args, **kwargs):
+        if name in present:
+            return object() if present[name] else None
+        return find_spec(name, *args, **kwargs)
+
+    monkeypatch.setattr(importlib.util, "find_spec", fake_find_spec)
+    args = argparse.Namespace(
+        use_rotary_position_embeddings=False,
+        position_embedding_type="rope",
+        mtp_num_layers=None,
+        fp16=False,
+        seq_length=None,
+        max_position_embeddings=None,
+        vocab_size=None,
+        padded_vocab_size=None,
+        tokenizer_model=None,
+        tokenizer_type=None,
+        hf_checkpoint="model",
+    )
+    with caplog.at_level(logging.WARNING):
+        module.set_default_megatron_args(args)
+    assert args.ckpt_assume_constant_structure is expected
+    assert ("ckpt_assume_constant_structure is off" in caplog.text) is not expected
 
 
 @pytest.mark.parametrize("explicit_path", [False, True])

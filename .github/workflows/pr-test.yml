@@ -919,6 +919,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_rocm_checkpoint_writer_patch.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_qwen3_5_native_weights.py"
             },
             {
