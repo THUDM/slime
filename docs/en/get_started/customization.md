@@ -28,6 +28,7 @@ Below is a summary of all available customization interfaces and their purposes.
 | [`--custom-megatron-init-path`](#megatron-hooks) | Custom initialization after Megatron setup. |
 | [`--custom-megatron-before-log-prob-hook-path`](#megatron-hooks) | Custom logic before log probability computation. |
 | [`--custom-megatron-before-train-step-hook-path`](#megatron-hooks) | Custom logic before each training step. |
+| [`--custom-optimizer-config-overrides-path`](#megatron-hooks) | Supply Megatron optimizer parameter-group overrides. |
 
 ## Agentic workflows through customization interfaces
 
@@ -480,6 +481,40 @@ def custom_hook(args, rollout_id, step_id, model, optimizer, opt_param_scheduler
 ```
 
 **Purpose**: Custom logic before each training step.
+
+#### Optimizer Group Overrides (`--custom-optimizer-config-overrides-path`)
+
+**Signature**:
+```python
+def config_overrides(args, optimizer_config) -> dict
+```
+
+The callback runs before optimizer construction. Its result is passed unchanged
+as `config_overrides` to Megatron's `get_megatron_optimizer`, so models can use
+different learning rates for their components without changing slime's training
+loop or scheduler. The installed Megatron must support this argument.
+
+For example, a model with parameters named `vision_encoder.*` can use:
+
+```python
+from megatron.core.optimizer import get_standard_config_overrides
+from megatron.core.optimizer.optimizer_config import ParamKey
+
+
+def config_overrides(args, optimizer_config):
+    overrides = get_standard_config_overrides(optimizer_config)
+    overrides[ParamKey(name="*vision_encoder.*")] = {
+        "max_lr": 2e-7,
+        "min_lr": 4e-8,
+    }
+    return overrides
+```
+
+Start from `get_standard_config_overrides` to retain Megatron's bias/1D weight
+decay exclusions and decoupled embedding/output learning rates. The callback
+provides the complete overrides mapping; slime does not merge defaults into it.
+Megatron's scheduler uses each group's `max_lr` and `min_lr` with the configured
+warmup and decay schedule. Without this hook, optimizer construction is unchanged.
 
 ---
 

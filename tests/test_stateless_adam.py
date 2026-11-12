@@ -15,7 +15,8 @@ from slime.backends.megatron_utils.stateless_adam import StatelessAdam
 NUM_GPUS = 0
 
 
-def test_optimizer_construction_keeps_fp32_shards_out_of_autograd():
+@pytest.mark.parametrize("custom_overrides", [False, True])
+def test_optimizer_construction_keeps_fp32_shards_out_of_autograd(monkeypatch, custom_overrides):
     path = Path(__file__).resolve().parents[1] / "slime/backends/megatron_utils/model.py"
     definition = next(
         node
@@ -26,10 +27,19 @@ def test_optimizer_construction_keeps_fp32_shards_out_of_autograd():
     @dataclasses.dataclass
     class Config:
         use_precision_aware_optimizer: bool = False
+        lr: float = 0.01
 
     model = torch.nn.Linear(4, 2)
+    overrides = {object(): {"max_lr": 1e-4, "min_lr": 1e-5}}
 
-    def optimizer_factory(*, config, model_chunks, use_gloo_process_groups):
+    def configure_optimizer(args, config):
+        assert config.lr == args.lr
+        return overrides
+
+    monkeypatch.setattr(sys.modules[__name__], "configure_optimizer", configure_optimizer, raising=False)
+
+    def optimizer_factory(*, config, model_chunks, use_gloo_process_groups, **kwargs):
+        assert kwargs == ({"config_overrides": overrides} if custom_overrides else {})
         # Real DistributedOptimizer slices FP32 model parameters this way. An
         # autograd-tracked view is not a leaf and torch.optim rejects it.
         shard = model_chunks[0].weight.view(-1)[:4]
@@ -58,6 +68,8 @@ def test_optimizer_construction_keeps_fp32_shards_out_of_autograd():
         num_rollout=1,
         use_stateless_adam=False,
         enable_gloo_process_groups=False,
+        lr=0.02,
+        custom_optimizer_config_overrides_path=f"{__name__}.configure_optimizer" if custom_overrides else None,
     )
     with torch.enable_grad():
         models, optimizer, _ = namespace["setup_model_and_optimizer"](args)

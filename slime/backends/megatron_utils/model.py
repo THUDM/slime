@@ -325,6 +325,11 @@ def setup_model_and_optimizer(
         assert args.no_save_optim, "Stateless Adam does not save Adam moment states. Please set --no-save-optim."
 
     optimizer_context = _patch_megatron_adam(StatelessAdam) if args.use_stateless_adam else nullcontext()
+    optimizer_kwargs = {}
+    if getattr(args, "custom_optimizer_config_overrides_path", None):
+        from slime.utils.misc import load_function
+
+        optimizer_kwargs["config_overrides"] = load_function(args.custom_optimizer_config_overrides_path)(args, config)
     # DistributedOptimizer slices FP32 parameters into optimizer shards. Those
     # views must remain leaves rather than retaining an initialization graph.
     with optimizer_context, torch.no_grad():
@@ -332,6 +337,7 @@ def setup_model_and_optimizer(
             config=config,
             model_chunks=model,
             use_gloo_process_groups=use_gloo_process_groups(args),
+            **optimizer_kwargs,
         )
     if config.use_precision_aware_optimizer:
         from .transformer_engine import patch_precision_aware_optimizer_checkpointing
