@@ -65,6 +65,31 @@ def test_r3_validation_rejects_row_mismatch_and_expert_range():
         validate_rollout_routed_experts_for_replay([routes], _args())
 
 
+def test_tensorize_python_lists_match_as_tensor():
+    tokens = [[1, 2, -3], [], [np.int64(4), 5]]
+    masks = [[1, 0, 1], [], [0]]
+    logps = [[-0.5, 0.1, 1.0000001], [], [-1e-20]]
+    rollout_data = {
+        "tokens": [list(row) for row in tokens],
+        "loss_masks": [list(row) for row in masks],
+        "rollout_log_probs": [list(row) for row in logps],
+        "rollout_mask_sums": [2, 0, 0],
+    }
+
+    tensorize_rollout_data_for_training(rollout_data)
+
+    expected = {
+        "tokens": [torch.as_tensor(row, dtype=torch.long) for row in tokens],
+        "loss_masks": [torch.as_tensor(row, dtype=torch.int) for row in masks],
+        "rollout_log_probs": [torch.as_tensor(row, dtype=torch.float32) for row in logps],
+    }
+    for key, rows in expected.items():
+        for got, ref in zip(rollout_data[key], rows, strict=True):
+            assert got.dtype == ref.dtype
+            assert torch.equal(got, ref)
+    assert torch.equal(rollout_data["rollout_mask_sums"], torch.as_tensor([2, 0, 0], dtype=torch.float32))
+
+
 def test_tensorize_rollout_data_for_training_normalizes_cpu_tensors():
     readonly_tokens = np.array([1, 2, 3])
     readonly_tokens.flags.writeable = False
