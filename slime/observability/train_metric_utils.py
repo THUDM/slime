@@ -177,6 +177,7 @@ def log_rollout_data(
             "micro_batch_indices",
             "source_names",
             "local_raw_reward",
+            "raw_reward_mean",
         }
         per_rollout_mean_keys = {
             "log_probs",
@@ -191,6 +192,10 @@ def log_rollout_data(
 
         for key, value in rollout_data.items():
             if key in ignored_keys:
+                continue
+            if key == "raw_reward" and "raw_reward_mean" in rollout_data:
+                # Each rank carries the same mean over the full rollout batch.
+                log_dict[key] = rollout_data["raw_reward_mean"]
                 continue
             if isinstance(value, (list, tuple)):
                 count = len(value)

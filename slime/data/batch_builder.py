@@ -22,7 +22,7 @@ from slime.observability.rollout_data_utils import (
 )
 from slime.utils.data import get_source
 from slime.utils.dp_schedule import build_dp_schedule
-from slime.utils.misc import Box, load_function
+from slime.utils.misc import Box, group_by, load_function
 from slime.utils.types import Sample
 
 logger = logging.getLogger(__name__)
@@ -446,10 +446,9 @@ class BatchBuilder:
         """Build a schedule over one immutable conversion, without per-rank writes."""
         transport = self.args.rollout_data_transport
         if transport == "straw":
-            # Scheduling needs lengths and rollout identity only. In particular,
-            # replay must not read the full token or R3 payload on the manager.
+            # Read only the metadata needed for scheduling and reward reporting.
             reference = data if isinstance(data, DiskPayloadRef) else self.publish_converted(data)
-            data = reference.load(selection={"total_lengths": None, "rollout_ids": None})
+            data = reference.load(selection={"total_lengths": None, "rollout_ids": None, "raw_reward": None})
         total_lengths = data.get("total_lengths")
         if total_lengths is None:
             total_lengths = [len(tokens) for tokens in data["tokens"]]
@@ -461,6 +460,14 @@ class BatchBuilder:
             global_batch_size=self.args.global_batch_size,
             rollout_indices=data["rollout_ids"],
         )
+        raw_reward_mean = None
+        if raw_rewards := data.get("raw_reward"):
+            # An episode can span multiple DP ranks. Average its rows while
+            # the whole batch is available, then weight each episode equally.
+            rewards_by_rollout = group_by(zip(data["rollout_ids"], raw_rewards, strict=True), lambda pair: pair[0])
+            raw_reward_mean = sum(
+                sum(reward for _, reward in rows) / len(rows) for rows in rewards_by_rollout.values()
+            ) / len(rewards_by_rollout)
         fields = [
             "tokens",
             "multimodal_train_inputs",
@@ -502,6 +509,8 @@ class BatchBuilder:
                 "num_microbatches": num_microbatches,
                 "micro_batch_indices": micro_batch_indices[rank],
             }
+            if raw_reward_mean is not None:
+                schedule["raw_reward_mean"] = raw_reward_mean
             if transport == "straw":
                 selection = {key: partition for key in fields}
                 # Training's pass-rate and load metrics use the global arrays;
