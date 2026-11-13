@@ -1,0 +1,20 @@
+sglang:
+  - name: actor
+    update_weights: true
+    num_gpus_per_engine: 1
+    server_groups:
+      - worker_type: regular
+        num_gpus: 1
+        overrides:
+          enable_lmcache: false
+
+  - name: ref
+    model_path: Qwen/Qwen3-0.6B
+    update_weights: false
+    num_gpus_per_engine: 1
+    server_groups:
+      - worker_type: regular
+        num_gpus: 1
+        overrides:
+          enable_lmcache: true
+          lmcache_config_file: examples/lmcache/lmcache.yaml
