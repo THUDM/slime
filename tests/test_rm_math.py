@@ -225,9 +225,24 @@ def test_grade_answer_verl_returns_false_on_missing_extraction():
 
 
 @pytest.mark.unit
-def test_grade_answer_verl_returns_false_on_empty_ground_truth():
-    """Empty / falsy ground truth → False at the top guard."""
-    assert grade_answer_verl(r"\boxed{42}", "") is False
+@pytest.mark.parametrize("ground_truth", ["", None])
+def test_grade_answer_verl_returns_false_on_missing_ground_truth(ground_truth):
+    """Empty / missing ground truth → False at the top guard."""
+    assert grade_answer_verl(r"\boxed{42}", ground_truth) is False
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("ground_truth", [0, 0.0])
+def test_grade_answer_verl_accepts_numeric_zero_ground_truth(ground_truth):
+    """Labels are passed through from JSON as-is, so a zero answer arrives as
+    ``0`` / ``0.0``. These are falsy but valid and must not hit the
+    missing-ground-truth guard."""
+    assert grade_answer_verl(r"\boxed{0}", ground_truth) is True
+
+
+@pytest.mark.unit
+def test_grade_answer_verl_rejects_wrong_answer_for_zero_ground_truth():
+    assert grade_answer_verl(r"\boxed{1}", 0) is False
 
 
 if __name__ == "__main__":
