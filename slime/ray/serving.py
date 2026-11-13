@@ -257,6 +257,11 @@ class ServingCluster:
         # Recovery waits until the trainer can immediately install its weights.
         # Rollout completion only prunes failed engines; it never starts them.
         self.health_monitoring_pause()
+        # The monitors are paused from the end of the rollout to here, so an
+        # engine that died during training is still registered. Retire it now,
+        # before the weight update sends it control requests.
+        for monitor in self._health_monitors:
+            monitor.check_once()
         server = self._updatable_server()
         # Fresh and replacement trainers must connect to every retained engine.
         # A no-op recover() would clear num_new_engines and lose those markers,
