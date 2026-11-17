@@ -679,6 +679,27 @@ def test_slime_validate_args_rejects_non_positive_rollout_temperature(monkeypatc
 
 
 @pytest.mark.unit
+def test_slime_validate_args_rejects_save_retain_interval(monkeypatch):
+    # Checkpoints are numbered by the 0-based rollout id (19, 39, ... for --save-interval 20), so
+    # Megatron's retention would delete every previous one (#2532).
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(save="/tmp/ckpt", save_interval=20, save_retain_interval=100)
+
+    with pytest.raises(ValueError, match="--save-retain-interval is not supported"):
+        module.slime_validate_args(args)
+
+
+@pytest.mark.unit
+def test_slime_validate_args_accepts_unset_save_retain_interval(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    args = make_slime_validate_args(save="/tmp/ckpt", save_interval=20, save_retain_interval=None)
+
+    args, _ = module.slime_validate_args(args)
+
+    assert args.save_retain_interval is None
+
+
+@pytest.mark.unit
 def test_slime_validate_args_preserves_zero_rollout_gpus_under_colocate(monkeypatch):
     module = load_slime_arguments_module(monkeypatch)
     args = make_slime_validate_args(colocate=True, rollout_num_gpus=0)
