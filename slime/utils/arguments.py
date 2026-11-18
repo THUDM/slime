@@ -606,12 +606,13 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--rollout-data-transport",
                 type=str,
-                choices=["straw", "object-store", "nixl"],
+                choices=["straw", "object-store", "nixl", "mooncake"],
                 default="object-store",
                 help=(
                     "Rollout payload transport. Defaults to Ray object-store. straw uses packed storage "
                     "under --rollout-data-dir for rollout and training payloads, sending only references through "
-                    "Ray. nixl uses Ray's NIXL tensor transport. Ray still manages actors and RPCs in every mode."
+                    "Ray. nixl uses Ray's NIXL tensor transport. mooncake uses Mooncake Store for trainer "
+                    "payloads. Ray still manages actors and RPCs in every mode."
                 ),
             )
             parser.add_argument(
@@ -1996,6 +1997,10 @@ def slime_validate_args(args):
     if args.eval_interval is not None:
         assert args.eval_datasets, "Evaluation datasets must be configured when eval_interval is set."
 
+    if args.rollout_data_transport == "mooncake":
+        from slime.utils.data_transfer import check_mooncake_available
+
+        check_mooncake_available()
     if importlib.util.find_spec("straw") is None:
         if args.rollout_data_transport == "straw":
             raise ModuleNotFoundError(

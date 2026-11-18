@@ -10,14 +10,14 @@ Mooncake Store 可以替换这段传输路径：rollout dict 的接口和训练�
 - 模型权重同步由 `--update-weight-*` 参数单独配置；
 - SGLang KV cache disaggregation 也使用独立的传输配置。
 
-同步入口 `train.py` 和异步入口 `train_async.py` 都支持 Mooncake。
+同步训练和全异步训练都通过 `train.py` 使用 Mooncake。
 
 ## 环境要求
 
 启动 slime 任务前，请确认：
 
 - 所有 Ray 节点使用相同的 slime revision 和 Mooncake wheel。Mooncake 包需要
-  提供 slime 使用的 structured-object `put`/`get` 接口；
+  提供 slime 使用的 structured-object legacy-dictionary 接口；
 - 已经启动 `mooncake_master`，或者准备好 Mooncake HA endpoint。slime 只作为
   client 连接，不负责管理 endpoint 生命周期；
 - 所有 Ray 节点都能访问用于数据传输的网络地址；
@@ -226,12 +226,11 @@ ray job submit --address="${RAY_DASHBOARD_ADDR}" \
   --distributed-backend nccl
 ```
 
-使用 fully async 训练时，保留相同的 Mooncake 环境变量和传输参数，切换到
-slime 原有的异步入口和配置：
+使用 fully async 训练时，保留相同的 Mooncake 环境变量和传输参数，并在
+常规入口上启用全异步配置：
 
 ```diff
-- -- python3 train.py ...
-+ -- python3 train_async.py ...
++ -- python3 train.py ... --rollout-function-path slime.rollout.fully_async_rollout.generate_rollout_fully_async ...
 ```
 
 其余异步参数请参考 [fully async 示例](../_examples_synced/fully_async/README.md)。

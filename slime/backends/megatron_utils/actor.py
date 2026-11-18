@@ -227,6 +227,7 @@ class MegatronTrainRayActor(TrainRayActor):
             rollout_data_ref,
             mpu.get_data_parallel_rank(with_context_parallel=False),
             mpu.get_data_parallel_world_size(with_context_parallel=False),
+            args=self.args,
         )
         # TODO: this is ugly, move to somewhere else?
         # move tokens to GPU in advance
@@ -407,16 +408,17 @@ class MegatronTrainRayActor(TrainRayActor):
         with timer("data_preprocess"):
             rollout_data = self._get_rollout_data(rollout_data_ref)
 
-        if self.role == "critic":
-            result = self.train_critic(rollout_id, rollout_data)
-        else:
-            self.train_actor(rollout_id, rollout_data, external_data=external_data)
-            result = None
+        try:
+            if self.role == "critic":
+                result = self.train_critic(rollout_id, rollout_data)
+            else:
+                self.train_actor(rollout_id, rollout_data, external_data=external_data)
+                result = None
+        finally:
+            if getattr(self.args, "rollout_data_transport", "object-store") == "mooncake":
+                from slime.utils.data_transfer import release_mooncake_rollout_data
 
-        if getattr(self.args, "rollout_data_transport", "object-store") == "mooncake":
-            from slime.utils.data_transfer import release_mooncake_rollout_data
-
-            release_mooncake_rollout_data(self.args, rollout_data)
+                release_mooncake_rollout_data(self.args, rollout_data)
 
         if self.args.offload_train:
             del rollout_data

@@ -12,14 +12,14 @@ This setting only controls rollout data transfer:
   options.
 - SGLang KV-cache disaggregation uses its own transfer settings.
 
-Both `train.py` and `train_async.py` support the Mooncake path.
+Both synchronous and fully asynchronous training use the Mooncake path through `train.py`.
 
 ## Requirements
 
 Before starting a slime job:
 
 - Use the same slime revision and Mooncake wheel on every Ray node. The Mooncake
-  package must provide the structured-object `put`/`get` APIs used by slime.
+  package must provide the structured-object legacy-dictionary APIs used by slime.
 - Start `mooncake_master`, or provide a Mooncake HA endpoint. slime connects as a
   client and does not manage the endpoint lifecycle.
 - Use data-network addresses that are reachable from every Ray node.
@@ -234,11 +234,10 @@ ray job submit --address="${RAY_DASHBOARD_ADDR}" \
 ```
 
 For fully asynchronous training, keep the same Mooncake environment and transport
-option, then use the regular async entrypoint and settings:
+option, then enable the fully asynchronous settings on the regular entrypoint:
 
 ```diff
-- -- python3 train.py ...
-+ -- python3 train_async.py ...
++ -- python3 train.py ... --rollout-function-path slime.rollout.fully_async_rollout.generate_rollout_fully_async ...
 ```
 
 See the [fully asynchronous example](../_examples_synced/fully_async/README.md) for
