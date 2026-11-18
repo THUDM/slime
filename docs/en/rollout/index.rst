@@ -9,6 +9,7 @@ Place engines, schedule generation, and move data and weights.
    ../advanced/rl-systems.md
    ../advanced/rollout-scheduling.md
    ../advanced/straw.md
+   ../advanced/mooncake-rollout-transfer.md
    ../advanced/pd-disaggregation.md
    ../advanced/external-rollout-engines.md
    ../advanced/delta-weight-sync.md

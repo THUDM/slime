@@ -28,6 +28,8 @@ sample's reward to a different sample).
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 import ray
 
@@ -160,6 +162,91 @@ def test_missing_raw_reward_is_tolerated(unwrap_ray_get):
 
     assert "local_raw_reward" not in rollout_data
     assert rollout_data["total_lengths"] == [201, 200]
+
+
+def test_mooncake_transport_uses_configured_loader(monkeypatch):
+    from slime.utils import data_transfer
+
+    args = SimpleNamespace(rollout_data_transport="mooncake")
+    ref = _FakeBox("opaque-mooncake-ref")
+    expected = {"partition": [0], "total_lengths": [123]}
+    calls = []
+
+    def fake_get_mooncake_rollout_data(actual_args, actual_ref):
+        calls.append((actual_args, actual_ref))
+        return expected
+
+    monkeypatch.setattr(data_transfer, "get_mooncake_rollout_data", fake_get_mooncake_rollout_data)
+
+    rollout_data = process_rollout_data([ref], dp_rank=0, dp_size=1, args=args)
+
+    assert calls == [(args, ref)]
+    assert rollout_data["total_lengths"] == [123]
+
+
+def test_batch_builder_publishes_mooncake_refs(monkeypatch):
+    from slime.data import batch_builder as batch_builder_module
+    from slime.utils import data_transfer
+
+    args = SimpleNamespace(
+        rollout_data_transport="mooncake",
+        global_batch_size=2,
+        custom_reward_post_process_path=None,
+        custom_convert_samples_to_train_data_path=None,
+    )
+    builder = batch_builder_module.BatchBuilder(args)
+    builder.rollout_id = 7
+    builder.train_parallel_config = object()
+    calls = []
+
+    monkeypatch.setattr(
+        batch_builder_module,
+        "build_dp_schedule",
+        lambda *args, **kwargs: ([[1, 0]], [[[0, 1]]], [1], [2]),
+    )
+    monkeypatch.setattr(batch_builder_module, "tensorize_rollout_data_for_training", lambda data: None)
+
+    def fake_put(actual_args, data, partition):
+        calls.append((actual_args, data, partition))
+        return _FakeBox("opaque-mooncake-ref")
+
+    monkeypatch.setattr(data_transfer, "put_mooncake_rollout_data", fake_put)
+
+    refs = builder.split_by_dp(
+        {
+            "tokens": [[10], [20]],
+            "response_lengths": [1, 1],
+            "rollout_ids": [10, 20],
+        }
+    )
+
+    assert refs == builder._mooncake_refs
+    assert refs[0].inner == "opaque-mooncake-ref"
+    assert calls[0][0] is args
+    assert calls[0][1]["tokens"] == [[20], [10]]
+    assert calls[0][2] == "rollout-7-dp0"
+
+
+def test_training_completion_cleans_mooncake_refs(monkeypatch):
+    from slime.data.batch_builder import BatchBuilder
+    from slime.utils import data_transfer
+
+    args = SimpleNamespace(
+        rollout_data_transport="mooncake",
+        custom_reward_post_process_path=None,
+        custom_convert_samples_to_train_data_path=None,
+    )
+    builder = BatchBuilder(args)
+    builder.rollout_id = 7
+    refs = [_FakeBox("ref-0"), _FakeBox("ref-1")]
+    builder._mooncake_refs = refs
+    calls = []
+    monkeypatch.setattr(data_transfer, "cleanup_mooncake_rollout_refs", lambda *values: calls.append(values))
+
+    builder.training_completed(7)
+
+    assert calls == [(args, refs)]
+    assert builder._mooncake_refs == []
 
 
 if __name__ == "__main__":
