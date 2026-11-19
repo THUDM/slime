@@ -124,6 +124,29 @@ def test_reward_choices_as_dict_is_accepted():
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    "response,label,answer_metadata,expected",
+    [
+        ("hydrogen", "C", {}, 1.0),
+        ("xenon", "C", {"correct_letter": "C", "correct_answer": "hydrogen"}, 0.0),
+        ("Answer: C", "hydrogen", {}, 1.0),
+    ],
+)
+def test_reward_uses_option_keys_for_unordered_choice_maps(response, label, answer_metadata, expected):
+    metadata = {
+        "choices": {"c": "hydrogen", "a": "argon", "D": "xenon", "B": "boron"},
+        **answer_metadata,
+    }
+    assert compute_gpqa_reward(response, label=label, metadata=metadata) == expected
+
+
+@pytest.mark.unit
+def test_reward_preserves_positional_fallback_for_unkeyed_choice_maps():
+    metadata = {"choices": {"first": "argon", "second": "hydrogen", "third": "xenon"}}
+    assert compute_gpqa_reward("hydrogen", label="B", metadata=metadata) == 1.0
+
+
+@pytest.mark.unit
 def test_reward_full_text_label_resolves_to_letter_via_choices():
     """label is the answer *text* — code matches normalized label against
     each choice and resolves the position to a letter, then extracts the

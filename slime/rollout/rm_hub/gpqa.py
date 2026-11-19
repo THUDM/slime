@@ -59,7 +59,9 @@ def compute_gpqa_reward(response: str, label, metadata: dict | None = None) -> f
     metadata = metadata or {}
 
     choices = metadata.get("choices")
+    choices_by_letter = {}
     if isinstance(choices, dict):
+        choices_by_letter = {letter.upper(): value for letter, value in choices.items() if isinstance(letter, str)}
         choices = list(choices.values())
     elif choices is not None:
         choices = list(choices)
@@ -71,6 +73,14 @@ def compute_gpqa_reward(response: str, label, metadata: dict | None = None) -> f
         valid_letters = list(string.ascii_uppercase[: len(choices)])
     else:
         valid_letters = DEFAULT_VALID_LETTERS
+
+    # A complete letter-keyed choice map is independent of JSON field order.
+    if (
+        choices_by_letter
+        and len(choices_by_letter) == len(choices) == len(valid_letters)
+        and set(choices_by_letter) == set(valid_letters)
+    ):
+        choices = [choices_by_letter[letter] for letter in valid_letters]
 
     correct_letter = metadata.get("correct_letter")
     if isinstance(correct_letter, str):
