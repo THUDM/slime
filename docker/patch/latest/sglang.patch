@@ -242,11 +242,11 @@ index 0f0edd88..f1c34629 100644
                                  bootstrap_room=kv_chunk.room,
                                  failure_reason=(
 diff --git a/python/sglang/srt/disaggregation/prefill.py b/python/sglang/srt/disaggregation/prefill.py
-index b72dc2a2..06e2e46a 100644
+index b72dc2a..e3df77f 100644
 --- a/python/sglang/srt/disaggregation/prefill.py
 +++ b/python/sglang/srt/disaggregation/prefill.py
 @@ -21,6 +21,8 @@ from __future__ import annotations
-
+ 
  import hashlib
  import logging
 +import os
@@ -257,7 +257,7 @@ index b72dc2a2..06e2e46a 100644
 @@ -495,6 +497,11 @@ class PrefillBootstrapQueue:
                  self.scheduler.attn_tp_cpu_group,
              )
-
+ 
 +        bootstrap_timeout = float(
 +            os.environ.get("SGLANG_DISAGGREGATION_TRANSFER_TIMEOUT", "600")
 +        )
@@ -297,7 +297,7 @@ index b72dc2a2..06e2e46a 100644
 @@ -1020,6 +1048,11 @@ class SchedulerDisaggregationPrefillMixin:
              self.attn_tp_cpu_group,
          )
-
+ 
 +        transfer_timeout = float(
 +            os.environ.get("SGLANG_DISAGGREGATION_TRANSFER_TIMEOUT", "600")
 +        )
@@ -306,9 +306,9 @@ index b72dc2a2..06e2e46a 100644
          undone_reqs: List[Req] = []
          # Check .poll() for the reqs in disagg_prefill_inflight_queue. If Success, respond to the client and remove it from the queue
          for req, poll in zip(self.disagg_prefill_inflight_queue, polls):
-@@ -1053,8 +1086,27 @@ class SchedulerDisaggregationPrefillMixin:
+@@ -1053,9 +1086,30 @@ class SchedulerDisaggregationPrefillMixin:
                  continue
-
+ 
              if poll in [KVPoll.WaitingForInput, KVPoll.Transferring]:
 -                # todo: set Transferring correctly in backend
 -                undone_reqs.append(req)
@@ -334,9 +334,12 @@ index b72dc2a2..06e2e46a 100644
 +                else:
 +                    undone_reqs.append(req)
              elif poll == KVPoll.Success:  # transfer done
++                if req.return_routed_experts:
++                    self.batch_result_processor._maybe_collect_routed_experts(req)
                  if not isinstance(req.finished_reason, FINISH_ABORT):
                      req.finished_reason = FINISH_LENGTH(length=0)
-@@ -1575,6 +1627,7 @@ class SchedulerDisaggregationPrefillMixin:
+                 release_kv_cache(req, self.tree_cache)  # unlock the tree
+@@ -1575,6 +1629,7 @@ class SchedulerDisaggregationPrefillMixin:
          req.hidden_states_tensor = None
          req.output_dsa_topk_indices = None
          req.pending_bootstrap = True
@@ -729,7 +732,7 @@ index 52c72a0e..f1b4f39d 100755
          ):
              # Even the last remaining request cannot fit in memory.
 diff --git a/python/sglang/srt/managers/scheduler.py b/python/sglang/srt/managers/scheduler.py
-index a7d8baee..90f09760 100644
+index a7d8bae..b641f28 100644
 --- a/python/sglang/srt/managers/scheduler.py
 +++ b/python/sglang/srt/managers/scheduler.py
 @@ -162,6 +162,9 @@ from sglang.srt.managers.io_struct import (
@@ -757,7 +760,17 @@ index a7d8baee..90f09760 100644
                  (
                      GetWeightsByNameReqInput,
                      self.weight_updater.get_weights_by_name,
-@@ -5575,6 +5586,12 @@ class Scheduler(
+@@ -3104,6 +3115,9 @@ class Scheduler(
+                 req.set_finish_with_abort(error_msg)
+                 self._add_request_to_queue(req)
+                 return
++            if self.disaggregation_mode == DisaggregationMode.DECODE:
++                # Prefill returns prompt-side routing; decode only owns rows after the prompt.
++                req.routed_experts_start_len = len(req.origin_input_ids)
+ 
+         if get_parallel().pp_rank == 0 and getattr(
+             self.tree_cache.cache_controller, "pp_prefetch_command_group", None
+@@ -5575,6 +5589,12 @@ class Scheduler(
                  # The request will still run one decode forward pass.
                  # Then we reuse all existing code to clean up the KV cache allocation.
                  logger.debug(f"Abort running request. {req.rid=}")
