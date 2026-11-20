@@ -406,11 +406,21 @@ def _send_to_colocated_engine(
         long_live_tensors.append(flattened_tensor_data)
         serialized_tensors.append(MultiprocessingSerializer.serialize(flattened_tensor_data, output_str=True))
 
+    # Each rank contributes its own empty placeholder. The gather source must not
+    # fabricate placeholders on behalf of peers: a serialized placeholder carries a
+    # CUDA IPC handle tagged with the *producing* rank's device, and an engine worker
+    # on another node cannot import a handle for a device it does not see
+    # (sglang raises "Invalid device_uuid=..."). This only shows up when a single
+    # engine spans more than one node (rollout_num_gpus_per_engine > num_gpus_per_node).
+    local_empty_tensor_data = _empty_flattened_tensor_data()
+    long_live_tensors.append(local_empty_tensor_data)
+    local_empty_serialized_tensor = MultiprocessingSerializer.serialize(local_empty_tensor_data, output_str=True)
+
     serialized_named_tensors = (
         [None] * dist.get_world_size(ipc_gather_group) if ipc_gather_src == dist.get_rank() else None
     )
     dist.gather_object(
-        serialized_tensors,
+        (serialized_tensors, local_empty_serialized_tensor),
         object_gather_list=serialized_named_tensors,
         dst=ipc_gather_src,
         group=ipc_gather_group,
@@ -418,20 +428,19 @@ def _send_to_colocated_engine(
 
     refs = []
     if dist.get_rank() == ipc_gather_src:
-        num_buckets = max(len(tensors) for tensors in serialized_named_tensors)
-        empty_serialized_tensor = None
+        per_rank_tensors = [item[0] for item in serialized_named_tensors]
+        per_rank_empty_tensor = [item[1] for item in serialized_named_tensors]
+        num_buckets = max(len(tensors) for tensors in per_rank_tensors)
         for i in range(num_buckets):
             serialized_tensors_for_dtype = []
-            for tensors in serialized_named_tensors:
+            for rank_index, tensors in enumerate(per_rank_tensors):
                 if i < len(tensors):
                     serialized_tensors_for_dtype.append(tensors[i])
                     continue
 
-                if empty_serialized_tensor is None:
-                    empty_tensor_data = _empty_flattened_tensor_data()
-                    long_live_tensors.append(empty_tensor_data)
-                    empty_serialized_tensor = MultiprocessingSerializer.serialize(empty_tensor_data, output_str=True)
-                serialized_tensors_for_dtype.append(empty_serialized_tensor)
+                # Use the placeholder produced by *that* rank so the handle always
+                # refers to a device visible to the engine worker reading this slot.
+                serialized_tensors_for_dtype.append(per_rank_empty_tensor[rank_index])
 
             kwargs = {
                 "serialized_named_tensors": serialized_tensors_for_dtype,
