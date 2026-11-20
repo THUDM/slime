@@ -1,0 +1,16 @@
+# Single-teacher ablation: every domain is distilled from the math teacher.
+#
+# `default_teacher` resolves the `code` and `ifeval` rows to the same model, so
+# this measures what the domain split is worth rather than training a real
+# student.
+
+input_key: prompt
+apply_chat_template: true
+
+mopd:
+  teachers:
+    - id: math
+      backend: megatron
+      load: ${MOPD_TEACHER_MATH}
+
+  default_teacher: math

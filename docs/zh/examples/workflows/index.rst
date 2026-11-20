@@ -11,4 +11,5 @@
    ../../_examples_synced/delta_weight_sync/README.md
    ../../_examples_synced/eval_multi_task/README.md
    ../../_examples_synced/on_policy_distillation/README.md
+   ../../_examples_synced/multi_teacher_on_policy_distillation/README.md
    ../../_examples_synced/train_infer_mismatch_helper/README.md

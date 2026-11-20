@@ -1,0 +1,25 @@
+# Three Qwen3.5-9B domain teachers for the `domain` labels in the mixed prompt
+# dataset (math / code / ifeval).
+#
+# Paths come from the environment so the same file works on every host; the
+# launcher resolves `${VAR}` before submitting the job.
+
+# --- slime args (merged from this file) ---
+input_key: prompt
+apply_chat_template: true
+
+mopd:
+  teachers:
+    - id: math
+      backend: megatron
+      load: ${MOPD_TEACHER_MATH}
+    - id: code
+      backend: megatron
+      load: ${MOPD_TEACHER_CODE}
+    - id: ifeval
+      backend: megatron
+      load: ${MOPD_TEACHER_IFEVAL}
+
+  max_concurrency: 64
+  request_timeout_s: 120
+  max_retries: 10
