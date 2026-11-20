@@ -776,5 +776,17 @@ def test_force_fp8_ue8m0_scale_argument(monkeypatch):
     assert configured.force_fp8_ue8m0_scale is True
 
 
+@pytest.mark.unit
+def test_update_weight_broadcast_mode_argument_removed(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    parser = argparse.ArgumentParser()
+    module.get_slime_extra_args_provider()(parser)
+
+    defaults = parser.parse_args(["--rollout-batch-size", "1"])
+    assert not hasattr(defaults, "update_weight_broadcast_mode")
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--rollout-batch-size", "1", "--update-weight-broadcast-mode", "flattened-bucket"])
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
