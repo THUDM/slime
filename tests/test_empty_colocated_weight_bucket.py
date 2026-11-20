@@ -69,7 +69,7 @@ def _install_fake_deps(monkeypatch):
     slime_utils_pkg.__path__ = [str(REPO_ROOT / "slime" / "utils")]
     accelerator_mod = types.ModuleType("slime.utils.accelerator")
     accelerator_mod.device = lambda: "cuda:0"
-    accelerator_mod.current_device = lambda: "cuda:0"
+    accelerator_mod.current_device = lambda: f"cuda:{dist_state.rank}"
     accelerator_mod.ipc_collect = lambda: None
 
     dist_mod = types.ModuleType("torch.distributed")
@@ -180,9 +180,13 @@ def _load_update_weight_module(monkeypatch):
     return module, dist_state
 
 
+def _empty_bucket(device):
+    return {"flattened_tensor": {"size": 0, "dtype": "uint8", "device": device}, "metadata": []}
+
+
 def test_empty_colocated_bucket_still_participates_in_gather(monkeypatch):
     module, dist_state = _load_update_weight_module(monkeypatch)
-    dist_state.gathered = lambda local: [local, []]
+    dist_state.gathered = lambda local: [local, ([], _empty_bucket("cuda:1"))]
     engine = _FakeEngine()
 
     refs, long_lived_tensors = module._send_to_colocated_engine(
@@ -193,16 +197,17 @@ def test_empty_colocated_bucket_still_participates_in_gather(monkeypatch):
         weight_version=3,
     )
 
-    assert dist_state.local_object == []
+    local_empty = _empty_bucket("cuda:0")
+    assert dist_state.local_object == ([], local_empty)
     assert refs == []
-    assert long_lived_tensors == []
+    assert long_lived_tensors == [local_empty]
     assert engine.update_weights_from_tensor.calls == []
 
 
-def test_source_rank_pads_empty_colocated_bucket_entries(monkeypatch):
+def test_source_rank_uses_its_own_placeholder_when_empty(monkeypatch):
     module, dist_state = _load_update_weight_module(monkeypatch)
     remote_serialized_bucket = {"flattened_tensor": ("remote",), "metadata": ("remote_weight",)}
-    dist_state.gathered = lambda local: [local, [remote_serialized_bucket]]
+    dist_state.gathered = lambda local: [local, ([remote_serialized_bucket], _empty_bucket("cuda:1"))]
     engine = _FakeEngine()
 
     refs, long_lived_tensors = module._send_to_colocated_engine(
@@ -214,18 +219,47 @@ def test_source_rank_pads_empty_colocated_bucket_entries(monkeypatch):
     )
 
     assert refs == ["ref-1"]
-    assert len(long_lived_tensors) == 1
-    empty_bucket = long_lived_tensors[0]
-    assert empty_bucket["metadata"] == []
-    assert empty_bucket["flattened_tensor"] == {"size": 0, "dtype": "uint8", "device": "cuda:0"}
+    local_empty = _empty_bucket("cuda:0")
+    assert long_lived_tensors == [local_empty]
 
     assert engine.update_weights_from_tensor.calls == [
         {
-            "serialized_named_tensors": [empty_bucket, remote_serialized_bucket],
+            "serialized_named_tensors": [local_empty, remote_serialized_bucket],
             "load_format": "flattened_bucket",
             "weight_version": "7",
         }
     ]
+
+
+def test_remote_empty_bucket_uses_remote_rank_placeholder(monkeypatch):
+    module, dist_state = _load_update_weight_module(monkeypatch)
+    engine = _FakeEngine()
+    group = object()
+
+    dist_state.rank = 1
+    refs, remote_tensors = module._send_to_colocated_engine(
+        [], ipc_engine=None, ipc_gather_src=0, ipc_gather_group=group, weight_version=7
+    )
+    remote_payload = dist_state.local_object
+    remote_empty = _empty_bucket("cuda:1")
+    assert refs == []
+    assert remote_payload == ([], remote_empty)
+    assert remote_tensors == [remote_empty]
+
+    dist_state.rank = 0
+    dist_state.gathered = lambda local: [local, remote_payload]
+    refs, _ = module._send_to_colocated_engine(
+        [("local_weight", object())],
+        ipc_engine=engine,
+        ipc_gather_src=0,
+        ipc_gather_group=group,
+        weight_version=7,
+    )
+
+    assert refs == ["ref-1"]
+    (local_bucket,), _ = dist_state.local_object
+    (call,) = engine.update_weights_from_tensor.calls
+    assert call["serialized_named_tensors"] == [local_bucket, remote_empty]
 
 
 if __name__ == "__main__":
