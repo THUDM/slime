@@ -45,7 +45,11 @@ def test_raw_reward_before_filters_omits_incomplete_candidate_statistics(missing
     args = Namespace(reward_key=None, rollout_sample_filter_path=None)
     gatherer = MetricGatherer()
     gatherer.on_group_completed(call_dynamic_filter(lambda *a: True, args, [Sample(reward=1.0)]))
-    output = DynamicFilterOutput(keep=True) if missing == "recovered" else call_dynamic_filter(lambda *a: True, args, [Sample(reward=None)])
+    output = (
+        DynamicFilterOutput(keep=True)
+        if missing == "recovered"
+        else call_dynamic_filter(lambda *a: True, args, [Sample(reward=None)])
+    )
     gatherer.on_group_completed(output)
     assert "rollout/raw_reward_before_filters" not in gatherer.collect()
 
@@ -329,7 +333,9 @@ def test_append_response_tokens_validates_pd_merged_routed_experts_and_continuat
             "finish_reason": {"type": "length"},
         },
     )
-    validate_routed_experts_tensor(sample.rollout_routed_experts, args, sample_index=0, expected_rows=len(sample.tokens) - 1)
+    validate_routed_experts_tensor(
+        sample.rollout_routed_experts, args, sample_index=0, expected_rows=len(sample.tokens) - 1
+    )
 
     # Turn 2 continuation with routed_experts_start_len=4 (prompt_len=5, 2 new tokens -> 2 rows):
     # prefill returns [4, 5) (1 row) and decode returns [5, 6) (1 row).
