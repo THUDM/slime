@@ -38,7 +38,7 @@ def sample_from_vocab_parallel_logits_without_full_gather(
         vocab_parallel_logits: Shape `[num_tokens, vocab_per_tp]` logits shard.
         sample_n: Number of samples per token position, with replacement.
         tp_group: Tensor-parallel process group. If None, uses Megatron TP group.
-        reduction_chunk_size: Row chunk size for denominator computation.
+        reduction_chunk_size: Maximum rows per denominator and local sampling chunk.
         global_vocab_size: Optional unpadded vocab size. If set, padded logits
             (outside `[0, global_vocab_size)`) are excluded from sampling.
 
@@ -127,22 +127,23 @@ def sample_from_vocab_parallel_logits_without_full_gather(
             if row_ids.numel() == 0:
                 continue
 
-            row_logits = vocab_parallel_logits.index_select(0, row_ids)[:, :valid_vocab_per_tp]
-            row_max = global_max.index_select(0, row_ids).to(reduction_dtype)
-            local_row_max = row_logits.max(dim=-1, keepdim=True).values.to(reduction_dtype)
-            row_weights = (row_logits.to(reduction_dtype) - local_row_max).exp_()
-            local_ids = torch.multinomial(row_weights, num_samples=slot_count, replacement=True)
+            for chunk_rows in row_ids.split(reduction_chunk_size):
+                row_logits = vocab_parallel_logits[:, :valid_vocab_per_tp].index_select(0, chunk_rows)
+                row_max = global_max.index_select(0, chunk_rows).to(reduction_dtype)
+                local_row_max = row_logits.max(dim=-1, keepdim=True).values.to(reduction_dtype)
+                row_weights = (row_logits.to(reduction_dtype) - local_row_max).exp_()
+                local_ids = torch.multinomial(row_weights, num_samples=slot_count, replacement=True)
 
-            slot_cols = torch.nonzero(owner_slots.index_select(0, row_ids), as_tuple=False)[:, 1].view(-1, slot_count)
+                slot_cols = torch.nonzero(owner_slots.index_select(0, chunk_rows), as_tuple=False)[:, 1].view(-1, slot_count)
 
-            selected_logits = torch.gather(row_logits, dim=-1, index=local_ids)
-            selected_log_probs = (
-                selected_logits.to(reduction_dtype) - row_max - log_denom.index_select(0, row_ids)
-            ).to(logits_dtype)
-            global_ids = local_ids + vocab_start
+                selected_logits = torch.gather(row_logits, dim=-1, index=local_ids)
+                selected_log_probs = (
+                    selected_logits.to(reduction_dtype) - row_max - log_denom.index_select(0, chunk_rows)
+                ).to(logits_dtype)
+                global_ids = local_ids + vocab_start
 
-            sampled_token_ids[row_ids.unsqueeze(-1), slot_cols] = global_ids
-            sampled_log_probs[row_ids.unsqueeze(-1), slot_cols] = selected_log_probs
+                sampled_token_ids[chunk_rows.unsqueeze(-1), slot_cols] = global_ids
+                sampled_log_probs[chunk_rows.unsqueeze(-1), slot_cols] = selected_log_probs
 
     if tp_size > 1:
         dist.all_reduce(sampled_token_ids, op=dist.ReduceOp.MAX, group=tp_group)
