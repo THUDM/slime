@@ -1,12 +1,18 @@
+import asyncio
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
 import pytest
 import torch
 
-from slime.observability.trace_utils import TRACE_CHILDREN_KEY, build_sglang_meta_trace_attrs, trace_span
-from slime.utils.types import Sample
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from slime.observability.trace_utils import TRACE_CHILDREN_KEY, build_sglang_meta_trace_attrs, trace_span  # noqa: E402
+from slime.utils.types import Sample  # noqa: E402
 
 NUM_GPUS = 0
 
@@ -93,6 +99,23 @@ def test_trace_timeline_viewer_omits_virtual_pd_lanes_without_pd_attrs(tmp_path:
     }
     assert "[P]" not in item["name"]
     assert "[D]" not in item["name"]
+
+
+def test_trace_closes_cancelled_spans_and_jsonl_roundtrips(tmp_path):
+    sample = Sample(index=3, group_index=1)
+    with pytest.raises(asyncio.CancelledError):
+        with trace_span(sample, "agent_run", record_error=False):
+            raise asyncio.CancelledError("private endpoint must not be stored")
+    events = sample.trace["events"]
+    assert [event["type"] for event in events] == ["span_start", "span_end"]
+    assert events[0]["span_id"] == events[1]["span_id"]
+    assert "private endpoint" not in json.dumps(sample.trace)
+    path = tmp_path / "coding.jsonl"
+    path.write_text(json.dumps({"index": 3, "group_index": 1, "trace": sample.trace}) + "\n")
+    cache = _load_trace_timeline_viewer_module()._build_cache_data(path)
+    assert cache["sample_count"] == 1
+    assert cache["rows"][0]["closed_span_count"] == 1
+    assert cache["rows"][0]["items"][0]["name"] == "agent_run"
 
 
 if __name__ == "__main__":

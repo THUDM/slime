@@ -24,7 +24,28 @@ class Qwen3_5MultimodalRotaryEmbedding(MultimodalRotaryEmbedding):
         mrope_section: list[int],
         packed_seq: bool = False,
         cp_group=None,
+        return_raw_freqs: bool = False,
     ) -> torch.Tensor:
+        # Megatron (core 0.20) always passes return_raw_freqs; it is True only when Megatron
+        # takes its fused mRoPE path (use_fused_mrope in gpt_model.py), which asks for the raw
+        # per-axis (T/H/W) frequencies and lets a fused kernel combine and apply them.
+        #
+        # This plugin only implements the other path: it returns the final rotary embedding,
+        # with Qwen3.5's interleaved T/H/W frequency layout already applied (see below). That
+        # is not a limitation of the model. The fused kernel is designed around the usual
+        # concatenated T/H/W layout (not verified against the kernel source), and nobody has
+        # implemented the interleaved layout for it here, so there is nothing to return for
+        # True. Raise rather than hand Megatron a tensor it would interpret as raw
+        # frequencies and silently rotate wrongly.
+        #
+        # Megatron only asks for True when config.apply_rope_fusion is set, which
+        # __init__ below forces to False for this model, so this should not trigger.
+        if return_raw_freqs:
+            raise NotImplementedError(
+                "Qwen3_5MultimodalRotaryEmbedding only returns the final rotary embedding; "
+                "the fused mRoPE path (return_raw_freqs=True) is not implemented for the "
+                "interleaved T/H/W layout"
+            )
         seq = position_ids.to(device=self.inv_freq.device, dtype=torch.float32)
         if self.seq_len_interpolation_factor is not None:
             seq *= 1 / self.seq_len_interpolation_factor

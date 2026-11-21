@@ -66,7 +66,7 @@ PERF_ARGS=(
    --tensor-model-parallel-size 2
    --sequence-parallel
    --pipeline-model-parallel-size 1
-   --context-parallel-size 1
+   --context-parallel-size 2
    --expert-model-parallel-size 8
    --expert-tensor-parallel-size 1
 
@@ -76,6 +76,7 @@ PERF_ARGS=(
 
    # --micro-batch-size 1
    --use-dynamic-batch-size
+   --log-probs-chunk-size 1024
    --max-tokens-per-gpu 8192
 )
 
@@ -150,7 +151,7 @@ RUNTIME_ENV_JSON="{
 
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
-   -- python3 train_async.py \
+   -- python3 train.py \
    --actor-num-nodes 1 \
    --actor-num-gpus-per-node 8 \
    ${MODEL_ARGS[@]} \

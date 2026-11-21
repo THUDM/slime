@@ -1,14 +1,15 @@
 """OpenAI Chat-Completions adapter for agent rollouts.
 
 Mirrors slime.agent.adapters.anthropic but speaks the OpenAI
-/v1/chat/completions protocol, so an OpenAI-compatible client (e.g. the Codex
-CLI) can drive the slime sglang server. Each request is rendered with the served
-model's chat template, sent to sglang /generate as input_ids, parsed, and folded
+/v1/chat/completions protocol, so a Chat Completions client can drive the slime
+sglang server. Current Codex uses the separate ResponsesAdapter. Each request
+is rendered with the served model's chat template, sent to sglang /generate as
+input_ids, parsed, and folded
 into a shared TrajectoryManager keyed by session id. finish_session(sid) drains
 a session's trajectory into a list of Sample.
 
-Only /v1/chat/completions is implemented; the Responses API (/v1/responses) is
-out of scope. The section layout (adapter class -> translation -> reply building
+This class implements only /v1/chat/completions. The section layout
+(adapter class -> translation -> reply building
 -> request framing) mirrors slime.agent.adapters.anthropic.
 """
 

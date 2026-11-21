@@ -12,7 +12,6 @@ from shlex import quote
 
 import slime.utils.external_utils.command_utils as U
 
-
 MODEL_NAME = "Qwen3.5-0.8B"
 MODEL_TYPE = "qwen3.5-0.8B"
 NUM_GPUS = 4
@@ -46,6 +45,8 @@ def execute():
         )
 
         rollout_args = (
+            "--rollout-data-transport straw "
+            f"--rollout-data-dir {quote(str(save_dir / 'rollout_data'))} "
             "--prompt-data /root/datasets/gsm8k/train.parquet "
             "--input-key messages "
             "--label-key label "

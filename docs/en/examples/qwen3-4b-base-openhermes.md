@@ -3,7 +3,7 @@
 
 ## Environment Preparation
 
-First, we need to create a mirror environment and convert the `Qwen3-4B-Base` model by following the [Example: Qwen3-4B Model](qwen3-4B.md).
+First, we need to create a mirror environment and convert the `Qwen3-4B-Base` model by following the [experiment tutorial](../get_started/experiment-guide.md).
 
 After that, we will process the SFT data. Here, we use the classic [OpenHermes-2.5](https://huggingface.co/datasets/teknium/OpenHermes-2.5) as an example. First, we process the data into a format suitable for `slime` to load. You can use the following script to add a column that conforms to the OpenAI message format and save it to `/root/openhermes2_5.parquet`.
 
@@ -82,5 +82,3 @@ You can compare [run-qwen3-4B-base-sft.sh](https://github.com/THUDM/slime/blob/m
     As for `--calculate-per-token-loss`, this is because `slime` defaults to calculating the per-sample mean for GRPO. In general SFT training, the average is taken over all unmasked tokens in a batch, so it is recommended to configure this.
 
     Finally, `--disable-compute-advantages-and-returns` indicates that there is no need to pre-calculate log probabilities during the SFT process, and `--debug-train-only` means that `sglang` does not need to be initialized.
-
-3.  Used `train_async.py` instead of `train.py`. This is to leverage the asynchronous training process to implement data prefetching.

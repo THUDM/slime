@@ -1,3 +1,5 @@
+import sys
+
 import pytest
 import torch
 
@@ -8,6 +10,7 @@ from glm52_layerwise_comparator import (
     load_train_sequences,
     map_requests_to_train_sequences,
 )
+from test_glm52_6layer_deterministic_e2e import _run
 
 NUM_GPUS = 0
 
@@ -54,6 +57,19 @@ def test_sglang_layer_output_reconstructs_the_visible_residual_sum():
     output = _sglang_layer_token_rows([delta, residual], 1, "layer0")
 
     torch.testing.assert_close(output, torch.tensor([[4.0, 6.0]], dtype=torch.bfloat16))
+
+
+def test_sglang_layer_output_accepts_a_residual_stream_snapshot():
+    snapshot = torch.tensor([[4.0, 6.0]], dtype=torch.bfloat16)
+
+    output = _sglang_layer_token_rows({"residual_sum": snapshot}, 1, "layer0")
+
+    torch.testing.assert_close(output, snapshot, rtol=0, atol=0)
+
+
+def test_streaming_comparator_failure_fails_the_gate():
+    with pytest.raises(RuntimeError, match=r"failed \(7\)"):
+        _run([sys.executable, "-c", "raise SystemExit(7)"], stream=True)
 
 
 def test_layerwise_comparison_excludes_terminal_causal_state(tmp_path):

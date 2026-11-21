@@ -35,6 +35,8 @@ def register_ordered_topk_capture(module):
     if getattr(module, "_slime_ordered_topk_capture_registered", False):
         return
 
+    _install_router_replay_bridge(module)
+
     def pre_forward_hook(patched_module, *args, **kwargs):
         del args, kwargs
         _set_ordered_topk_capture_router(patched_module)
@@ -217,10 +219,37 @@ def get_routing_replay_compute_topk(old_compute_topk):
 
 
 def register_routing_replay(module):
-    if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
+    if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1" and not hasattr(module, "routing_replay"):
         module.routing_replay = RoutingReplay()
+        _install_router_replay_bridge(module)
 
         def pre_forward_hook(*args, **kwargs):
             set_routing_replay(module.routing_replay)
 
         module.register_forward_pre_hook(pre_forward_hook)
+
+
+class _SlimeRouterReplay:
+    def __init__(self, original):
+        self.original = original
+
+    def get_replay_topk(self, scores, topk, num_groups, group_topk, compute_topk):
+        if self.original is not None:
+            original_compute_topk = compute_topk
+
+            def compute_topk(scores, topk, num_groups=None, group_topk=None):
+                return self.original.get_replay_topk(scores, topk, num_groups, group_topk, original_compute_topk)
+
+        return get_routing_replay_compute_topk(compute_topk)(scores, topk, num_groups, group_topk)
+
+
+def _install_router_replay_bridge(module):
+    if not hasattr(module, "router_replay") or isinstance(module.router_replay, _SlimeRouterReplay):
+        return
+
+    from megatron.core.transformer.moe.moe_utils import topk_routing_with_score_function
+
+    # Older patched Megatron calls the slime hook directly; avoid recording twice.
+    if "get_routing_replay_compute_topk" in topk_routing_with_score_function.__code__.co_names:
+        return
+    module.router_replay = _SlimeRouterReplay(module.router_replay)

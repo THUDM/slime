@@ -49,7 +49,7 @@ def execute():
         "--num-rollout 3000 "
         "--rollout-batch-size 64 "
         "--n-samples-per-prompt 8 "
-        "--rollout-max-response-len 4096 "
+        "--rollout-max-response-len 131072 "
         "--rollout-temperature 1 "
         "--global-batch-size 512 "
     )
@@ -58,7 +58,7 @@ def execute():
     #     "--eval-interval 20 "
     #     f"--eval-prompt-data geo3k_eval {TRAIN_DATA_PATH}@[0:64] "
     #     "--n-samples-per-eval-prompt 1 "
-    #     "--eval-max-response-len 4096 "
+    #     "--eval-max-response-len 131072 "
     #     "--eval-top-k 1 "
     # )
 
@@ -74,6 +74,9 @@ def execute():
 
     optimizer_args = (
         "--optimizer adam "
+        "--optimizer-cpu-offload "
+        "--overlap-cpu-optimizer-d2h-h2d "
+        "--use-precision-aware-optimizer "
         "--lr 1e-6 "
         "--lr-decay-style constant "
         "--weight-decay 0.1 "
@@ -94,7 +97,7 @@ def execute():
         "--tensor-model-parallel-size 2 "
         "--sequence-parallel "
         "--pipeline-model-parallel-size 1 "
-        "--context-parallel-size 1 "
+        "--context-parallel-size 2 "
         f"--expert-model-parallel-size {NUM_GPUS} "
         "--expert-tensor-parallel-size 1 "
         "--recompute-granularity full "

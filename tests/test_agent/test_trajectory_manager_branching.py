@@ -828,7 +828,7 @@ def test_2_10_cross_leaf_dedup():
         "<tul> tool:x </tul> <gen> [r:a2] [</ast>]",
         "<sys> system:S </sys> <usr> user:u </usr> <gen> r:call </ast> " "<tul> tool:y </tul> <gen> [r:a3] [</ast>]",
     ]
-    assert s_second.rollout_log_probs == [0.0] * (len(p3) - len(p1)) + [-0.3] * len(r3)
+    assert s_second.rollout_log_probs == ([-0.5] * len(r1) + [0.0] * (len(p3) - len(p1) - len(r1)) + [-0.3] * len(r3))
     _check_invariants(samples)
     _record("2.10 cross-leaf dedup (shared assistant trained once)", mgr, sid, samples)
     print("PASS 2.10")

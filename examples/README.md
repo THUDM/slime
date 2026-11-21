@@ -4,7 +4,7 @@ These examples provide concrete examples to leverage slime in your own RL workfl
 
 ## Directory Structure
 
-- **[coding_agent_rl](./coding_agent_rl)**: End-to-end SWE coding-agent RL — a real coding agent (claude-code / codex) edits code in a per-sample sandbox, and the resulting `git diff` is graded against the dataset's test harness.
+- **[coding_agent_rl](./coding_agent_rl)**: Qwen3.8-27B coding-agent RL on Xiaomi MiMo SWE data — Claude Code edits code in sunabako sandboxes, and a fresh sandbox runs the official tests on the resulting `git diff`.
 - **[eval_multi_task](./eval_multi_task)**: Example for supporting evaluation multiple tasks with different configs.
 - **[fully_async](./fully_async)**: Demonstrates fully asynchronous rollout generation for higher efficiency.
 - **[geo3k_vlm](./geo3k_vlm)**: Training VLMs on a single-turn reasoning task using GRPO on the GEO3K dataset.

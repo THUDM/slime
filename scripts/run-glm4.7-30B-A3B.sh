@@ -26,7 +26,7 @@ fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-source "${SCRIPT_DIR}/../scripts/models/glm4.7-30B-A3B.sh"
+source "${SCRIPT_DIR}/models/glm4.7-30B-A3B.sh"
 
 CKPT_ARGS=(
    --hf-checkpoint $BASE_DIR/GLM-4.7-Flash
@@ -45,7 +45,7 @@ ROLLOUT_ARGS=(
    --num-rollout 3000
    --rollout-batch-size 128
    --n-samples-per-prompt 8
-   --rollout-max-response-len 32768
+   --rollout-max-response-len 131072
    --rollout-temperature 1.0
 
    --global-batch-size 1024
@@ -56,7 +56,7 @@ EVAL_ARGS=(
    --eval-interval 20
    --eval-prompt-data aime24 $BASE_DIR/rl_data/aime-2024.jsonl
    --n-samples-per-eval-prompt 2
-   --eval-max-response-len 32768
+   --eval-max-response-len 131072
    --eval-temperature 1.0
    --eval-top-p 0.95
 )
@@ -64,17 +64,17 @@ EVAL_ARGS=(
 PERF_ARGS=(
    --tensor-model-parallel-size 2
    --sequence-parallel
-   --pipeline-model-parallel-size 2
-   --context-parallel-size 2
+   --pipeline-model-parallel-size 1
+   --context-parallel-size 4
    --expert-model-parallel-size 8
    --expert-tensor-parallel-size 1
-   --decoder-last-pipeline-num-layers 23
 
    --recompute-granularity full
    --recompute-method uniform
    --recompute-num-layers 1
 
    --use-dynamic-batch-size
+   --log-probs-chunk-size 1024
    --max-tokens-per-gpu 32768
 )
 
@@ -86,6 +86,15 @@ MTP_ARGS=(
 
 GRPO_ARGS=(
    --advantage-estimator grpo
+   --use-score-centering
+   --score-centering-top-k 128
+   --pg-loss-type reinforce
+   --use-tis
+   --tis-clip-low 0
+   --tis-clip 2
+   --disable-grpo-std-normalization
+   --calculate-per-token-loss
+   --use-rollout-routing-replay
    --use-kl-loss
    --kl-loss-coef 0.00
    --kl-loss-type low_var_kl

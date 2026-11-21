@@ -106,7 +106,7 @@ PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
     --save /root/Qwen3-8B_torch_dist
 
 # 3. Run
-bash examples/on_policy_distillation/run-qwen3-8B-opd.sh
+bash examples/on_policy_distillation/run-qwen3-4B-opd.sh
 ```
 
 ### Megatron Teacher
@@ -114,7 +114,7 @@ bash examples/on_policy_distillation/run-qwen3-8B-opd.sh
 ```bash
 # 1. Convert both student and teacher models to Megatron format
 # 2. Run
-bash examples/on_policy_distillation/run-qwen3-8B-opd-megatron.sh
+bash examples/on_policy_distillation/run-qwen3-4B-opd-megatron.sh
 ```
 
 ## Preliminary Results

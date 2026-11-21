@@ -6,8 +6,10 @@ from slime.utils.types import Sample
 __all__ = ["check_reward_nonzero_std", "check_reward_nonzero_std_with_fallback"]
 
 
-def check_reward_nonzero_std(args, samples: list[Sample], **kwargs):
-    rewards = [sample.get_reward_value(args) for sample in samples]
+def check_reward_nonzero_std(args, samples: list[Sample | list[Sample]], **kwargs):
+    # Agent generators return one list of context-window segments per trajectory.
+    # Count its terminal reward once, independent of the number of segments.
+    rewards = [(sample[-1] if isinstance(sample, list) else sample).get_reward_value(args) for sample in samples]
     keep = torch.tensor(rewards, dtype=torch.float64).std() > 1e-6
     return DynamicFilterOutput(
         keep=keep,

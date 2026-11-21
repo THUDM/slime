@@ -75,7 +75,7 @@ PD 让 slime 在不改变 training loop 的情况下，使用更贴合真实 ser
 ## 运维注意事项
 
 - 新的复杂部署优先使用 `--sglang-config`，而不是 `--prefill-num-servers`。
-- multi-turn agent 建议开启 router session affinity，使同一 sample 的多轮请求可以复用 prefix cache。见 [Session-Affinity Routing](sglang-config.md#session-affinity-routing-for-multi-turn-agents)。
+- multi-turn agent 建议开启 router session affinity，使同一 sample 的多轮请求可以复用 prefix cache。见 [Session-Affinity Routing](sglang-config.md#多轮-agent-的会话亲和路由)。
 - `--rollout-num-gpus` 应等于 SGLang config 中描述的 GPU 总数。
 - 不要在同一个 model entry 中混用 `regular` worker 和 `prefill`/`decode` worker。
 - 当 prompt processing 和 token generation 的瓶颈不同时，分别调 prefill 和 decode 的 TP。

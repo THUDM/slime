@@ -1,7 +1,7 @@
 """MUSA accelerator implementation.
 
 Importing this module never imports ``torch_musa``.  A MUSA runtime or the
-optional ``musa_patch`` bootstrap may attach ``torch.musa`` before selection.
+optional ``musa_titan`` bootstrap may attach ``torch.musa`` before selection.
 """
 
 from __future__ import annotations
@@ -50,11 +50,15 @@ class MUSAAccelerator(TorchAccelerator):
 
     def post_import_torch(self) -> None:
         try:
-            module = importlib.import_module("musa_patch")
+            module = importlib.import_module("musa_titan")
         except ModuleNotFoundError as exc:
-            if exc.name == "musa_patch":
+            if exc.name == "musa_titan":
                 return
-            raise RuntimeError(f"musa_patch failed because dependency {exc.name!r} is missing") from exc
+            raise RuntimeError(f"musa_titan failed because dependency {exc.name!r} is missing") from exc
+        apply_rl = getattr(module, "apply_rl_patch", None)
+        if apply_rl is not None:
+            apply_rl()
+            return
         callback = getattr(module, "patch_after_import_torch", None)
         if callback is not None:
             callback()

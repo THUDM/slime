@@ -163,5 +163,35 @@ def test_transport_retry_of_the_spawn_stays_deduped(fast_marker_polls):
     assert not any("rm -" in c and "setsid" in c for c in sb.exec_log)
 
 
+def test_completion_poll_reads_files_without_starting_a_shell(fast_marker_polls):
+    class Sandbox:
+        reads = 0
+
+        async def read_file(self, path, *, user):
+            assert path == "/tmp/.run.done" and user == "agent"
+            self.reads += 1
+            if self.reads == 1:
+                raise FileNotFoundError(path)
+            return "" if self.reads == 2 else "7\n"
+
+        async def exec(self, *args, **kwargs):
+            raise AssertionError("A completion poll must not spawn a shell")
+
+    sandbox = Sandbox()
+    assert (
+        asyncio.run(sandbox_mod._await_done_marker(sandbox, "/tmp/.run.done", user="agent", time_budget_sec=60)) == 7
+    )
+    assert sandbox.reads == 3
+
+
+def test_completion_poll_propagates_a_stopped_sandbox(fast_marker_polls):
+    class Sandbox:
+        async def read_file(self, path, *, user):
+            raise RuntimeError("sandbox must be running")
+
+    with pytest.raises(RuntimeError, match="sandbox must be running"):
+        asyncio.run(sandbox_mod._await_done_marker(Sandbox(), "/tmp/.run.done", user="agent", time_budget_sec=60))
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
