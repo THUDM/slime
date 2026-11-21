@@ -1,12 +1,26 @@
 import logging
 import random
+from contextlib import nullcontext
+from pathlib import Path
 
 import numpy as np
 import torch
+from filelock import FileLock
 from megatron.core import mpu, tensor_parallel
 from megatron.core.config import set_experimental_flag
 from megatron.core.num_microbatches_calculator import init_num_microbatches_calculator
 from megatron.training.global_vars import _build_tokenizer, set_args
+from transformers.utils import HF_MODULES_CACHE
+
+from .arguments import use_gloo_process_groups
+
+try:
+    # Megatron ae76c60e6 keeps a run config next to args; get_model and the training loop read it.
+    from megatron.training.argument_utils import pretrain_cfg_container_from_args
+    from megatron.training.global_vars import set_run_config
+except ImportError:
+    pretrain_cfg_container_from_args = None
+    set_run_config = None
 
 logger = logging.getLogger(__name__)
 
@@ -49,21 +63,20 @@ def _initialize_distributed(args, get_embedding_ranks=None, get_position_embeddi
         order="tp-cp-ep-dp-pp" if not args.use_tp_pp_dp_mapping else "tp-cp-ep-pp-dp",
         get_embedding_ranks=get_embedding_ranks,
         get_position_embedding_ranks=get_position_embedding_ranks,
-        create_gloo_process_groups=args.enable_gloo_process_groups,
+        create_gloo_process_groups=use_gloo_process_groups(args),
     )
 
 
 def init(args):
     set_args(args)
+    if set_run_config is not None:
+        set_run_config(pretrain_cfg_container_from_args(args))
     if args.enable_experimental:
         logger.info("Enable megatron experimental")
         set_experimental_flag(True)
 
     # Pytorch distributed.
     _initialize_distributed(args)
-
-    # https://github.com/NVIDIA/Megatron-LM/issues/1563
-    assert np.__version__.startswith("1."), "Megatron does not support numpy 2.x"
 
     # Random seeds for reproducibility.
     if args.rank == 0:
@@ -74,7 +87,14 @@ def init(args):
         args.te_rng_tracker,
         args.inference_rng_tracker,
     )
-    _build_tokenizer(args)
+    # HF copies remote tokenizer code into a shared cache before importing it.
+    # Protect both operations so another rank cannot import a partial file.
+    tokenizer_lock = nullcontext()
+    if args.tokenizer_type == "HuggingFaceTokenizer":
+        Path(HF_MODULES_CACHE).mkdir(parents=True, exist_ok=True)
+        tokenizer_lock = FileLock(str(Path(HF_MODULES_CACHE) / "slime-tokenizer.lock"))
+    with tokenizer_lock:
+        _build_tokenizer(args)
     # We won't use this. initialize to pass some validation in megatron.
     init_num_microbatches_calculator(
         args.rank,

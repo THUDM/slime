@@ -6,13 +6,13 @@ Thank you for your interest in contributing to slime! We deeply appreciate every
 
 ## Collaboration Scope
 
-slime is the RL training infrastructure behind [GLM-4.5 through GLM-5.3](https://z.ai) and a large number of internal experiments at Z.ai. We open-sourced slime because we believe the training scenarios used internally cover the majority of cutting-edge RL algorithm requirements, and we hope to provide the community with a correct and efficient large-scale RL training infrastructure.
+slime is the RL training infrastructure behind [GLM-4.5 through GLM-5.3](https://z.ai/blog/glm-5.3), [GLM-5.3-Flash](https://z.ai/blog/glm-5.3-flash), and a large number of internal experiments at Z.ai. We open-sourced slime because we believe the training scenarios used internally cover the majority of cutting-edge RL algorithm requirements, and we hope to provide the community with a correct and efficient large-scale RL training infrastructure.
 
 Our goal for open-source collaboration is focused on **bug fixes** and **general-purpose large-scale RL optimizations**. We have had several successful collaborations with the community in this area, including:
 
-- Speculative decoding in RL ([docs](https://thudm.github.io/slime/en/advanced/speculative_decoding.html))
-- Low-precision training: fp8 rollout + bf16/fp8 training, int4 rollout + int4 QAT training ([docs](https://thudm.github.io/slime/en/advanced/low_precision_training.html))
-- Deterministic training ([docs](https://thudm.github.io/slime/en/advanced/reproducibility.html))
+- Speculative decoding in RL ([docs](docs/en/advanced/speculative-decoding.md))
+- Low-precision training: fp8 rollout + bf16/fp8 training, int4 rollout + int4 QAT training ([docs](docs/en/advanced/low-precision.md))
+- Deterministic training ([docs](docs/en/advanced/reproducibility.md))
 
 ### What We Welcome
 
@@ -48,7 +48,7 @@ Thank you for your understanding and patience. We truly appreciate the effort co
 
 ### 背景
 
-slime 承担了智谱内部的大量实验，包括 GLM 4.5 至 5.3 的全部 RL 流程，以及大量的日常实验。我们开源的初衷是相信智谱内部的训练场景覆盖了大多数前沿算法需求，希望能够为社区提供一套**正确且高效**的大规模 RL 训练 Infra，同时也希望在此基础上和社区进行 Infra 性能优化上的共建。
+slime 承担了智谱内部的大量实验，包括 GLM-4.5 至 GLM-5.3、[GLM-5.3-Flash](https://z.ai/blog/glm-5.3-flash) 的 RL 流程，以及大量的日常实验。我们开源的初衷是相信智谱内部的训练场景覆盖了大多数前沿算法需求，希望能够为社区提供一套**正确且高效**的大规模 RL 训练 Infra，同时也希望在此基础上和社区进行 Infra 性能优化上的共建。
 
 在我们的已知范围内，目前只有极少的前沿大模型团队愿意公开如此核心且完整的 Infra 组件——这背后是公司对开源社区的极大热情。相应的，从维护者的角度，我们会充分利用这个开明的政策，让智谱内部使用的 slime 与开源版本同步，保持核心竞争力；同时，我们也希望在开源协作的过程中尽量不影响内部的研发节奏。因此，slime 的设计与开发 roadmap 需要优先参考智谱内部的需求，暂时无法完全在开源社区内进行讨论。
 
@@ -56,9 +56,9 @@ slime 承担了智谱内部的大量实验，包括 GLM 4.5 至 5.3 的全部 RL
 
 我们将开源协作的范围限制在 **bug fix** 和一些**通用的大规模 RL 优化**上。在这方面我们也和社区达成了多次成功的合作，例如：
 
-- RL 中的投机采样（[文档](https://thudm.github.io/slime/en/advanced/speculative_decoding.html)）
-- 低精度训练：fp8 rollout + bf16/fp8 training，int4 rollout + int4 QAT training（[文档](https://thudm.github.io/slime/en/advanced/low_precision_training.html)）
-- 确定性训练（[文档](https://thudm.github.io/slime/en/advanced/reproducibility.html)）
+- RL 中的投机采样（[文档](docs/zh/advanced/speculative-decoding.md)）
+- 低精度训练：fp8 rollout + bf16/fp8 training，int4 rollout + int4 QAT training（[文档](docs/zh/advanced/low-precision.md)）
+- 确定性训练（[文档](docs/zh/advanced/reproducibility.md)）
 
 ### 我们欢迎的
 

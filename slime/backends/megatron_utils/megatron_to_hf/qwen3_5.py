@@ -72,6 +72,29 @@ def convert_qwen3_5_to_hf(args, name, param):
         layer_idx, rest = match.groups()
         prefix = f"model.language_model.layers.{layer_idx}"
 
+        if rest == "self_attention.in_proj.weight":
+            sections = getattr(param, "partition_sections", None)
+            if sections is None or len(sections) != 6:
+                raise ValueError("Native Qwen GDN projection is missing its six partition sections")
+            q, k, v, z, beta, alpha = param.split(sections, dim=0)
+            return [
+                (f"{prefix}.linear_attn.in_proj_qkv.weight", torch.cat((q, k, v), dim=0)),
+                (f"{prefix}.linear_attn.in_proj_z.weight", z),
+                (f"{prefix}.linear_attn.in_proj_b.weight", beta),
+                (f"{prefix}.linear_attn.in_proj_a.weight", alpha),
+            ]
+        if rest == "self_attention.in_proj.layer_norm_weight":
+            return [(f"{prefix}.input_layernorm.weight", param)]
+        native_mapping = {
+            "self_attention.A_log": "A_log",
+            "self_attention.dt_bias": "dt_bias",
+            "self_attention.conv1d.weight": "conv1d.weight",
+            "self_attention.out_norm.weight": "norm.weight",
+            "self_attention.out_proj.weight": "out_proj.weight",
+        }
+        if rest in native_mapping:
+            return [(f"{prefix}.linear_attn.{native_mapping[rest]}", param)]
+
         # experts (grouped gemm - fused format)
         if rest == "mlp.experts.linear_fc1":
             return [(f"{prefix}.mlp.experts.gate_up_proj", param)]

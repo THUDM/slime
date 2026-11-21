@@ -1,10 +1,15 @@
 // Inject a language toggle button into the topbar (sphinx-book-theme compatible)
 (function(){
   const STORAGE_KEY = 'slime-doc-lang';
+  const prefixedLayout = document.currentScript?.dataset.layout === 'prefix';
+  // The local asset URL identifies the published base, including project subpaths.
+  // Unlike guessing from the hostname, this also works on a github.io user site.
+  const assetBase = new URL(document.currentScript.src).pathname.split('/_static/')[0];
+  const siteBase = assetBase.replace(prefixedLayout ? /\/(en|zh)$/ : /\/zh$/, '');
   // Default language EN has no URL prefix; Chinese uses '/zh/' inserted after optional repo root.
   function detectCurrent(){
     const { zhIndex } = analyzePath();
-    return zhIndex !== -1 ? 'zh' : 'en';
+    return zhIndex !== -1 || document.documentElement.lang.startsWith('zh') ? 'zh' : 'en';
   }
   function otherLang(lang){ return lang === 'zh' ? 'en' : 'zh'; }
   /**
@@ -18,23 +23,22 @@
   function analyzePath(){
     const rawParts = window.location.pathname.split('/').filter(Boolean);
     const parts = rawParts.slice();
-    let repoRoot = null;
-    if(parts.length > 0 && (window.location.host.endsWith('github.io') || parts[0] === 'slime')){
-      repoRoot = parts[0];
-    }
-    let zhIndex = -1;
-    if(parts[0] === 'zh') zhIndex = 0; else if(parts[1] === 'zh') zhIndex = 1;
-    return { parts, repoRoot, zhIndex };
+    const repoRoot = siteBase || null;
+    const languageIndex = siteBase.split('/').filter(Boolean).length;
+    const zhIndex = parts[languageIndex] === 'zh' ? languageIndex : -1;
+    return { parts, repoRoot, zhIndex, languageIndex };
   }
 
   function buildTargetUrl(target){
     const url = new URL(window.location.href);
     const trailingSlash = url.pathname.endsWith('/') || url.pathname === '/';
-    const { parts, repoRoot, zhIndex } = analyzePath();
-    if(target === 'zh'){
+    const { parts, repoRoot, zhIndex, languageIndex } = analyzePath();
+    if(prefixedLayout){
+      parts[languageIndex] = target;
+    } else if(target === 'zh'){
       if(zhIndex === -1){
         if(repoRoot){
-          if(parts.length === 1) parts.push('zh'); else parts.splice(1,0,'zh');
+          parts.splice(languageIndex,0,'zh');
         } else {
           parts.unshift('zh');
         }
@@ -109,7 +113,7 @@
   document.addEventListener('DOMContentLoaded', ()=>{
     insert();
     // Observe for dynamic header injection
-  const obs = new MutationObserver(()=>{ insert(); });
+    const obs = new MutationObserver(()=>{ insert(); });
     obs.observe(document.body, {childList:true, subtree:true});
     // Stop observing after 5s
     setTimeout(()=>obs.disconnect(), 5000);

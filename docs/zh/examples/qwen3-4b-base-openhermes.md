@@ -2,7 +2,7 @@
 
 ## 环境准备
 
-首先需要我们仿照 [示例：Qwen3-4B 模型](qwen3-4B.md) 创建镜像环境与转换 `Qwen3-4B-Base` 模型。
+首先需要我们仿照 [实验 tutorial](../get_started/experiment-guide.md) 创建镜像环境与转换 `Qwen3-4B-Base` 模型。
 
 之后，我们处理 sft 数据。这里我们以经典的 [OpenHermes-2.5](https://huggingface.co/datasets/teknium/OpenHermes-2.5) 为例，首先把数据处理成适合 slime 加载的格式，可以用如下的脚本进行处理，增加一个符合 openai message 格式的列，并保存在 `/root/openhermes2_5.parquet`。
 
@@ -81,5 +81,3 @@ bash scripts/run-qwen3-4B-base-sft.sh
    至于 `--calculate-per-token-loss`，这是因为 slime 默认是以 GRPO 的 per sample mean 进行计算的，而一般 sft 训练都是按一个 batch 的所有不被 mask 的 token 取平均，所以建议配置上。
 
    最后 `--disable-compute-advantages-and-returns` 表示 sft 的过程中不需要预先计算 log prob，`--debug-train-only` 表示不需要初始化 sglang。
-
-3. 使用了 `train_async.py` 而不是 `train.py`。这是为了利用异步训练的流程，来实现数据 prefetch。

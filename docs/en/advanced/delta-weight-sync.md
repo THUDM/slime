@@ -26,7 +26,7 @@ need nothing extra on the slime side.
 | Flag | Role |
 |---|---|
 | `--update-weight-disk-dir` | Shared filesystem directory the trainer publishes deltas to and the rollout hosts read from. |
-| `--update-weight-local-checkpoint-dir` | Host-local (e.g. NVMe) full HF checkpoint that `/pull_weights` keeps in sync — deltas are applied into it in place; a published full checkpoint replaces it. Each host seeds it from the engine's model path on the first `/pull_weights`. |
+| `--update-weight-local-checkpoint-dir` | Host-local (e.g. NVMe) full HF checkpoint that `/pull_weights` keeps in sync. The initial full publication establishes its baseline; later deltas apply in place, and a new full publication replaces it. |
 | `--update-weight-delta-encoding` | On-disk delta encoding: `xor` (default) or `overwrite`. |
 | `--update-weight-delta-checksum` | Per-tensor integrity checksum: `xxh3-128` (default), `blake3`, or `adler32`. |
 
@@ -34,11 +34,11 @@ Deltas are always zstd-compressed (level 1); profiling showed it dominates lz4 /
 
 ## How it works
 
-1. **Seed.** On the first sync the trainer captures a CPU snapshot of every parameter — seeded
-   from `--hf-checkpoint`, which is exactly what each rollout host materializes its local
-   checkpoint from. Nothing is published; this snapshot is the base the next sync diffs against.
-   The trainer also issues `/pull_weights` with `target_version=0` so every host materializes
-   its local base now, overlapped with the snapshot capture.
+1. **Seed.** The first sync, including after trainer recovery or an engine replacement,
+   publishes a full HF checkpoint from the trainer's current weights. It captures the CPU
+   snapshot from those exact tensors and reloads every engine before generation resumes.
+   The version exceeds every existing version directory, including an update whose reply
+   was lost. Existing versions are retained; restarting does not delete the stream.
 2. **Publish.** On every later sync the trainer diffs each gathered HF tensor against the
    snapshot, encodes and compresses the change, and writes a new version directory
    `weight_v{N:06d}/` under `--update-weight-disk-dir`. The directory is a canonical HF
@@ -60,9 +60,9 @@ Deltas are always zstd-compressed (level 1); profiling showed it dominates lz4 /
 4. **Reload.** The engines reload the patched local checkpoint through the vanilla
    `update_weights_from_disk` path — the weight-loading code never sees the delta format.
 
-Because the snapshot is seeded from `--hf-checkpoint` (the engine's actual base) rather than
-from the current GPU weights, the scheme is correct for any model even where the Megatron→HF
-round-trip is not byte-exact (e.g. trimmed vocab-padding rows in the embedding / LM head).
+The snapshot and the engines start from the same published HF bytes, including when the
+trainer restored a newer model than `--hf-checkpoint`. Megatron→HF conversion differences
+(such as trimmed embedding / LM-head padding) therefore do not corrupt the next delta.
 
 ## Encodings
 

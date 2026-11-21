@@ -130,12 +130,66 @@ def _extract_images_from_messages(messages):
     return images
 
 
+# Image processors whose own sizing rule must see the original image. For these
+# the qwen_vl_utils pre-resize below is skipped, and each image is resized once,
+# here, to the size the processor itself picks.
+#
+# Why not just skip qwen_vl_utils: the image then reaches two different sizing
+# rules -- the HF processor builds the training prompt, SGLang's own processor the
+# rollout prompt -- and for Nemotron 3.5 they disagree (HF rounds patches with
+# round(x + 0.5), SGLang with round(x)). On geo3k that is 1570 of 2702 images
+# with different image-token counts. Qwen's resize happens to hide it by snapping
+# every image to a multiple of 32 first. The HF target size is a fixed point of
+# both rules, so resizing to it makes both sides build the same grid -- and, since
+# neither then resizes again, the same pixels.
+_NATIVE_RESIZE_IMAGE_PROCESSORS = frozenset({"NemotronH_Omni_Reasoning_V3ImageProcessor"})
+
+
+def uses_native_resize(processor) -> bool:
+    """Whether process_vision_info resizes to the processor's own target size."""
+    image_processor = getattr(processor, "image_processor", None)
+    return type(image_processor).__name__ in _NATIVE_RESIZE_IMAGE_PROCESSORS
+
+
+def _resize_to_native_target(images, image_processor):
+    """Resize each image to the size `image_processor` would resize it to.
+
+    The size comes from the processor itself (`imgs_sizes`, one (h, w) per image),
+    so this does not restate its sizing rule. One call over all of a prompt's
+    images, so the processor's per-prompt budget applies as it would at train time.
+    The resize uses that processor's own kernel (torch bicubic, antialias), rounded
+    back to uint8 so the same image can be handed to the rollout engine as a PNG.
+    """
+    import numpy as np
+    import torch
+
+    images = [image.convert("RGB") for image in images]
+    sizes = image_processor(images=images, return_tensors=None)["imgs_sizes"]
+    resized = []
+    for image, (height, width) in zip(images, sizes, strict=True):
+        if image.size != (width, height):
+            pixels = torch.from_numpy(np.asarray(image, dtype=np.uint8).copy()).permute(2, 0, 1)[None].float()
+            pixels = torch.nn.functional.interpolate(
+                pixels, size=(height, width), mode="bicubic", align_corners=False, antialias=True
+            )
+            image = Image.fromarray(pixels.round().clamp(0, 255).to(torch.uint8)[0].permute(1, 2, 0).numpy())
+        resized.append(image)
+    return resized
+
+
 def process_vision_info(prompt, processor):
     """Extract PIL images (and videos) from the message list for training.
 
-    Tries qwen_vl_utils first (Qwen VL family), falls back to generic
-    extraction for other models (e.g. GLM-4.6V).
+    Processors in _NATIVE_RESIZE_IMAGE_PROCESSORS get their images resized to their
+    own target size (see there). Otherwise tries qwen_vl_utils first (Qwen VL
+    family), falls back to generic extraction for other models (e.g. GLM-4.6V).
     """
+    if uses_native_resize(processor):
+        images = _extract_images_from_messages(prompt) or None
+        if images:
+            images = _resize_to_native_target(images, processor.image_processor)
+        return {"images": images, "videos": None}
+
     try:
         from qwen_vl_utils import process_vision_info as qwen_process_vision_info
 

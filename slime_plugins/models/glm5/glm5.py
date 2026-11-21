@@ -170,7 +170,10 @@ def _apply_sglang_rope_forward(
     cos_sin_cache: torch.Tensor,
     positions: torch.Tensor,
 ) -> torch.Tensor:
-    from sglang.jit_kernel.rope import apply_rope_with_cos_sin_cache_inplace
+    try:
+        from sglang.kernels.ops.attention.rope import apply_rope_with_cos_sin_cache_inplace
+    except ImportError:
+        from sglang.jit_kernel.rope import apply_rope_with_cos_sin_cache_inplace
 
     output = torch.empty_strided(value.size(), value.stride(), dtype=value.dtype, device=value.device)
     output.copy_(value)
@@ -235,8 +238,12 @@ def _get_sglang_rope_cache(
 class _DSAKVFP8QAT(torch.autograd.Function):
     @staticmethod
     def forward(ctx, kv: torch.Tensor):
-        from sglang.srt.layers.attention.dsa.dequant_k_cache import dequantize_k_cache
-        from sglang.srt.layers.attention.dsa.quant_k_cache import quantize_k_cache
+        try:
+            from sglang.kernels.ops.attention.dsa.dequant_k_cache import dequantize_k_cache
+            from sglang.kernels.ops.attention.dsa.quant_k_cache import quantize_k_cache
+        except ImportError:
+            from sglang.srt.layers.attention.dsa.dequant_k_cache import dequantize_k_cache
+            from sglang.srt.layers.attention.dsa.quant_k_cache import quantize_k_cache
 
         if kv.dtype != torch.bfloat16 or kv.shape[-2:] != (1, 576):
             raise ValueError(

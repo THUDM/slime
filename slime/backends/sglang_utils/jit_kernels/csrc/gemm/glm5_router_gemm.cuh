@@ -95,7 +95,12 @@ void glm5_router_gemm(
     tvm::ffi::TensorView output,
     tvm::ffi::TensorView input,
     tvm::ffi::TensorView weight) {
+  // SGLang 0.5.21 moved the JIT host utilities into the sglang namespace.
+#ifdef SGLANG_NAMESPACED_KERNELS
+  using namespace sglang::host;
+#else
   using namespace host;
+#endif
 
   RuntimeCheck(input.device().device_type == kDLCUDA, "input must be CUDA");
   RuntimeCheck(input.is_contiguous(), "input must be contiguous");

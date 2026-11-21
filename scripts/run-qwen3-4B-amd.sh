@@ -34,13 +34,14 @@ export HIP_VISIBLE_DEVICES=${HIP_VISIBLE_DEVICES:-"0,1,2,3,4,5,6,7"} #You can ch
 export PYTHONUNBUFFERED=1
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-source "${SCRIPT_DIR}/models/qwen3-4B.sh"
+source "${SCRIPT_DIR}/models/qwen3-4B-Instruct-2507.sh"
 
+# Use the 256K-context Instruct-2507 checkpoint and its converted training weights.
 CKPT_ARGS=(
-   --hf-checkpoint ${MODEL_DIR}/Qwen3-4B
-   --ref-load ${MODEL_DIR}/Qwen3-4B_torch_dist
-   --load ${MODEL_DIR}/Qwen3-4B_slime/
-   --save ${MODEL_DIR}/Qwen3-4B_slime/
+   --hf-checkpoint ${MODEL_DIR}/Qwen3-4B-Instruct-2507
+   --ref-load ${MODEL_DIR}/Qwen3-4B-Instruct-2507_torch_dist
+   --load ${MODEL_DIR}/Qwen3-4B-Instruct-2507_slime/
+   --save ${MODEL_DIR}/Qwen3-4B-Instruct-2507_slime/
    --save-interval 20
 )
 
@@ -54,7 +55,7 @@ ROLLOUT_ARGS=(
    --num-rollout 3000
    --rollout-batch-size 32
    --n-samples-per-prompt 8
-   --rollout-max-response-len 8192
+   --rollout-max-response-len 131072
    --rollout-temperature 1
 
    --global-batch-size 256
@@ -65,7 +66,7 @@ EVAL_ARGS=(
    --eval-interval 20
    --eval-prompt-data aime ${DATA_DIR}/aime-2024/aime-2024.jsonl
    --n-samples-per-eval-prompt 16
-   --eval-max-response-len 16384
+   --eval-max-response-len 131072
    --eval-top-p 1
 )
 
@@ -73,7 +74,7 @@ PERF_ARGS=(
    --tensor-model-parallel-size 2
    --sequence-parallel
    --pipeline-model-parallel-size 1
-   --context-parallel-size 1
+   --context-parallel-size 2
    --expert-model-parallel-size 1
    --expert-tensor-parallel-size 1
 
@@ -83,6 +84,7 @@ PERF_ARGS=(
 
    # --micro-batch-size 1
    --use-dynamic-batch-size
+   --log-probs-chunk-size 1024
    --max-tokens-per-gpu 9216
 )
 

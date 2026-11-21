@@ -396,7 +396,7 @@ def trace_span(
 
     try:
         yield span_context
-    except Exception as exc:
+    except BaseException as exc:
         try:
             end_attrs = span_context.build_end_attrs()
             if record_error:

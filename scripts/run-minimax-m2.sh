@@ -50,7 +50,7 @@ ROLLOUT_ARGS=(
    --num-rollout 3000
    --rollout-batch-size 128
    --n-samples-per-prompt 8
-   --rollout-max-response-len 32768
+   --rollout-max-response-len 131072
    --rollout-temperature 1
 
    --over-sampling-batch-size 256
@@ -64,7 +64,7 @@ EVAL_ARGS=(
    --eval-interval 20
    --eval-prompt-data aime ${BASE_DIR}/rl_data/aime-2024.jsonl
    --n-samples-per-eval-prompt 8
-   --eval-max-response-len 32768
+   --eval-max-response-len 131072
    --eval-top-p 1
 )
 
@@ -76,7 +76,7 @@ PERF_ARGS=(
    --tensor-model-parallel-size 2
    --sequence-parallel
    --pipeline-model-parallel-size 2
-   --context-parallel-size 1
+   --context-parallel-size 2
    --expert-model-parallel-size 4
    --expert-tensor-parallel-size 1
 
@@ -85,17 +85,25 @@ PERF_ARGS=(
    --recompute-num-layers 1
 
    --use-dynamic-batch-size
+   --log-probs-chunk-size 1024
    --max-tokens-per-gpu 8192
 )
 
 GRPO_ARGS=(
    --advantage-estimator grpo
+   --use-score-centering
+   --score-centering-top-k 128
+   --pg-loss-type reinforce
+   --use-tis
+   --tis-clip-low 0
+   --tis-clip 2
+   --disable-grpo-std-normalization
+   --calculate-per-token-loss
+   --use-rollout-routing-replay
    --use-kl-loss
    --kl-loss-coef 0.00
    --kl-loss-type low_var_kl
    --entropy-coef 0.00
-   --eps-clip 0.2
-   --eps-clip-high 0.28
 )
 
 OPTIMIZER_ARGS=(

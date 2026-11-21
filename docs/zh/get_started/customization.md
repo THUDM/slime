@@ -66,6 +66,27 @@ def generate_rollout(args, rollout_id, data_source, evaluation=False) -> Rollout
 
 **示例**: 参见 [examples/fully_async](../_examples_synced/fully_async/README.md)
 
+选择 `--rollout-data-transport straw` 后，自定义 rollout 函数可以直接返回 Sample 列表，也可以放在 `RolloutFnTrainOutput` 中，由 manager 持久化。`RolloutFnTrainOutput.samples` 也接受 `DiskPayloadRef`。为了避免在内存中积累整个 batch，可以逐组保存已经生成、打分并筛选的结果。以下辅助函数接收 rollout 函数的 `data_source` 和逐组返回已完成数据的异步迭代器：
+
+```python
+from slime.data.transport import publish_rollout_async
+from slime.rollout.base_types import finalize_rollout_groups
+
+
+async def generate_stored_batch(args, rollout_id, data_source, completed_groups):
+    refs = []
+    async for group in completed_groups:
+        ref = await publish_rollout_async(
+            group, args, rollout_id, group=True, controller=data_source.controller
+        )
+        refs.append(ref)
+    return finalize_rollout_groups(args, rollout_id, refs, controller=data_source.controller)
+```
+
+数据源的 controller 负责将带 lease 的 group 提交到所属队列。`finalize_rollout_groups` 排序后调用一次配置的 batch sample filter，并保存 batch manifest；hook 修改 Sample 时会重新保存结果。Wrapper 需要 Sample 对象时，可调用 `slime.data.transport.load_rollout_samples(output.samples)`。
+
+straw 默认数据源为 `slime.data.queue_data_source.QueueDataSource`，通过 `get_samples(n)` 获取 prompt group，通过 `add_samples(groups)` 归还任务以供续跑。归还的 group 持久化后可由任意 reader 领取。自定义远端 worker 可以接收 `source.reader_config("worker_id")`，在自己的进程中调用 `config.open()`。Reader ID 必须唯一，`owner` 为保留名称；请求和写入结束后应关闭 reader。Reader 自动续租，关闭时归还未完成任务。
+
 ---
 
 ### `--custom-generate-function-path`
@@ -107,6 +128,7 @@ async def custom_generate(args, sample: Sample, sampling_params: dict) -> list[S
         s.response = segment.response
         s.response_length = segment.response_length
         s.loss_mask = segment.loss_mask
+        s.rollout_log_probs = segment.rollout_log_probs
         s.reward = segment.reward
         s.status = Sample.Status.COMPLETED
         s.rollout_id = rollout_id
@@ -114,7 +136,7 @@ async def custom_generate(args, sample: Sample, sampling_params: dict) -> list[S
     return samples
 ```
 
-如果一个完整 trajectory 只有一个总奖励、但被拆成了 `K` 个训练片段，常见做法是在这些片段之间分配这个奖励（例如每个片段写入 `reward / K`），避免把同一次 rollout 的奖励重复放大。
+如果完整 trajectory 只有一个最终奖励，每个片段应保留同一个完整奖励及原始 `group_index`。GRPO 在每个题目组内按不同的 `rollout_id` 统计均值和标准差，再把同一 rollout 的 advantage 传给其所有片段。loss 已按整条 rollout 中未被屏蔽的 token 总数归一化，包括分布在不同 microbatch 中的片段，因此再把 reward 除以片段数会降低多片段轨迹的权重。多个分支共享的生成前缀也只能计算一次 loss。
 
 **示例**: 参见 [examples/search-r1/generate_with_search.py](../../../examples/search-r1/generate_with_search.py) 和 [examples/multi_agent/rollout_with_multi_agents.py](../../../examples/multi_agent/rollout_with_multi_agents.py)
 
@@ -376,11 +398,11 @@ def log_eval_rollout_data(rollout_id, args, data, extra_metrics) -> bool
 
 ### `--data-source-path`
 
-**默认值**: `slime.rollout.data_source.RolloutDataSourceWithBuffer`
+**默认值**: `slime.data.data_source.RolloutDataSourceWithBuffer`
 
 **用途**: 覆盖 rollout 提示词的数据源。
 
-**基类**: `slime.rollout.data_source.DataSource`
+**基类**: `slime.data.data_source.DataSource`
 
 **必需方法**:
 ```python
@@ -448,7 +470,7 @@ def custom_hook(args, rollout_id, step_id, model, optimizer, opt_param_scheduler
 
 ---
 
-### 18. MoE 路由重放
+### MoE 路由重放
 
 通过记录和重放专家路由决策来稳定 MoE RL 训练。
 
@@ -459,7 +481,7 @@ def custom_hook(args, rollout_id, step_id, model, optimizer, opt_param_scheduler
 
 ---
 
-### 19. Disk 权重同步 Post-Write Hook（`--custom-update-weight-post-write-path`）
+### Disk 权重同步 Post-Write Hook（`--custom-update-weight-post-write-path`）
 
 **签名**：
 ```python

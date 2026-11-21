@@ -1,11 +1,43 @@
+diff --git a/python/sglang/srt/arg_groups/field_order.py b/python/sglang/srt/arg_groups/field_order.py
+index 20c35da6..3d07bc8a 100644
+--- a/python/sglang/srt/arg_groups/field_order.py
++++ b/python/sglang/srt/arg_groups/field_order.py
+@@ -364,6 +364,7 @@ POSITIONAL_FIELD_ORDER = (
+     "hicache_storage_backend",
+     "hicache_storage_prefetch_policy",
+     "hicache_storage_backend_extra_config",
++    "release_hicache",
+     "hicache_storage_prefetch_retry_poll_interval",
+     "hicache_storage_prefetch_retry_max_attempts",
+     "enable_unified_cache_external_linker",
+diff --git a/python/sglang/srt/arg_groups/fields/memory.py b/python/sglang/srt/arg_groups/fields/memory.py
+index 992caf72..e69ea6b7 100644
+--- a/python/sglang/srt/arg_groups/fields/memory.py
++++ b/python/sglang/srt/arg_groups/fields/memory.py
+@@ -175,6 +175,7 @@ class Memory(msgspec.Struct):
+         Optional[str],
+         "A dictionary in JSON string format, or a string starting with a leading '@' and a config file in JSON/YAML/TOML format, containing extra configuration for the storage backend.",
+     ] = None
++    release_hicache: A[bool, "Release hierarchical cache host memory during release_memory_occupation."] = False
+     hicache_storage_prefetch_retry_poll_interval: A[
+         int,
+         Arg(
 diff --git a/python/sglang/srt/managers/scheduler_components/weight_updater.py b/python/sglang/srt/managers/scheduler_components/weight_updater.py
-index 40e50efa440f8ec48a1b8c30b412a8d3cf525ea3..505bd2994fbf4812c5069d4391cb80197d42f80c 100644
+index 6d1a4056..2f92a45c 100644
 --- a/python/sglang/srt/managers/scheduler_components/weight_updater.py
 +++ b/python/sglang/srt/managers/scheduler_components/weight_updater.py
-@@ -206,10 +206,18 @@ class SchedulerWeightUpdaterManager:
+@@ -1,5 +1,7 @@
+ from __future__ import annotations
+
++from sglang.srt.runtime_context import get_memory
++
+ import logging
+ import time
+ import traceback
+@@ -337,10 +339,18 @@ class SchedulerWeightUpdaterManager:
          if tags is None or len(tags) == 0:
              tags = GPU_MEMORY_ALL_TYPES
- 
+
 +        tags_to_offload = []
          for tag in tags:
 +            if tag not in self.offload_tags and tag not in tags_to_offload:
@@ -16,44 +48,41 @@ index 40e50efa440f8ec48a1b8c30b412a8d3cf525ea3..505bd2994fbf4812c5069d4391cb8019
 +
 +        for tag in tags_to_offload:
              self.offload_tags.add(tag)
- 
+
 -        if GPU_MEMORY_TYPE_KV_CACHE in tags:
 +        if GPU_MEMORY_TYPE_KV_CACHE in tags_to_offload:
-             scheduler = self.scheduler
              if scheduler is not None:
                  if scheduler.disaggregation_mode == DisaggregationMode.DECODE:
-@@ -223,18 +231,24 @@ class SchedulerWeightUpdaterManager:
-                 elif scheduler.disaggregation_mode == DisaggregationMode.PREFILL:
-                     queue = getattr(scheduler, "disagg_prefill_bootstrap_queue", None)
-                     if queue is not None:
--                        queue.release_memory_occupation()
-+                            queue.release_memory_occupation()
+                     for queue_name in (
+@@ -356,8 +366,14 @@ class SchedulerWeightUpdaterManager:
+                         queue.release_memory_occupation()
              self.memory_saver_adapter.pause(GPU_MEMORY_TYPE_KV_CACHE)
              self.flush_cache()
-+            if scheduler is not None and scheduler.server_args.release_hicache:
++            if scheduler is not None and get_memory().release_hicache:
 +                release = getattr(
 +                    scheduler.tree_cache, "release_memory_occupation", None
 +                )
 +                if release is not None:
 +                    release()
- 
+
 -        if GPU_MEMORY_TYPE_WEIGHTS in tags:
 +        if GPU_MEMORY_TYPE_WEIGHTS in tags_to_offload:
+             self._assert_weight_cache_inactive("release_memory_occupation")
              self.stashed_model_static_state = _export_static_state(
                  self.tp_worker.model_runner.model
-             )
+@@ -365,7 +381,7 @@ class SchedulerWeightUpdaterManager:
              torch.distributed.barrier(self.tp_cpu_group)
              self.memory_saver_adapter.pause(GPU_MEMORY_TYPE_WEIGHTS)
- 
+
 -        if GPU_MEMORY_TYPE_CUDA_GRAPH in tags:
 +        if GPU_MEMORY_TYPE_CUDA_GRAPH in tags_to_offload:
              self.memory_saver_adapter.pause(GPU_MEMORY_TYPE_CUDA_GRAPH)
- 
+
          torch.get_device_module().synchronize()
-@@ -247,13 +261,21 @@ class SchedulerWeightUpdaterManager:
+@@ -378,13 +394,21 @@ class SchedulerWeightUpdaterManager:
          if tags is None or len(tags) == 0:
              tags = GPU_MEMORY_ALL_TYPES
- 
+
 +        tags_to_resume = []
          for tag in tags:
 +            if tag in self.offload_tags and tag not in tags_to_resume:
@@ -64,26 +93,26 @@ index 40e50efa440f8ec48a1b8c30b412a8d3cf525ea3..505bd2994fbf4812c5069d4391cb8019
 +
 +        for tag in tags_to_resume:
              self.offload_tags.remove(tag)
- 
+
 -        if GPU_MEMORY_TYPE_CUDA_GRAPH in tags:
 +        if GPU_MEMORY_TYPE_CUDA_GRAPH in tags_to_resume:
              self.memory_saver_adapter.resume(GPU_MEMORY_TYPE_CUDA_GRAPH)
- 
+
 -        if GPU_MEMORY_TYPE_WEIGHTS in tags:
 +        if GPU_MEMORY_TYPE_WEIGHTS in tags_to_resume:
+             self._assert_weight_cache_inactive("resume_memory_occupation")
              self.memory_saver_adapter.resume(GPU_MEMORY_TYPE_WEIGHTS)
              torch.distributed.barrier(self.tp_cpu_group)
-             _import_static_state(
-@@ -262,10 +284,16 @@ class SchedulerWeightUpdaterManager:
+@@ -394,10 +418,16 @@ class SchedulerWeightUpdaterManager:
              )
              del self.stashed_model_static_state
- 
+
 -        if GPU_MEMORY_TYPE_KV_CACHE in tags:
 +        if GPU_MEMORY_TYPE_KV_CACHE in tags_to_resume:
              self.memory_saver_adapter.resume(GPU_MEMORY_TYPE_KV_CACHE)
              scheduler = self.scheduler
              if scheduler is not None:
-+                if scheduler.server_args.release_hicache:
++                if get_memory().release_hicache:
 +                    resume = getattr(
 +                        scheduler.tree_cache, "resume_memory_occupation", None
 +                    )
@@ -92,201 +121,24 @@ index 40e50efa440f8ec48a1b8c30b412a8d3cf525ea3..505bd2994fbf4812c5069d4391cb8019
                  if scheduler.disaggregation_mode == DisaggregationMode.DECODE:
                      for queue_name in (
                          "disagg_decode_transfer_queue",
-diff --git a/python/sglang/srt/mem_cache/hi_mamba_radix_cache.py b/python/sglang/srt/mem_cache/hi_mamba_radix_cache.py
-index 381af58be2a7e5922cb1e5d0d583dea182b1e56a..ecd143cc6e9d56bd9e5013f604449abc3b230496 100644
---- a/python/sglang/srt/mem_cache/hi_mamba_radix_cache.py
-+++ b/python/sglang/srt/mem_cache/hi_mamba_radix_cache.py
-@@ -207,6 +207,19 @@ class HiMambaRadixCache(MambaRadixCache):
-         )
-         super().reset()
- 
-+    def release_memory_occupation(self) -> None:
-+        if self.enable_storage:
-+            logger.warning(
-+                "Skipping HiCache host memory release while storage backend is enabled."
-+            )
-+            return
-+        self.host_pool_group.release_memory_occupation()
-+
-+    def resume_memory_occupation(self) -> None:
-+        if self.enable_storage:
-+            return
-+        self.host_pool_group.resume_memory_occupation()
-+
-     def write_backup(self, node: TreeNode, write_back=False) -> int:
-         # Backup invariant (for write-through mode): backed-up nodes must form a
-         # contiguous prefix from root — no gaps.  Skip if parent isn't backed
-diff --git a/python/sglang/srt/mem_cache/hiradix_cache.py b/python/sglang/srt/mem_cache/hiradix_cache.py
-index 378a29e936e6c1ad3213f710cbf5bd9380bd019f..7733c5a7583bfa55ea03b435976562b169c4d9a8 100644
---- a/python/sglang/srt/mem_cache/hiradix_cache.py
-+++ b/python/sglang/srt/mem_cache/hiradix_cache.py
-@@ -730,6 +730,19 @@ class HiRadixCache(RadixCache):
-         self.evictable_host_leaves.clear()
-         super().reset()
- 
-+    def release_memory_occupation(self) -> None:
-+        if self.enable_storage:
-+            logger.warning(
-+                "Skipping HiCache host memory release while storage backend is enabled."
-+            )
-+            return
-+        self.cache_controller.mem_pool_host.release_memory_occupation()
-+
-+    def resume_memory_occupation(self) -> None:
-+        if self.enable_storage:
-+            return
-+        self.cache_controller.mem_pool_host.resume_memory_occupation()
-+
-     def get_height(self, node: TreeNode):
-         height = 0
-         while node != self.root_node:
-diff --git a/python/sglang/srt/mem_cache/memory_pool_host.py b/python/sglang/srt/mem_cache/memory_pool_host.py
-index 28c97f0cd1092e5478282a5cdf3961a5ca1b341d..110680f950fd7f7c7a0d3243523afd87db507313 100644
---- a/python/sglang/srt/mem_cache/memory_pool_host.py
-+++ b/python/sglang/srt/mem_cache/memory_pool_host.py
-@@ -114,7 +114,9 @@ class MHATokenToKVPoolHost(HostKVCache):
-         self.can_use_jit = _is_cuda and can_use_hicache_jit_kernel(
-             element_size=self.element_dim * self.dtype.itemsize
-         )
-+        self._post_init_host_buffers()
- 
-+    def _post_init_host_buffers(self) -> None:
-         if self.layout == "page_first":
-             # Transpose [page, layer, ...] -> [layer, page, ...] to get per-layer views
-             # This swaps strides without copying data
-@@ -686,6 +688,7 @@ class MHATokenToKOnlyPoolHost(HostKVCache):
- 
-         self.init_kv_buffer()
-         self.lock = threading.RLock()
-+        self._host_memory_released = False
-         self.clear()
- 
-         self.can_use_jit = _is_cuda and can_use_hicache_jit_kernel(
-@@ -696,6 +699,15 @@ class MHATokenToKOnlyPoolHost(HostKVCache):
-             dtype=torch.uint64,
-             device=self.device_pool.device,
-         )
-+        self._post_init_host_buffers()
-+
-+    def _host_buffer_attr_names(self):
-+        return ("k_buffer",)
-+
-+    def _init_host_buffers(self) -> None:
-+        self.init_kv_buffer()
-+
-+    def _post_init_host_buffers(self) -> None:
-         if self.layout == "page_first":
-             transposed = self.k_buffer.transpose(0, 1)
-             self.k_data_refs = [transposed[i] for i in range(self.layer_num)]
-@@ -1285,7 +1297,12 @@ class MLATokenToKVPoolHost(HiSparseHostPoolMixin, HostKVCache):
-         self.can_use_jit = _is_cuda and can_use_hicache_jit_kernel(
-             element_size=self.kv_cache_dim * self.dtype.itemsize
-         )
-+        self._post_init_host_buffers()
- 
-+    def _host_buffer_attr_names(self):
-+        return ("kv_buffer", "k_buffer", "v_buffer", "index_k_buffer")
-+
-+    def _post_init_host_buffers(self) -> None:
-         if self.layout == "page_first":
-             # Transpose [page, layer, ...] -> [layer, page, ...] to get per-layer views
-             # This swaps strides without copying data
-@@ -1801,8 +1818,18 @@ class MambaPoolHost(HostKVCache):
-         self.init_kv_buffer()
-         self._init_write_back_staging_buffers()
-         self.lock = threading.RLock()
-+        self._host_memory_released = False
-         self.clear()
- 
-+    def _host_buffer_attr_names(self):
-+        return ("temporal_buffer", "conv_buffer")
-+
-+    def _init_host_buffers(self) -> None:
-+        self.init_kv_buffer()
-+
-+    def _post_init_host_buffers(self) -> None:
-+        self._init_write_back_staging_buffers()
-+
-     def init_kv_buffer(self):
-         alloc_func = ALLOC_MEMORY_FUNCS[self.device_pool.device]
- 
-@@ -2361,6 +2388,12 @@ class LogicalHostPool:
-     def get_ksize_per_token(self):
-         return 0
- 
-+    def release_memory_occupation(self) -> None:
-+        pass
-+
-+    def resume_memory_occupation(self) -> None:
-+        pass
-+
- 
- class DeepSeekV4PagedHostPool(HiSparseHostPoolMixin, HostKVCache):
-     """Host mirror for a DeepSeek V4 paged KV/indexer sub-pool."""
-@@ -3183,6 +3216,18 @@ class HostPoolGroup:
-         for entry in self.entries:
-             entry.host_pool.clear()
- 
-+    def release_memory_occupation(self) -> None:
-+        for entry in self.entries:
-+            release = getattr(entry.host_pool, "release_memory_occupation", None)
-+            if release is not None:
-+                release()
-+
-+    def resume_memory_occupation(self) -> None:
-+        for entry in self.entries:
-+            resume = getattr(entry.host_pool, "resume_memory_occupation", None)
-+            if resume is not None:
-+                resume()
-+
-     def available_size(self):
-         return self.anchor_entry.host_pool.available_size()
- 
-@@ -3330,8 +3375,26 @@ class DSAIndexerPoolHost(HostKVCache):
-         self.can_use_write_back_jit = False
-         self._init_write_back_staging_buffers()
-         self.lock = threading.RLock()
-+        self._host_memory_released = False
-         self.clear()
- 
-+    def _requested_host_memory_bytes(self) -> int:
-+        return (
-+            self.page_num
-+            * self.layer_num
-+            * self.indexer_page_stride_size
-+            * self.indexer_dtype.itemsize
-+        )
-+
-+    def _host_buffer_attr_names(self):
-+        return ("index_k_with_scale_buffer",)
-+
-+    def _init_host_buffers(self) -> None:
-+        self.init_kv_buffer()
-+
-+    def _post_init_host_buffers(self) -> None:
-+        self._init_write_back_staging_buffers()
-+
-     def get_size_per_token(self):
-         return (
-             self.indexer_size_per_token * self.layer_num * self.indexer_dtype.itemsize
 diff --git a/python/sglang/srt/mem_cache/pool_host/base.py b/python/sglang/srt/mem_cache/pool_host/base.py
-index 39b809af2b378439d0868b52b9e1272e6dd05875..ade3cdc3965e62e8af1cd1c985d5d8a240f8cfc0 100644
+index 972b1cb6..25358d55 100644
 --- a/python/sglang/srt/mem_cache/pool_host/base.py
 +++ b/python/sglang/srt/mem_cache/pool_host/base.py
 @@ -1,6 +1,9 @@
  from __future__ import annotations
- 
+
  import abc
 +import ctypes
 +import ctypes.util
 +import gc
  import logging
  import threading
- from functools import wraps
-@@ -24,6 +27,27 @@ _is_hip = is_hip()
- # Host RAM to leave free when sizing HiCache pools (OS, other processes).
- HICACHE_HOST_MEMORY_RESERVE_BYTES: int = 10 * (1024**3)
- 
+ from collections.abc import Iterable
+@@ -102,6 +105,28 @@ def host_memory_budget_bytes(requested_bytes: int = 0) -> int:
+     return free // ranks_per_host()
+
+
 +try:
 +    _libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6")
 +    _libc.malloc_trim.argtypes = [ctypes.c_size_t]
@@ -308,14 +160,16 @@ index 39b809af2b378439d0868b52b9e1272e6dd05875..ade3cdc3965e62e8af1cd1c985d5d8a2
 +    if _libc is not None:
 +        _libc.malloc_trim(0)
 +
- 
++
  def sync_fixed_hicache_size(size: int, host_size: int) -> int:
      """Sync fixed-size HiCache token capacity across PP ranks.
-@@ -120,9 +144,21 @@ class HostKVCache(abc.ABC):
-                 device_pool.size,
+
+@@ -219,8 +244,20 @@ class HostKVCache(abc.ABC):
+                 device_capacity,
              )
- 
+
 -        # Verify there is enough available host memory.
+-        requested_bytes = self.size * self.size_per_token
 +        self._check_host_memory_available()
 +
 +        self.lock = threading.RLock()
@@ -329,27 +183,41 @@ index 39b809af2b378439d0868b52b9e1272e6dd05875..ade3cdc3965e62e8af1cd1c985d5d8a2
 +        return self.size * self.size_per_token
 +
 +    def _check_host_memory_available(self) -> None:
-         host_mem = psutil.virtual_memory()
--        requested_bytes = self.size * self.size_per_token
 +        requested_bytes = self._requested_host_memory_bytes()
-         available_bytes = host_mem.available - HICACHE_HOST_MEMORY_RESERVE_BYTES
+         available_bytes = host_memory_budget_bytes(requested_bytes)
          if requested_bytes > available_bytes:
              raise ValueError(
-@@ -131,15 +167,73 @@ class HostKVCache(abc.ABC):
+@@ -229,33 +266,73 @@ class HostKVCache(abc.ABC):
                  f"{available_bytes / 1e9:.2f} GB free. Please reduce the "
                  f"size of the hierarchical cache."
              )
 -        else:
--            logger.info(
--                f"Allocating {requested_bytes / 1e9:.2f} GB host memory for hierarchical KV cache."
--            )
-+        logger.info(
-+            f"Allocating {requested_bytes / 1e9:.2f} GB host memory for hierarchical KV cache."
-+        )
- 
+-            draft_layer_num = self.layer_num - self.target_layer_num
+-            if draft_layer_num > 0:
+-                logger.info(
+-                    "Allocating %s hierarchical KV host pool: %d tokens, "
+-                    "%.2f GB host memory, packed MTP KV layers: "
+-                    "target_layers=%d, draft_layers=%d, total_layers=%d.",
+-                    pool_label,
+-                    self.size,
+-                    requested_bytes / 1e9,
+-                    self.target_layer_num,
+-                    draft_layer_num,
+-                    self.layer_num,
+-                )
+-            else:
+-                logger.info(
+-                    "Allocating %s hierarchical KV host pool: %d tokens, %.2f GB host memory.",
+-                    pool_label,
+-                    self.size,
+-                    requested_bytes / 1e9,
+-                )
++        logger.info("Allocating %.2f GB host memory for hierarchical cache.", requested_bytes / 1e9)
+
 +    def _init_host_buffers(self) -> None:
          self.kv_buffer = self.init_kv_buffer()
- 
+         self.fd = getattr(self.allocator, "fd", None)
+
 -        # A lock for synchronized operations on memory allocation and state transitions.
 -        self.lock = threading.RLock()
 +    def _post_init_host_buffers(self) -> None:
@@ -360,6 +228,7 @@ index 39b809af2b378439d0868b52b9e1272e6dd05875..ade3cdc3965e62e8af1cd1c985d5d8a2
 +
 +    def _host_derived_attr_names(self):
 +        return (
++            "host_kv_data_refs",
 +            "k_data_refs",
 +            "v_data_refs",
 +            "k_data_ptrs",
@@ -413,16 +282,300 @@ index 39b809af2b378439d0868b52b9e1272e6dd05875..ade3cdc3965e62e8af1cd1c985d5d8a2
 +        self._post_init_host_buffers()
 +        self._host_memory_released = False
          self.clear()
- 
+
      def destroy(self):
+diff --git a/python/sglang/srt/mem_cache/pool_host/dsa.py b/python/sglang/srt/mem_cache/pool_host/dsa.py
+index e6d3d624..8655d22d 100644
+--- a/python/sglang/srt/mem_cache/pool_host/dsa.py
++++ b/python/sglang/srt/mem_cache/pool_host/dsa.py
+@@ -52,6 +52,23 @@ class DSAIndexerPoolHost(HostKVCache):
+
+     device_pool: DSATokenToKVPool
+
++    def _host_buffer_attr_names(self):
++        return ("index_k_with_scale_buffer",)
++
++    def _init_host_buffers(self) -> None:
++        self.init_kv_buffer()
++
++    def _requested_host_memory_bytes(self) -> int:
++        return (
++            self.page_num
++            * self.layer_num
++            * self.indexer_page_stride_size
++            * self.indexer_dtype.itemsize
++        )
++
++    def _post_init_host_buffers(self) -> None:
++        self._init_write_back_staging_buffers()
++
+     def __init__(
+         self,
+         device_pool: DSATokenToKVPool,
+@@ -105,6 +122,7 @@ class DSAIndexerPoolHost(HostKVCache):
+                 "skipping indexer buffer allocation",
+                 self.size,
+             )
++            self._host_memory_released = False
+             self.lock = threading.RLock()
+             self.clear()
+             return
+@@ -139,6 +157,7 @@ class DSAIndexerPoolHost(HostKVCache):
+         self.init_kv_buffer()
+         self._init_write_back_staging_buffers()
+         self.lock = threading.RLock()
++        self._host_memory_released = False
+         self.clear()
+
+     def get_size_per_token(self):
+diff --git a/python/sglang/srt/mem_cache/pool_host/group.py b/python/sglang/srt/mem_cache/pool_host/group.py
+index 4abe9b3e..1fcf3ce7 100644
+--- a/python/sglang/srt/mem_cache/pool_host/group.py
++++ b/python/sglang/srt/mem_cache/pool_host/group.py
+@@ -35,6 +35,18 @@ class PoolEntry:
+ class HostPoolGroup:
+     """Allocation facade for an anchor host pool and its side pools."""
+
++    def release_memory_occupation(self) -> None:
++        for entry in self.entries:
++            release = getattr(entry.host_pool, "release_memory_occupation", None)
++            if release is not None:
++                release()
++
++    def resume_memory_occupation(self) -> None:
++        for entry in self.entries:
++            resume = getattr(entry.host_pool, "resume_memory_occupation", None)
++            if resume is not None:
++                resume()
++
+     def __init__(self, entries: list[PoolEntry]):
+         if not entries:
+             raise ValueError("HostPoolGroup requires at least one pool entry.")
+diff --git a/python/sglang/srt/mem_cache/pool_host/mamba.py b/python/sglang/srt/mem_cache/pool_host/mamba.py
+index 79accc17..35e43a56 100644
+--- a/python/sglang/srt/mem_cache/pool_host/mamba.py
++++ b/python/sglang/srt/mem_cache/pool_host/mamba.py
+@@ -72,6 +72,15 @@ def _npu_hicache_mamba_io_mode() -> str:
+
+
+ class MambaPoolHost(HostKVCache):
++    def _host_buffer_attr_names(self):
++        return ("kv_buffer", "temporal_buffer", "conv_buffer")
++
++    def _init_host_buffers(self) -> None:
++        self.kv_buffer = self.init_kv_buffer()
++
++    def _post_init_host_buffers(self) -> None:
++        self._init_write_back_staging_buffers()
++
+     def __init__(
+         self,
+         device_pool: MambaPool,
+@@ -166,6 +175,7 @@ class MambaPoolHost(HostKVCache):
+         self.kv_buffer = self.init_kv_buffer()
+         self._configure_npu_mamba_io()
+         self._init_write_back_staging_buffers()
++        self._host_memory_released = False
+         self.lock = threading.RLock()
+         self.clear()
+
+diff --git a/python/sglang/srt/mem_cache/pool_host/mha.py b/python/sglang/srt/mem_cache/pool_host/mha.py
+index 198a15a7..61aff24c 100644
+--- a/python/sglang/srt/mem_cache/pool_host/mha.py
++++ b/python/sglang/srt/mem_cache/pool_host/mha.py
+@@ -161,6 +161,9 @@ class MHATokenToKVPoolHost(HostKVCache):
+             element_size=self.element_dim * self.dtype.itemsize,
+         )
+
++        self._post_init_host_buffers()
++
++    def _post_init_host_buffers(self) -> None:
+         if self.layout == "page_first":
+             # Transpose [page, layer, ...] -> [layer, page, ...] to get per-layer views
+             # This swaps strides without copying data
+@@ -779,6 +782,12 @@ class MHATokenToKOnlyPoolHost(HostKVCache):
+
+     device_pool: MHATokenToKOnlyPool
+
++    def _host_buffer_attr_names(self):
++        return ("k_buffer",)
++
++    def _init_host_buffers(self) -> None:
++        self.init_kv_buffer()
++
+     def __init__(
+         self,
+         device_pool: MHATokenToKOnlyPool,
+@@ -824,6 +833,7 @@ class MHATokenToKOnlyPoolHost(HostKVCache):
+         )
+
+         self.init_kv_buffer()
++        self._host_memory_released = False
+         self.lock = threading.RLock()
+         self.clear()
+
+@@ -835,6 +845,9 @@ class MHATokenToKOnlyPoolHost(HostKVCache):
+             dtype=torch.uint64,
+             device=self.device_pool.device,
+         )
++        self._post_init_host_buffers()
++
++    def _post_init_host_buffers(self) -> None:
+         if self.layout == "page_first":
+             transposed = self.k_buffer.transpose(0, 1)
+             self.k_data_refs = [transposed[i] for i in range(self.layer_num)]
+diff --git a/python/sglang/srt/mem_cache/pool_host/mla.py b/python/sglang/srt/mem_cache/pool_host/mla.py
+index b60325f8..9a2cbd22 100644
+--- a/python/sglang/srt/mem_cache/pool_host/mla.py
++++ b/python/sglang/srt/mem_cache/pool_host/mla.py
+@@ -67,6 +67,9 @@ class MLATokenToKVPoolHost(HiSparseHostPoolMixin, HostKVCache):
+     device_pool: MLATokenToKVPool
+     mtp_draft_device_pools: tuple[MLATokenToKVPool, ...] = ()
+
++    def _host_buffer_attr_names(self):
++        return ("kv_buffer", "k_buffer", "v_buffer", "index_k_buffer", "index_k_scale_buffer")
++
+     def __init__(
+         self,
+         device_pool: MLATokenToKVPool,
+@@ -127,6 +130,9 @@ class MLATokenToKVPoolHost(HiSparseHostPoolMixin, HostKVCache):
+             element_size=self.kv_cache_dim * self.dtype.itemsize,
+         )
+
++        self._post_init_host_buffers()
++
++    def _post_init_host_buffers(self) -> None:
+         if self.layout in ("page_first", "page_first_kv_split"):
+             # Transpose [page, layer, ...] -> [layer, page, ...] to get per-layer views
+             # This swaps strides without copying data.  For page_first_kv_split,
+diff --git a/python/sglang/srt/mem_cache/pool_host/unified.py b/python/sglang/srt/mem_cache/pool_host/unified.py
+index f3aa0172..94d9e075 100644
+--- a/python/sglang/srt/mem_cache/pool_host/unified.py
++++ b/python/sglang/srt/mem_cache/pool_host/unified.py
+@@ -6,7 +6,7 @@ from contextlib import contextmanager
+
+ import torch
+
+-from sglang.srt.mem_cache.pool_host.base import HostKVCache, host_memory_budget_bytes
++from sglang.srt.mem_cache.pool_host.base import HostKVCache, host_memory_budget_bytes, _trim_host_allocator
+ from sglang.srt.mem_cache.pool_host.common import (
+     ALLOC_MEMORY_FUNCS,
+     _cuda_host_unregister,
+@@ -174,6 +174,10 @@ class _SharedPageEnvelopeHostBacking:
+         self.allocator = get_allocator_from_storage(allocator_type)
+         self.lock = threading.RLock()
+         alloc_func = ALLOC_MEMORY_FUNCS[device_buffers[0].device]
++        self._alloc_func = alloc_func
++        self._total_bytes = total_bytes
++        self._allocation_device = device
++        self._released_users: set[str] = set()
+         self.raw = alloc_func(
+             (total_bytes,),
+             dtype=torch.uint8,
+@@ -203,6 +207,7 @@ class _SharedPageEnvelopeHostBacking:
+     def release(self, name: str) -> None:
+         with self.lock:
+             self._users.discard(name)
++            self._released_users.discard(name)
+             self.destroy_if_unused()
+
+     def destroy_if_unused(self) -> None:
+@@ -211,14 +216,47 @@ class _SharedPageEnvelopeHostBacking:
+                 return
+             self._destroyed = True
+             events = self._begin_compaction()
++            try:
++                for event in events:
++                    event.synchronize()
++                if self.raw is not None and self.pin_memory and (_is_cuda or _is_hip):
++                    _cuda_host_unregister(self.raw)
++                self.raw = None
++            finally:
++                self._finish_compaction()
++
++    def release_memory_occupation(self, name: str) -> None:
++        with self.lock:
++            self._released_users.add(name)
++            if self._released_users != self._users or self.raw is None:
++                return
++            events = self._begin_compaction()
+             try:
+                 for event in events:
+                     event.synchronize()
+                 if self.pin_memory and (_is_cuda or _is_hip):
+                     _cuda_host_unregister(self.raw)
+                 self.raw = None
++                self.fd = None
+             finally:
+                 self._finish_compaction()
++            _trim_host_allocator()
++
++    def resume_memory_occupation(self, name: str) -> None:
++        with self.lock:
++            if self.raw is None:
++                available = host_memory_budget_bytes(self._total_bytes)
++                if self._total_bytes > available:
++                    raise ValueError("Not enough host memory to resume the unified HiCache pool.")
++                self.raw = self._alloc_func(
++                    (self._total_bytes,),
++                    dtype=torch.uint8,
++                    device=self._allocation_device,
++                    pin_memory=self.pin_memory,
++                    allocator=self.allocator,
++                )
++                self.fd = getattr(self.allocator, "fd", None)
++            self._released_users.discard(name)
+
+     def page_buffer(self, name: str) -> torch.Tensor:
+         side = self.sides[name]
+@@ -695,6 +733,7 @@ class UnifiedPageEnvelopeHostPool(HostKVCache):
+         self.fd = _shared_backing.fd
+         self.lock = _shared_backing.lock
+         self._destroyed = False
++        self._host_memory_released = False
+         _shared_backing.retain(pool_label)
+
+     @classmethod
+@@ -815,6 +854,31 @@ class UnifiedPageEnvelopeHostPool(HostKVCache):
+             return host_indices, device_indices.cpu()
+         raise ValueError(f"Unsupported io backend: {io_backend}")
+
++    def release_memory_occupation(self) -> None:
++        with self.lock:
++            if self._host_memory_released:
++                return
++            self.clear()
++            self.kv_buffer = None
++            self._host_page_buffer_view = None
++            self.fd = None
++            self._shared_backing.release_memory_occupation(self.pool_label)
++            self._host_memory_released = True
++
++    def resume_memory_occupation(self) -> None:
++        with self.lock:
++            if not self._host_memory_released:
++                return
++            self._shared_backing.resume_memory_occupation(self.pool_label)
++            self._host_page_buffer_view = self._shared_backing.page_buffer(self.pool_label)
++            self.kv_buffer = (
++                self._shared_backing.raw
++                if self.pool_label == self._shared_backing.registration_owner
++                else None
++            )
++            self.fd = self._shared_backing.fd
++            self._host_memory_released = False
++
+     def destroy(self) -> None:
+         if self._destroyed:
+             return
 diff --git a/python/sglang/srt/mem_cache/unified_radix_cache.py b/python/sglang/srt/mem_cache/unified_radix_cache.py
-index 5fd3c95ef4e534d08876f5afc7145fda25f02011..9c309b7d2b12c68f1f70f920aad5d4111ee1baa9 100644
+index 421a2157..34816e35 100644
 --- a/python/sglang/srt/mem_cache/unified_radix_cache.py
 +++ b/python/sglang/srt/mem_cache/unified_radix_cache.py
-@@ -487,6 +487,21 @@ class UnifiedRadixCache(KVCacheEventMixin, BasePrefixCache):
-         )
-         self._record_all_cleared_event()
- 
+@@ -401,6 +401,21 @@ class UnifiedRadixCache(BasePrefixCache):
+
+         self.tree_core.kv_events.record_all_cleared()
+
 +    def release_memory_occupation(self) -> None:
 +        if self.enable_storage:
 +            logger.warning(
@@ -440,19 +593,66 @@ index 5fd3c95ef4e534d08876f5afc7145fda25f02011..9c309b7d2b12c68f1f70f920aad5d411
 +
      def init_hicache(self, server_args: ServerArgs, params: CacheInitParams) -> None:
          """Initialize HiCache infrastructure."""
-         from sglang.srt.mem_cache.hybrid_cache.hybrid_pool_assembler import (
-diff --git a/python/sglang/srt/server_args.py b/python/sglang/srt/server_args.py
-index 3049e6d85b2ec11bf9258609886baa9b9b19abfb..5af52950ff182997cf51badc33e53dc45475a93b 100644
---- a/python/sglang/srt/server_args.py
-+++ b/python/sglang/srt/server_args.py
-@@ -2052,6 +2052,10 @@ class ServerArgs:
-         Optional[str],
-         "A dictionary in JSON string format, or a string starting with a leading '@' and a config file in JSON/YAML/TOML format, containing extra configuration for the storage backend.",
-     ] = None
-+    release_hicache: A[
-+        bool,
-+        "Release hierarchical cache host memory during release_memory_occupation.",
-+    ] = False
- 
-     # -------------------------------------------------------------------------
-     # Hierarchical sparse attention
+         self.host_memory_mode = get_memory().hicache_host_memory_mode
+diff --git a/test/registered/unit/mem_cache/test_hybrid_pool_assembler.py b/test/registered/unit/mem_cache/test_hybrid_pool_assembler.py
+index eafba691..4ac0a4dc 100644
+--- a/test/registered/unit/mem_cache/test_hybrid_pool_assembler.py
++++ b/test/registered/unit/mem_cache/test_hybrid_pool_assembler.py
+@@ -312,6 +312,32 @@ def _build_unified_host_pair(bundle):
+
+
+ class TestUnifiedPageEnvelopeHostPool(CustomTestCase):
++    def test_release_resume_shared_host_backing(self):
++        full, swa = _build_unified_host_pair(_build_unified_swa_pool())
++        self.addCleanup(full.destroy)
++        self.addCleanup(swa.destroy)
++        backing = full._shared_backing
++        self.assertIsNotNone(full.alloc(4))
++        self.assertIsNotNone(swa.alloc(4))
++        full.release_memory_occupation()
++        self.assertIsNotNone(backing.raw)
++        swa.release_memory_occupation()
++        self.assertIsNone(backing.raw)
++        self.assertIsNone(full._host_page_buffer_view)
++        self.assertIsNone(swa._host_page_buffer_view)
++        full.release_memory_occupation()
++        full.resume_memory_occupation()
++        allocation = backing.raw
++        swa.resume_memory_occupation()
++        self.assertIs(backing.raw, allocation)
++        self.assertIsNotNone(full.alloc(4))
++        self.assertIsNotNone(swa.alloc(4))
++        # Destroying an offloaded pair must not attempt to unregister None.
++        full.release_memory_occupation()
++        swa.release_memory_occupation()
++        full.destroy()
++        swa.destroy()
++
+     def test_shared_arena_can_reuse_bytes_across_sides(self):
+         page_size = 4
+         full_pool, swa_pool = _build_unified_host_pair(
+diff --git a/test/registered/unit/mem_cache/test_mem_pool_host.py b/test/registered/unit/mem_cache/test_mem_pool_host.py
+index 360899c7..35a8ca83 100644
+--- a/test/registered/unit/mem_cache/test_mem_pool_host.py
++++ b/test/registered/unit/mem_cache/test_mem_pool_host.py
+@@ -89,6 +89,20 @@ class TestHostKVCache(CustomTestCase):
+                         host_pool.size * host_pool.size_per_token,
+                     )
+
++    def test_release_resume_drops_host_views_and_restores_capacity(self):
++        import weakref
++
++        buffer = weakref.ref(self.host_pool.kv_buffer)
++        self.host_pool.release_memory_occupation()
++        self.host_pool.release_memory_occupation()
++        self.assertIsNone(buffer())
++        self.assertIsNone(self.host_pool.host_kv_data_refs)
++        self.assertEqual(self.host_pool.free_slots.numel(), 0)
++        self.host_pool.resume_memory_occupation()
++        self.host_pool.resume_memory_occupation()
++        self.assertEqual(self.host_pool.available_size(), self.host_pool.size)
++        self.assertIsNotNone(self.host_pool.alloc(self.page_size))
++
+     def test_double_alloc(self):
+         indices = self.host_pool.alloc(4)
+         self.assertEqual(len(indices), 4)

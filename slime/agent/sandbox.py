@@ -13,6 +13,7 @@ import io
 import logging
 import os
 import random
+import shlex
 import time
 from pathlib import Path
 from typing import Protocol, runtime_checkable
@@ -22,6 +23,10 @@ logger = logging.getLogger(__name__)
 
 ExecResult = tuple[int, str, str]
 FileContent = str | bytes | Path
+
+
+class SandboxTerminatedError(RuntimeError):
+    """The sandbox stopped while executing an agent trajectory."""
 
 
 @runtime_checkable
@@ -35,6 +40,10 @@ class Sandbox(Protocol):
     mark whether re-sending the command after a severed response is safe to
     replay (see ``E2BSandbox._rpc_retry``). Backends without retries may
     ignore it.
+
+    A provider may expose ``emulates_root=True`` when guest user identities are
+    virtual and the host runtime already owns the writable filesystem. Account
+    setup then skips recursive guest ownership changes.
     """
 
     sandbox_id: str
@@ -56,7 +65,12 @@ class Sandbox(Protocol):
 
     async def write_file(self, sandbox_path: str, content: FileContent, *, user: str = "root") -> None: ...
 
-    async def read_file(self, sandbox_path: str, *, user: str = "root") -> str: ...
+    async def read_file(self, sandbox_path: str, *, user: str = "root") -> str:
+        """Read text, returning an empty string for a missing file.
+
+        Lifecycle, permission and transport failures must propagate.
+        """
+        ...
 
 
 EXIT_TIME_BUDGET_EXCEEDED = -1
@@ -66,15 +80,18 @@ async def _await_done_marker(sb: Sandbox, done_file: str, *, user: str, time_bud
     """Poll a detached command's exit-code marker until it appears, returning the
     exit code (or ``EXIT_TIME_BUDGET_EXCEEDED`` if the budget runs out first).
 
-    The 5s ``test -f && cat`` polls are deliberately short, idempotent RPCs --
-    they keep the sandbox alive against idle GC while the detached command runs
-    over a stream the gateway can't sever.
+    Read the marker directly every 5s. Spawning a shell for each poll adds load
+    and some providers terminate the whole sandbox when an exec times out.
+    File reads are idempotent RPCs and still keep the sandbox active.
     """
     deadline = time.time() + time_budget_sec
     while time.time() < deadline:
         await asyncio.sleep(5)
-        ec, out, _ = await sb.exec(f"test -f {done_file} && cat {done_file}", user=user, timeout=15, check=False)
-        if ec == 0 and (out or "").strip():
+        try:
+            out = await sb.read_file(done_file, user=user)
+        except FileNotFoundError:
+            continue
+        if (out or "").strip():
             return int(out.strip())
     return EXIT_TIME_BUDGET_EXCEEDED
 
@@ -378,22 +395,26 @@ class E2BSandbox:
         )
 
     async def read_file(self, sandbox_path: str, *, user: str = "root") -> str:
+        from e2b.exceptions import FileNotFoundException
+
         try:
             return await self._rpc_retry(
                 f"read_file({sandbox_path})",
                 lambda: self._sb.files.read(sandbox_path, user=user),
             )
-        except Exception:
+        except FileNotFoundException:
             return ""
 
 
 async def ensure_agent_user(sb: Sandbox, workdir: str) -> None:
-    """Create the unprivileged 'agent' user that owns workdir + can git diff."""
+    """Provision the agent account, filesystem access, and Git configuration."""
+    command = "id agent >/dev/null 2>&1 || useradd -m -s /bin/bash agent"
+    if not getattr(sb, "emulates_root", False):
+        command += f" && chown -R agent:agent /home/agent {shlex.quote(workdir)}"
+    command += " && git config --system --add safe.directory '*' && id agent"
     await sb.exec(
-        f"id agent >/dev/null 2>&1 || useradd -m -s /bin/bash agent && "
-        f"chown -R agent:agent /home/agent {workdir} && "
-        f"git config --system --add safe.directory '*' && id agent",
+        command,
         user="root",
         check=True,
-        timeout=60,
+        timeout=600,
     )

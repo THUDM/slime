@@ -12,6 +12,7 @@ on the updatable (actor) server, testing:
 
 import os
 import tempfile
+from shlex import quote
 
 import slime.utils.external_utils.command_utils as U
 
@@ -54,6 +55,7 @@ def execute():
     ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /root/models/{MODEL_NAME}/ "
 
     rollout_args = (
+        "--rollout-data-transport straw "
         "--prompt-data /root/datasets/gsm8k/train.parquet "
         "--input-key messages "
         "--label-key label "
@@ -146,11 +148,13 @@ def execute():
         f"{misc_args} "
     )
 
-    U.execute_train(
-        train_args=train_args,
-        num_gpus_per_node=NUM_GPUS,
-        megatron_model_type=MODEL_TYPE,
-    )
+    with tempfile.TemporaryDirectory(prefix="slime_straw_") as rollout_dir:
+        train_args += f"--rollout-data-dir {quote(rollout_dir)} "
+        U.execute_train(
+            train_args=train_args,
+            num_gpus_per_node=NUM_GPUS,
+            megatron_model_type=MODEL_TYPE,
+        )
 
 
 if __name__ == "__main__":

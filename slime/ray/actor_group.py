@@ -1,3 +1,4 @@
+import copy
 import os
 import shutil
 import time
@@ -7,7 +8,9 @@ import ray
 from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
+from slime.ray.training_recovery import configure_recovery_checkpoint, training_recovery_enabled
 from slime.ray.utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, add_default_ray_env_vars
+from slime.utils.weight_sync import should_flush_cache
 
 
 class RayTrainGroup:
@@ -41,7 +44,9 @@ class RayTrainGroup:
         with_opd_teacher: bool = False,
         actor_cls=None,
     ) -> None:
-        self.args = args
+        # Role initialization/release cycles resolve their own checkpoint
+        # options; they must not rewrite the driver's attempt configuration.
+        self.args = copy.deepcopy(args)
         self._num_nodes = num_nodes
         self._num_gpus_per_node = num_gpus_per_node
         self._pg = pg
@@ -127,6 +132,18 @@ class RayTrainGroup:
             if rank == 0:
                 master_addr, master_port = ray.get(actor.get_master_addr_and_port.remote())
             self._actor_handlers.append(actor)
+        if self._rollout_manager is not None:
+            # Register before model initialization can OOM. The serving owner
+            # can then release all ranks even if the manager also disappears.
+            configuration = ray.get(
+                self._rollout_manager.register_training_actors.remote(self.role, self._actor_handlers, self.args)
+            )
+            configuration["update_weight_start_version"] = max(
+                configuration["update_weight_start_version"], self._disk_weight_version
+            )
+            for name, value in configuration.items():
+                setattr(self.args, name, value)
+            self._disk_weight_version = configuration["update_weight_start_version"]
 
     def async_train(self, rollout_id, rollout_data_ref, external_data=None):
         """Do one rollout training. Returns a list of Ray refs (one per worker).
@@ -148,21 +165,21 @@ class RayTrainGroup:
             for actor in self._actor_handlers
         ]
 
-    def save_model(self, rollout_id, force_sync=False):
-        """Save actor model"""
-        ret = ray.get([actor.save_model.remote(rollout_id, force_sync=force_sync) for actor in self._actor_handlers])
+    def save_model(self, rollout_id, force_sync=False) -> None:
+        """Save on all ranks; force_sync also waits for asynchronous writes."""
+        ray.get([actor.save_model.remote(rollout_id, force_sync=force_sync) for actor in self._actor_handlers])
         if self._release_train_enabled():
             self.args.load = self.args.save
             self.args.ckpt_step = None
             self.args.finetune = False
             self.args.no_load_optim = self.args.no_save_optim
             self.args.no_load_rng = False
-        return ret
 
-    def update_weights(self):
-        """Broadcast weights from rank 0 to all other ranks."""
+    def update_weights(self) -> None:
+        """Publish actor weights; disk reload is coordinated after all ranks save."""
         if not self._full_disk_weight_update_enabled():
-            return ray.get([actor.update_weights.remote() for actor in self._actor_handlers])
+            ray.get([actor.update_weights.remote() for actor in self._actor_handlers])
+            return
 
         weight_version = self._disk_weight_version + 1
         disk_weight_dir = Path(self.args.update_weight_disk_dir) / f"weight_v{weight_version:06d}"
@@ -188,6 +205,10 @@ class RayTrainGroup:
     def create(self, rollout_manager=None):
         if self._actor_handlers:
             return None
+        if training_recovery_enabled(self.args):
+            # Role-specific YAML overrides are applied after CLI validation.
+            # Recheck each role's optimizer/RNG checkpoint policy here.
+            configure_recovery_checkpoint(self.args)
         if rollout_manager is not None:
             self._rollout_manager = rollout_manager
         self.args.update_weight_start_version = self._disk_weight_version
@@ -241,13 +262,18 @@ class RayTrainGroup:
             model_path = self.args.update_weight_local_checkpoint_dir
         else:
             model_path = str(disk_weight_dir)
-        ray.get([engine.pause_generation.remote() for engine in engines])
-        ray.get([engine.flush_cache.remote() for engine in engines])
+        flush_cache = should_flush_cache(
+            self.args.flush_cache_interval, int(weight_version), getattr(self.args, "update_weight_start_version", 0)
+        )
+        ray.get([engine.pause_generation.remote(mode="abort" if flush_cache else "in_place") for engine in engines])
+        if flush_cache:
+            ray.get([engine.flush_cache.remote() for engine in engines])
         ray.get(
             [
                 engine.update_weights_from_disk.remote(
                     model_path=model_path,
                     weight_version=weight_version,
+                    flush_cache=flush_cache,
                 )
                 for engine in engines
             ]

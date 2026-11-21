@@ -93,7 +93,6 @@ def configure_megatron_server_args(args):
     args.kl_coef = 0
     args.use_opd = False
     args.use_critic = False
-    args.keep_old_actor = False
     args.no_load_optim = True
     args.no_load_rng = True
     # Keep this as a list (not str), otherwise freeze logic iterates over characters.

@@ -1,5 +1,7 @@
+import ctypes
 import gc
 import logging
+from functools import lru_cache
 
 import psutil
 import torch
@@ -8,6 +10,34 @@ import torch.distributed as dist
 from slime.utils import accelerator
 
 logger = logging.getLogger(__name__)
+
+
+@lru_cache(maxsize=1)
+def _cuda_stack_api():
+    driver = ctypes.CDLL("libcuda.so.1")
+    driver.cuCtxGetLimit.argtypes = [ctypes.POINTER(ctypes.c_size_t), ctypes.c_int]
+    driver.cuCtxGetLimit.restype = ctypes.c_int
+    driver.cuCtxSetLimit.argtypes = [ctypes.c_int, ctypes.c_size_t]
+    driver.cuCtxSetLimit.restype = ctypes.c_int
+    return driver
+
+
+def reset_cuda_stack_size() -> None:
+    """Release an enlarged CUDA per-thread stack after model offload."""
+    if torch.version.cuda is None or torch.version.hip is not None or not torch.cuda.is_initialized():
+        return
+    torch.cuda.synchronize()
+    driver = _cuda_stack_api()
+    previous = ctypes.c_size_t()
+    error = driver.cuCtxGetLimit(ctypes.byref(previous), 0)  # CU_LIMIT_STACK_SIZE
+    if error:
+        raise RuntimeError(f"cuCtxGetLimit(CU_LIMIT_STACK_SIZE) failed: CUDA error {error}")
+    if previous.value <= 1024:
+        return
+    error = driver.cuCtxSetLimit(0, 1024)
+    if error:
+        raise RuntimeError(f"cuCtxSetLimit(CU_LIMIT_STACK_SIZE) failed: CUDA error {error}")
+    logger.info("Reset CUDA stack limit after offload: %d -> 1024 bytes", previous.value)
 
 
 def clear_memory(clear_host_memory: bool = False):

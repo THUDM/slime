@@ -11,6 +11,25 @@ from megatron.core.transformer.transformer_layer import get_transformer_layer_of
 from slime.utils.types import ParamInfo
 
 
+def _merge_param_partitions(name, partitions, partition_dim, partition_sections=None):
+    if partition_sections is not None:
+        tp_size = len(partitions)
+        if any(size % tp_size for size in partition_sections):
+            raise ValueError("Projection sections must be divisible by TP")
+        local_sections = tuple(size // tp_size for size in partition_sections)
+        split = [part.split(local_sections, dim=partition_dim) for part in partitions]
+        result = torch.cat([part for section in zip(*split, strict=True) for part in section], dim=partition_dim)
+        result.partition_sections = partition_sections
+        return result
+    if "linear_fc1.weight" in name or "linear_fc1.bias" in name:
+        split = [part.chunk(2, dim=0) for part in partitions]
+        partitions = [part[0] for part in split] + [part[1] for part in split]
+    # Megatron grouped MoE exposes its FC2 partition dimension as zero.
+    if "linear_fc2.weight" in name and partition_dim == 0:
+        partition_dim = 1
+    return torch.cat(partitions, dim=partition_dim)
+
+
 def all_gather_param(name: str, param: torch.nn.Parameter) -> torch.Tensor:
     """
     All-gather TP-sharded param to full tensor. expert_bias→param,
@@ -21,8 +40,11 @@ def all_gather_param(name: str, param: torch.nn.Parameter) -> torch.Tensor:
         return param
 
     assert hasattr(param, "tensor_model_parallel"), f"{name} does not have tensor_model_parallel attribute"
+    data = param.data
+    if (sections := getattr(param, "partition_sections", None)) is not None:
+        data.partition_sections = sections
     if not param.tensor_model_parallel or getattr(param, "parallel_mode", None) == "duplicated":
-        return param.data
+        return data
 
     if ".experts." in name:
         tp_size = mpu.get_expert_tensor_parallel_world_size()
@@ -30,7 +52,7 @@ def all_gather_param(name: str, param: torch.nn.Parameter) -> torch.Tensor:
         tp_size = mpu.get_tensor_model_parallel_world_size()
 
     if tp_size == 1:
-        return param.data
+        return data
 
     if ".experts." in name:
         tp_group = mpu.get_expert_tensor_parallel_group()
@@ -43,17 +65,7 @@ def all_gather_param(name: str, param: torch.nn.Parameter) -> torch.Tensor:
     assert param.partition_stride == 1 or (
         param.partition_stride == 2 and "linear_fc1" in name
     ), "partition_stride != 1 is not supported"
-    # TODO: here we did an extra copy during concat, maybe merge this with convert_to_hf is better?
-    # TODO: check only GLU is used.
-    if "linear_fc1.weight" in name or "linear_fc1.bias" in name:
-        param_partitions = [p.chunk(2, dim=0) for p in param_partitions]
-        param_partitions = [p[0] for p in param_partitions] + [p[1] for p in param_partitions]
-    # this is bug in megatron's grouped moe.
-    if "linear_fc2.weight" in name:
-        if partition_dim == 0:
-            partition_dim = 1
-    param = torch.cat(param_partitions, dim=partition_dim)
-    return param
+    return _merge_param_partitions(name, param_partitions, partition_dim, getattr(param, "partition_sections", None))
 
 
 def all_gather_params_async(
@@ -108,18 +120,13 @@ def all_gather_params_async(
             # No all_gather needed
             param = direct_param
         else:
-            # Process the gathered partitions (same logic as original all_gather_param)
             assert partition_dim is not None, "partition_stride != 1 is not supported"
-            # TODO: here we did an extra copy during concat, maybe merge this with convert_to_hf is better?
-            # TODO: check only GLU is used.
-            if "linear_fc1.weight" in info.name or "linear_fc1.bias" in info.name:
-                param_partitions = [p.chunk(2, dim=0) for p in param_partitions]
-                param_partitions = [p[0] for p in param_partitions] + [p[1] for p in param_partitions]
-            # this is bug in megatron's grouped moe.
-            if "linear_fc2.weight" in info.name:
-                if partition_dim == 0:
-                    partition_dim = 1
-            param = torch.cat(param_partitions, dim=partition_dim)
+            param = _merge_param_partitions(
+                info.name, param_partitions, partition_dim, info.attrs.get("partition_sections")
+            )
+
+        if (sections := info.attrs.get("partition_sections")) is not None:
+            param.partition_sections = sections
 
         gathered_params.append(param)
 
@@ -162,15 +169,19 @@ def named_params_and_buffers(args: Namespace, model: Sequence[torch.nn.Module]) 
 
                 # MTP layer indices start from 0
                 layer_idx, rest = match.groups()
-                expert_pattern = r"transformer_layer\.mlp\.experts\.(.+)\.(weight|bias)(\d+)"
-                match = re.match(expert_pattern, rest)
+                # GPT MTP: `transformer_layer.mlp.experts.*`. Hybrid (Nemotron-H) MTP nests a
+                # HybridStack: `mtp_model_layer.layers.{k}.mlp.experts.*`. Both need the EP-local
+                # expert index turned into the global one, or every EP rank publishes the same
+                # names and the weight sync silently overwrites itself.
+                expert_pattern = r"(.*?)mlp\.experts\.(.+)\.(weight|bias)(\d+)"
+                match = re.fullmatch(expert_pattern, rest)
                 if not match:
                     yield name, param
                     continue
 
-                rest, param_type, expert_idx = match.groups()
+                layer_path, rest, param_type, expert_idx = match.groups()
                 expert_idx = int(expert_idx) + expert_offset
-                yield f"{prefix}mtp.layers.{layer_idx}.transformer_layer.mlp.experts.{rest}.{param_type}{expert_idx}", param
+                yield f"{prefix}mtp.layers.{layer_idx}.{layer_path}mlp.experts.{rest}.{param_type}{expert_idx}", param
                 continue
 
             layer_idx, rest = match.groups()

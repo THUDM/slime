@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 import torch
 import torch.nn.functional as F
@@ -9,6 +10,19 @@ from slime.utils import accelerator
 from slime.utils.types import RolloutBatch
 
 from .cp_utils import slice_with_cp
+
+
+@dataclass
+class PackedSeqParamsWithCPUOffsets(PackedSeqParams):
+    """Retain CPU sequence boundaries for the HuggingfaceAttention CP wrapper.
+
+    That wrapper reorders CP chunks with Python slices. Using CUDA scalars as
+    slice bounds would synchronize the GPU with the host for every slice in
+    every layer. get_batch already builds these boundaries on the CPU, so keep
+    them alongside the CUDA cu_seqlens tensors consumed by attention kernels.
+    """
+
+    cu_seqlens_q_cpu: tuple[int, ...] | None = None
 
 
 def get_batch(
@@ -69,14 +83,13 @@ def get_batch(
             tokens = F.pad(tokens, (0, pad), value=pad_token_id)
             cu_seqlens_list.append(cu_seqlens_list[-1] + pad)
 
-        cu_seqlens = torch.tensor(cu_seqlens_list, dtype=torch.int, device=accelerator.current_device())
         tokens = tokens.chunk(cp_size, dim=0)[cp_rank]
     else:
         tokens = [slice_with_cp(t, pad_token_id) for t in tokens]
 
-        cu_seqlens = [0]
+        cu_seqlens_list = [0]
         for t in tokens:
-            cu_seqlens.append(cu_seqlens[-1] + t.size(0))
+            cu_seqlens_list.append(cu_seqlens_list[-1] + t.size(0))
 
         tokens = torch.cat(tokens)
 
@@ -84,15 +97,17 @@ def get_batch(
         pad = (pad_size - tokens.size(0) % pad_size) % pad_size
         if pad != 0:
             tokens = F.pad(tokens, (0, pad), value=pad_token_id)
-            cu_seqlens.append(cu_seqlens[-1] + pad)
+            cu_seqlens_list.append(cu_seqlens_list[-1] + pad)
 
         # thd requires the cu_seqlens to be of the origin length
-        cu_seqlens = torch.tensor(cu_seqlens, dtype=torch.int, device=accelerator.device()) * cp_size
+        cu_seqlens_list = [offset * cp_size for offset in cu_seqlens_list]
 
-    max_seqlen = (cu_seqlens[1:] - cu_seqlens[:-1]).max().item()
-    packed_seq_params = PackedSeqParams(
+    cu_seqlens = torch.tensor(cu_seqlens_list, dtype=torch.int, device=accelerator.device())
+    max_seqlen = max(end - start for start, end in zip(cu_seqlens_list[:-1], cu_seqlens_list[1:], strict=True))
+    packed_seq_params = PackedSeqParamsWithCPUOffsets(
         cu_seqlens_q=cu_seqlens,
         cu_seqlens_kv=cu_seqlens,
+        cu_seqlens_q_cpu=tuple(cu_seqlens_list),
         max_seqlen_q=max_seqlen,
         max_seqlen_kv=max_seqlen,
         qkv_format="thd",
@@ -136,14 +151,37 @@ def get_batch(
     # Process multimodal training tensors if present
     multimodal_train_inputs = batch.get("multimodal_train_inputs", None)
     if multimodal_train_inputs is not None:
-        multimodal_data = {}  # key -> concatenated tensor
+        # Two passes, because whether a key can be torch.cat'ed depends on the
+        # shapes of ALL samples, which is only known after seeing every one:
+        #
+        #   pass 1  collect per key, in sample order, no decision yet
+        #           grouped["pixel_values"] = [A, B, C]
+        #   pass 2  decide per key, looking at the whole group
+        #
+        # Concatenate along dim 0 only when the pieces agree on every other dim
+        # (shape[1:]); otherwise keep a list with exactly one tensor per sample,
+        # in sample order (the order of the <image> tokens in the packed sequence):
+        #
+        #   Qwen VL, flattened patches (one row per patch):
+        #       [N_A, D] [N_B, D]                     -> cat -> [N_A + N_B, D]
+        #   Nemotron 3.5 VL, pixel_values (tiles, 3, H, W), same size:
+        #       (1,3,448,512) x3                      -> cat -> (3,3,448,512)
+        #   Nemotron 3.5 VL, H and W vary per image (cannot be concatenated):
+        #       (1,3,448,512) (1,3,320,640) (1,3,448,512)
+        #                                             -> list of 3, forward iterates it
+        #   pass 1  collect per key, in sample order
+        grouped = {}  # key -> per-sample tensors, in sample order
         for mm_input_dict in multimodal_train_inputs:
             if mm_input_dict is not None:
                 for key, mm_tensor in mm_input_dict.items():
-                    if key not in multimodal_data:
-                        multimodal_data[key] = mm_tensor
-                    else:
-                        multimodal_data[key] = torch.cat([multimodal_data[key], mm_tensor], dim=0)
+                    grouped.setdefault(key, []).append(mm_tensor)
+        #   pass 2  decide per key, looking at the whole group
+        multimodal_data = {}  # key -> concatenated tensor, or list of tensors
+        for key, tensors in grouped.items():
+            if len(tensors) == 1 or all(t.shape[1:] == tensors[0].shape[1:] for t in tensors):
+                multimodal_data[key] = tensors[0] if len(tensors) == 1 else torch.cat(tensors, dim=0)
+            else:
+                multimodal_data[key] = tensors
         batch["multimodal_train_inputs"] = multimodal_data
 
     return batch

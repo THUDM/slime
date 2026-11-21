@@ -16,8 +16,10 @@ from tqdm import tqdm
 from slime.utils import accelerator
 from slime.utils.distributed_utils import get_gloo_group, init_process_group
 from slime.utils.http_utils import _wrap_ipv6
+from slime.utils.weight_sync import should_flush_cache
 
 from ..megatron_to_hf import convert_to_hf
+from ..sglang import FlattenedTensorBucket
 from .common import all_gather_param, named_params_and_buffers
 
 
@@ -101,13 +103,22 @@ class UpdateWeightFromDistributed:
     @torch.no_grad()
     def update_weights(self) -> None:
         """
-        Pause → flush → _send_weights → continue. Progress on PP source.
+        Pause → optionally flush → _send_weights → continue. Progress on PP source.
         """
         self.weight_version += 1
+        flush_cache = should_flush_cache(
+            self.args.flush_cache_interval, self.weight_version, getattr(self.args, "update_weight_start_version", 0)
+        )
 
         if dist.get_rank() == 0:
-            ray.get([engine.pause_generation.remote() for engine in self.rollout_engines])
-            ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
+            ray.get(
+                [
+                    engine.pause_generation.remote(mode="abort" if flush_cache else "in_place")
+                    for engine in self.rollout_engines
+                ]
+            )
+            if flush_cache:
+                ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
 
             # int4/fp4 pre_process
             if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
@@ -334,6 +345,15 @@ def update_weights_from_distributed(
     """
     Send metadata through Ray and tensors through the configured transport.
     """
+    # Custom load formats (e.g. delta updates) retain their per-parameter wire format.
+    # Older SGLang builds lack the multi-dtype flattened-bucket protocol.
+    use_flattened_bucket = (
+        bool(converted_named_tensors)
+        and load_format is None
+        and getattr(FlattenedTensorBucket, "supports_multi_dtypes", False)
+    )
+    remote_load_format = "flattened_bucket" if use_flattened_bucket else load_format
+
     refs = [
         engine.update_weights_from_distributed.remote(
             names=[name for name, _ in converted_named_tensors],
@@ -341,13 +361,17 @@ def update_weights_from_distributed(
             shapes=[param.shape for _, param in converted_named_tensors],
             group_name=group_name,
             weight_version=str(weight_version),
-            load_format=load_format,
+            load_format=remote_load_format,
         )
         for engine in rollout_engines
     ]
     handles = []
-    for _, param in converted_named_tensors:
-        handles.append(dist.broadcast(param.data, 0, group=group, async_op=True))
+    if use_flattened_bucket:
+        flattened_tensor = FlattenedTensorBucket(named_tensors=list(converted_named_tensors)).get_flattened_tensor()
+        handles.append(dist.broadcast(flattened_tensor, 0, group=group, async_op=True))
+    else:
+        for _, param in converted_named_tensors:
+            handles.append(dist.broadcast(param.data, 0, group=group, async_op=True))
     for handle in handles:
         handle.wait()
 

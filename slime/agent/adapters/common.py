@@ -13,21 +13,33 @@ protocols handle identically.
 from __future__ import annotations
 
 import asyncio
+import copy
 import dataclasses
 import logging
+import math
 import time
 import uuid
 from collections.abc import Callable
+from contextlib import nullcontext
 from typing import Any
 
 import aiohttp
 from aiohttp import web
 
 from slime.agent.parsing import parse_model_output
-from slime.agent.trajectory import TrajectoryManager, TurnRecord
-
+from slime.agent.trajectory import REPLAY_FIELDS, TrajectoryManager, TurnRecord
+from slime.observability.trace_utils import TraceHandle, bind_trace_carrier, build_sglang_meta_trace_attrs, trace_span
+from slime.utils.score_centering import score_centering_request
+from slime.utils.types import Sample
 
 __all__ = ["TurnRecord"]
+
+
+@dataclasses.dataclass
+class PromptPrefix:
+    messages: list[dict]
+    tools: list[dict] | None
+    turn: TurnRecord
 
 
 @dataclasses.dataclass
@@ -40,6 +52,9 @@ class Session:
 
     sampling_defaults: dict = dataclasses.field(default_factory=dict)
     max_context_tokens: int = 0
+    apply_chat_template_kwargs: dict = dataclasses.field(default_factory=dict)
+    prompt_prefixes: list[PromptPrefix] = dataclasses.field(default_factory=list)
+    trace: TraceHandle | None = None
 
 
 @dataclasses.dataclass
@@ -61,6 +76,7 @@ def _render_token_ids(
     *,
     tools: list[dict] | None,
     add_generation_prompt: bool = True,
+    apply_chat_template_kwargs: dict | None = None,
 ) -> list[int]:
     """Render a chat-message list to token ids with the served chat template."""
     enc = tokenizer.apply_chat_template(
@@ -68,9 +84,56 @@ def _render_token_ids(
         tools=tools,
         tokenize=True,
         add_generation_prompt=add_generation_prompt,
+        **(apply_chat_template_kwargs or {}),
     )
     ids = enc["input_ids"] if hasattr(enc, "__getitem__") and "input_ids" in enc else enc
     return list(ids)
+
+
+def _session_prompt_ids(messages, tokenizer, *, tools, session: Session) -> list[int]:
+    """Extend a replayed assistant message using its original model tokens.
+
+    Wire clients can omit reasoning and reformat tool arguments. Match the
+    complete message history and tool schema first, then use the template only
+    for the new suffix. A changed/compacted history remains a separate branch.
+    The end-of-message special token is the splice boundary; if the template
+    cannot prove that boundary, leave its normal rendering intact.
+    """
+    kwargs = session.apply_chat_template_kwargs
+    rendered = _render_token_ids(messages, tokenizer, tools=tools, apply_chat_template_kwargs=kwargs)
+    special_ids = set(getattr(tokenizer, "all_special_ids", ()))
+    for prefix in sorted(session.prompt_prefixes, key=lambda p: len(p.messages), reverse=True):
+        turn = prefix.turn
+        depth = len(prefix.messages)
+        if (
+            prefix.tools != tools
+            or depth >= len(messages)
+            or prefix.messages != messages[:depth]
+            or turn.finish_reason != "stop"
+            or not turn.output_ids
+            or turn.output_ids[-1] not in special_ids
+        ):
+            continue
+        # Two branches may have identical visible replies but different hidden
+        # reasoning. Without a unique token history, do not guess which one the
+        # client echoed.
+        if any(
+            other.messages == prefix.messages
+            and other.tools == tools
+            and (other.turn.prompt_ids != turn.prompt_ids or other.turn.output_ids != turn.output_ids)
+            for other in session.prompt_prefixes
+        ):
+            continue
+        anchor = _render_token_ids(
+            messages[:depth], tokenizer, tools=tools, add_generation_prompt=False, apply_chat_template_kwargs=kwargs
+        )
+        if rendered[: len(anchor)] != anchor:
+            continue
+        end = next((i for i in range(len(anchor) - 1, -1, -1) if anchor[i] == turn.output_ids[-1]), None)
+        if end is None or tokenizer.decode(anchor[end + 1 :], skip_special_tokens=False).strip():
+            continue
+        return turn.prompt_ids + turn.output_ids + rendered[end + 1 :]
+    return rendered
 
 
 def flatten_content(c: Any) -> str:
@@ -148,8 +211,10 @@ class BaseAdapter:
         max_turns_per_sid: int | None = None,
         fork_threshold_tokens: int | None = None,
         debug_callback: Callable[..., None] | None = None,
+        rollout_args: Any = None,
     ) -> None:
         self.tokenizer = tokenizer
+        self.rollout_args = rollout_args
         self.sglang_url = sglang_url.rstrip("/") if isinstance(sglang_url, str) else sglang_url
         self.tool_parser = tool_parser
         self.reasoning_parser = reasoning_parser
@@ -213,6 +278,8 @@ class BaseAdapter:
         *,
         sampling_defaults: dict | None = None,
         max_context_tokens: int = 0,
+        apply_chat_template_kwargs: dict | None = None,
+        trace: TraceHandle | None = None,
     ) -> None:
         """Register a fresh per-sid Session; sids must be unique."""
         if sid in self.store:
@@ -220,6 +287,8 @@ class BaseAdapter:
         self.store[sid] = Session(
             sampling_defaults=dict(sampling_defaults or {}),
             max_context_tokens=int(max_context_tokens or 0),
+            apply_chat_template_kwargs=dict(apply_chat_template_kwargs or {}),
+            trace=trace,
         )
 
     async def shutdown_session(self, sid: str, *, wait_timeout: float = 5.0) -> None:
@@ -338,10 +407,20 @@ class BaseAdapter:
         self.inflight.setdefault(sid, set()).add(task)
         t0 = time.monotonic()
         try:
-            translated, tools_schema = self._translate(body)
-            prompt_ids = _render_token_ids(translated, tok, tools=tools_schema, add_generation_prompt=True)
+            # HTTP handlers run on the adapter's event loop, so carry the
+            # rollout trace explicitly rather than relying on contextvars.
+            with trace_span(s.trace, "agent_model_turn", record_error=False) if s.trace else nullcontext():
+                target = bind_trace_carrier(s.trace.carrier) if s.trace else None
+                with trace_span(target, "agent_tokenize", record_error=False) if target else nullcontext():
+                    translated, tools_schema = self._translate(body)
+                    prompt_ids = _session_prompt_ids(
+                        translated,
+                        tok,
+                        tools=tools_schema,
+                        session=s,
+                    )
 
-            turn = await call_sglang_generate(prompt_ids, s, body, adapter=self, session_id=sid)
+                turn = await call_sglang_generate(prompt_ids, s, body, adapter=self, session_id=sid)
 
             raw_output = tok.decode(turn.output_ids, skip_special_tokens=False) if turn.output_ids else ""
             parsed = parse_model_output(
@@ -387,6 +466,9 @@ class BaseAdapter:
                 prompt_messages=translated,
                 response_message=reply.manager_message,
                 metadata={"sid": sid},
+            )
+            s.prompt_prefixes.append(
+                PromptPrefix(copy.deepcopy(translated + [reply.manager_message]), copy.deepcopy(tools_schema), turn)
             )
             return response
         finally:
@@ -447,70 +529,174 @@ async def call_sglang_generate(
     adapter: BaseAdapter,
     session_id: str | None = None,
 ) -> TurnRecord:
-    """POST one turn to sglang /generate and pack the reply into a TurnRecord.
+    """Generate a complete turn, continuing interrupted requests in partial rollout.
 
     Module-level (not a method) so tests can monkeypatch it.
     """
     logger = adapter.logger
     sp = _sampling_params(session, body, max_token_keys=adapter.max_token_keys, stop_keys=adapter.stop_keys)
+    if sp.get("top_p", 1.0) < 1:
+        sp["custom_params"] = {**sp.get("custom_params", {}), "return_top_p_token_ids": True}
+    request_options = score_centering_request(adapter.rollout_args, sp)
+    if getattr(adapter.rollout_args, "use_rollout_routing_replay", False):
+        request_options["return_routed_experts"] = True
 
-    if session.max_context_tokens > 0:
-        remaining_context = session.max_context_tokens - len(prompt_ids)
+    context_limit = session.max_context_tokens
+    server_context = int(getattr(adapter.rollout_args, "sglang_context_length", 0) or context_limit)
+    bounded_context = context_limit > 0 or server_context > 0
+    if server_context > 0:
+        algorithm = str(getattr(adapter.rollout_args, "sglang_speculative_algorithm", "") or "").upper()
+        if algorithm in {"EAGLE", "EAGLE3", "NEXTN"}:
+            # SGLang reserves draft output slots in addition to max_new_tokens.
+            # Keep that server limit separate from a smaller rollout budget.
+            topk = int(getattr(adapter.rollout_args, "sglang_speculative_eagle_topk", 1) or 1)
+            steps = int(getattr(adapter.rollout_args, "sglang_speculative_num_steps", 0) or 0)
+            drafts = int(getattr(adapter.rollout_args, "sglang_speculative_num_draft_tokens", 0) or 0)
+            server_context -= max(topk * steps, drafts)
+        context_limit = min(context_limit, server_context) if context_limit > 0 else server_context
+    if bounded_context:
+        remaining_context = context_limit - len(prompt_ids)
         if remaining_context <= 0:
             logger.warning(
                 "[%s] sid=%s prompt exceeds max_context_tokens (%d >= %d)",
                 adapter.log_prefix,
                 session_id,
                 len(prompt_ids),
-                session.max_context_tokens,
+                context_limit,
             )
             return TurnRecord(prompt_ids=list(prompt_ids), output_ids=[], finish_reason="length")
         sp["max_new_tokens"] = min(int(sp.get("max_new_tokens", remaining_context)), remaining_context)
 
     sglang_url = adapter.sglang_url
-    rid = uuid.uuid4().hex
+    rid = None
     headers = {"X-SMG-Routing-Key": session_id} if session_id and session_id != "default" else None
     timeout = aiohttp.ClientTimeout(total=None, sock_read=900)
+    captured = Sample(tokens=list(prompt_ids))
+    max_new_tokens = int(sp["max_new_tokens"])
+    partial_rollout = getattr(adapter.rollout_args, "partial_rollout", False)
+    finish = "length"
     try:
-        async with aiohttp.ClientSession(timeout=timeout) as sess, sess.post(
-            f"{sglang_url}/generate",
-            json={
-                "rid": rid,
-                "input_ids": prompt_ids,
-                "sampling_params": sp,
-                "return_logprob": True,
-            },
-            headers=headers,
-        ) as r:
-            if r.status >= 400:
-                text = await r.text()
-                logger.warning(
-                    "[%s] sid=%s rid=%s sglang upstream %d: %.200s",
+        async with aiohttp.ClientSession(timeout=timeout) as sess:
+            while captured.response_length < max_new_tokens:
+                rid = uuid.uuid4().hex
+                payload = {
+                    "rid": rid,
+                    "input_ids": captured.tokens,
+                    "sampling_params": {**sp, "max_new_tokens": max_new_tokens - captured.response_length},
+                    "return_logprob": True,
+                    **request_options,
+                }
+                if request_options.get("return_routed_experts") and captured.response_length:
+                    start = captured.get_rollout_routed_experts_length()
+                    if start != len(captured.tokens) - 1:
+                        raise ValueError("R3 continuation must preserve every historical routing row")
+                    payload["routed_experts_start_len"] = start
+                target = bind_trace_carrier(session.trace.carrier) if getattr(session, "trace", None) else None
+                request_trace = (
+                    trace_span(
+                        target,
+                        "sglang_generate",
+                        attrs={
+                            "input_tokens": len(captured.tokens),
+                            "max_new_tokens": payload["sampling_params"]["max_new_tokens"],
+                            "continuation_tokens": captured.response_length,
+                        },
+                        record_error=False,
+                    )
+                    if target
+                    else nullcontext()
+                )
+                with request_trace as span:
+                    async with sess.post(f"{sglang_url}/generate", json=payload, headers=headers) as r:
+                        if span is not None:
+                            span.set("http_status", r.status)
+                        if r.status >= 400:
+                            text = await r.text()
+                            logger.warning(
+                                "[%s] sid=%s rid=%s sglang upstream %d: %.200s",
+                                adapter.log_prefix,
+                                session_id,
+                                rid,
+                                r.status,
+                                text,
+                            )
+                            raise RuntimeError(f"sglang upstream {r.status}: {text[:400]}")
+                        data = await r.json(content_type=None)
+                    if span is not None:
+                        span.update(build_sglang_meta_trace_attrs(data.get("meta_info") or {}))
+                meta = data.get("meta_info") or {}
+                if "output_token_logprobs" not in meta:
+                    raise ValueError("SGLang must return output_token_logprobs for token-exact training")
+                output_token_logprobs = meta.get("output_token_logprobs") or []
+                output_ids = [x[1] for x in output_token_logprobs]
+                output_log_probs = [float(x[0]) for x in output_token_logprobs]
+                for count_key in ("completion_tokens", "output_token_logprobs_length"):
+                    if count_key in meta and int(meta[count_key]) != len(output_ids):
+                        raise ValueError(f"SGLang {count_key} does not match the captured output token count")
+                if data.get("output_ids") is not None and data["output_ids"] != output_ids:
+                    raise ValueError("SGLang output_ids do not match the token IDs paired with logprobs")
+                if any(not isinstance(token, int) or token < 0 for token in output_ids) or not all(
+                    math.isfinite(lp) for lp in output_log_probs
+                ):
+                    raise ValueError("SGLang returned invalid output token IDs or non-finite logprobs")
+                if len(output_ids) > payload["sampling_params"]["max_new_tokens"]:
+                    raise ValueError("SGLang output exceeds the remaining turn budget")
+                if "routed_experts_start_len" in payload:
+                    start = payload["routed_experts_start_len"]
+                    if meta.setdefault("routed_experts_start_len", start) != start:
+                        raise ValueError("SGLang routed_experts_start_len differs from the continuation request")
+                finish = (meta.get("finish_reason") or {}).get("type", "stop") or "stop"
+                # Validate each chunk before merging: earlier metadata must not hide
+                # a missing nucleus or routing snapshot in a later response.
+                if (
+                    output_ids
+                    and sp.get("top_p", 1.0) < 1
+                    and not any(key in meta for key in ("top_p_token_ids", "top_p_kept_token_ids"))
+                ):
+                    raise ValueError("SGLang must return nucleus token IDs and offsets for top-p replay")
+                if output_ids and request_options.get("return_routed_experts") and "routed_experts" not in meta:
+                    raise ValueError("SGLang must return routed experts for R3")
+                captured.append_response_tokens(
+                    adapter.rollout_args, tokens=output_ids, log_probs=output_log_probs, meta_info=meta
+                )
+                if finish != "abort" or not partial_rollout:
+                    break
+                if captured.response_length >= max_new_tokens:
+                    finish = "length"
+                    break
+                logger.info(
+                    "[%s] sid=%s continuing interrupted turn after %d tokens",
                     adapter.log_prefix,
                     session_id,
-                    rid,
-                    r.status,
-                    text,
+                    captured.response_length,
                 )
-                raise RuntimeError(f"sglang upstream {r.status}: {text[:400]}")
-            data = await r.json(content_type=None)
-        meta = data.get("meta_info") or {}
-        output_token_logprobs = meta.get("output_token_logprobs") or []
-        output_ids = [x[1] for x in output_token_logprobs]
-        output_log_probs = [float(x[0]) for x in output_token_logprobs]
-        finish = (meta.get("finish_reason") or {}).get("type", "stop") or "stop"
+                # A paused SGLang engine queues the next request until weights are
+                # published. Back off for repeated aborts before the first token.
+                if not output_ids:
+                    with (
+                        trace_span(target, "partial_rollout_backoff", record_error=False) if target else nullcontext()
+                    ):
+                        await asyncio.sleep(0.1)
     except (asyncio.CancelledError, aiohttp.ClientError, asyncio.TimeoutError) as e:
         # free the sglang slot eagerly on client cancel/timeout, else the
         # orphaned generation keeps occupying KV until its own length cap
         logger.debug("[%s] sid=%s rid=%s turn aborted: %s", adapter.log_prefix, session_id, rid, type(e).__name__)
-        await _abort_sglang_request(sglang_url, rid, logger)
+        if rid is not None:
+            await _abort_sglang_request(sglang_url, rid, logger)
         raise
 
+    if captured.rollout_routed_experts is not None:
+        captured.materialize_rollout_routed_experts(replace=True)
+    replay = {key: getattr(captured, key) for key in REPLAY_FIELDS if getattr(captured, key) is not None}
     return TurnRecord(
         prompt_ids=list(prompt_ids),
-        output_ids=output_ids,
+        output_ids=captured.tokens[len(prompt_ids) :],
         finish_reason=finish,
-        output_log_probs=output_log_probs,
+        output_log_probs=captured.rollout_log_probs or [],
+        replay=replay or None,
+        weight_versions=captured.weight_versions,
+        spec_info=captured.spec_info,
+        prefix_cache_info=captured.prefix_cache_info,
     )
 
 
