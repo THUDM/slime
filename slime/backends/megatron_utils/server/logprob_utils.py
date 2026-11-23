@@ -134,7 +134,9 @@ def sample_from_vocab_parallel_logits_without_full_gather(
                 row_weights = (row_logits.to(reduction_dtype) - local_row_max).exp_()
                 local_ids = torch.multinomial(row_weights, num_samples=slot_count, replacement=True)
 
-                slot_cols = torch.nonzero(owner_slots.index_select(0, chunk_rows), as_tuple=False)[:, 1].view(-1, slot_count)
+                slot_cols = torch.nonzero(owner_slots.index_select(0, chunk_rows), as_tuple=False)[:, 1].view(
+                    -1, slot_count
+                )
 
                 selected_logits = torch.gather(row_logits, dim=-1, index=local_ids)
                 selected_log_probs = (
