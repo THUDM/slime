@@ -183,9 +183,9 @@ def test_health_monitor_resume_wait_applies_after_the_first_resume(monkeypatch, 
     try:
         # A rollout shorter than the first wait ends before any check.
         monitor.resume()
-        time.sleep(0.6)  # The paused loop polls every 0.5 s.
+        time.sleep(1.0)  # The paused loop polls every 0.5 s, then starts the 2 s wait.
         monitor.pause()
-        time.sleep(2.6)
+        time.sleep(2.0)  # The wait ends by 2.5 s after resume() and finds the monitor paused.
         assert not checked.is_set()
         # The next rollout waits again: the first wait by default, else the resume wait.
         monitor.resume()
