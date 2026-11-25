@@ -5,12 +5,50 @@ import numpy as np
 import pytest
 import torch
 
-from slime.observability.rollout_metrics import _compute_agent_compaction_metrics, _compute_top_p_kept_vocab_metrics
+from slime.observability.rollout_metrics import (
+    _compute_agent_compaction_metrics,
+    _compute_top_p_kept_vocab_metrics,
+    log_eval_rollout_data,
+)
 from slime.rollout.filter_hub.base_types import DynamicFilterOutput, MetricGatherer, call_dynamic_filter
+from slime.utils.eval_config import build_eval_dataset_configs
 from slime.utils.misc import decode_int32_meta_array
 from slime.utils.types import Sample
 
 NUM_GPUS = 0
+
+
+@pytest.mark.unit
+def test_eval_pass_at_k_uses_per_dataset_sample_count():
+    args = Namespace(
+        n_samples_per_eval_prompt=2,
+        log_passrate=True,
+        custom_eval_rollout_log_function_path=None,
+        wandb_always_use_train_step=False,
+        use_wandb=False,
+        use_tensorboard=False,
+    )
+    args.eval_datasets = build_eval_dataset_configs(
+        args,
+        [
+            {"name": "two_draws", "path": "two.jsonl"},
+            {"name": "four_draws", "path": "four.jsonl", "n_samples_per_eval_prompt": 4},
+        ],
+        defaults={},
+    )
+    data = {
+        "two_draws": {"rewards": [1, 0, 0, 1]},
+        "four_draws": {"rewards": [1, 1, 0, 0, 0, 0, 1, 1]},
+        "custom": {"rewards": [1, 0]},
+    }
+
+    metrics = log_eval_rollout_data(0, args, data)
+
+    assert metrics["eval/four_draws-pass@2"] == pytest.approx(5 / 6)
+    assert metrics["eval/four_draws-pass@4"] == 1.0
+    assert metrics["eval/two_draws-pass@2"] == 1.0
+    assert "eval/two_draws-pass@4" not in metrics
+    assert metrics["eval/custom-pass@2"] == 1.0
 
 
 def test_raw_reward_before_filters_counts_rejected_trajectories_once_before_mutation():

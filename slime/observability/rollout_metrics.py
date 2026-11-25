@@ -243,6 +243,10 @@ def log_eval_rollout_data(rollout_id, args, data, extra_metrics: dict[str, Any] 
         if custom_log_func(rollout_id, args, data, extra_metrics):
             return
 
+    if args.log_passrate:
+        samples_per_prompt = {
+            dataset.name: dataset.n_samples_per_eval_prompt for dataset in getattr(args, "eval_datasets", None) or []
+        }
     log_dict = extra_metrics or {}
     for key in data.keys():
         rewards = data[key]["rewards"]
@@ -256,7 +260,7 @@ def log_eval_rollout_data(rollout_id, args, data, extra_metrics: dict[str, Any] 
             log_dict |= dict_add_prefix(
                 compute_pass_rate(
                     flat_rewards=rewards,
-                    group_size=args.n_samples_per_eval_prompt,
+                    group_size=samples_per_prompt.get(key, args.n_samples_per_eval_prompt),
                 ),
                 f"eval/{key}-",
             )
