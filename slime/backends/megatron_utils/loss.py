@@ -1526,7 +1526,9 @@ def loss_function(
         - `logging_dict` has keys "keys" (list of str metric names) and
           "values" (1D tensor: [count, metric1, metric2, ...]).
     """
-    num_tokens = sum([torch.clamp_min(loss_mask.sum(), 1) for loss_mask in batch["loss_masks"]])
+    # A fully masked row (e.g. remove_sample=True) adds no tokens. Megatron clamps
+    # the all-reduced total before it divides the gradients.
+    num_tokens = sum([loss_mask.sum() for loss_mask in batch["loss_masks"]])
 
     sum_of_sample_mean = get_sum_of_sample_mean(
         batch["total_lengths"],
