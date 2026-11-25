@@ -5,6 +5,8 @@ import pytest
 
 import slime.utils.http_utils as http_utils
 
+NUM_GPUS = 0
+
 
 def _post_with_status(monkeypatch, status_code):
     calls = []
@@ -36,3 +38,7 @@ def test_post_does_not_retry_client_errors(monkeypatch, status_code):
 @pytest.mark.parametrize("status_code", [408, 429, 500, 503])
 def test_post_retries_transient_errors(monkeypatch, status_code):
     assert _post_with_status(monkeypatch, status_code) == 3
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__]))
