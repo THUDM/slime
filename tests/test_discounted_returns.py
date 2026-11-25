@@ -91,6 +91,30 @@ def test_reinforce_plus_plus_returns_matches_serial_for_variable_lengths(monkeyp
         torch.testing.assert_close(actual_for_seq, expected_for_seq, atol=1e-5, rtol=1e-5)
 
 
+def test_reinforce_plus_plus_returns_zero_for_fully_masked_sequence(monkeypatch):
+    # A sample with remove_sample=True has an all-zero loss mask.
+    mpu = types.SimpleNamespace(get_context_parallel_world_size=lambda: 1)
+    megatron = types.ModuleType("megatron")
+    megatron_core = types.ModuleType("megatron.core")
+    megatron_core.mpu = mpu
+    megatron.core = megatron_core
+    monkeypatch.setitem(sys.modules, "megatron", megatron)
+    monkeypatch.setitem(sys.modules, "megatron.core", megatron_core)
+
+    actual = get_reinforce_plus_plus_returns(
+        rewards=torch.tensor([1.0, 2.0]),
+        kl=[torch.tensor([0.1, 0.2, 0.3]), torch.tensor([0.4, 0.5])],
+        loss_masks=[torch.ones(3), torch.zeros(2)],
+        response_lengths=[3, 2],
+        total_lengths=[5, 4],
+        kl_coef=0.1,
+        gamma=1.0,
+    )
+
+    torch.testing.assert_close(actual[0], torch.tensor([0.94, 0.95, 0.97]))
+    torch.testing.assert_close(actual[1], torch.zeros(2))
+
+
 @pytest.mark.parametrize("sequence_length", [127, 128, 129])
 def test_chunked_gae_matches_serial_after_scan_reuse(sequence_length):
     torch.manual_seed(0)
