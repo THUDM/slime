@@ -699,6 +699,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="Initial grace period (in seconds) before starting health checks. This allows time for model compilation and initialization. Increase this value significantly when using deepgemm.",
             )
             parser.add_argument(
+                "--rollout-health-check-resume-wait",
+                type=float,
+                default=None,
+                help="Grace period (in seconds) before health checks after each later resume, e.g. at the start of each rollout. Defaults to --rollout-health-check-first-wait.",
+            )
+            parser.add_argument(
                 "--rollout-cleanup-timeout",
                 type=float,
                 default=60.0,

@@ -93,7 +93,8 @@ Reattachment also bounds the time spent resetting old trainer connections. An en
 
 | Argument | Default | Description |
 |---|---|---|
-| `--rollout-health-check-first-wait` | `600` seconds | Wait after each resumption of background checks to allow model warmup and kernel compilation. Rollout-completion checks bypass this wait. |
+| `--rollout-health-check-first-wait` | `600` seconds | Wait before the first background check to allow model warmup and kernel compilation. Rollout-completion checks bypass this wait. |
+| `--rollout-health-check-resume-wait` | Same as `--rollout-health-check-first-wait` | Wait after each later resumption of background checks, for example at the start of each rollout. Set it below the rollout duration so that background checks run during short rollouts. |
 | `--rollout-health-check-interval` | `600` seconds | Interval between background health checks. |
 | `--rollout-health-check-timeout` | `600` seconds | Timeout for each health check, including the wait for the Ray health-check call. |
 
