@@ -595,6 +595,16 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--expert-sync-merge-bytes",
+                type=int,
+                default=0,
+                help=(
+                    "Per-rank staging budget per batch, in bytes, for rank-local colocated expert weight updates. "
+                    "A positive value allows batching expert layers across Megatron pipeline stages and replaces "
+                    "--update-weight-buffer-size for those expert batches only. Default 0 keeps layer-wise packing."
+                ),
+            )
+            parser.add_argument(
                 "--rollout-data-postprocess-path",
                 type=str,
                 default=None,
@@ -1914,6 +1924,8 @@ def slime_validate_args(args):
     args = copy.deepcopy(args)
     if getattr(args, "rollout_cleanup_timeout", 60) <= 0:
         raise ValueError("--rollout-cleanup-timeout must be positive")
+    if getattr(args, "expert_sync_merge_bytes", 0) < 0:
+        raise ValueError("--expert-sync-merge-bytes must be non-negative")
     get_pg_loss_type(args)
     validate_score_centering_args(args)
     args.eval_datasets = _resolve_eval_datasets(args)

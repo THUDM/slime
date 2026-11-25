@@ -516,6 +516,17 @@ def test_pipeline_rl_rejects_incompatible_lifecycles(monkeypatch, options):
         module.slime_validate_args(make_slime_validate_args(flush_cache_interval=0, **options))
 
 
+def test_expert_sync_merge_bytes_is_opt_in_and_non_negative(monkeypatch):
+    module = load_slime_arguments_module(monkeypatch)
+    parser = module.get_slime_extra_args_provider()(argparse.ArgumentParser())
+    rollout_args = ["--rollout-batch-size", "1"]
+    assert parser.parse_args(rollout_args).expert_sync_merge_bytes == 0
+    assert parser.parse_args([*rollout_args, "--expert-sync-merge-bytes", "1024"]).expert_sync_merge_bytes == 1024
+
+    with pytest.raises(ValueError, match="--expert-sync-merge-bytes must be non-negative"):
+        module.slime_validate_args(make_slime_validate_args(expert_sync_merge_bytes=-1))
+
+
 def test_flush_cache_interval_defaults_to_existing_behavior(monkeypatch):
     module = load_slime_arguments_module(monkeypatch)
     parser = module.get_slime_extra_args_provider()(argparse.ArgumentParser())

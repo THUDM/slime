@@ -1,7 +1,7 @@
 import logging
 import re
 from argparse import Namespace
-from collections import defaultdict
+from collections import defaultdict, deque
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
@@ -34,6 +34,11 @@ class _ExpertTransfer:
     source_rank: int
     target_ranks: tuple[int, ...]
     params: tuple[_ExpertParam, ...]
+
+    @property
+    def participants(self) -> set[int]:
+        # Fan-out reuses the sender's buffer, including when the sender is also a target.
+        return set(self.target_ranks) | {self.source_rank}
 
 
 _ExpertTransferBatch = tuple[_ExpertTransfer, ...]
@@ -223,10 +228,12 @@ def _resolve_expert_source_ranks(
 def _build_expert_transfer_plan(
     params: Sequence[_ExpertParam],
     buffer_size: int,
+    *,
+    pp_stage_by_rank: Sequence[int] | None = None,
 ) -> list[_ExpertTransferGroup]:
     """Build expert transfer groups with pre-packed, rank-bounded transfer batches."""
     if buffer_size <= 0:
-        raise ValueError("update_weight_buffer_size must be positive")
+        raise ValueError("expert transfer buffer size must be positive")
 
     params_by_transfer: dict[tuple[int, int, tuple[int, ...], int], list[_ExpertParam]] = defaultdict(list)
     for param in params:
@@ -241,13 +248,63 @@ def _build_expert_transfer_plan(
         )
         by_layer[layer].append(transfer)
 
-    transfer_plan = []
-    for layer in sorted(by_layer):
-        transfer_group = tuple(
-            sorted(by_layer[layer], key=lambda transfer: (transfer.target_ranks, transfer.source_rank))
-        )
-        transfer_plan.append(tuple(_pack_expert_transfer_batches(transfer_group, buffer_size)))
-    return transfer_plan
+    layers = [
+        tuple(sorted(by_layer[layer], key=lambda transfer: (transfer.target_ranks, transfer.source_rank)))
+        for layer in sorted(by_layer)
+    ]
+    if pp_stage_by_rank is not None:
+        merged_plan = _merge_expert_transfer_layers(layers, pp_stage_by_rank, buffer_size)
+        if merged_plan is not None:
+            return merged_plan
+    return [tuple(_pack_expert_transfer_batches(layer, buffer_size)) for layer in layers]
+
+
+def _merge_expert_transfer_layers(
+    layers: Sequence[_ExpertTransferBatch],
+    pp_stage_by_rank: Sequence[int],
+    buffer_size: int,
+) -> list[_ExpertTransferGroup] | None:
+    """Take at most one whole layer per training PP stage in each merged batch."""
+    by_stage: dict[int, deque[tuple[_ExpertTransferBatch, dict[int, int]]]] = defaultdict(deque)
+    for layer in layers:
+        stages = {pp_stage_by_rank[transfer.source_rank] for transfer in layer}
+        if len(stages) != 1:
+            return None
+        costs: dict[int, int] = defaultdict(int)
+        for transfer in layer:
+            size = _expert_transfer_size(transfer)
+            for rank in transfer.participants:
+                costs[rank] += size
+        by_stage[stages.pop()].append((layer, costs))
+    if len(by_stage) < 2:
+        return None
+
+    plan = []
+    while by_stage:
+        batch = []
+        batch_costs: dict[int, int] = defaultdict(int)
+        # Queues and their iteration order come from the globally sorted layer metadata.
+        for stage in tuple(by_stage):
+            queue = by_stage[stage]
+            layer, costs = queue[0]
+            exceeds_budget = any(batch_costs.get(rank, 0) + size > buffer_size for rank, size in costs.items())
+            if exceeds_budget and batch:
+                continue
+
+            queue.popleft()
+            if not queue:
+                del by_stage[stage]
+            if exceeds_budget:
+                # A layer that cannot fit even by itself still uses the selected cap.
+                plan.append(tuple(_pack_expert_transfer_batches(layer, buffer_size)))
+                break
+
+            batch.extend(layer)
+            for rank, size in costs.items():
+                batch_costs[rank] += size
+        if batch:
+            plan.append((tuple(batch),))
+    return plan
 
 
 def _expert_transfer_size(transfer: _ExpertTransfer) -> int:
@@ -264,12 +321,12 @@ def _pack_expert_transfer_batches(
         key=lambda item: (-item[0], item[1].target_ranks, item[1].source_rank),
     )
     if buffer_size < sized_transfers[0][0]:
-        raise ValueError("one source-to-target expert transfer bundle exceeds update_weight_buffer_size")
+        raise ValueError(f"one source-to-target expert transfer bundle exceeds the {buffer_size}-byte staging budget")
 
     batches: list[list[_ExpertTransfer]] = []
     batch_costs: list[dict[int, int]] = []
     for size, transfer in sized_transfers:
-        participants = set(transfer.target_ranks) | {transfer.source_rank}
+        participants = transfer.participants
         candidates = [
             index
             for index, costs in enumerate(batch_costs)
@@ -358,7 +415,15 @@ def configure_expert_routing(
             num_experts=args.num_experts,
         )
         buffer_size = args.update_weight_buffer_size
-        expert_transfer_plan = _build_expert_transfer_plan(expert_params, buffer_size)
+        merge_bytes = getattr(args, "expert_sync_merge_bytes", 0)
+        pp_stage_by_rank = None
+        if merge_bytes > 0 and mpu.get_pipeline_model_parallel_world_size() > 1:
+            # Virtual pipeline chunks can interleave layers from the same physical stage.
+            pp_stage_by_rank = [0] * dist.get_world_size()
+            dist.all_gather_object(pp_stage_by_rank, mpu.get_pipeline_model_parallel_rank(), group=get_gloo_group())
+        expert_transfer_plan = _build_expert_transfer_plan(
+            expert_params, merge_bytes or buffer_size, pp_stage_by_rank=pp_stage_by_rank
+        )
         expert_transfer_batches = sum(len(group) for group in expert_transfer_plan)
         dense_buckets = pack_param_info_buckets(dense_infos, buffer_size)
     except (AttributeError, TypeError, ValueError) as exc:
