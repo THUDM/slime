@@ -743,6 +743,81 @@ def test_startup_failure_detaches_acquired_serving_without_mutating_request(args
     assert vars(args) == before
 
 
+@pytest.mark.parametrize("lifetime,disposed", [("detached", False), ("task", True)])
+def test_failed_attempt_disposes_serving_only_when_task_owned(args, monkeypatch, lifetime, disposed):
+    from unittest.mock import Mock, call
+
+    from slime.ray import placement_group
+
+    args.rollout_cleanup_timeout = 2
+    args.serving_lifetime = lifetime
+    manager, serving = Mock(), Mock()
+    monkeypatch.setattr(placement_group.ray, "get", lambda ref, *, timeout: None)
+    monkeypatch.setattr(placement_group.ray, "kill", Mock())
+    monkeypatch.setattr(
+        placement_group.ray, "get_runtime_context", lambda: SimpleNamespace(get_job_id=lambda: "driver")
+    )
+    placement_group.RolloutStartup(args, manager=manager, serving=serving).close(failed=True)
+    for owner in (manager, serving):
+        assert owner.dispose.remote.called == disposed
+        assert (call(owner, no_restart=True) in placement_group.ray.kill.call_args_list) == disposed
+    assert serving.detach_training.remote.called == (not disposed)
+
+
+@pytest.mark.parametrize("lifetime", ["detached", "task"])
+def test_serving_lifetime_controls_actor_ownership_and_name(args, monkeypatch, lifetime):
+    from unittest.mock import Mock
+
+    from slime.ray import placement_group, rollout, serving
+
+    args.rollout_external = False
+    args.serving_lifetime = lifetime
+    args.rollout_data_transport = "object-store"
+    args.num_rollout = 1
+    args.check_weight_update_equal = False
+    args.offload_rollout = False
+    created = {}
+
+    def fake_actor(label):
+        def options(**kwargs):
+            created[label] = kwargs
+            return SimpleNamespace(remote=lambda *a, **k: Mock(name=label))
+
+        return SimpleNamespace(options=options)
+
+    deployment = SimpleNamespace(placements={"rollout": None}, restore_plan=RestorePlan(), routers={})
+    resume = Mock(restore_plan=RestorePlan(), reused=False)
+    resume.apply.side_effect = lambda value: value
+    monkeypatch.setattr(serving, "ServingCluster", fake_actor("serving"))
+    monkeypatch.setattr(rollout, "RolloutManager", fake_actor("manager"))
+    monkeypatch.setattr(placement_group, "add_default_ray_env_vars", lambda: {})
+    monkeypatch.setattr(
+        placement_group.ray,
+        "get",
+        lambda ref: resume if created.get("_attached") else created.setdefault("_attached", deployment),
+    )
+    monkeypatch.setattr(placement_group.ray, "get_runtime_context", lambda: SimpleNamespace(get_job_id=lambda: "job7"))
+    placement_group._attach_rollout_manager(placement_group.RolloutStartup(args))
+
+    session = training_session_name(args)
+    for label, suffix in (("serving", ":serving"), ("manager", "")):
+        kwargs = created[label]
+        if lifetime == "detached":
+            assert kwargs["lifetime"] == "detached" and kwargs["get_if_exists"] is True
+            assert kwargs["name"] == session + suffix
+        else:
+            # Job-owned actors under a job-unique name never attach to a retained session.
+            assert "lifetime" not in kwargs and "get_if_exists" not in kwargs
+            assert kwargs["name"] == session + ":task:job7" + suffix
+
+
+def test_serving_lifetime_does_not_change_the_retained_session(args):
+    task = copy.deepcopy(args)
+    task.serving_lifetime = "task"
+    args.serving_lifetime = "detached"
+    assert retained_rollout_configuration(task) == retained_rollout_configuration(args)
+
+
 def test_training_resume_keeps_checkpoint_and_attempt_configuration_separate(args):
     from slime.ray.training_recovery import TrainingCheckpoint, TrainingResume
 
