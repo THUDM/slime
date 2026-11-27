@@ -366,9 +366,15 @@ class _VocabParallelLogProbEntropy(torch.autograd.Function):
         process_group,
         with_entropy: bool,
         with_entropy_grad: bool,
+        temperature: float = 1.0,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         with_entropy_grad = with_entropy and with_entropy_grad
+        input_logits = vocab_parallel_logits
+        ctx.input_dtype = input_logits.dtype
+        ctx.temperature = temperature
         vocab_parallel_logits = vocab_parallel_logits.float()
+        if temperature != 1.0:
+            vocab_parallel_logits = vocab_parallel_logits / temperature
         seq_len, vocab_parallel_size = vocab_parallel_logits.shape
         rank, _world_size = _get_vocab_parallel_rank_size(process_group)
         vocab_start_index = rank * vocab_parallel_size
@@ -457,20 +463,25 @@ class _VocabParallelLogProbEntropy(torch.autograd.Function):
             sum_softmax_times_logits if with_entropy_grad else vocab_parallel_logits.new_empty((0,))
         )
         saved_logits = vocab_parallel_logits if with_entropy_grad else vocab_parallel_logits.new_empty((0,))
+        # Only the opt-in bf16 path changes saved state; fp32 keeps its existing softmax.
+        ctx.recompute_softmax = (
+            input_logits.dtype == torch.bfloat16 and log_prob_keep_mask is None and not with_entropy_grad
+        )
         ctx.save_for_backward(
-            log_prob_softmax,
+            input_logits if ctx.recompute_softmax else log_prob_softmax,
             target_mask,
             masked_target_1d,
             saved_entropy_softmax,
             saved_sum_softmax_times_logits,
             saved_logits,
+            *((log_prob_logits_max, log_prob_sum_exp_logits) if ctx.recompute_softmax else ()),
         )
         return log_prob, entropy
 
     @staticmethod
     def backward(
         ctx, grad_log_prob: torch.Tensor | None, grad_entropy: torch.Tensor | None
-    ) -> tuple[torch.Tensor, None, None, None, None, None]:
+    ) -> tuple[torch.Tensor, None, None, None, None, None, None]:
         (
             log_prob_softmax,
             target_mask,
@@ -478,7 +489,14 @@ class _VocabParallelLogProbEntropy(torch.autograd.Function):
             entropy_softmax,
             sum_softmax_times_logits,
             vocab_parallel_logits,
+            *normalizers,
         ) = ctx.saved_tensors
+        if ctx.recompute_softmax:
+            logits_max, sum_exp_logits = normalizers
+            log_prob_softmax = log_prob_softmax.float()
+            if ctx.temperature != 1.0:
+                log_prob_softmax = log_prob_softmax / ctx.temperature
+            log_prob_softmax = (log_prob_softmax - logits_max).exp_().div_(sum_exp_logits)
 
         if grad_log_prob is None:
             raise RuntimeError(
@@ -505,7 +523,11 @@ class _VocabParallelLogProbEntropy(torch.autograd.Function):
         if grad_entropy_input is not None:
             grad_input.add_(grad_entropy_input)
 
-        return grad_input, None, None, None, None, None
+        if ctx.temperature != 1.0:
+            grad_input.div_(ctx.temperature)
+        if grad_input.dtype != ctx.input_dtype:
+            grad_input = grad_input.to(ctx.input_dtype)
+        return grad_input, None, None, None, None, None, None
 
 
 def _calculate_log_probs_and_entropy_chunk(
@@ -516,6 +538,7 @@ def _calculate_log_probs_and_entropy_chunk(
     with_entropy: bool,
     with_entropy_grad: bool = True,
     log_prob_keep_mask: torch.Tensor | None,
+    temperature: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor | None]:
     log_prob, entropy = _VocabParallelLogProbEntropy.apply(
         logits,
@@ -524,6 +547,7 @@ def _calculate_log_probs_and_entropy_chunk(
         tp_group,
         with_entropy,
         with_entropy_grad,
+        temperature,
     )
     if not with_entropy:
         entropy = None
@@ -894,7 +918,7 @@ class _ChunkedLogProbEntropy(torch.autograd.Function):
     """
 
     @staticmethod
-    def forward(ctx, logits, tokens, keep_mask, tp_group, with_entropy, with_entropy_grad, chunk_size):
+    def forward(ctx, logits, tokens, keep_mask, tp_group, with_entropy, with_entropy_grad, chunk_size, temperature):
         log_prob = torch.empty((logits.size(0), 1), device=logits.device, dtype=torch.float32)
         entropy = log_prob.new_empty((logits.size(0),) if with_entropy else (0,))
         for start in range(0, logits.size(0), chunk_size):
@@ -906,6 +930,7 @@ class _ChunkedLogProbEntropy(torch.autograd.Function):
                 with_entropy=with_entropy,
                 with_entropy_grad=with_entropy_grad,
                 log_prob_keep_mask=None if keep_mask is None else keep_mask[start:end],
+                temperature=temperature,
             )
             log_prob[start:end] = values
             if with_entropy:
@@ -914,6 +939,7 @@ class _ChunkedLogProbEntropy(torch.autograd.Function):
         ctx.tp_group = tp_group
         ctx.with_entropy_grad = with_entropy and with_entropy_grad
         ctx.chunk_size = chunk_size
+        ctx.temperature = temperature
         if not ctx.with_entropy_grad:
             ctx.mark_non_differentiable(entropy)
         return log_prob, entropy
@@ -934,6 +960,7 @@ class _ChunkedLogProbEntropy(torch.autograd.Function):
                     with_entropy=ctx.with_entropy_grad,
                     with_entropy_grad=ctx.with_entropy_grad,
                     log_prob_keep_mask=None if keep_mask is None else keep_mask[start:end],
+                    temperature=ctx.temperature,
                 )
                 outputs, gradients = [values], [grad_log_prob[start:end]]
                 if ctx.with_entropy_grad:
@@ -942,7 +969,7 @@ class _ChunkedLogProbEntropy(torch.autograd.Function):
                 (gradient,) = torch.autograd.grad(outputs, chunk, grad_outputs=gradients)
             grad_input[start:end] = gradient
             del gradient, outputs, gradients, values, entropies, chunk
-        return grad_input, None, None, None, None, None, None
+        return grad_input, None, None, None, None, None, None, None
 
 
 def calculate_log_probs_and_entropy(
@@ -953,13 +980,18 @@ def calculate_log_probs_and_entropy(
     chunk_size: int = -1,
     log_prob_keep_mask=None,
     with_entropy_grad: bool = True,
+    temperature: float = 1.0,
 ):
+    """Compute in fp32, casting each chunk before temperature scaling.
+
+    Keep the default temperature for callers that already scaled fp32 logits.
+    """
     logits = logits.contiguous()
     entropy = None
     if logits.size(0) != 0:
         if chunk_size > 0:
             log_prob, entropy = _ChunkedLogProbEntropy.apply(
-                logits, tokens, log_prob_keep_mask, tp_group, with_entropy, with_entropy_grad, chunk_size
+                logits, tokens, log_prob_keep_mask, tp_group, with_entropy, with_entropy_grad, chunk_size, temperature
             )
             if not with_entropy:
                 entropy = None
@@ -971,10 +1003,12 @@ def calculate_log_probs_and_entropy(
                 with_entropy=with_entropy,
                 with_entropy_grad=with_entropy_grad,
                 log_prob_keep_mask=log_prob_keep_mask,
+                temperature=temperature,
             )
     else:
-        log_prob = logits.new_zeros((0,))
+        dtype = torch.float32 if logits.dtype == torch.bfloat16 else logits.dtype
+        log_prob = logits.new_zeros((0,), dtype=dtype)
         if with_entropy:
-            entropy = logits.new_zeros((0,))
+            entropy = logits.new_zeros((0,), dtype=dtype)
 
     return log_prob, entropy

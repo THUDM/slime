@@ -268,6 +268,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="Whether to disable recompute loss function to save memory during training.",
             )
             parser.add_argument(
+                "--logits-dtype",
+                choices=["fp32", "bf16"],
+                default="fp32",
+                help="Megatron actor logits storage dtype; bf16 saves memory while consumers compute in fp32.",
+            )
+            parser.add_argument(
                 "--log-probs-chunk-size", type=int, default=-1, help="Chunk size to compute log probs to save memory"
             )
             parser.add_argument(
@@ -1914,6 +1920,11 @@ def slime_validate_args(args):
     args = copy.deepcopy(args)
     if getattr(args, "rollout_cleanup_timeout", 60) <= 0:
         raise ValueError("--rollout-cleanup-timeout must be positive")
+    if getattr(args, "logits_dtype", "fp32") == "bf16":
+        if args.loss_type == "custom_loss":
+            raise ValueError("--logits-dtype bf16 is incompatible with --loss-type custom_loss")
+        if getattr(args, "overlap_moe_expert_parallel_comm", False):
+            raise ValueError("--logits-dtype bf16 is incompatible with combined 1F1B")
     get_pg_loss_type(args)
     validate_score_centering_args(args)
     args.eval_datasets = _resolve_eval_datasets(args)

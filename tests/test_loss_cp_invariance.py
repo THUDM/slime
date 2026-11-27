@@ -252,5 +252,62 @@ def test_backward_grad_is_cp_invariant(dp_size, cp_size, tmp_path):
 _ = _cp_dist_helpers
 
 
+@pytest.mark.parametrize("consumer", ["sft", "values", "topk", "ragged", "logprob"])
+@pytest.mark.parametrize("temperature", [1.0, 0.8])
+@pytest.mark.parametrize("chunk_size", [-1, 2])
+def test_bf16_cpu_consumers_bitwise_equal(monkeypatch, consumer, temperature, chunk_size):
+    from argparse import Namespace
+
+    from slime.backends.megatron_utils import loss as loss_module
+    from slime.utils.ppo_utils import calculate_ragged_log_probs, calculate_topk_log_probs
+
+    monkeypatch.setattr(loss_module.mpu, "get_context_parallel_world_size", lambda: 1)
+    monkeypatch.setattr(loss_module.mpu, "get_tensor_model_parallel_group", lambda: None, raising=False)
+    args = Namespace(
+        logits_dtype="bf16",
+        rollout_temperature=temperature,
+        allgather_cp=False,
+        log_probs_chunk_size=chunk_size,
+        entropy_coef=0.0,
+    )
+    tokens = [torch.tensor([2, 0, 1, 3, 4, 5])]
+    batch = dict(unconcat_tokens=tokens, total_lengths=[6], response_lengths=[4])
+    data = torch.randn(
+        1, 6, 1 if consumer == "values" else 19, generator=torch.Generator().manual_seed(123)
+    ).bfloat16()
+    if consumer != "values":
+        data[0, 1, 1] = 30
+    results = []
+    for bf16 in (False, True):
+        leaf = data.clone().requires_grad_()
+        logits = leaf if bf16 else leaf.float()
+        if consumer == "sft":
+            output, _ = loss_module.sft_loss_function(args, batch, logits, torch.mean)
+        elif consumer == "values":
+            _, values = loss_module.get_values(logits, args=args, **batch)
+            output = torch.cat(values["values"])
+        elif consumer == "logprob":
+            _, values = loss_module.get_log_probs_and_entropy(logits, args=args, **batch, with_entropy=False)
+            output = torch.cat(values["log_probs"])
+        else:
+            chunks = []
+            for chunk, _ in loss_module.get_responses(
+                logits, args=args, **batch, apply_temperature=consumer != "ragged"
+            ):
+                assert chunk.dtype == torch.float32
+                ids = torch.tensor([[0, 1, 3]]).expand(chunk.size(0), -1)
+                if consumer == "ragged":
+                    offsets = torch.arange(chunk.size(0) + 1) * ids.size(1)
+                    chunks.append(calculate_ragged_log_probs(chunk, ids.flatten(), offsets, None, temperature))
+                else:
+                    chunks.append(calculate_topk_log_probs(chunk, ids, None, chunk_size=chunk_size))
+            output = torch.cat(chunks)
+        output.sum().backward()
+        results.append((output.detach(), leaf.grad))
+    assert torch.equal(results[0][0], results[1][0])
+    assert torch.equal(results[0][1], results[1][1])
+    assert results[1][1].dtype == torch.bfloat16
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
