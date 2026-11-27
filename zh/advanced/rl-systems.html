@@ -61,7 +61,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="2026 年 11 月 05 日"/>
+    <meta name="docbuild:last-update" content="2026 年 11 月 27 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -481,7 +481,7 @@
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="rl">
-<h1>看懂你正在搭建的 RL 系统<a class="headerlink" href="#rl" title="Link to this heading">#</a></h1>
+<span id="看懂你正在搭建的-rl-系统"></span><h1>看懂你正在搭建的 RL 系统<a class="headerlink" href="#rl" title="Link to this heading">#</a></h1>
 <p><a class="reference internal" href="../index.html"><span class="std std-doc">打开实验室</span></a>。<strong>布局</strong>决定 GPU 的归属，<strong>调度</strong>决定工作顺序，<strong>精度</strong>决定数值计算，<strong>推理拓扑</strong>决定如何划分 serving 工作。它们是独立的配置维度。下面的成本模型用于理解取舍，不是性能预测。</p>
 <section id="placement">
 <h2>Placement<a class="headerlink" href="#placement" title="Link to this heading">#</a></h2>
@@ -505,11 +505,9 @@
 <p>权重更新停顿、采样依赖、reward 延迟、队列预热和 GPU 争用都会削弱这个估计。它不代表实测加速比。回复长度差异越大，同步 barrier 的长尾等待往往越明显。</p>
 <p>重叠的代价是 staleness。样本在权重版本 <span class="math notranslate nohighlight">\(v_s\)</span> 生成、在 <span class="math notranslate nohighlight">\(v_t\)</span> 被使用，定义年龄 <span class="math notranslate nohighlight">\(d=v_t-v_s\)</span>。固定 prefix，可拆分差异：</p>
 <div class="math notranslate nohighlight">
-\[
-\log p_{v_t}(a\mid h)-\log q_{v_s}(a\mid h)
+\[\log p_{v_t}(a\mid h)-\log q_{v_s}(a\mid h)
 =\underbrace{\log p_{v_t}-\log p_{v_s}}_{\text{参数过期}}
-+\underbrace{\log p_{v_s}-\log q_{v_s}}_{\text{同版本引擎差异}}.
-\]</div>
++\underbrace{\log p_{v_s}-\log q_{v_s}}_{\text{同版本引擎差异}}.\]</div>
 <p>确定性 kernel 可以减少第二项，不能消去第一项。长轨迹也可能混入多个权重版本，单个年龄统计只是一种诊断。TIS / SC 可以帮助稳定训练，但不意味着可以无限容忍旧样本。</p>
 <p>slime 仍用 <code class="docutils literal notranslate"><span class="pre">train.py</span></code>，选择 <code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span> <span class="pre">slime.rollout.fully_async_rollout.generate_rollout_fully_async</span></code>。它跨调用保留正在生成的样本；要有实际重叠收益，需要独立 GPU。监控 <code class="docutils literal notranslate"><span class="pre">staleness/mean</span></code>、<code class="docutils literal notranslate"><span class="pre">staleness/max</span></code>。生成配方不会在这个连续队列上直接做 evaluation，请使用独立评估路径或任务。见 <a class="reference internal" href="../_examples_synced/fully_async/README.html"><span class="std std-doc">fully async 实现指南</span></a>。相关研究：<a class="reference external" href="https://arxiv.org/abs/2509.19128">PipelineRL</a>，作为概念参考，不表示 slime 实现了论文完整算法。</p>
 </section>
@@ -557,11 +555,9 @@
 \[B_{\rm cache}\approx N c_A + K c_R.\]</div>
 <p>对普通 GQA 层集合 <span class="math notranslate nohighlight">\(\mathcal A\)</span>，逐层计算每个 token 的 K、V 元素；对线性注意力层集合 <span class="math notranslate nohighlight">\(\mathcal R\)</span>，计算每个 slot 的递归状态和卷积状态元素：</p>
 <div class="math notranslate nohighlight">
-\[
-c_A=\sum_{\ell\in\mathcal A}2H^{KV}_\ell d_\ell\frac{b_{KV}}8,
+\[c_A=\sum_{\ell\in\mathcal A}2H^{KV}_\ell d_\ell\frac{b_{KV}}8,
 \qquad
-c_R=\sum_{\ell\in\mathcal R}\left(P^{SSM}_\ell\frac{b_{SSM}}8+P^{conv}_\ell\frac{b_{conv}}8\right).
-\]</div>
+c_R=\sum_{\ell\in\mathcal R}\left(P^{SSM}_\ell\frac{b_{SSM}}8+P^{conv}_\ell\frac{b_{conv}}8\right).\]</div>
 <p>估计每卡占用时，用分片后的实际张量维度。DSA / MLA 的缓存张量不同，应测量其真实字节数，不能套用 GQA 维度。单个递归状态 slot 的形状固定，但 <strong>slot 数量</strong>会随并发、prefix 快照和调度缓冲增加。</p>
 <p>只把 BF16 attention KV 改成 FP8 时，<span class="math notranslate nohighlight">\(B'\approx Nc_A/2+Kc_R\)</span>，因此总缓存通常不会减半。同理，BF16 SSM 只改变递归状态项，卷积状态保持自身的 dtype。</p>
 <p>可选的内存比例通过 <code class="docutils literal notranslate"><span class="pre">--sglang-mamba-full-memory-ratio</span></code> 设置 <span class="math notranslate nohighlight">\(r=B_R/B_A\)</span>。理想化地给两个池分配预算 <span class="math notranslate nohighlight">\(B\)</span>，联立 <span class="math notranslate nohighlight">\(B_A+B_R=B\)</span> 与 <span class="math notranslate nohighlight">\(B_R=rB_A\)</span>，得到：</p>
@@ -599,7 +595,7 @@ c_R=\sum_{\ell\in\mathcal R}\left(P^{SSM}_\ell\frac{b_{SSM}}8+P^{conv}_\ell\frac
 <p>向导使用 <code class="docutils literal notranslate"><span class="pre">--sglang-enable-hierarchical-cache</span> <span class="pre">--sglang-hicache-ratio</span> <span class="pre">2</span></code>，只配置主机缓存，不创建 L3 存储服务。slime 管理的 PD 仅在 prefill 开启，与当前 engine builder 一致；不自动配置 decode offload 或分布式存储。KV 是特定权重下的激活，跨 actor 权重更新必须正确失效。因此要在有效权重窗口内测量可用命中。</p>
 </section>
 <section id="debug">
-<h2>先 Debug，再优化<a class="headerlink" href="#debug" title="Link to this heading">#</a></h2>
+<span id="先-debug再优化"></span><h2>先 Debug，再优化<a class="headerlink" href="#debug" title="Link to this heading">#</a></h2>
 <p>先跑三轮短实验并设置独立评估。文本异常时先查模板、checkpoint 转换和权重更新。<a class="reference internal" href="../developer_guide/debug.html"><span class="std std-doc">Debug replay</span></a> 固定采样 batch；<a class="reference internal" href="../developer_guide/trace.html"><span class="std std-doc">Trace</span></a> 找等待阶段；<a class="reference internal" href="../developer_guide/profiling.html"><span class="std std-doc">Profiling</span></a> 再看具体 kernel 或引擎阶段。针对实测瓶颈优化，同时比较 reward 和 mismatch；吞吐本身不是 RL 的最终目标。</p>
 </section>
 </section>
@@ -694,7 +690,7 @@ c_R=\sum_{\ell\in\mathcal R}\left(P^{SSM}_\ell\frac{b_{SSM}}8+P^{conv}_\ell\frac
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 11 月 05 日.
+  最后更新于 2026 年 11 月 27 日.
   <br/>
 </p>
   </div>

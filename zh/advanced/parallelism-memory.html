@@ -419,7 +419,7 @@ window.runMermaid = runMermaid;</script>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="2026 年 11 月 05 日"/>
+    <meta name="docbuild:last-update" content="2026 年 11 月 27 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -836,10 +836,10 @@ window.runMermaid = runMermaid;</script>
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="id1">
-<h1>卡数、显存与并行方式<a class="headerlink" href="#id1" title="Link to this heading">#</a></h1>
+<span id="卡数显存与并行方式"></span><h1>卡数、显存与并行方式<a class="headerlink" href="#id1" title="Link to this heading">#</a></h1>
 <p>在<a class="reference internal" href="../index.html#lab"><span class="std std-ref">交互实验室</span></a>的「布局」步骤中逐个点击图示。先确认各阶段能放下且学习正确，再优化每秒有效样本数。</p>
 <section id="id2">
-<h2>从多少张卡起步？<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<span id="从多少张卡起步"></span><h2>从多少张卡起步？<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
 <p>实验室按每节点 8 GPU，参考 H100/H200 级别、高速互联服务器的仓库配方。这些是配方起步值，不是实测最小值，也不保证这一档所有硬件均能直接运行。模型配方默认回复上限为 131,072 tokens（128K），GLM-5.3 为 262,144（256K），均启用 CP，每轮 8 个 prompt、各采样 8 次；prompt 长度仍计入显存。MoE 和 Qwen 默认启用 CPU Adam 与重计算。</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
@@ -882,7 +882,7 @@ window.runMermaid = runMermaid;</script>
 <p>同卡训推分配一个池；训推分离需训练卡数加 rollout 卡数。PD 将 rollout 池分为完整 prefill/decode 引擎；外部推理资源不计入训练 Ray 集群。只增加卡数而不调整模型并行，可能只是增加副本，并不减少每卡模型显存。</p>
 </section>
 <section id="id3">
-<h2>显存账本<a class="headerlink" href="#id3" title="Link to this heading">#</a></h2>
+<span id="显存账本"></span><h2>显存账本<a class="headerlink" href="#id3" title="Link to this heading">#</a></h2>
 <p>以一种混合精度 Adam 为例，<span class="math notranslate nohighlight">\(P\)</span> 个参数的 BF16 权重占 <span class="math notranslate nohighlight">\(2P\)</span> 字节、FP32 梯度 <span class="math notranslate nohighlight">\(4P\)</span>、FP32 master weights <span class="math notranslate nohighlight">\(4P\)</span>、两份 FP32 moments <span class="math notranslate nohighlight">\(8P\)</span>：</p>
 <div class="math notranslate nohighlight">
 \[M_{\rm states}=(2+4+4+8)P=18P\ \text{bytes}.\]</div>
@@ -900,14 +900,14 @@ window.runMermaid = runMermaid;</script>
     </pre><p>理想的阶段 offload 使同卡显存需求接近 <span class="math notranslate nohighlight">\(\max(M_{\rm train},M_{\rm rollout})\)</span>，还需考虑常驻 buffers 与切换开销。分离布局则分别满足两个池的容量约束。</p>
 </section>
 <section id="tp">
-<h2>TP：拆一个层<a class="headerlink" href="#tp" title="Link to this heading">#</a></h2>
+<span id="tp拆一个层"></span><h2>TP：拆一个层<a class="headerlink" href="#tp" title="Link to this heading">#</a></h2>
 <p>按矩阵列拆分：</p>
 <div class="math notranslate nohighlight">
 \[W=[W_0\;W_1],\qquad Y=XW=[XW_0\;XW_1].\]</div>
 <p>各卡计算一片；后续按输入行拆分的层计算 <span class="math notranslate nohighlight">\(Z=Y_0V_0+Y_1V_1\)</span>，需要归约各卡的部分输出。这解释了显存节省和频繁通信的来源，TP 应优先放在高速互联内。Sequence parallelism 还拆分部分激活操作，不能替代 CP。见 <a class="reference external" href="https://arxiv.org/abs/2104.04473">Megatron 论文</a>和<a class="reference external" href="https://docs.nvidia.com/megatron-core/developer-guide/latest/user-guide/parallelism-guide.html">并行指南</a>。</p>
 </section>
 <section id="pp">
-<h2>PP：拆模型层<a class="headerlink" href="#pp" title="Link to this heading">#</a></h2>
+<span id="pp拆模型层"></span><h2>PP：拆模型层<a class="headerlink" href="#pp" title="Link to this heading">#</a></h2>
 <pre  class="mermaid">
         flowchart LR
     A[前面的层] --&gt;|激活| B[中间的层]
@@ -917,7 +917,7 @@ window.runMermaid = runMermaid;</script>
     </pre><p>每个 stage 只保存自己的层。假设 <span class="math notranslate nohighlight">\(p\)</span> 个等耗时阶段、<span class="math notranslate nohighlight">\(m\)</span> 个 microbatch、每阶段耗时 <span class="math notranslate nohighlight">\(\tau\)</span>，简单 forward 流水线耗时 <span class="math notranslate nohighlight">\((m+p-1)\tau\)</span>。利用率为 <span class="math notranslate nohighlight">\(m/(m+p-1)\)</span>，填充与排空的 bubble 比例为 <span class="math notranslate nohighlight">\((p-1)/(m+p-1)\)</span>。实际训练还受 backward 调度、通信与分层不均衡影响。增加 microbatch 数能摊薄 bubble，但每个 microbatch 仍要放得下。见 <a class="reference external" href="https://arxiv.org/abs/2104.04473">Megatron 论文</a>。</p>
 </section>
 <section id="ep-moe">
-<h2>EP：拆 MoE 专家<a class="headerlink" href="#ep-moe" title="Link to this heading">#</a></h2>
+<span id="ep拆-moe-专家"></span><h2>EP：拆 MoE 专家<a class="headerlink" href="#ep-moe" title="Link to this heading">#</a></h2>
 <p>对选中的专家集合 <span class="math notranslate nohighlight">\(K(x)\)</span>：</p>
 <div class="math notranslate nohighlight">
 \[y(x)=\sum_{e\in K(x)}g_e(x)E_e(x).\]</div>
@@ -925,7 +925,7 @@ window.runMermaid = runMermaid;</script>
 <p>Dense 层常用卡数关系为 <span class="math notranslate nohighlight">\(N=TP\cdot PP\cdot CP\cdot DP\)</span>。专家层有另一套含 expert TP、expert DP 的分组，不能在 dense 关系上再乘 EP。本实验室使用 expert TP=1，检查卡数能被 <span class="math notranslate nohighlight">\(TP\cdot PP\cdot CP\)</span> 和 <span class="math notranslate nohighlight">\(EP\cdot PP\)</span> 整除；模型维度与 Megatron 还会带来其他约束。</p>
 </section>
 <section id="cp-token">
-<h2>CP：拆 token<a class="headerlink" href="#cp-token" title="Link to this heading">#</a></h2>
+<span id="cp拆-token"></span><h2>CP：拆 token<a class="headerlink" href="#cp-token" title="Link to this heading">#</a></h2>
 <p>CP 按 token 位置分配 queries；attention 仍需远端 keys/values，因此引入通信。它减少本地序列激活，不会自动拆模型权重。</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
@@ -957,7 +957,7 @@ window.runMermaid = runMermaid;</script>
 <p>CP &gt; 1 时，slime 当前只允许 <code class="docutils literal notranslate"><span class="pre">DeepseekV32ForCausalLM</span></code> 和 <code class="docutils literal notranslate"><span class="pre">GlmMoeDsaForCausalLM</span></code> 使用 allgather CP。实验室的 GLM-5.3 通过模型配置启用它，其他配方保持支持的布局。图示按钮不修改运行 flag。见<a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/backends/megatron_utils/arguments.py">参数校验</a>、<a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/backends/megatron_utils/data.py">打包</a>、<a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/backends/megatron_utils/cp_utils.py">CP 索引</a>和 <a class="reference external" href="https://docs.nvidia.com/megatron-core/developer-guide/latest/user-guide/parallelism-guide.html">Megatron 指南</a>。</p>
 </section>
 <section id="zero-distributed-optimizer">
-<h2>ZeRO 与 distributed optimizer<a class="headerlink" href="#zero-distributed-optimizer" title="Link to this heading">#</a></h2>
+<span id="zero-与-distributed-optimizer"></span><h2>ZeRO 与 distributed optimizer<a class="headerlink" href="#zero-distributed-optimizer" title="Link to this heading">#</a></h2>
 <p>数据并行副本处理不同样本。ZeRO 依次分片优化器状态（stage 1）、梯度（stage 2）、参数（stage 3）。沿用每参数 18 字节示例，<span class="math notranslate nohighlight">\(D\)</span> 个副本上的理想持久状态开销为：</p>
 <div class="math notranslate nohighlight">
 \[M_0=18P,\quad M_1=6P+12P/D,\quad M_2=2P+16P/D,\quad M_3=18P/D.\]</div>
@@ -965,7 +965,7 @@ window.runMermaid = runMermaid;</script>
 <p>slime 默认启用 Megatron <code class="docutils literal notranslate"><span class="pre">use_distributed_optimizer</span></code>，分片优化器状态与更新计算，再聚合更新后的参数。这不等于完整 ZeRO-3 参数分片，也不表示使用 DeepSpeed runtime。见<a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/backends/megatron_utils/arguments.py">后端默认参数</a>。</p>
 </section>
 <section id="cpu-adam">
-<h2>CPU Adam 与重计算<a class="headerlink" href="#cpu-adam" title="Link to this heading">#</a></h2>
+<span id="cpu-adam-与重计算"></span><h2>CPU Adam 与重计算<a class="headerlink" href="#cpu-adam" title="Link to this heading">#</a></h2>
 <p>Adam 保存 moments 并做偏差修正：</p>
 <div class="math notranslate nohighlight">
 \[m_t=\beta_1m_{t-1}+(1-\beta_1)g_t,\quad v_t=\beta_2v_{t-1}+(1-\beta_2)g_t^2,\]</div>
@@ -1064,7 +1064,7 @@ window.runMermaid = runMermaid;</script>
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 11 月 05 日.
+  最后更新于 2026 年 11 月 27 日.
   <br/>
 </p>
   </div>

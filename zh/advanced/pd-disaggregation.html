@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="2026 年 11 月 05 日"/>
+    <meta name="docbuild:last-update" content="2026 年 11 月 27 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -478,10 +478,10 @@
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="pd">
-<h1>PD 分离<a class="headerlink" href="#pd" title="Link to this heading">#</a></h1>
+<span id="pd-分离"></span><h1>PD 分离<a class="headerlink" href="#pd" title="Link to this heading">#</a></h1>
 <p>PD Disaggregation 将 SGLang rollout 中的 Prefill worker 和 Decode worker 拆开部署。它特别适合 multi-turn、long-context 和 agentic RL：这些 workload 中，prompt processing 和 token generation 的计算/显存特征往往完全不同。</p>
 <section id="id1">
-<h2>什么时候使用<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
+<span id="什么时候使用"></span><h2>什么时候使用<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
 <p>建议在以下场景使用 PD 分离：</p>
 <ul class="simple">
 <li><p>rollout context 很长，或会随着多轮交互持续增长；</p></li>
@@ -493,10 +493,10 @@
 <p>对于短单轮任务，默认 regular SGLang engine layout 通常更简单。</p>
 </section>
 <section id="id2">
-<h2>配置路径<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<span id="配置路径"></span><h2>配置路径<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
 <p>slime 支持两种 PD 配置方式。</p>
 <section id="prefill-num-servers">
-<h3>简单路径：<code class="docutils literal notranslate"><span class="pre">--prefill-num-servers</span></code><a class="headerlink" href="#prefill-num-servers" title="Link to this heading">#</a></h3>
+<span id="简单路径--prefill-num-servers"></span><h3>简单路径：<code class="docutils literal notranslate"><span class="pre">--prefill-num-servers</span></code><a class="headerlink" href="#prefill-num-servers" title="Link to this heading">#</a></h3>
 <p>如果只有单个 actor model，并且只需要简单 PD layout，可以设置：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--prefill-num-servers<span class="w"> </span><span class="m">1</span>
 </pre></div>
@@ -504,7 +504,7 @@
 <p>这是轻量路径，适合只想拆开 prefill/decode、但不需要分别调每个 group 的场景。</p>
 </section>
 <section id="sglang-config">
-<h3>高级路径：<code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code><a class="headerlink" href="#sglang-config" title="Link to this heading">#</a></h3>
+<span id="高级路径--sglang-config"></span><h3>高级路径：<code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code><a class="headerlink" href="#sglang-config" title="Link to this heading">#</a></h3>
 <p>生产级 rollout topology 推荐使用 <a class="reference internal" href="sglang-config.html"><span class="std std-doc">SGLang Config</span></a>。它可以独立配置 prefill 和 decode group，也能表达 EPD-style layout、heterogeneous server group、multi-model serving 和 per-group SGLang override。</p>
 <p>示例：</p>
 <div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">sglang</span><span class="p">:</span>
@@ -533,7 +533,7 @@
 </section>
 </section>
 <section id="rl">
-<h2>为什么这对 RL 重要<a class="headerlink" href="#rl" title="Link to this heading">#</a></h2>
+<span id="为什么这对-rl-重要"></span><h2>为什么这对 RL 重要<a class="headerlink" href="#rl" title="Link to this heading">#</a></h2>
 <p>RL rollout 往往不是一批短 completion。Agentic 和 verifier-based workload 常见特征包括：</p>
 <ul class="simple">
 <li><p>来自 tool/environment history 的长 prompt；</p></li>
@@ -545,7 +545,7 @@
 <p>PD 让 slime 在不改变 training loop 的情况下，使用更贴合真实 serving workload 的 rollout topology。</p>
 </section>
 <section id="id3">
-<h2>运维注意事项<a class="headerlink" href="#id3" title="Link to this heading">#</a></h2>
+<span id="运维注意事项"></span><h2>运维注意事项<a class="headerlink" href="#id3" title="Link to this heading">#</a></h2>
 <ul class="simple">
 <li><p>新的复杂部署优先使用 <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code>，而不是 <code class="docutils literal notranslate"><span class="pre">--prefill-num-servers</span></code>。</p></li>
 <li><p>multi-turn agent 建议开启 router session affinity，使同一 sample 的多轮请求可以复用 prefix cache。见 <a class="reference internal" href="sglang-config.html#agent"><span class="std std-ref">Session-Affinity Routing</span></a>。</p></li>
@@ -555,7 +555,7 @@
 </ul>
 </section>
 <section id="id4">
-<h2>相关文档<a class="headerlink" href="#id4" title="Link to this heading">#</a></h2>
+<span id="相关文档"></span><h2>相关文档<a class="headerlink" href="#id4" title="Link to this heading">#</a></h2>
 <ul class="simple">
 <li><p><a class="reference internal" href="sglang-config.html"><span class="std std-doc">SGLang Config</span></a></p></li>
 <li><p><a class="reference internal" href="../get_started/agent.html"><span class="std std-doc">Agentic RL Training Roadmap</span></a></p></li>
@@ -653,7 +653,7 @@
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 11 月 05 日.
+  最后更新于 2026 年 11 月 27 日.
   <br/>
 </p>
   </div>

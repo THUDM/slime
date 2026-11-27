@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="2026 年 11 月 05 日"/>
+    <meta name="docbuild:last-update" content="2026 年 11 月 27 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -485,10 +485,10 @@
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="ci">
-<h1>CI（持续集成）<a class="headerlink" href="#ci" title="Link to this heading">#</a></h1>
+<span id="ci持续集成"></span><h1>CI（持续集成）<a class="headerlink" href="#ci" title="Link to this heading">#</a></h1>
 <p>提交或更新 PR、向 <code class="docutils literal notranslate"><span class="pre">main</span></code> 推送代码，以及手动触发工作流时，slime 都会运行 CPU 测试。GPU 端到端测试通过 PR 标签触发，在自托管的 GPU 机器上运行真实的 Megatron 训练和 SGLang 推理。日常改动可以先用 CPU 测试检查，再按改动范围选择 GPU 测试。</p>
 <section id="id1">
-<h2>如何触发测试<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
+<span id="如何触发测试"></span><h2>如何触发测试<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>触发方式</p></th>
@@ -545,9 +545,9 @@
 <p>工作流定义在 <code class="docutils literal notranslate"><span class="pre">.github/workflows/pr-test.yml</span></code>，由 <code class="docutils literal notranslate"><span class="pre">.github/workflows/pr-test.yml.j2</span></code> 生成。修改测试列表或触发条件时，应编辑模板，再生成工作流文件。</p>
 </section>
 <section id="id2">
-<h2>测试如何运行<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<span id="测试如何运行"></span><h2>测试如何运行<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
 <section id="cpu">
-<h3>CPU 测试<a class="headerlink" href="#cpu" title="Link to this heading">#</a></h3>
+<span id="cpu-测试"></span><h3>CPU 测试<a class="headerlink" href="#cpu" title="Link to this heading">#</a></h3>
 <p>CPU 任务运行在 GitHub 托管的 <code class="docutils literal notranslate"><span class="pre">ubuntu-latest</span></code> 环境中，安装 CPU 版 PyTorch 和测试依赖，再执行 <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">tests/&lt;test_file&gt;.py</span></code>。它们不使用 Docker，也不申请 GPU。</p>
 <p><code class="docutils literal notranslate"><span class="pre">cpu-unittest</span></code> 主要检查：</p>
 <ul class="simple">
@@ -567,7 +567,7 @@ python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> <
 </div>
 </section>
 <section id="gpu">
-<h3>GPU 端到端测试<a class="headerlink" href="#gpu" title="Link to this heading">#</a></h3>
+<span id="gpu-端到端测试"></span><h3>GPU 端到端测试<a class="headerlink" href="#gpu" title="Link to this heading">#</a></h3>
 <p>GPU 任务运行在自托管机器上，每项测试依次执行以下步骤：</p>
 <ol class="arabic simple">
 <li><p>启动 Docker 容器，通常使用 <code class="docutils literal notranslate"><span class="pre">slimerl/slime:latest</span></code>；镜像验证使用 <code class="docutils literal notranslate"><span class="pre">slimerl/slime-test:latest</span></code>。</p></li>
@@ -578,7 +578,7 @@ python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> <
 <p>测试文件通常用 <code class="docutils literal notranslate"><span class="pre">prepare()</span></code> 下载模型和数据集，用 <code class="docutils literal notranslate"><span class="pre">execute()</span></code> 构建训练参数并调用 <code class="docutils literal notranslate"><span class="pre">U.execute_train(...)</span></code>。</p>
 </section>
 <section id="id3">
-<h3>只运行改动的测试<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
+<span id="只运行改动的测试"></span><h3>只运行改动的测试<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
 <p>添加 <code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> 标签后，CI 会相对于 <code class="docutils literal notranslate"><span class="pre">origin/main</span></code> 查找新增或修改的 <code class="docutils literal notranslate"><span class="pre">tests/test_*.py</span></code> 和 <code class="docutils literal notranslate"><span class="pre">tests/plugin_contracts/test_*.py</span></code>，并为每个文件创建一个测试任务。</p>
 <p>GPU 数量取自文件顶层的 <code class="docutils literal notranslate"><span class="pre">NUM_GPUS</span> <span class="pre">=</span> <span class="pre">&lt;N&gt;</span></code>。没有声明时默认申请 8 张卡，因此只需要 CPU 的测试应写明：</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">NUM_GPUS</span> <span class="o">=</span> <span class="mi">0</span>
@@ -588,9 +588,9 @@ python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> <
 </section>
 </section>
 <section id="id4">
-<h2>数据传输与恢复测试<a class="headerlink" href="#id4" title="Link to this heading">#</a></h2>
+<span id="数据传输与恢复测试"></span><h2>数据传输与恢复测试<a class="headerlink" href="#id4" title="Link to this heading">#</a></h2>
 <section id="agent">
-<h3>Agent 训练<a class="headerlink" href="#agent" title="Link to this heading">#</a></h3>
+<span id="agent-训练"></span><h3>Agent 训练<a class="headerlink" href="#agent" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">tests/test_agent_sunabako_codex_e2e.py</span></code> 使用 <strong>Codex 0.162.1</strong>、<strong>Claude Code 2.1.296</strong>、
 Qwen3.8-27B 和两个独立镜像中的小米任务：</p>
 <ul class="simple">
@@ -670,7 +670,7 @@ GitHub Actions 在成功或失败后都会上传这些产物。</p>
 <p>固定测试列表包含三种配置：<code class="docutils literal notranslate"><span class="pre">--flush-cache-interval</span> <span class="pre">0</span></code> 配合 NCCL 或完整权重落盘同步，以及 <code class="docutils literal notranslate"><span class="pre">--flush-cache-interval</span> <span class="pre">2</span></code> 配合 NCCL 定期刷新缓存。CPU 测试 <code class="docutils literal notranslate"><span class="pre">test_pipeline_rl.py</span></code> 检查刷新周期和发给 SGLang 的控制请求。这些测试检查功能是否正确，不评估学习效果或吞吐提升。</p>
 </section>
 <section id="megatron">
-<h3>Megatron 手动重启<a class="headerlink" href="#megatron" title="Link to this heading">#</a></h3>
+<span id="megatron-手动重启"></span><h3>Megatron 手动重启<a class="headerlink" href="#megatron" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">test_qwen2.5_0.5B_training_recovery.py</span></code> 使用 4 张 GPU，在同一个 Ray 集群中先后运行两次训练任务。第一次使用 TP=1，故意触发真实的 CUDA OOM；确认训练任务退出后推理服务仍能响应，再改成 TP=2 重新提交，此时 DP 大小也会改变。</p>
 <p>测试检查是否复用了健康的 SGLang 进程、路由器和 GPU 资源，重放的批次内容是否一致，以及训练调度器进度、非零且有限的梯度和最终 checkpoint。固定测试列表包括：</p>
 <div class="pst-scrollable-table-container"><table class="table">
@@ -712,15 +712,15 @@ GitHub Actions 在成功或失败后都会上传这些产物。</p>
 <p>无论是否传入兼容参数 <code class="docutils literal notranslate"><span class="pre">--use-fault-tolerance</span></code>，内部推理健康检查都会启用。CPU 测试还包括：<code class="docutils literal notranslate"><span class="pre">test_training_recovery.py</span></code> 的配置与 checkpoint 边界检查，<code class="docutils literal notranslate"><span class="pre">test_disk_delta_recovery.py</span></code> 的权重更新应答丢失，以及 <code class="docutils literal notranslate"><span class="pre">test_rollout_manager_recovery.py</span></code> 中真实 Ray manager 的 SIGKILL 和转换应答丢失。</p>
 </section>
 <section id="rollout">
-<h3>Rollout 收尾时清理失效引擎<a class="headerlink" href="#rollout" title="Link to this heading">#</a></h3>
+<span id="rollout-收尾时清理失效引擎"></span><h3>Rollout 收尾时清理失效引擎<a class="headerlink" href="#rollout" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">test_qwen2.5_0.5B_rollout_health.py</span></code> 在 rollout 收尾前停掉真实的 SGLang HTTP 服务，但保留它在路由器中的注册信息。两个四卡场景分别保留或杀掉对应的 Ray actor，检查收尾是否有超时限制、返回训练前是否注销失效服务、更新权重时能否恢复引擎，以及训练能否保存最终 checkpoint。</p>
 <p>两种情况都不传 <code class="docutils literal notranslate"><span class="pre">--use-fault-tolerance</span></code>，并将后台检查间隔和首次等待时间设为 600 秒，以验证收尾检查会立即执行，不必等待后台定时检查。</p>
 </section>
 </section>
 <section id="id5">
-<h2>添加测试<a class="headerlink" href="#id5" title="Link to this heading">#</a></h2>
+<span id="添加测试"></span><h2>添加测试<a class="headerlink" href="#id5" title="Link to this heading">#</a></h2>
 <section id="id6">
-<h3>添加 CPU 测试<a class="headerlink" href="#id6" title="Link to this heading">#</a></h3>
+<span id="添加-cpu-测试"></span><h3>添加 CPU 测试<a class="headerlink" href="#id6" title="Link to this heading">#</a></h3>
 <p>参考相邻文件，将测试放在 <code class="docutils literal notranslate"><span class="pre">tests/test_*.py</span></code>、<code class="docutils literal notranslate"><span class="pre">tests/utils/test_*.py</span></code> 或 <code class="docutils literal notranslate"><span class="pre">tests/plugin_contracts/test_*.py</span></code> 下。如果文件会被 <code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> 运行，需要声明顶层 <code class="docutils literal notranslate"><span class="pre">NUM_GPUS</span> <span class="pre">=</span> <span class="pre">0</span></code>。</p>
 <p>CI 会直接执行测试文件，因此使用 pytest 的文件需要提供入口：</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">"__main__"</span><span class="p">:</span>
@@ -730,7 +730,7 @@ GitHub Actions 在成功或失败后都会上传这些产物。</p>
 <p>需要自动运行的测试，还应注册到 <code class="docutils literal notranslate"><span class="pre">.github/workflows/pr-test.yml.j2</span></code> 的 <code class="docutils literal notranslate"><span class="pre">cpu-unittest</span></code> 或 <code class="docutils literal notranslate"><span class="pre">agent-test</span></code> 列表中，再重新生成工作流。</p>
 </section>
 <section id="id7">
-<h3>添加 GPU 端到端测试<a class="headerlink" href="#id7" title="Link to this heading">#</a></h3>
+<span id="添加-gpu-端到端测试"></span><h3>添加 GPU 端到端测试<a class="headerlink" href="#id7" title="Link to this heading">#</a></h3>
 <ol class="arabic simple">
 <li><p>创建 <code class="docutils literal notranslate"><span class="pre">tests/test_&lt;your_test_name&gt;.py</span></code>，沿用现有的 <code class="docutils literal notranslate"><span class="pre">prepare()</span></code> / <code class="docutils literal notranslate"><span class="pre">execute()</span></code> 结构。</p></li>
 <li><p>用顶层 <code class="docutils literal notranslate"><span class="pre">NUM_GPUS</span> <span class="pre">=</span> <span class="pre">&lt;N&gt;</span></code> 声明所需 GPU 数量。</p></li>
@@ -764,7 +764,7 @@ GitHub Actions 在成功或失败后都会上传这些产物。</p>
 </section>
 </section>
 <section id="id8">
-<h2>生成工作流<a class="headerlink" href="#id8" title="Link to this heading">#</a></h2>
+<span id="生成工作流"></span><h2>生成工作流<a class="headerlink" href="#id8" title="Link to this heading">#</a></h2>
 <p>不要直接编辑生成的 <code class="docutils literal notranslate"><span class="pre">.github/workflows/pr-test.yml</span></code>。修改 <code class="docutils literal notranslate"><span class="pre">.github/workflows/pr-test.yml.j2</span></code> 后，运行：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>.github/workflows/generate_github_workflows.py
 </pre></div>
@@ -772,7 +772,7 @@ GitHub Actions 在成功或失败后都会上传这些产物。</p>
 <p>提交时要同时包含模板和生成后的工作流文件。</p>
 </section>
 <section id="pr">
-<h2>PR 选择哪些检查<a class="headerlink" href="#pr" title="Link to this heading">#</a></h2>
+<span id="pr-选择哪些检查"></span><h2>PR 选择哪些检查<a class="headerlink" href="#pr" title="Link to this heading">#</a></h2>
 <ul class="simple">
 <li><p>参数解析、奖励计算、批次调度、样本、轨迹或扩展接口改动：先运行对应的 CPU 测试。</p></li>
 <li><p>SGLang 部署或推理引擎布局改动：添加 <code class="docutils literal notranslate"><span class="pre">run-ci-sglang-config</span></code>。</p></li>
@@ -885,7 +885,7 @@ GitHub Actions 在成功或失败后都会上传这些产物。</p>
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 11 月 05 日.
+  最后更新于 2026 年 11 月 27 日.
   <br/>
 </p>
   </div>

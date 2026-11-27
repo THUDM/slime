@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="2026 年 11 月 05 日"/>
+    <meta name="docbuild:last-update" content="2026 年 11 月 27 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -472,11 +472,11 @@
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="agentic-rl">
-<h1>Agentic RL 训练路线图<a class="headerlink" href="#agentic-rl" title="Link to this heading">#</a></h1>
+<span id="agentic-rl-训练路线图"></span><h1>Agentic RL 训练路线图<a class="headerlink" href="#agentic-rl" title="Link to this heading">#</a></h1>
 <p>slime 的核心定位并不只是跑单轮 RL，而是把高性能训练、SGLang rollout serving、以及可插拔的数据生成接口组合起来，支持 agent 时代常见的多轮工具调用、sandbox 交互、subagent 分支、context compact 和 test-based reward。</p>
 <p>这篇文档是一个导航页：当你要把 agent workflow 接进 slime 时，先用它判断该看哪些文档和例子。</p>
 <section id="id1">
-<h2>从哪里开始<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
+<span id="从哪里开始"></span><h2>从哪里开始<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
 <tr class="row-odd"><th class="head text-left"><p>目标</p></th>
@@ -510,7 +510,7 @@
 </div>
 </section>
 <section id="id2">
-<h2>推荐接入方式<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<span id="推荐接入方式"></span><h2>推荐接入方式<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
 <p>大多数 agentic RL 任务应该先从 <code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code> 开始。这个函数负责把一次 agent 运行转换成 slime 可训练的 <code class="docutils literal notranslate"><span class="pre">Sample</span></code>：填好 <code class="docutils literal notranslate"><span class="pre">tokens</span></code>、<code class="docutils literal notranslate"><span class="pre">response_length</span></code>、<code class="docutils literal notranslate"><span class="pre">loss_mask</span></code>、<code class="docutils literal notranslate"><span class="pre">status</span></code>，并在需要时填好 <code class="docutils literal notranslate"><span class="pre">reward</span></code> 或交给 <code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code> 计算。</p>
 <p>agent workflow 本身可以使用字符串、chat messages、tool calls、环境 observation 或框架自己的事件格式。但训练目标仍然应该是 token based：尽量保留模型实际采样得到的 token ids，并用 <code class="docutils literal notranslate"><span class="pre">loss_mask</span></code> 区分可训练的模型输出和 prompt、template、tool observation、环境文本。</p>
 <p>如果一次 prompt rollout 只对应一个训练样本，返回一个 <code class="docutils literal notranslate"><span class="pre">Sample</span></code> 即可。如果一次 rollout 会拆成多个训练片段，例如 subagent 轨迹、main-agent 轨迹、compact 前后的片段，则返回 <code class="docutils literal notranslate"><span class="pre">list[Sample]</span></code>，并给这些 sibling samples 设置相同的 <code class="docutils literal notranslate"><span class="pre">rollout_id</span></code>。这样 slime 会在训练 step 切分和 loss 聚合时把它们视作同一次 rollout，而不是重复计数。</p>
@@ -542,7 +542,7 @@
 <p>多轮 agent 应使用稳定的 <code class="docutils literal notranslate"><span class="pre">session_id</span></code>。adapter 会把它作为 <code class="docutils literal notranslate"><span class="pre">X-SMG-Routing-Key</span></code> 传给 SGLang，让同一个 session 尽量落到同一个 worker，复用 prefix cache。</p>
 </section>
 <section id="agent-serving">
-<h2>Agent Serving 与性能配置<a class="headerlink" href="#agent-serving" title="Link to this heading">#</a></h2>
+<span id="agent-serving-与性能配置"></span><h2>Agent Serving 与性能配置<a class="headerlink" href="#agent-serving" title="Link to this heading">#</a></h2>
 <p>agentic rollout 往往比普通单轮 generation 更依赖 serving 配置：上下文更长、多轮请求更多、请求时长分布更重尾，并且可能同时需要 actor、reference、reward 或工具侧模型。</p>
 <ul class="simple">
 <li><p>常规 SGLang server 参数通过 <code class="docutils literal notranslate"><span class="pre">--sglang-*</span></code> 传入。例如 <code class="docutils literal notranslate"><span class="pre">--context-length</span></code> 在 slime 中写作 <code class="docutils literal notranslate"><span class="pre">--sglang-context-length</span></code>，<code class="docutils literal notranslate"><span class="pre">--mem-fraction-static</span></code> 写作 <code class="docutils literal notranslate"><span class="pre">--sglang-mem-fraction-static</span></code>。</p></li>
@@ -553,7 +553,7 @@
 </ul>
 </section>
 <section id="id3">
-<h2>参考样例<a class="headerlink" href="#id3" title="Link to this heading">#</a></h2>
+<span id="参考样例"></span><h2>参考样例<a class="headerlink" href="#id3" title="Link to this heading">#</a></h2>
 <p>完整的 coding-agent 样例见 <a class="reference internal" href="../_examples_synced/coding_agent_rl/README.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">examples/coding_agent_rl</span></code></span></a>。它展示了一个比较接近真实 agent RL 的端到端形态：每条 sample 启动独立 sandbox，agent 使用工具修改代码，生成 <code class="docutils literal notranslate"><span class="pre">git</span> <span class="pre">diff</span></code>，再在干净 sandbox 里跑测试得到 reward。</p>
 <p>这个样例也演示了 agent fan-out 的训练方式：middleware 会把 trajectory 切成 <code class="docutils literal notranslate"><span class="pre">subagent</span></code>、<code class="docutils literal notranslate"><span class="pre">wipe</span></code>（compact 前被冻结的链）和 <code class="docutils literal notranslate"><span class="pre">final</span></code> 等片段，<code class="docutils literal notranslate"><span class="pre">generate()</span></code> 返回 <code class="docutils literal notranslate"><span class="pre">list[Sample]</span></code>，并让这些片段共享同一个 <code class="docutils literal notranslate"><span class="pre">rollout_id</span></code>。</p>
 <p>如果你只需要更轻量的入门例子，可以先看 <a class="reference internal" href="../_examples_synced/search-r1/README.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">examples/search-r1</span></code></span></a> 的多轮工具调用、<a class="reference internal" href="../_examples_synced/retool/README.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">examples/retool</span></code></span></a> 的工具增强生成、以及 <a class="reference internal" href="../_examples_synced/multi_agent/README.html"><span class="std std-doc"><code class="docutils literal notranslate"><span class="pre">examples/multi_agent</span></code></span></a> 的多 agent 模式。</p>
@@ -645,7 +645,7 @@
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 11 月 05 日.
+  最后更新于 2026 年 11 月 27 日.
   <br/>
 </p>
   </div>

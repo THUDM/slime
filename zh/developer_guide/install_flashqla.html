@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="2026 年 11 月 05 日"/>
+    <meta name="docbuild:last-update" content="2026 年 11 月 27 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -466,14 +466,14 @@
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="flashqla">
-<h1>安装 FlashQLA<a class="headerlink" href="#flashqla" title="Link to this heading">#</a></h1>
+<span id="安装-flashqla"></span><h1>安装 FlashQLA<a class="headerlink" href="#flashqla" title="Link to this heading">#</a></h1>
 <p>FlashQLA 是 Qwen GDN kernel 的可选运行后端。安装 FlashQLA 后，仍需要在训练命令中显式加入：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--qwen-gdn-backend<span class="w"> </span>flashqla
 </pre></div>
 </div>
 <p>如果不传该参数，Qwen GDN 仍使用默认的 FLA 后端。</p>
 <section id="id1">
-<h2>环境要求<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
+<span id="环境要求"></span><h2>环境要求<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
 <p>使用 <code class="docutils literal notranslate"><span class="pre">--qwen-gdn-backend</span> <span class="pre">flashqla</span></code> 前，请确认训练节点满足：</p>
 <ul class="simple">
 <li><p>PyTorch 2.8 或更新版本。</p></li>
@@ -483,7 +483,7 @@
 </ul>
 </section>
 <section id="cuda-13">
-<h2>当前 CUDA 13 构建<a class="headerlink" href="#cuda-13" title="Link to this heading">#</a></h2>
+<span id="当前-cuda-13-构建"></span><h2>当前 CUDA 13 构建<a class="headerlink" href="#cuda-13" title="Link to this heading">#</a></h2>
 <p>SGLang v0.5.21 要求 TileLang 0.1.12。旧 CUDA 12 镜像使用的 FlashQLA
 版本依赖 TileLang 0.1.9，因此当前 Docker 和 conda 构建使用默认 FLA 后端。</p>
 <p>需要旧 CUDA 12/FlashQLA 环境时，可使用带版本的 CUDA 12 镜像，或从保留
@@ -495,7 +495,7 @@ docker<span class="w"> </span>build<span class="w"> </span>-f<span class="w"> </
 </div>
 </section>
 <section id="gb10">
-<h2>GB10 镜像<a class="headerlink" href="#gb10" title="Link to this heading">#</a></h2>
+<span id="gb10-镜像"></span><h2>GB10 镜像<a class="headerlink" href="#gb10" title="Link to this heading">#</a></h2>
 <p><code class="docutils literal notranslate"><span class="pre">docker/Dockerfile.gb10</span></code> 默认不安装 FlashQLA。GB10 环境需要自行验证 FlashQLA 编译和运行行为；如需实验性安装，可显式传入：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>docker<span class="w"> </span>build<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--build-arg<span class="w"> </span><span class="nv">INSTALL_FLASHQLA</span><span class="o">=</span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
@@ -589,7 +589,7 @@ docker<span class="w"> </span>build<span class="w"> </span>-f<span class="w"> </
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 11 月 05 日.
+  最后更新于 2026 年 11 月 27 日.
   <br/>
 </p>
   </div>

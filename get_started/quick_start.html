@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="Nov 05, 2026"/>
+    <meta name="docbuild:last-update" content="Nov 27, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -461,7 +461,7 @@
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#install-slime">Install slime</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#conda-micromamba">Conda / micromamba</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#conda">Conda / micromamba</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#mount-the-experiment-paths">Mount the experiment paths</a></li>
 </ul>
             </nav>
@@ -530,8 +530,8 @@ python<span class="w"> </span>-c<span class="w"> </span><span class="s2">"import
 <p>The GPU count should match the devices exposed to the container. Save the builder’s <code class="docutils literal notranslate"><span class="pre">experiment.sh</span></code> in the host <code class="docutils literal notranslate"><span class="pre">slime</span></code> directory; it is immediately visible at <code class="docutils literal notranslate"><span class="pre">/root/slime/experiment.sh</span></code> inside the container. Models, data and checkpoints written under <code class="docutils literal notranslate"><span class="pre">/data</span></code> persist in the host’s sibling <code class="docutils literal notranslate"><span class="pre">slime-data</span></code> directory after the container exits. To reopen the environment, repeat the <code class="docutils literal notranslate"><span class="pre">docker</span> <span class="pre">run</span></code> command from the same checkout and the editable install inside the new container.</p>
 </section>
 </section>
-<section id="conda-micromamba">
-<span id="conda"></span><h2>Conda / micromamba<a class="headerlink" href="#conda-micromamba" title="Link to this heading">#</a></h2>
+<section id="conda">
+<span id="conda-micromamba"></span><span id="conda--micromamba"></span><h2>Conda / micromamba<a class="headerlink" href="#conda" title="Link to this heading">#</a></h2>
 <p><a class="reference external" href="https://github.com/THUDM/slime/blob/main/build_conda.sh">build_conda.sh</a> installs micromamba and creates the <code class="docutils literal notranslate"><span class="pre">slime</span></code> environment with Python 3.12 and CUDA 13.0. It builds Megatron, SGLang and native dependencies, installs slime, and applies the repository’s matching patches. This takes longer than starting a prepared image.</p>
 <p>Use a Linux x86_64 NVIDIA machine with Bash, Git, curl, patch, a C/C++ toolchain and a compatible GPU driver. The current script writes to <code class="docutils literal notranslate"><span class="pre">/root</span></code> (including <code class="docutils literal notranslate"><span class="pre">/root/.cargo</span></code>) and expects permission to do so; the commands below use its default <code class="docutils literal notranslate"><span class="pre">/root</span></code> source directory. The script installs the same CUDA compatibility libraries as the Docker image.</p>
 <p>From a Bash shell:</p>
@@ -609,7 +609,7 @@ python<span class="w"> </span>-c<span class="w"> </span><span class="s2">"import
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#install-slime">Install slime</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#conda-micromamba">Conda / micromamba</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#conda">Conda / micromamba</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#mount-the-experiment-paths">Mount the experiment paths</a></li>
 </ul>
   </nav></div>
@@ -644,7 +644,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Nov 05, 2026.
+  Last updated on Nov 27, 2026.
   <br/>
 </p>
   </div>

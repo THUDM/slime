@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="2026 年 11 月 05 日"/>
+    <meta name="docbuild:last-update" content="2026 年 11 月 27 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -479,11 +479,11 @@
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="straw-rollout">
-<h1>使用 straw 持久化 rollout<a class="headerlink" href="#straw-rollout" title="Link to this heading">#</a></h1>
+<span id="使用-straw-持久化-rollout"></span><h1>使用 straw 持久化 rollout<a class="headerlink" href="#straw-rollout" title="Link to this heading">#</a></h1>
 <p><a class="reference external" href="https://github.com/zhuzilin/straw">straw</a> 为 slime 提供基于文件系统的队列和打包张量存储，持久化 prompt 任务、partial rollout、已完成 sample 和训练 batch。多机上的生成与训练进程可以并行读写载荷，Ray 负责传递控制消息和引用。</p>
 <p>当前支持的共享文件系统是 JuiceFS，所有节点必须以相同绝对路径挂载存储池。包括 NFS 在内的其他网络文件系统，需要单独验证锁、可见性和持久性。</p>
 <section id="id1">
-<h2>启用方式<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
+<span id="启用方式"></span><h2>启用方式<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
 <p>标准 slime 安装和 Docker 构建包含 <code class="docutils literal notranslate"><span class="pre">straw-queue</span></code>。已有环境可以在每个 rollout 和训练节点执行以下命令，同一任务使用相同版本：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span><span class="s1">'straw-queue&gt;=0.1.3'</span>
 </pre></div>
@@ -506,7 +506,7 @@
 <p>未安装 straw 时，默认 object-store 传输可以运行；显式选择 straw 则在启动时报错并给出安装命令。</p>
 </section>
 <section id="id2">
-<h2>数据流与调度<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<span id="数据流与调度"></span><h2>数据流与调度<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
 <ol class="arabic simple">
 <li><p>Worker 请求 prompt group，数据源从 dataset 读取数据，将 group 和更新后的游标一起保存到队列。</p></li>
 <li><p>Worker 生成和打分。归还的 partial group 持久化后等待续跑；已接收的完整 group 可供训练使用。</p></li>
@@ -517,7 +517,7 @@
 <p>straw 不支持 <code class="docutils literal notranslate"><span class="pre">--buffer-filter-path</span></code>。<code class="docutils literal notranslate"><span class="pre">--buffer-sort-by-staleness</span></code> 适用于内存数据源，straw 使用上述排序规则。Reward 和 sample-selection hook 可用；分布式 fully async 不支持 <code class="docutils literal notranslate"><span class="pre">--rollout-all-samples-process-path</span></code>。自定义 rollout 函数和 queue reader 的用法见<a class="reference internal" href="../get_started/customization.html"><span class="std std-doc">自定义功能</span></a>。</p>
 </section>
 <section id="id3">
-<h2>数据打包与支持类型<a class="headerlink" href="#id3" title="Link to this heading">#</a></h2>
+<span id="数据打包与支持类型"></span><h2>数据打包与支持类型<a class="headerlink" href="#id3" title="Link to this heading">#</a></h2>
 <p>选择 straw 传输后，数据默认打包写入：每个写入进程将多个样本和张量追加到同一个文件（pack）中，减少共享存储上大量小文件的管理开销。slime 默认沿用 straw 的包大小，当前为 <strong>1 GiB</strong>；可以通过 <code class="docutils literal notranslate"><span class="pre">--rollout-queue-segment-mib</span></code> 指定其他大小，单位为 MiB。</p>
 <p>包大小控制何时切换到新文件，不影响数据何时可读：每次发布的数据都可以立即读取，无需等待包写满。单次发布超过目标大小时会完整保留，不会为了满足包大小而拆开；显式封存也可能产生小于目标大小的包。</p>
 <p>已写入的张量通过不可变引用在 rollout、训练批次和 checkpoint 之间共享。修改数据时会写入新记录，已有引用仍指向原来的内容。</p>
@@ -548,18 +548,18 @@
 </div>
 </section>
 <section id="gc">
-<h2>在线 GC<a class="headerlink" href="#gc" title="Link to this heading">#</a></h2>
+<span id="在线-gc"></span><h2>在线 GC<a class="headerlink" href="#gc" title="Link to this heading">#</a></h2>
 <p>在线 GC 默认关闭，通过 <code class="docutils literal notranslate"><span class="pre">--rollout-queue-online-gc</span></code> 开启。slime 在任务和训练 batch 使用完成或被丢弃后通知 straw。只有所有任务、reader、checkpoint 和归档都释放引用后，straw 才会回收封存的 pack。一条存活记录就会保留整个 pack，活跃 writer 和日志历史也会占用空间。</p>
 <p>保留的 checkpoint 和归档在 GC 开启时也能保护其载荷，因此回退不需要关闭 GC。数据不再需要时还应释放对应的存储保留关系；只删除索引文件不会释放所有权。不要手动删除活跃存储池中的 pack 文件。离线删除前，先停止所有 coordinator、writer 和 reader。</p>
 <p>GC 失败会通过后续队列操作和关闭流程报告。容量耗尽时需要释放不再使用的保留数据或增加容量，不会自动 reset 队列。目前没有活跃 pack 和日志压缩功能。</p>
 </section>
 <section id="checkpoint">
-<h2>恢复与 checkpoint<a class="headerlink" href="#checkpoint" title="Link to this heading">#</a></h2>
+<span id="恢复与-checkpoint"></span><h2>恢复与 checkpoint<a class="headerlink" href="#checkpoint" title="Link to this heading">#</a></h2>
 <p>正常训练 checkpoint 同时保存模型和 rollout 状态，包括 dataset 游标、sample/group 编号、pending/partial 输入、ready group 和训练进度。已经保存在 straw 中的载荷通过引用保存，不会在每次 checkpoint 时重新复制。保留 checkpoint 会保留它依赖的数据。</p>
 <p>本节介绍推理集群也需要重新启动时的恢复方式。启动前需要停止整个原任务，包括远端生成进程；保存目录的锁会拒绝同时运行的队列控制器，但不会替你停止遗留的读取进程。目前不支持队列控制器自动故障转移。</p>
 <p>如果只是 Megatron 训练失败，Ray 和推理集群仍在运行，应按<a class="reference internal" href="fault-tolerance.html"><span class="std std-doc">容灾文档</span></a>重新提交训练任务，保留原来的推理服务和队列控制器。</p>
 <section id="step">
-<h3>续跑或选择 step<a class="headerlink" href="#step" title="Link to this heading">#</a></h3>
+<span id="续跑或选择-step"></span><h3>续跑或选择 step<a class="headerlink" href="#step" title="Link to this heading">#</a></h3>
 <p>使用相同目录恢复最近一次完整 checkpoint：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--rollout-data-transport<span class="w"> </span>straw<span class="w"> </span><span class="se">\</span>
 --load<span class="w"> </span>/shared/checkpoints/run<span class="w"> </span><span class="se">\</span>
@@ -580,7 +580,7 @@
 <p>Dataset、模型/tokenizer 配置、Straw run ID 和 storage profile 应与 checkpoint 一致；训练恢复需要保留 optimizer 和训练 RNG 状态。Fully async worker 会重新启动，不沿用旧 ready 队列。</p>
 </section>
 <section id="id4">
-<h3>缺失状态与恢复限制<a class="headerlink" href="#id4" title="Link to this heading">#</a></h3>
+<span id="缺失状态与恢复限制"></span><h3>缺失状态与恢复限制<a class="headerlink" href="#id4" title="Link to this heading">#</a></h3>
 <p>队列快照缺失、损坏、版本不受支持或引用的数据丢失时，会打印 warning 并从空队列重新 rollout。优先使用快照中仍可读取的 dataset 游标，其次读取单独保存的 <code class="docutils literal notranslate"><span class="pre">rollout/global_dataset_state_dict_&lt;step&gt;.pt</span></code>；游标也不可用时，从数据集开头读。模型仍从指定 step 续训，不复用其他 step 的生成结果。每次保存队列 checkpoint 时都会单独保存 dataset 游标。</p>
 <p>模型 checkpoint 损坏、缺少必要的 optimizer/RNG 状态或配置不匹配时仍会报错。</p>
 <p>尚无模型 checkpoint 时，使用相同 <code class="docutils literal notranslate"><span class="pre">--save</span></code> 和模型/输入配置重启原任务，可以恢复已持久化的 rollout 工作，但仅限于第一个训练 batch 尚未开始规划的阶段。之后恢复需要匹配的模型/optimizer 和 rollout checkpoint。</p>
@@ -589,7 +589,7 @@
 </section>
 </section>
 <section id="debug-key">
-<h2>Debug 归档与按 key 查询<a class="headerlink" href="#debug-key" title="Link to this heading">#</a></h2>
+<span id="debug-归档与按-key-查询"></span><h2>Debug 归档与按 key 查询<a class="headerlink" href="#debug-key" title="Link to this heading">#</a></h2>
 <p>Debug 保存和加载参数支持 <code class="docutils literal notranslate"><span class="pre">.pt</span></code> 与 <code class="docutils literal notranslate"><span class="pre">.straw.json</span></code> 两种格式：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--save-debug-rollout-data<span class="w"> </span><span class="s1">'/shared/debug/rollout_{rollout_id}.straw.json'</span>
 <span class="c1"># 在独立的只训练任务中加载，不启动 SGLang：</span>
@@ -725,7 +725,7 @@
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 11 月 05 日.
+  最后更新于 2026 年 11 月 27 日.
   <br/>
 </p>
   </div>

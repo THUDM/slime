@@ -61,7 +61,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="2026 年 11 月 05 日"/>
+    <meta name="docbuild:last-update" content="2026 年 11 月 27 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -483,10 +483,10 @@
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="on-policy-distillation">
-<h1>在策略蒸馏 (On-Policy Distillation)<a class="headerlink" href="#on-policy-distillation" title="Link to this heading">#</a></h1>
+<span id="在策略蒸馏-on-policy-distillation"></span><h1>在策略蒸馏 (On-Policy Distillation)<a class="headerlink" href="#on-policy-distillation" title="Link to this heading">#</a></h1>
 <p>在策略蒸馏 (OPD) 使用学生当前策略采样的 response token 来训练学生。对于学生轨迹中访问到的每个前缀，固定的教师模型为同一个 next token 评分，从而沿学生自己的轨迹提供稠密的 token 级学习信号。在 slime 中，这一信号以逆 KL 的采样估计惩罚 advantage，因此可以与 GRPO、PPO、REINFORCE++ 等 advantage estimator 组合；当任务奖励为零时，同一机制就是纯蒸馏。</p>
 <section id="id1">
-<h2>关键参数<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
+<span id="关键参数"></span><h2>关键参数<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>参数</p></th>
@@ -514,33 +514,27 @@
 </div>
 </section>
 <section id="id2">
-<h2>原理<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<span id="原理"></span><h2>原理<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
 <p>记 <span class="math notranslate nohighlight">\(\pi_\theta\)</span> 为学生策略，<span class="math notranslate nohighlight">\(\pi_T\)</span> 为教师策略，<span class="math notranslate nohighlight">\(h_t\)</span> 为学生生成轨迹中采样 token <span class="math notranslate nohighlight">\(a_t\)</span> 之前的历史。按照 <a class="reference external" href="https://thinkingmachines.ai/blog/on-policy-distillation/">Thinking Machines Lab 给出的定义</a>，token 级逆 KL 为</p>
 <div class="math notranslate nohighlight">
-\[
-D_{\mathrm{KL}}\left(\pi_\theta(\cdot \mid h_t) \| \pi_T(\cdot \mid h_t)\right)
+\[D_{\mathrm{KL}}\left(\pi_\theta(\cdot \mid h_t) \| \pi_T(\cdot \mid h_t)\right)
 = \mathbb{E}_{a_t \sim \pi_\theta(\cdot \mid h_t)}\left[
 \log \pi_\theta(a_t \mid h_t) - \log \pi_T(a_t \mid h_t)
-\right].
-\]</div>
+\right].\]</div>
 <p>这里的顺序很重要：KL 的第一个参数是学生分布，期望同样对学生分布取值。教师不生成训练轨迹，而是评估学生实际采样的 token。</p>
 <p>slime 不会遍历完整词表来精确计算这个期望。对于每个采样 token，它使用如下 Monte Carlo 贡献：</p>
 <div class="math notranslate nohighlight">
-\[
-\hat d_t = \log \pi_\theta(a_t \mid h_t) - \log \pi_T(a_t \mid h_t),
-\qquad a_t \sim \pi_\theta(\cdot \mid h_t),
-\]</div>
+\[\hat d_t = \log \pi_\theta(a_t \mid h_t) - \log \pi_T(a_t \mid h_t),
+\qquad a_t \sim \pi_\theta(\cdot \mid h_t),\]</div>
 <p>然后修改基础 advantage：</p>
 <div class="math notranslate nohighlight">
-\[
-\hat A_t = A_t - \lambda_{\mathrm{opd}}\hat d_t.
-\]</div>
+\[\hat A_t = A_t - \lambda_{\mathrm{opd}}\hat d_t.\]</div>
 <p>其中 <span class="math notranslate nohighlight">\(A_t\)</span> 来自所配置的 estimator（纯蒸馏时为零），<span class="math notranslate nohighlight">\(\lambda_{\mathrm{opd}}\)</span> 是 <code class="docutils literal notranslate"><span class="pre">--opd-kl-coef</span></code>。尽管 KL 的期望非负，单个样本的 <span class="math notranslate nohighlight">\(\hat d_t\)</span> 仍可能为负。策略损失使用修改后的 <span class="math notranslate nohighlight">\(\hat A_t\)</span>，因此 OPD 项与 GRPO、PPO、REINFORCE++、GSPO 等 advantage estimator 的选择相互独立。</p>
 </section>
 <section id="id3">
-<h2>两种教师模式<a class="headerlink" href="#id3" title="Link to this heading">#</a></h2>
+<span id="两种教师模式"></span><h2>两种教师模式<a class="headerlink" href="#id3" title="Link to this heading">#</a></h2>
 <section id="sglang-opd-type-sglang">
-<h3>SGLang 模式 (<code class="docutils literal notranslate"><span class="pre">--opd-type</span> <span class="pre">sglang</span></code>)<a class="headerlink" href="#sglang-opd-type-sglang" title="Link to this heading">#</a></h3>
+<span id="sglang-模式---opd-type-sglang"></span><h3>SGLang 模式 (<code class="docutils literal notranslate"><span class="pre">--opd-type</span> <span class="pre">sglang</span></code>)<a class="headerlink" href="#sglang-opd-type-sglang" title="Link to this heading">#</a></h3>
 <p>教师模型运行在外部 SGLang 服务器上，教师的 log-probs 在 rollout 阶段获取。</p>
 <p><strong>适用场景</strong>：教师与学生架构不同，或教师模型太大无法与训练模型同时加载。由于教师需要为学生的原始 token ID 评分，两者仍须使用兼容的 tokenizer 和词表。</p>
 <p><strong>工作流程</strong>：</p>
@@ -561,7 +555,7 @@ D_{\mathrm{KL}}\left(\pi_\theta(\cdot \mid h_t) \| \pi_T(\cdot \mid h_t)\right)
 </div>
 </section>
 <section id="megatron-opd-type-megatron">
-<h3>Megatron 模式 (<code class="docutils literal notranslate"><span class="pre">--opd-type</span> <span class="pre">megatron</span></code>)<a class="headerlink" href="#megatron-opd-type-megatron" title="Link to this heading">#</a></h3>
+<span id="megatron-模式---opd-type-megatron"></span><h3>Megatron 模式 (<code class="docutils literal notranslate"><span class="pre">--opd-type</span> <span class="pre">megatron</span></code>)<a class="headerlink" href="#megatron-opd-type-megatron" title="Link to this heading">#</a></h3>
 <p>教师模型通过 <code class="docutils literal notranslate"><span class="pre">--opd-teacher-load</span></code> 直接加载到 Megatron 中，教师的 log-probs 在训练前向传播阶段计算。</p>
 <p><strong>适用场景</strong>：教师与学生/参考模型架构相同，且能放入 GPU 显存。</p>
 <p><strong>工作流程</strong>：</p>
@@ -583,10 +577,10 @@ D_{\mathrm{KL}}\left(\pi_\theta(\cdot \mid h_t) \| \pi_T(\cdot \mid h_t)\right)
 </section>
 </section>
 <section id="id4">
-<h2>运行示例<a class="headerlink" href="#id4" title="Link to this heading">#</a></h2>
+<span id="运行示例"></span><h2>运行示例<a class="headerlink" href="#id4" title="Link to this heading">#</a></h2>
 <p>完整的示例脚本在 <code class="docutils literal notranslate"><span class="pre">examples/on_policy_distillation/</span></code> 中：</p>
 <section id="sglang">
-<h3>SGLang 教师<a class="headerlink" href="#sglang" title="Link to this heading">#</a></h3>
+<span id="sglang-教师"></span><h3>SGLang 教师<a class="headerlink" href="#sglang" title="Link to this heading">#</a></h3>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 1. 下载模型和数据</span>
 hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen3-32B<span class="w"> </span>--local-dir<span class="w"> </span>/root/Qwen3-32B
 hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen3-8B<span class="w"> </span>--local-dir<span class="w"> </span>/root/Qwen3-8B
@@ -606,7 +600,7 @@ bash<span class="w"> </span>examples/on_policy_distillation/run-qwen3-4B-opd.sh
 </div>
 </section>
 <section id="megatron">
-<h3>Megatron 教师<a class="headerlink" href="#megatron" title="Link to this heading">#</a></h3>
+<span id="megatron-教师"></span><h3>Megatron 教师<a class="headerlink" href="#megatron" title="Link to this heading">#</a></h3>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 1. 将学生和教师模型都转换为 Megatron 格式</span>
 <span class="c1"># 2. 运行</span>
 bash<span class="w"> </span>examples/on_policy_distillation/run-qwen3-4B-opd-megatron.sh
@@ -615,7 +609,7 @@ bash<span class="w"> </span>examples/on_policy_distillation/run-qwen3-4B-opd-meg
 </section>
 </section>
 <section id="id5">
-<h2>初步结果<a class="headerlink" href="#id5" title="Link to this heading">#</a></h2>
+<span id="初步结果"></span><h2>初步结果<a class="headerlink" href="#id5" title="Link to this heading">#</a></h2>
 <p>使用 Qwen3-8B-Base 模型在 <a class="reference external" href="https://huggingface.co/datasets/open-thoughts/OpenThoughts3-1.2M">OpenThoughts3-1.2M</a> 数据集的一部分上进行 SFT，然后在剩余数据上用 Qwen3-32B 教师进行在策略蒸馏，Math500 评测结果如下：</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
@@ -729,7 +723,7 @@ bash<span class="w"> </span>examples/on_policy_distillation/run-qwen3-4B-opd-meg
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 11 月 05 日.
+  最后更新于 2026 年 11 月 27 日.
   <br/>
 </p>
   </div>

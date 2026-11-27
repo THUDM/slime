@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="Nov 05, 2026"/>
+    <meta name="docbuild:last-update" content="Nov 27, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -680,7 +680,7 @@ python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\
 <section id="usage-patterns">
 <h2>Usage Patterns<a class="headerlink" href="#usage-patterns" title="Link to this heading">#</a></h2>
 <section id="basic-single-model-deployment">
-<h3>1. Basic Single-Model Deployment<a class="headerlink" href="#basic-single-model-deployment" title="Link to this heading">#</a></h3>
+<span id="1-basic-single-model-deployment"></span><h3>1. Basic Single-Model Deployment<a class="headerlink" href="#basic-single-model-deployment" title="Link to this heading">#</a></h3>
 <p>The simplest config replicates the default behavior:</p>
 <div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="c1"># sglang_basic.yaml</span>
 <span class="nt">sglang</span><span class="p">:</span>
@@ -700,7 +700,7 @@ python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\
 <p>This creates 4 engines (8 GPUs ÷ 2 GPUs/engine) behind a single router.</p>
 </section>
 <section id="pd-disaggregation">
-<h3>2. PD Disaggregation<a class="headerlink" href="#pd-disaggregation" title="Link to this heading">#</a></h3>
+<span id="2-pd-disaggregation"></span><h3>2. PD Disaggregation<a class="headerlink" href="#pd-disaggregation" title="Link to this heading">#</a></h3>
 <p>Separate prefill and decode phases onto dedicated server groups for better throughput in multi-turn and agentic workloads:</p>
 <div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="c1"># sglang_pd.yaml</span>
 <span class="nt">sglang</span><span class="p">:</span>
@@ -731,7 +731,7 @@ python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\
 </div></blockquote>
 </section>
 <section id="multi-model-serving">
-<h3>3. Multi-Model Serving<a class="headerlink" href="#multi-model-serving" title="Link to this heading">#</a></h3>
+<span id="3-multi-model-serving"></span><h3>3. Multi-Model Serving<a class="headerlink" href="#multi-model-serving" title="Link to this heading">#</a></h3>
 <p>Deploy multiple models simultaneously, each behind its own router:</p>
 <div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="c1"># sglang_multi_model.yaml</span>
 <span class="nt">sglang</span><span class="p">:</span>
@@ -790,7 +790,7 @@ python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\
 <p>The <code class="docutils literal notranslate"><span class="pre">get_model_url()</span></code> helper reads from <code class="docutils literal notranslate"><span class="pre">args.sglang_model_routers</span></code>, a dict mapping model names to <code class="docutils literal notranslate"><span class="pre">(ip,</span> <span class="pre">port)</span></code> tuples that is automatically populated after engine startup.</p>
 </section>
 <section id="multi-model-with-pd-disaggregation">
-<h3>4. Multi-Model with PD Disaggregation<a class="headerlink" href="#multi-model-with-pd-disaggregation" title="Link to this heading">#</a></h3>
+<span id="4-multi-model-with-pd-disaggregation"></span><h3>4. Multi-Model with PD Disaggregation<a class="headerlink" href="#multi-model-with-pd-disaggregation" title="Link to this heading">#</a></h3>
 <p>Combine multi-model and PD disaggregation for maximum flexibility:</p>
 <div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="c1"># sglang_full.yaml</span>
 <span class="nt">sglang</span><span class="p">:</span>
@@ -815,7 +815,7 @@ python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\
 </div>
 </section>
 <section id="placeholder-groups-for-gpu-reservation">
-<h3>5. Placeholder Groups for GPU Reservation<a class="headerlink" href="#placeholder-groups-for-gpu-reservation" title="Link to this heading">#</a></h3>
+<span id="5-placeholder-groups-for-gpu-reservation"></span><h3>5. Placeholder Groups for GPU Reservation<a class="headerlink" href="#placeholder-groups-for-gpu-reservation" title="Link to this heading">#</a></h3>
 <p>Use <code class="docutils literal notranslate"><span class="pre">placeholder</span></code> groups to reserve GPU slots without creating engines. This is useful for co-located training where some GPUs need to be reserved for training:</p>
 <div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">sglang</span><span class="p">:</span>
 <span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">actor</span>
@@ -829,7 +829,7 @@ python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\
 </div>
 </section>
 <section id="per-group-serverargs-overrides">
-<h3>6. Per-Group ServerArgs Overrides<a class="headerlink" href="#per-group-serverargs-overrides" title="Link to this heading">#</a></h3>
+<span id="6-per-group-serverargs-overrides"></span><h3>6. Per-Group ServerArgs Overrides<a class="headerlink" href="#per-group-serverargs-overrides" title="Link to this heading">#</a></h3>
 <p>Use <code class="docutils literal notranslate"><span class="pre">overrides</span></code> to apply SGLang <code class="docutils literal notranslate"><span class="pre">ServerArgs</span></code> fields to specific server groups without affecting others:</p>
 <div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">sglang</span><span class="p">:</span>
 <span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">actor</span>
@@ -852,7 +852,7 @@ python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\
 </ul>
 </section>
 <section id="standalone-sglang-launcher">
-<h3>7. Standalone SGLang Launcher<a class="headerlink" href="#standalone-sglang-launcher" title="Link to this heading">#</a></h3>
+<span id="7-standalone-sglang-launcher"></span><h3>7. Standalone SGLang Launcher<a class="headerlink" href="#standalone-sglang-launcher" title="Link to this heading">#</a></h3>
 <p>While <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> is designed for slime’s training pipeline, it also works as a powerful launcher for pure inference scenarios using external engine addresses or by configuring slime to focus solely on serving.</p>
 <p><strong>Using external engines with a pre-launched topology:</strong></p>
 <p>For complex production deployments, you may want to pre-launch SGLang engines independently and connect them to slime:</p>
@@ -1034,7 +1034,7 @@ to it.</p>
 <p>No. PD disaggregation requires that a model’s server groups are either all prefill/decode pairs or all regular. Mixing <code class="docutils literal notranslate"><span class="pre">regular</span></code> with <code class="docutils literal notranslate"><span class="pre">prefill</span></code>/<code class="docutils literal notranslate"><span class="pre">decode</span></code> in the same model is not supported.</p>
 </section>
 <section id="q-what-happens-if-num-gpus-is-not-divisible-by-num-gpus-per-engine">
-<h3>Q: What happens if <code class="docutils literal notranslate"><span class="pre">num_gpus</span></code> is not divisible by <code class="docutils literal notranslate"><span class="pre">num_gpus_per_engine</span></code>?<a class="headerlink" href="#q-what-happens-if-num-gpus-is-not-divisible-by-num-gpus-per-engine" title="Link to this heading">#</a></h3>
+<span id="q-what-happens-if-num_gpus-is-not-divisible-by-num_gpus_per_engine"></span><h3>Q: What happens if <code class="docutils literal notranslate"><span class="pre">num_gpus</span></code> is not divisible by <code class="docutils literal notranslate"><span class="pre">num_gpus_per_engine</span></code>?<a class="headerlink" href="#q-what-happens-if-num-gpus-is-not-divisible-by-num-gpus-per-engine" title="Link to this heading">#</a></h3>
 <p>For multi-node engines (where <code class="docutils literal notranslate"><span class="pre">num_gpus_per_engine</span> <span class="pre">&gt;</span> <span class="pre">num_gpus_per_node</span></code>), the division is based on the local GPU count per node. For example, with 8 GPUs/node and <code class="docutils literal notranslate"><span class="pre">num_gpus_per_engine:</span> <span class="pre">16</span></code>, each engine spans 2 nodes.</p>
 </section>
 <section id="q-can-different-server-groups-within-a-model-use-different-model-paths">
@@ -1046,11 +1046,11 @@ to it.</p>
 <p>Use <code class="docutils literal notranslate"><span class="pre">get_model_url(args,</span> <span class="pre">&quot;model_name&quot;,</span> <span class="pre">&quot;/endpoint&quot;)</span></code> from <code class="docutils literal notranslate"><span class="pre">slime.rollout.sglang_rollout</span></code>. It reads from <code class="docutils literal notranslate"><span class="pre">args.sglang_model_routers</span></code>, which is a dict <code class="docutils literal notranslate"><span class="pre">{</span> <span class="pre">model_name:</span> <span class="pre">(ip,</span> <span class="pre">port)</span> <span class="pre">}</span></code> populated automatically.</p>
 </section>
 <section id="q-can-i-use-sglang-config-without-training-inference-only">
-<h3>Q: Can I use <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> without training (inference only)?<a class="headerlink" href="#q-can-i-use-sglang-config-without-training-inference-only" title="Link to this heading">#</a></h3>
+<span id="q-can-i-use---sglang-config-without-training-inference-only"></span><h3>Q: Can I use <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> without training (inference only)?<a class="headerlink" href="#q-can-i-use-sglang-config-without-training-inference-only" title="Link to this heading">#</a></h3>
 <p>While <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> is designed for slime’s training loop, you can effectively use it for inference-only scenarios by configuring a rollout-only run. For fully standalone SGLang serving, consider using SGLang’s native <code class="docutils literal notranslate"><span class="pre">launch_server</span></code> directly or <code class="docutils literal notranslate"><span class="pre">--rollout-external-engine-addrs</span></code> for connecting to pre-deployed engines.</p>
 </section>
 <section id="q-what-is-the-relationship-between-sglang-config-and-prefill-num-servers">
-<h3>Q: What is the relationship between <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> and <code class="docutils literal notranslate"><span class="pre">--prefill-num-servers</span></code>?<a class="headerlink" href="#q-what-is-the-relationship-between-sglang-config-and-prefill-num-servers" title="Link to this heading">#</a></h3>
+<span id="q-what-is-the-relationship-between---sglang-config-and---prefill-num-servers"></span><h3>Q: What is the relationship between <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> and <code class="docutils literal notranslate"><span class="pre">--prefill-num-servers</span></code>?<a class="headerlink" href="#q-what-is-the-relationship-between-sglang-config-and-prefill-num-servers" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">--prefill-num-servers</span></code> is the legacy way to enable PD disaggregation (it creates a single model with prefill + decode groups). <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> is the newer, more flexible approach. They are mutually exclusive. We recommend migrating to <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> for all new deployments.</p>
 </section>
 </section>
@@ -1174,7 +1174,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Nov 05, 2026.
+  Last updated on Nov 27, 2026.
   <br/>
 </p>
   </div>

@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="Nov 05, 2026"/>
+    <meta name="docbuild:last-update" content="Nov 27, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -477,7 +477,7 @@
 <h1>Profiling<a class="headerlink" href="#profiling" title="Link to this heading">#</a></h1>
 <p>In slime, we can perform detailed performance analysis of the rollout process using the profiling interface provided by SGLang.</p>
 <section id="sleeping-the-rollout-process">
-<h2>1. Sleeping the Rollout Process<a class="headerlink" href="#sleeping-the-rollout-process" title="Link to this heading">#</a></h2>
+<span id="1-sleeping-the-rollout-process"></span><h2>1. Sleeping the Rollout Process<a class="headerlink" href="#sleeping-the-rollout-process" title="Link to this heading">#</a></h2>
 <p>For more flexible stress testing and profiling, it is often useful to make the slime rollout process enter a waiting state after initialization, instead of starting generation immediately.</p>
 <p>You can achieve this by replacing the <code class="docutils literal notranslate"><span class="pre">rollout_function_path</span></code> in your startup arguments without modifying the source code:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
@@ -488,7 +488,7 @@
 <p>This function will make the rollout process enter an infinite wait loop, allowing you to manually send requests or run stress testing tools.</p>
 </section>
 <section id="obtaining-sglang-engine-list">
-<h2>2. Obtaining SGLang Engine List<a class="headerlink" href="#obtaining-sglang-engine-list" title="Link to this heading">#</a></h2>
+<span id="2-obtaining-sglang-engine-list"></span><h2>2. Obtaining SGLang Engine List<a class="headerlink" href="#obtaining-sglang-engine-list" title="Link to this heading">#</a></h2>
 <p>SGLang engines (workers) are registered with the router. You can retrieve the list of all active engines by accessing the <code class="docutils literal notranslate"><span class="pre">/workers</span></code> endpoint of the router.</p>
 <p>The router address is typically printed in the startup logs:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">Router</span> <span class="n">launched</span> <span class="n">at</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">3000</span>
@@ -500,7 +500,7 @@
 </div>
 </section>
 <section id="using-automated-profiling-tool">
-<h2>3. Using Automated Profiling Tool<a class="headerlink" href="#using-automated-profiling-tool" title="Link to this heading">#</a></h2>
+<span id="3-using-automated-profiling-tool"></span><h2>3. Using Automated Profiling Tool<a class="headerlink" href="#using-automated-profiling-tool" title="Link to this heading">#</a></h2>
 <p>To simplify profiling across multiple engines simultaneously, we provide an automated script: <code class="docutils literal notranslate"><span class="pre">tools/profile_rollout.py</span></code>.</p>
 <section id="starting-profiling">
 <h3>Starting Profiling<a class="headerlink" href="#starting-profiling" title="Link to this heading">#</a></h3>
@@ -526,7 +526,7 @@
 </section>
 </section>
 <section id="running-stress-tests">
-<h2>4. Running Stress Tests<a class="headerlink" href="#running-stress-tests" title="Link to this heading">#</a></h2>
+<span id="4-running-stress-tests"></span><h2>4. Running Stress Tests<a class="headerlink" href="#running-stress-tests" title="Link to this heading">#</a></h2>
 <p>While the Rollout process is in a waiting state via <code class="docutils literal notranslate"><span class="pre">sleep_rollout</span></code>, you can:</p>
 <ol class="arabic simple">
 <li><p>Start profiling using <code class="docutils literal notranslate"><span class="pre">tools/profile_rollout.py</span></code>.</p></li>
@@ -625,7 +625,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Nov 05, 2026.
+  Last updated on Nov 27, 2026.
   <br/>
 </p>
   </div>

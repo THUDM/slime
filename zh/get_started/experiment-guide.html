@@ -417,7 +417,7 @@ window.runMermaid = runMermaid;</script>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="2026 年 11 月 05 日"/>
+    <meta name="docbuild:last-update" content="2026 年 11 月 27 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -832,10 +832,10 @@ window.runMermaid = runMermaid;</script>
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="tutorial-rl">
-<h1>Tutorial：搭建并理解一个 RL 实验<a class="headerlink" href="#tutorial-rl" title="Link to this heading">#</a></h1>
+<span id="tutorial搭建并理解一个-rl-实验"></span><h1>Tutorial：搭建并理解一个 RL 实验<a class="headerlink" href="#tutorial-rl" title="Link to this heading">#</a></h1>
 <p><a class="reference internal" href="../index.html#lab"><span class="std std-ref">打开交互式 Quick Start</span></a>。选择模型，观察 GPU 布局变化，试不同组合，最后下载启动 shell。同一条教程适用于 GLM、Qwen3.8-27B 和 DeepSeek-R1，模型尺寸来自仓库已有配置。</p>
 <section id="id1">
-<h2>你正在搭建的循环<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
+<span id="你正在搭建的循环"></span><h2>你正在搭建的循环<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
 <pre  class="mermaid">
         flowchart LR
     A[Prompt / 环境] --&gt; B[SGLang 生成回答]
@@ -848,7 +848,7 @@ window.runMermaid = runMermaid;</script>
 <p>实验室的「演示一轮」用于理解流程，不是 GPU 性能模拟，也没有真的启动训练。每个选择都能回退：使用上一步、步骤标题、撤销 / 重做或重置。页面在本地保存选择，刷新后可继续。分享链接包含架构选择，不包含机器路径、引擎地址和自定义 hook 路径；<code class="docutils literal notranslate"><span class="pre">experiment.json</span></code> 保存完整的本地配置。</p>
 </section>
 <section id="id2">
-<h2>1. 选择任务与模型<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<span id="1-选择任务与模型"></span><h2>1. 选择任务与模型<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
 <p>刚接触 RL？从首页「了解一轮 RL」进入五阶段导览：prompt → 八个回答 → 验证器 → GRPO → 权重同步，可播放、暂停或手动推进。临时示例不会覆盖已保存的实验；点击「采用这个 GRPO 起点」才会作为一次可撤销修改写入当前配置。示例有四个 1 分、四个 0 分，均值为 0.5，样本标准差为 √(2/7)，归一化 advantage 约为 ±0.94，与 <code class="docutils literal notranslate"><span class="pre">slime/data/batch_builder.py</span></code> 的默认奖励归一化口径一致。这些数值用于解释机制，不是实测训练，也不保证 reward 提升。</p>
 <p>在「对照 A / B」中将当前完整配置保存为 A，再编辑 B。修改、撤销 / 重做和刷新都不会改变 A；例如选择 async 自动切换为独立 GPU 池，这些关联变化也会列出。两侧分别进行静态检查，默认始终导出 B。「将 A 恢复到 B」可以撤销；更新或清除 A 与 B 的历史独立。A/B 分享链接会同时过滤两侧的私有路径、地址与 hook，与普通分享的隐私边界一致。</p>
 <p>PD 资源不足时，在导出区域展开修复预览，先查看字段变化、GPU 分配及仍待解决的条件，再决定是否应用。资源调整根据当前配方的引擎大小与并行配置推导；一次修复可以一次撤销。RDMA 网卡名和外部引擎地址需要来自实际环境。安装区的镜像选择会将硬件条件带入「训推布局」，但不认证模型配方或显存容量。</p>
@@ -860,7 +860,7 @@ window.runMermaid = runMermaid;</script>
 <p><a class="reference external" href="https://huggingface.co/zai-org/GLM-5.3/blob/main/config.json">GLM-5.3 官方配置</a>的 78 层、256 专家 DSA 架构及跨层 index-sharing 计划，与现有 <code class="docutils literal notranslate"><span class="pre">glm5.2-744B-A40B</span></code> 模型规格匹配。实验室复用这一架构源文件，但下载 GLM-5.3 checkpoint；已有六层 deterministic 回归不代表对新 checkpoint 的验证。</p>
 </section>
 <section id="gpu">
-<h2>2. 先决定 GPU 归属，再决定调度<a class="headerlink" href="#gpu" title="Link to this heading">#</a></h2>
+<span id="2-先决定-gpu-归属再决定调度"></span><h2>2. 先决定 GPU 归属，再决定调度<a class="headerlink" href="#gpu" title="Link to this heading">#</a></h2>
 <p>在「训推布局」展开「GPU 推荐、显存与并行」，查看起步卡数、总资源量以及 CPU Adam 和激活重计算设置；继续展开并行方式即可切换 TP/PP/EP/CP/ZeRO 图示。CPU Adam 与激活重计算开关会改变导出的 shell。补充图解与生成文件预览按需展开，通过整页滚动阅读。见<a class="reference internal" href="../advanced/parallelism-memory.html"><span class="std std-doc">内存预算与并行方式</span></a>，包括 allgather/zigzag CP 对比。</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
@@ -898,19 +898,19 @@ window.runMermaid = runMermaid;</script>
 <p>Partial rollout 保存未完成前缀以便之后续跑，也可以用于同步训练。straw 持久化数据和队列，搭配 fully async 后启用多 Ray 节点的分布式 producer。实验室独立提供这两个选项；时间线、混合版本概率与 checkpoint 边界见<a class="reference internal" href="../advanced/rollout-scheduling.html"><span class="std std-doc">rollout 调度</span></a>。</p>
 </section>
 <section id="id3">
-<h2>3. 选择数值行为<a class="headerlink" href="#id3" title="Link to this heading">#</a></h2>
+<span id="3-选择数值行为"></span><h2>3. 选择数值行为<a class="headerlink" href="#id3" title="Link to this heading">#</a></h2>
 <p>可以先用 BF16 / BF16 建立基线，大 MoE 也可以从维护中的 BF16 训练 + FP8 rollout 路径开始。后者保留 BF16 训练 checkpoint，推理使用独立量化的 HF checkpoint。Attention KV 精度又是另一个维度；hybrid 模型还需单独选择递归状态 dtype。Qwen3.8-27B 提供 attention KV、Mamba SSM 状态和可选的状态 / KV 内存比例，配图分别展示两个池。见 <a class="reference internal" href="../advanced/rl-systems.html#hybrid-cache"><span class="std std-ref">hybrid 缓存账本</span></a>，其中也说明 GLM-5.3-Flash 的不同架构。</p>
 <p>FP8 训练仍为实验性，INT4 rollout 为 beta；低精度都需要匹配 GPU / kernel 栈。见<a class="reference internal" href="../advanced/rl-systems.html#precision"><span class="std std-ref">精度与内存推导</span></a>。</p>
 <p>再决定如何修正差异：TIS 裁剪重要性权重，IcePop mask 区间外权重，R3 重放 MoE 路由，SC 中心化加权 score 并使用 REINFORCE。Deterministic 改善可复现性，但不会自动让不同引擎相等。「原理与推导」按钮链接<a class="reference internal" href="../advanced/policy-mismatch.html"><span class="std std-doc">完整公式推导</span></a>及原论文。</p>
 </section>
 <section id="serving">
-<h2>4. 根据负载配置 serving<a class="headerlink" href="#serving" title="Link to this heading">#</a></h2>
+<span id="4-根据负载配置-serving"></span><h2>4. 根据负载配置 serving<a class="headerlink" href="#serving" title="Link to this heading">#</a></h2>
 <p>普通 serving 是基线；测量表明 prefill / decode 需要不同资源时再尝试 PD。向导要求两组都是完整引擎，使用 Mooncake / RDMA，需要填写真实网卡名。<code class="docutils literal notranslate"><span class="pre">sglang.yaml</span></code> 已嵌入 <code class="docutils literal notranslate"><span class="pre">experiment.sh</span></code>，不必再手工复制单独配置文件。</p>
 <p>重复 prefix 较多时，可在预算主机内存和 I/O 后启用 HiCache；PD 下此配方仅在 prefill 开启。并发数和 response token 上限根据真实显存与延迟调整，见<a class="reference internal" href="../advanced/rl-systems.html#pd"><span class="std std-ref">推理成本模型</span></a>。</p>
 <p>开启 <strong>EAGLE</strong> 可加入投机采样：选择 checkpoint 内置 MTP 头或填写匹配的独立 EAGLE 头，再设置投机深度。配图会随 PD、HiCache、EAGLE 三个开关变化，展示候选生成与目标模型验证。见<a class="reference internal" href="../advanced/speculative-decoding.html"><span class="std std-doc">配置、接受概率推导与指标</span></a>。</p>
 </section>
 <section id="id4">
-<h2>5. 准备一次、转换，然后运行<a class="headerlink" href="#id4" title="Link to this heading">#</a></h2>
+<span id="5-准备一次转换然后运行"></span><h2>5. 准备一次、转换，然后运行<a class="headerlink" href="#id4" title="Link to this heading">#</a></h2>
 <p>先<a class="reference internal" href="quick_start.html"><span class="std std-doc">安装运行环境</span></a>。各主机保持相同 checkout、依赖、模型 / 数据路径和配置路径。多机需要共享文件系统或相同路径的本地副本；只有 head 容器能看到的路径不够。生成的 <code class="docutils literal notranslate"><span class="pre">.slime-lab.*</span></code> 配置目录也要通过相同仓库路径供 Ray worker 访问。</p>
 <p>把 <code class="docutils literal notranslate"><span class="pre">experiment.sh</span></code> 下载到 slime 仓库根目录。核对路径与说明后：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 在共享文件系统上执行一次：下载原始权重、数据，</span>
@@ -942,7 +942,7 @@ bash<span class="w"> </span>experiment.sh<span class="w"> </span>train
 <p>默认是短实验；新实验请使用新的输出目录和 straw run ID，已有目录遵循后端恢复规则。恢复后续训练时，添加指向保存 checkpoint 的 <code class="docutils literal notranslate"><span class="pre">--load</span></code>，并遵循<a class="reference internal" href="../advanced/fault-tolerance.html"><span class="std std-doc">恢复要求</span></a>。保存间隔需要根据实验调整；默认短实验可能在到达保存间隔前结束。</p>
 </section>
 <section id="id5">
-<h2>6. 判断实验是否有效<a class="headerlink" href="#id5" title="Link to this heading">#</a></h2>
+<span id="6-判断实验是否有效"></span><h2>6. 判断实验是否有效<a class="headerlink" href="#id5" title="Link to this heading">#</a></h2>
 <p>先看生成文本，再看 reward、reference / trainer log-prob，然后检查训推差异和修正的 clipping / masking。Fully async 还要看 staleness。跑得快但奖励无意义，并不代表有效实验。</p>
 <p>长时间训练前加入独立验证集。例如下载 AIME 后，同步训练可以添加：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--eval-interval<span class="w"> </span><span class="m">20</span><span class="w"> </span><span class="se">\</span>
@@ -1042,7 +1042,7 @@ bash<span class="w"> </span>experiment.sh<span class="w"> </span>train
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 11 月 05 日.
+  最后更新于 2026 年 11 月 27 日.
   <br/>
 </p>
   </div>

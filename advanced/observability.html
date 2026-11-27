@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="Nov 05, 2026"/>
+    <meta name="docbuild:last-update" content="Nov 27, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -473,7 +473,7 @@
 <h1>Observability<a class="headerlink" href="#observability" title="Link to this heading">#</a></h1>
 <p>slime’s default observability path is intentionally small: training metrics still go to W&amp;B / TensorBoard; high-frequency SGLang Prometheus metrics are no longer uploaded to W&amp;B; request timings from SGLang response <code class="docutils literal notranslate"><span class="pre">meta_info</span></code> are stored in sample traces and aggregated once per rollout step as compact <code class="docutils literal notranslate"><span class="pre">perf/...</span></code> metrics.</p>
 <section id="w-b-tensorboard-metrics">
-<h2>W&amp;B / TensorBoard Metrics<a class="headerlink" href="#w-b-tensorboard-metrics" title="Link to this heading">#</a></h2>
+<span id="wb--tensorboard-metrics"></span><h2>W&amp;B / TensorBoard Metrics<a class="headerlink" href="#w-b-tensorboard-metrics" title="Link to this heading">#</a></h2>
 <p>W&amp;B and TensorBoard still receive reward, loss, KL, entropy, eval, and other training metrics. SGLang request timing summaries are logged under <code class="docutils literal notranslate"><span class="pre">perf/</span></code>, for example:</p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>perf/request/e2e_latency/mean
 perf/request/queue_time/median
@@ -639,7 +639,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Nov 05, 2026.
+  Last updated on Nov 27, 2026.
   <br/>
 </p>
   </div>

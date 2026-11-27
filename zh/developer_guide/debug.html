@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="2026 年 11 月 05 日"/>
+    <meta name="docbuild:last-update" content="2026 年 11 月 27 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -471,9 +471,9 @@
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="debug">
-<h1>Debug 指南<a class="headerlink" href="#debug" title="Link to this heading">#</a></h1>
+<span id="debug-指南"></span><h1>Debug 指南<a class="headerlink" href="#debug" title="Link to this heading">#</a></h1>
 <section id="id1">
-<h2>对齐精度<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
+<span id="对齐精度"></span><h2>对齐精度<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
 <p>在开发 slime 的过程中，经常会需要检查模型的精度是否正确，可以通过以下方式检查：</p>
 <ol class="arabic simple">
 <li><p>训练第一步</p>
@@ -520,7 +520,7 @@
 </ol>
 </section>
 <section id="id2">
-<h2>训练推理单独 debug<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<span id="训练推理单独-debug"></span><h2>训练推理单独 debug<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
 <p>slime 支持将训练部分和推理部分分开进行调试，从而实现：</p>
 <ul class="simple">
 <li><p>在调优/debug 推理部分时，只用少量卡就可以启动任务；</p></li>
@@ -547,7 +547,7 @@
 </ol>
 </section>
 <section id="int4-compressed-tensors-checkpoint">
-<h2>INT4 / Compressed-Tensors 量化 Checkpoint 问题<a class="headerlink" href="#int4-compressed-tensors-checkpoint" title="Link to this heading">#</a></h2>
+<span id="int4--compressed-tensors-量化-checkpoint-问题"></span><h2>INT4 / Compressed-Tensors 量化 Checkpoint 问题<a class="headerlink" href="#int4-compressed-tensors-checkpoint" title="Link to this heading">#</a></h2>
 <p>使用 INT4 量化模型（如 <code class="docutils literal notranslate"><span class="pre">compressed-tensors</span></code> 的 <code class="docutils literal notranslate"><span class="pre">W4A16</span></code>）时，checkpoint 的 <code class="docutils literal notranslate"><span class="pre">config.json</span></code> 中有一个 <code class="docutils literal notranslate"><span class="pre">quantization_config.ignore</span></code> 列表，指定哪些参数<strong>不</strong>做量化。在线权重更新（Megatron → SGLang）时，slime 也会读取这个 ignore list 来决定哪些参数需要 INT4 量化。ignore list 不正确会导致静默错误：</p>
 <ol class="arabic">
 <li><p><strong>MoE 路由权重（<code class="docutils literal notranslate"><span class="pre">mlp.gate.weight</span></code>）变成全零</strong></p>
@@ -605,7 +605,7 @@
 </ol>
 </section>
 <section id="ray-distributed-debugger">
-<h2>使用 Ray Distributed Debugger 单步调试<a class="headerlink" href="#ray-distributed-debugger" title="Link to this heading">#</a></h2>
+<span id="使用-ray-distributed-debugger-单步调试"></span><h2>使用 Ray Distributed Debugger 单步调试<a class="headerlink" href="#ray-distributed-debugger" title="Link to this heading">#</a></h2>
 <p>Ray 提供了基于 debugpy 的<a class="reference external" href="https://docs.ray.io/en/latest/ray-observability/ray-distributed-debugger.html">分布式调试器</a>，可以在 driver 进程中设置断点并单步执行代码。</p>
 <ol class="arabic">
 <li><p>安装 debugpy：</p>
@@ -734,7 +734,7 @@ ray<span class="w"> </span>job<span class="w"> </span>submit<span class="w"> </s
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 11 月 05 日.
+  最后更新于 2026 年 11 月 27 日.
   <br/>
 </p>
   </div>

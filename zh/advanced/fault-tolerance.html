@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="2026 年 11 月 05 日"/>
+    <meta name="docbuild:last-update" content="2026 年 11 月 27 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -476,14 +476,14 @@
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="id1">
-<h1>容灾<a class="headerlink" href="#id1" title="Link to this heading">#</a></h1>
+<span id="容灾"></span><h1>容灾<a class="headerlink" href="#id1" title="Link to this heading">#</a></h1>
 <p>slime 会检查 SGLang 推理引擎是否正常工作，移除失效的引擎，并在下次更新权重前重启它们。使用 straw 传输或保存 rollout 调试数据时，还支持在 Megatron 训练失败后保留推理集群，调整训练配置，再继续训练。</p>
 <p>这些能力默认对 slime 启动的推理集群生效，不需要传入 <code class="docutils literal notranslate"><span class="pre">--use-fault-tolerance</span></code>。该参数保留用于兼容旧命令；使用外部推理集群时，仍按原来的策略处理。</p>
 <section id="megatron">
-<h2>Megatron 失败后如何继续训练<a class="headerlink" href="#megatron" title="Link to this heading">#</a></h2>
+<span id="megatron-失败后如何继续训练"></span><h2>Megatron 失败后如何继续训练<a class="headerlink" href="#megatron" title="Link to this heading">#</a></h2>
 <p>这个恢复流程要求 <strong>Ray 集群仍在运行</strong>。训练入口进程或 <code class="docutils literal notranslate"><span class="pre">RolloutManager</span></code> 退出，不会销毁 SGLang 引擎和路由器；重新提交训练任务后，slime 会找到原来的推理集群并继续使用。整个流程不需要修改 SGLang，也不会自动重试训练任务。</p>
 <section id="id2">
-<h3>首次启动时保留恢复数据<a class="headerlink" href="#id2" title="Link to this heading">#</a></h3>
+<span id="首次启动时保留恢复数据"></span><h3>首次启动时保留恢复数据<a class="headerlink" href="#id2" title="Link to this heading">#</a></h3>
 <p>以下两种方式任选其一。选择后，slime 会自动保存恢复所需的数据，不依赖 <code class="docutils literal notranslate"><span class="pre">--use-fault-tolerance</span></code>。</p>
 <p>使用 straw 保存 rollout 和训练数据：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--rollout-data-transport<span class="w"> </span>straw<span class="w"> </span>--rollout-data-dir<span class="w"> </span>/shared/my-run/queue
@@ -499,7 +499,7 @@
 <p>如果保存大 MoE 的优化器时显存不足，可以使用 <code class="docutils literal notranslate"><span class="pre">--distrib-optim-fully-reshardable-mem-efficient</span></code>。Megatron 会通过 Gloo 在 CPU 上聚合 checkpoint 张量，仍支持重新分片，但会增加主机内存和保存时间的开销。<code class="docutils literal notranslate"><span class="pre">--overlap-grad-reduce</span> <span class="pre">--ddp-bucket-size</span> <span class="pre">40000000</span></code> 可以限制每次聚合的临时缓冲区大小；还需为完整的优化器状态预留主机内存。</p>
 </section>
 <section id="id3">
-<h3>失败后重新提交<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
+<span id="失败后重新提交"></span><h3>失败后重新提交<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
 <p>例如，Megatron 因 OOM 退出后：</p>
 <ol class="arabic simple">
 <li><p>等待失败的训练任务结束。</p></li>
@@ -511,14 +511,14 @@
 <p>两次提交之间不要停止 Ray、重建推理服务容器，或执行 <code class="docutils literal notranslate"><span class="pre">pkill</span> <span class="pre">sglang</span></code> 等清理命令。<code class="docutils literal notranslate"><span class="pre">slime.utils.external_utils.command_utils.execute_train</span></code> 会保留正在运行的 Ray head 和 SGLang；如果使用的 shell 脚本每次启动都会清理进程，重启时需要跳过这一步。训练正常结束后，slime 会释放保留的会话及其资源。</p>
 </section>
 <section id="id4">
-<h3>从哪一步恢复<a class="headerlink" href="#id4" title="Link to this heading">#</a></h3>
+<span id="从哪一步恢复"></span><h3>从哪一步恢复<a class="headerlink" href="#id4" title="Link to this heading">#</a></h3>
 <p>新训练进程会加载最近一次成功保存的模型、scheduler、随机数状态，以及有状态优化器的状态，并重新训练该 checkpoint 之后的批次。已经训练完成、但模型更新尚未保存的批次也会重放；如果还没有 checkpoint，则从最初的模型开始重放。</p>
 <p>保留的数据包括生成结果、token 和 reward 后处理结果。修改训练并行配置后，slime 会重新分片这些数据，不会重新生成样本，也不会再次执行 reward 后处理。恢复数据会保留到对应的模型 checkpoint 提交成功，或训练正常结束。推理侧的权重版本号在重启后继续递增。</p>
 <p>Megatron 会在并行布局兼容时恢复随机数状态；TP/PP 改变时会重新初始化。因此，改变并行布局后可以继续训练，但不保证结果逐比特一致。</p>
 </section>
 </section>
 <section id="id5">
-<h2>如何找到原来的推理集群<a class="headerlink" href="#id5" title="Link to this heading">#</a></h2>
+<span id="如何找到原来的推理集群"></span><h2>如何找到原来的推理集群<a class="headerlink" href="#id5" title="Link to this heading">#</a></h2>
 <p>slime 使用具名 Ray actor 管理推理集群。新任务根据会话名称找到该 actor，由它返回已有的路由器和引擎信息，不需要扫描路由器进程。</p>
 <p>可以用 <code class="docutils literal notranslate"><span class="pre">--rollout-session-id</span></code> 显式指定会话标识。未指定时，按以下顺序选择标识来源，再计算哈希得到稳定的名称：</p>
 <ol class="arabic simple">
@@ -540,7 +540,7 @@
 <p>Checkpoint 选择会返回独立的配置与恢复计划。恢复边界通过不可变对象交接，每次训练尝试根据它和 serving 权重版本生成自己的配置副本；data source 和长驻 rollout worker 保留原来的配置。所有 custom function 仍使用原有的 args 接口。</p>
 </section>
 <section id="id6">
-<h2>推理引擎的健康检查与重启<a class="headerlink" href="#id6" title="Link to this heading">#</a></h2>
+<span id="推理引擎的健康检查与重启"></span><h2>推理引擎的健康检查与重启<a class="headerlink" href="#id6" title="Link to this heading">#</a></h2>
 <p>rollout 过程中，slime 定期请求 SGLang 的 <code class="docutils literal notranslate"><span class="pre">/health_generate</span></code> 接口，检查引擎是否正常响应。rollout 结束时还会立即检查一次，<strong>不受后台检查间隔和首次等待时间限制</strong>。</p>
 <p>同步 rollout 在发送中止生成和等待请求结束的控制命令前，会先从路由器中移除失效的服务。返回训练前，<code class="docutils literal notranslate"><span class="pre">ServingCluster</span></code> 会再次检查引擎，注销失效服务并清除对应的 Ray actor 引用，避免后续显存卸载或权重更新请求访问已经停止的引擎。HTTP 请求和 Ray 调用都有超时限制。</p>
 <p>缺失的引擎在下一次更新权重前重启，随后加载训练侧的权重。后台检查和 rollout 收尾检查使用同一套故障处理流程；更新权重或调整显存占用时会暂停后台检查。</p>
@@ -578,7 +578,7 @@
 <p>如果负载高峰导致健康检查误判，可以增大超时。如果引擎在权重更新后反复失败，应检查 SGLang 日志和最近保存的 rollout 数据。</p>
 </section>
 <section id="id7">
-<h2>分开调试推理和训练<a class="headerlink" href="#id7" title="Link to this heading">#</a></h2>
+<span id="分开调试推理和训练"></span><h2>分开调试推理和训练<a class="headerlink" href="#id7" title="Link to this heading">#</a></h2>
 <p>保存 rollout 数据后，可以固定训练输入，单独排查训练问题：</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">--debug-rollout-only</span></code>：只初始化推理侧，不训练；可配合保存参数检查生成和打分结果。</p></li>
@@ -589,7 +589,7 @@
 <p>对于耗时较长的生成请求，可以用<a class="reference internal" href="../developer_guide/trace.html"><span class="std std-doc">请求追踪</span></a>查看生成、打分和模型调用各自的耗时，再用<a class="reference internal" href="../developer_guide/profiling.html"><span class="std std-doc">性能分析</span></a>定位瓶颈。多模型或 PD 分离部署的配置见 <a class="reference internal" href="sglang-config.html"><span class="std std-doc">SGLang 配置</span></a>。</p>
 </section>
 <section id="id8">
-<h2>恢复范围与限制<a class="headerlink" href="#id8" title="Link to this heading">#</a></h2>
+<span id="恢复范围与限制"></span><h2>恢复范围与限制<a class="headerlink" href="#id8" title="Link to this heading">#</a></h2>
 <p>未使用 straw、也未保存 rollout 调试数据时，仍可保留推理集群，但无法重放未保存到 checkpoint 的训练批次。</p>
 <p><code class="docutils literal notranslate"><span class="pre">RolloutManager</span></code> 重建支持内置数据源。自定义数据源需要提供兼容的 <code class="docutils literal notranslate"><span class="pre">state_dict</span></code> / <code class="docutils literal notranslate"><span class="pre">load_state_dict</span></code>，并让自己的队列控制器独立于 manager 存活；数据源构造函数和 rollout hook 的签名不变。</p>
 <p>如果 <code class="docutils literal notranslate"><span class="pre">ServingCluster</span></code> 或整个 Ray 集群已经丢失，需要重新启动推理服务并从 checkpoint 恢复。集群抢占和节点丢失仍需要调度系统与 checkpoint 配合处理。</p>
@@ -687,7 +687,7 @@
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 11 月 05 日.
+  最后更新于 2026 年 11 月 27 日.
   <br/>
 </p>
   </div>

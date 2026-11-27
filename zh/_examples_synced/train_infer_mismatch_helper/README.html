@@ -61,7 +61,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="2026 年 11 月 05 日"/>
+    <meta name="docbuild:last-update" content="2026 年 11 月 27 日"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -520,8 +520,7 @@ You may specify the <strong>IS/RS configs</strong> with a config file using <cod
 <h3>[Baseline: No Mismatch Correction] Standard PPO<a class="headerlink" href="#baseline-no-mismatch-correction-standard-ppo" title="Link to this heading">#</a></h3>
 <p>This is the basic PPO algorithm with potentially training-inference mismatch issue when the output of SGLang and Megatron does not exactly match.</p>
 <div class="math notranslate nohighlight">
-\[
-L_{\text{PPO}}(\theta)
+\[L_{\text{PPO}}(\theta)
 = - \mathbb{E}_{x \sim \mathcal{D},\, y \sim \pi_{\textcolor{red}{\text{SGLang}}}} \left[
   \min \left(
     \frac{\pi_\theta(y \mid x)}{\pi_{\textcolor{blue}{\text{Megatron}}}(y \mid x)} A_t,
@@ -531,15 +530,13 @@ L_{\text{PPO}}(\theta)
       1 + \epsilon
     \right) A_t
   \right)
-\right].
-\]</div>
+\right].\]</div>
 </section>
 <section id="bypassing-ppo-importance-sampling">
 <h3>Bypassing PPO importance sampling<a class="headerlink" href="#bypassing-ppo-importance-sampling" title="Link to this heading">#</a></h3>
 <p>Like REINFORCE, we directly use the rollout engine's log probs as the old policy in offline PPO's importance sampling, rather than the recomputed log-probs from the training engine.</p>
 <div class="math notranslate nohighlight">
-\[
-L_{\text{PPO-bypass}}(\theta)
+\[L_{\text{PPO-bypass}}(\theta)
 = - \mathbb{E}_{x \sim \mathcal{D}, y \sim \pi_{\textcolor{red}{\text{SGLang}}}} \left[
   \min \left(
     \frac{\pi_\theta(y \mid x)}{\pi_{\textcolor{red}{\text{SGLang}}}(y \mid x)} A_t,
@@ -549,8 +546,7 @@ L_{\text{PPO-bypass}}(\theta)
       1 + \epsilon
     \right) A_t
   \right)
-\right].
-\]</div>
+\right].\]</div>
 <p>Advantages:</p>
 <ul class="simple">
 <li><p>Efficiency: skip <code class="docutils literal notranslate"><span class="pre">log_prob</span></code> recomputation on training engine. Reduce one expensive forward pass on all the generated trajectories.</p></li>
@@ -560,8 +556,7 @@ L_{\text{PPO-bypass}}(\theta)
 <h3>Decoupled, 3-policy PPO Importance Sampling<a class="headerlink" href="#decoupled-3-policy-ppo-importance-sampling" title="Link to this heading">#</a></h3>
 <p><a class="reference external" href="https://arxiv.org/pdf/2110.00641">Decoupled PPO</a> achieves batch-independent PPO by decoupling two roles: Proximal Policy (anchor policy for PPO clipping, control update size) and Behavior Policy (for off-policy correction in importance sampling). Therefore, there are totally 3 roles engaged in this mode, <strong>target policy</strong> <span class="math notranslate nohighlight">\(\pi_\theta\)</span>, <strong>proximal policy</strong> <span class="math notranslate nohighlight">\(\pi_{\textcolor{blue}{\text{old}}}\)</span>, and <strong>behavior policy</strong> <span class="math notranslate nohighlight">\(\pi_{\textcolor{red}{\text{SGLang}}}\)</span>. <span class="math notranslate nohighlight">\(\pi_{\textcolor{blue}{\text{old}}}\)</span> is recomputed with Megatron at the beginning of each training step.</p>
 <div class="math notranslate nohighlight">
-\[
-L_{\text{PPO-decoupled}}(\theta)
+\[L_{\text{PPO-decoupled}}(\theta)
 = - \mathbb{E}_{x \sim \mathcal{D}, y \sim \pi_{\textcolor{red}{\text{SGLang}}}} \left[
     \frac{\pi_{\textcolor{blue}{\text{old}}}(y \mid x)}{\pi_{\textcolor{red}{\text{SGLang}}}(y \mid x)}
   \min \left(
@@ -572,8 +567,7 @@ L_{\text{PPO-decoupled}}(\theta)
       1 + \epsilon
     \right) A_t
   \right)
-\right].
-\]</div>
+\right].\]</div>
 <p>Advantages:</p>
 <ul class="simple">
 <li><p>Achieves batch size invariance and efficient stale data utilization</p></li>
@@ -729,7 +723,7 @@ Reject entire sequence if <span class="math notranslate nohighlight">\(\exists t
 <p><strong>Usage</strong>: These metrics help you monitor policy drift. Large values indicate a significant mismatch between the training and rollout engines.</p>
 </section>
 <section id="is-rs-correction-metrics">
-<h3>IS/RS Correction Metrics<a class="headerlink" href="#is-rs-correction-metrics" title="Link to this heading">#</a></h3>
+<span id="isrs-correction-metrics"></span><h3>IS/RS Correction Metrics<a class="headerlink" href="#is-rs-correction-metrics" title="Link to this heading">#</a></h3>
 <p>These metrics track importance sampling weights and corrections. They are only computed when <code class="docutils literal notranslate"><span class="pre">--use-tis</span></code> is enabled.</p>
 <p>When using <code class="docutils literal notranslate"><span class="pre">--custom-tis-function-path</span></code> pointing to MIS implementation (e.g., <code class="docutils literal notranslate"><span class="pre">mis.py</span></code>), additional fine-grained metrics become available:</p>
 <div class="pst-scrollable-table-container"><table class="table">
@@ -912,7 +906,7 @@ Reject entire sequence if <span class="math notranslate nohighlight">\(\exists t
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 11 月 05 日.
+  最后更新于 2026 年 11 月 27 日.
   <br/>
 </p>
   </div>

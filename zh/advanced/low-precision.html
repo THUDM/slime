@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="2026 年 11 月 05 日"/>
+    <meta name="docbuild:last-update" content="2026 年 11 月 27 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -481,7 +481,7 @@
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="rollout">
-<h1>低精度训练与 Rollout<a class="headerlink" href="#rollout" title="Link to this heading">#</a></h1>
+<span id="低精度训练与-rollout"></span><h1>低精度训练与 Rollout<a class="headerlink" href="#rollout" title="Link to this heading">#</a></h1>
 <p>slime 中的低精度能力主要用于让 rollout 更快、更省显存，同时保持训练侧数值稳定。对于大规模 MoE RL，推荐的生产路径是：</p>
 <blockquote>
 <div><p><strong>Megatron BF16 训练 + SGLang FP8 rollout/inference</strong></p>
@@ -518,7 +518,7 @@
 </div>
 </section>
 <section id="bf16-fp8-rollout">
-<h2>BF16 训练 + FP8 Rollout<a class="headerlink" href="#bf16-fp8-rollout" title="Link to this heading">#</a></h2>
+<span id="bf16-训练--fp8-rollout"></span><h2>BF16 训练 + FP8 Rollout<a class="headerlink" href="#bf16-fp8-rollout" title="Link to this heading">#</a></h2>
 <p>这是 slime 当前最主要的生产路径。</p>
 <p>你可以通过将 <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> 指向 blockwise quantized Hugging Face checkpoint 来开启 FP8 rollout。可以用如下命令从 BF16 checkpoint 转换：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>tools/convert_hf_to_fp8.py<span class="w"> </span><span class="se">\</span>
@@ -539,7 +539,7 @@
 </div>
 </section>
 <section id="rollout-fp8-kv-cache">
-<h2>Rollout 使用 FP8 KV Cache<a class="headerlink" href="#rollout-fp8-kv-cache" title="Link to this heading">#</a></h2>
+<span id="rollout-使用-fp8-kv-cache"></span><h2>Rollout 使用 FP8 KV Cache<a class="headerlink" href="#rollout-fp8-kv-cache" title="Link to this heading">#</a></h2>
 <p>对于 long-context、multi-turn 或 agentic workload，KV cache 容量经常是瓶颈。由于 slime 通过 <code class="docutils literal notranslate"><span class="pre">--sglang-</span></code> 前缀透传 SGLang 参数，可以直接开启 FP8 KV cache：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--sglang-kv-cache-dtype<span class="w"> </span>fp8_e4m3
 </pre></div>
@@ -548,10 +548,10 @@
 <p>对 Qwen3.8-27B、GLM-5.3-Flash 等 hybrid 模型，这个参数只作用于 attention 层 KV。线性注意力的递归状态使用 <code class="docutils literal notranslate"><span class="pre">--sglang-mamba-ssm-dtype</span></code>，状态池 / attention KV 池的内存比例使用 <code class="docutils literal notranslate"><span class="pre">--sglang-mamba-full-memory-ratio</span></code>。FP8 KV 不代表递归状态或卷积状态也用 FP8。向导默认不覆盖这些参数，为 Qwen3.8-27B 另外提供 FP32 / BF16 递归状态选项。见 <a class="reference internal" href="rl-systems.html#hybrid-cache"><span class="std std-ref">hybrid 缓存配置、架构来源与内存推导</span></a>。</p>
 </section>
 <section id="fp8-fp8-rollout">
-<h2>FP8 训练 + FP8 Rollout<a class="headerlink" href="#fp8-fp8-rollout" title="Link to this heading">#</a></h2>
+<span id="fp8-训练--fp8-rollout"></span><h2>FP8 训练 + FP8 Rollout<a class="headerlink" href="#fp8-fp8-rollout" title="Link to this heading">#</a></h2>
 <p>slime 也支持 experimental 的 FP8 training 路径。我们观察到，在一些设置下同时使用 FP8 training 和 FP8 inference，可以提升推理吞吐并降低训推不一致。更多细节请参考 <a class="reference external" href="https://lmsys.org/blog/2025-11-25-fp8-rl/">这篇博客</a>。</p>
 <section id="fp8">
-<h3>FP8 快速开始<a class="headerlink" href="#fp8" title="Link to this heading">#</a></h3>
+<span id="fp8-快速开始"></span><h3>FP8 快速开始<a class="headerlink" href="#fp8" title="Link to this heading">#</a></h3>
 <ol class="arabic simple">
 <li><p>使用 <code class="docutils literal notranslate"><span class="pre">tools/convert_hf_to_fp8.py</span></code> 将 Hugging Face 模型权重转换为 FP8 格式。</p></li>
 <li><p>添加 FP8 训练参数：</p></li>
@@ -574,7 +574,7 @@ bash<span class="w"> </span>scripts/low_precision/run-qwen3-30b-a3b-fp8.sh
 </div>
 </section>
 <section id="id1">
-<h3>实现说明<a class="headerlink" href="#id1" title="Link to this heading">#</a></h3>
+<span id="实现说明"></span><h3>实现说明<a class="headerlink" href="#id1" title="Link to this heading">#</a></h3>
 <ol class="arabic simple">
 <li><p>如果启用 FP8 recipe，TransformerEngine layers 会在 FP8 context 中构建。</p></li>
 <li><p>训练时，权重和 activation 会在线量化为 NVFP8 格式，并在 forward/backward GEMM 中使用 cuBLAS FP8 GEMM。</p></li>
@@ -584,15 +584,15 @@ bash<span class="w"> </span>scripts/low_precision/run-qwen3-30b-a3b-fp8.sh
 <p>目前只有 TransformerEngine 中的 <code class="docutils literal notranslate"><span class="pre">Linear</span></code> 和 <code class="docutils literal notranslate"><span class="pre">GroupLinear</span></code> 层使用 FP8。<code class="docutils literal notranslate"><span class="pre">embedding</span></code> 和 <code class="docutils literal notranslate"><span class="pre">lm_head</span></code> 保持原始精度。如果未开启 <code class="docutils literal notranslate"><span class="pre">--fp8-param-gather</span></code>，TransformerEngine 中的权重以 BF16 存储，仅在 <code class="docutils literal notranslate"><span class="pre">GEMM</span></code> 或 <code class="docutils literal notranslate"><span class="pre">GroupGEMM</span></code> 时转换为 FP8。</p>
 </section>
 <section id="id2">
-<h3>已知限制<a class="headerlink" href="#id2" title="Link to this heading">#</a></h3>
+<span id="已知限制"></span><h3>已知限制<a class="headerlink" href="#id2" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">--fp8-param-gather</span></code> 可以节省显存，但目前需要 TransformerEngine <code class="docutils literal notranslate"><span class="pre">FusedAdam</span></code>，这与大规模 Megatron-LM RL 中常用的 CPU Adam offload 路径冲突。</p>
 </section>
 </section>
 <section id="int4-qat">
-<h2>INT4 QAT 训练<a class="headerlink" href="#int4-qat" title="Link to this heading">#</a></h2>
+<span id="int4-qat-训练"></span><h2>INT4 QAT 训练<a class="headerlink" href="#int4-qat" title="Link to this heading">#</a></h2>
 <p>INT4 STE（Straight-Through Estimator）训练和 INT4 inference 可以进一步降低 rollout 显存并提升吞吐。在目标模型和 reward setup 验证前，请把这条路径视作 beta。</p>
 <section id="int4">
-<h3>INT4 快速开始<a class="headerlink" href="#int4" title="Link to this heading">#</a></h3>
+<span id="int4-快速开始"></span><h3>INT4 快速开始<a class="headerlink" href="#int4" title="Link to this heading">#</a></h3>
 <ol class="arabic simple">
 <li><p>将 Hugging Face 权重转换为 INT4：</p></li>
 </ol>
@@ -730,7 +730,7 @@ bash<span class="w"> </span>scripts/low_precision/run-kimi-k2-Thinking-int4.sh
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 11 月 05 日.
+  最后更新于 2026 年 11 月 27 日.
   <br/>
 </p>
   </div>

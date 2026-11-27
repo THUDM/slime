@@ -417,7 +417,7 @@ window.runMermaid = runMermaid;</script>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="Nov 05, 2026"/>
+    <meta name="docbuild:last-update" content="Nov 27, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -848,7 +848,7 @@ window.runMermaid = runMermaid;</script>
 <p>The lab’s <strong>Play a round</strong> animation illustrates this loop. It is not a simulation of GPU speed or a training run. Every choice is reversible: use the previous step, any step label, undo/redo, or reset. Choices survive reload locally. A share link carries architecture choices but excludes machine paths, engine addresses, and custom hook paths. <code class="docutils literal notranslate"><span class="pre">experiment.json</span></code> preserves the complete local configuration.</p>
 </section>
 <section id="choose-the-task-and-model">
-<h2>1. Choose the task and model<a class="headerlink" href="#choose-the-task-and-model" title="Link to this heading">#</a></h2>
+<span id="1-choose-the-task-and-model"></span><h2>1. Choose the task and model<a class="headerlink" href="#choose-the-task-and-model" title="Link to this heading">#</a></h2>
 <p>New to RL? Use <strong>Understand an RL run</strong> on the homepage for a five-stage prompt → eight answers → verifier → GRPO → weight-sync walkthrough. Play, pause or advance manually. Its temporary example leaves your saved experiment untouched; <strong>Use this GRPO starting point</strong> adopts it as one undoable change. The example uses four rewards of 1 and four of 0: mean 0.5, sample standard deviation √(2/7), and normalized advantages approximately ±0.94, matching the default reward normalization in <code class="docutils literal notranslate"><span class="pre">slime/data/batch_builder.py</span></code>. These are illustrative values, not a measured training run or a promise of reward improvement.</p>
 <p>Use <strong>Compare A / B</strong> to save the complete current configuration as A, then edit B. A stays fixed across edits, undo/redo and reloads. Dependency changes, such as async selecting separate GPU pools, appear in the differences. Each side gets its own static validation; the default export is always B. <strong>Restore A into B</strong> is undoable; replacing or clearing A is separate from B’s history. A/B share links filter private paths, addresses and hooks on both sides, just like ordinary share links.</p>
 <p>If PD has insufficient resources, expand a repair preview beside the export area. It shows field changes, GPU allocation and remaining requirements before applying anything. Resource adjustments derive from the selected recipe’s engine size and parallelism. Apply one repair, then use Undo to restore all of its fields together. RDMA devices and external addresses must come from your environment. The installation image selector carries hardware context into Placement; it does not certify a model or memory fit.</p>
@@ -860,7 +860,7 @@ window.runMermaid = runMermaid;</script>
 <p><a class="reference external" href="https://huggingface.co/zai-org/GLM-5.3/blob/main/config.json">GLM-5.3’s official config</a> matches the 78-layer, 256-expert DSA architecture and cross-layer index-sharing schedule in the existing <code class="docutils literal notranslate"><span class="pre">glm5.2-744B-A40B</span></code> model specification. The lab reuses that architecture source with the GLM-5.3 checkpoint; the older six-layer deterministic regression is not a validation of this new checkpoint.</p>
 </section>
 <section id="choose-gpu-ownership-then-scheduling">
-<h2>2. Choose GPU ownership, then scheduling<a class="headerlink" href="#choose-gpu-ownership-then-scheduling" title="Link to this heading">#</a></h2>
+<span id="2-choose-gpu-ownership-then-scheduling"></span><h2>2. Choose GPU ownership, then scheduling<a class="headerlink" href="#choose-gpu-ownership-then-scheduling" title="Link to this heading">#</a></h2>
 <p>Expand <strong>GPU recommendation, memory &amp; parallelism</strong> in Placement for starting GPU counts, total allocation, CPU Adam and recomputation settings. The parallelism section contains clickable TP/PP/EP/CP/ZeRO diagrams. CPU Adam and activation recomputation switches change the exported shell. Supplementary diagrams and the generated-file preview expand on demand; the page keeps a single scroll flow. See <a class="reference internal" href="../advanced/parallelism-memory.html"><span class="std std-doc">memory accounting and parallelism</span></a>, including allgather/zigzag CP.</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
@@ -898,19 +898,19 @@ window.runMermaid = runMermaid;</script>
 <p>Partial rollout keeps unfinished prefixes for later continuation, including under synchronous training. straw persists payloads and queue state; combined with fully async it selects distributed producer processes across Ray nodes. The lab exposes both choices independently. Compare their timelines, mixed-version probabilities, and checkpoint boundaries in <a class="reference internal" href="../advanced/rollout-scheduling.html"><span class="std std-doc">rollout scheduling</span></a>.</p>
 </section>
 <section id="choose-numerical-behavior">
-<h2>3. Choose numerical behavior<a class="headerlink" href="#choose-numerical-behavior" title="Link to this heading">#</a></h2>
+<span id="3-choose-numerical-behavior"></span><h2>3. Choose numerical behavior<a class="headerlink" href="#choose-numerical-behavior" title="Link to this heading">#</a></h2>
 <p>Start with BF16 on both sides to establish a baseline, or the maintained BF16-training / FP8-rollout path for large MoE. The latter keeps a BF16 training checkpoint and uses a separately quantized HF checkpoint for serving. Attention KV precision is another independent choice. Hybrid models also need a separate recurrent-state dtype: Qwen3.8-27B exposes attention KV, Mamba SSM state, and an optional state/KV memory ratio. The diagram shows the two pools separately. See <a class="reference internal" href="../advanced/rl-systems.html#hybrid-cache"><span class="std std-ref">hybrid cache accounting</span></a>, including GLM-5.3-Flash’s distinct architecture.</p>
 <p>FP8 training is experimental; INT4 rollout is beta. Every lower-precision path needs a compatible GPU/kernel stack. See <a class="reference internal" href="../advanced/rl-systems.html#precision"><span class="std std-ref">precision and memory derivation</span></a>.</p>
 <p>Then choose corrections deliberately. TIS clips importance weights; IcePop masks out-of-range weights. R3 replays MoE routes. SC centers weighted scores and uses REINFORCE. Deterministic execution addresses reproducibility but does not automatically make two engines identical. The <strong>why &amp; math</strong> buttons lead to <a class="reference internal" href="../advanced/policy-mismatch.html"><span class="std std-doc">full derivations</span></a> and the original papers.</p>
 </section>
 <section id="size-serving-for-the-workload">
-<h2>4. Size serving for the workload<a class="headerlink" href="#size-serving-for-the-workload" title="Link to this heading">#</a></h2>
+<span id="4-size-serving-for-the-workload"></span><h2>4. Size serving for the workload<a class="headerlink" href="#size-serving-for-the-workload" title="Link to this heading">#</a></h2>
 <p>Keep ordinary serving as a baseline. Enable PD when measurements show prefill and decode need independent resources. The lab requires both groups to contain whole engines and uses Mooncake/RDMA; fill in actual device names. <code class="docutils literal notranslate"><span class="pre">sglang.yaml</span></code> is embedded inside <code class="docutils literal notranslate"><span class="pre">experiment.sh</span></code>, so a separate manual file copy is unnecessary.</p>
 <p>Enable HiCache for reused prefixes after budgeting host RAM and I/O. Under PD this recipe enables it on prefill only. Tune concurrency and response-token limits against actual memory and latency. See <a class="reference internal" href="../advanced/rl-systems.html#pd"><span class="std std-ref">the serving cost models</span></a>.</p>
 <p>Enable <strong>EAGLE</strong> to add speculative decoding. Select a checkpoint MTP head or provide a separate compatible EAGLE head, then choose the draft depth. The serving diagram changes with PD, HiCache and EAGLE, showing candidate generation and target verification when enabled. See <a class="reference internal" href="../advanced/speculative-decoding.html"><span class="std std-doc">configuration, acceptance derivation and metrics</span></a>.</p>
 </section>
 <section id="prepare-once-convert-then-run">
-<h2>5. Prepare once, convert, then run<a class="headerlink" href="#prepare-once-convert-then-run" title="Link to this heading">#</a></h2>
+<span id="5-prepare-once-convert-then-run"></span><h2>5. Prepare once, convert, then run<a class="headerlink" href="#prepare-once-convert-then-run" title="Link to this heading">#</a></h2>
 <p>First <a class="reference internal" href="quick_start.html"><span class="std std-doc">install the environment</span></a>. Keep the same checkout, dependencies, model/data paths, and configuration paths on every participating host. Multi-node runs need a shared filesystem or equivalent identical local copies; a path inside only the head container is insufficient. Make the generated <code class="docutils literal notranslate"><span class="pre">.slime-lab.*</span></code> configuration directory visible to Ray workers through the same repository path.</p>
 <p>Download <code class="docutils literal notranslate"><span class="pre">experiment.sh</span></code> from the lab into the slime repository root. Review its paths and notes, then run:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Once, on the shared filesystem: download source weights and data,</span>
@@ -942,7 +942,7 @@ bash<span class="w"> </span>experiment.sh<span class="w"> </span>train
 <p>The shell defaults to a short training run. Use a fresh output directory and straw run ID for a new experiment; existing save directories follow the backend’s recovery rules. To resume a later run, add <code class="docutils literal notranslate"><span class="pre">--load</span></code> for the saved checkpoint and follow the <a class="reference internal" href="../advanced/fault-tolerance.html"><span class="std std-doc">checkpoint/recovery requirements</span></a>. Decide a save interval appropriate for your experiment; the short default may finish before the interval is reached.</p>
 </section>
 <section id="decide-whether-the-experiment-worked">
-<h2>6. Decide whether the experiment worked<a class="headerlink" href="#decide-whether-the-experiment-worked" title="Link to this heading">#</a></h2>
+<span id="6-decide-whether-the-experiment-worked"></span><h2>6. Decide whether the experiment worked<a class="headerlink" href="#decide-whether-the-experiment-worked" title="Link to this heading">#</a></h2>
 <p>Read generated responses first. Check reward and the reference/trainer log-probs; then inspect training/rollout mismatch and correction clipping/masking. With fully async, inspect staleness. A fast run with meaningless rewards is not progress.</p>
 <p>Add a held-out dataset before a long run. A synchronous example after downloading AIME data is:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--eval-interval<span class="w"> </span><span class="m">20</span><span class="w"> </span><span class="se">\</span>
@@ -1042,7 +1042,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Nov 05, 2026.
+  Last updated on Nov 27, 2026.
   <br/>
 </p>
   </div>

@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="Nov 05, 2026"/>
+    <meta name="docbuild:last-update" content="Nov 27, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -522,7 +522,7 @@
 <li><p><code class="docutils literal notranslate"><span class="pre">bind_trace(sample)</span></code>: ensure a sample already has a trace carrier before passing it across helpers or tasks.</p></li>
 </ul>
 <section id="trace-span-vs-trace-function">
-<h3><code class="docutils literal notranslate"><span class="pre">trace_span</span></code> vs <code class="docutils literal notranslate"><span class="pre">trace_function</span></code><a class="headerlink" href="#trace-span-vs-trace-function" title="Link to this heading">#</a></h3>
+<span id="trace_span-vs-trace_function"></span><h3><code class="docutils literal notranslate"><span class="pre">trace_span</span></code> vs <code class="docutils literal notranslate"><span class="pre">trace_function</span></code><a class="headerlink" href="#trace-span-vs-trace-function" title="Link to this heading">#</a></h3>
 <p>Use <code class="docutils literal notranslate"><span class="pre">trace_span(...)</span></code> when you only want to trace part of a function body, or when you need to update end-of-span attrs from inside the block.</p>
 <p>Use <code class="docutils literal notranslate"><span class="pre">trace_function(...)</span></code> when the whole function should be represented as one span. Internally it resolves the trace target and then opens a <code class="docutils literal notranslate"><span class="pre">trace_span(...)</span></code> around the function call, so it works for both sync and async functions.</p>
 <p>The decorator is what slime uses for the main rollout pipeline. For example, <code class="docutils literal notranslate"><span class="pre">generate_and_rm(...)</span></code> is traced per sample and <code class="docutils literal notranslate"><span class="pre">generate_and_rm_group(...)</span></code> is traced per sample group:</p>
@@ -680,7 +680,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Nov 05, 2026.
+  Last updated on Nov 27, 2026.
   <br/>
 </p>
   </div>

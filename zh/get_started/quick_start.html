@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="2026 年 11 月 05 日"/>
+    <meta name="docbuild:last-update" content="2026 年 11 月 27 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -461,7 +461,7 @@
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#slime">安装 slime</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#conda-micromamba">Conda / micromamba</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#conda">Conda / micromamba</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">挂载实验路径</a></li>
 </ul>
             </nav>
@@ -475,13 +475,13 @@
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="id1">
-<h1>运行环境准备<a class="headerlink" href="#id1" title="Link to this heading">#</a></h1>
+<span id="运行环境准备"></span><h1>运行环境准备<a class="headerlink" href="#id1" title="Link to this heading">#</a></h1>
 <p>从 <a class="reference internal" href="../index.html#lab"><span class="std std-ref">交互 Quick Start</span></a> 开始。本页准备所有生成配方共用的环境；<a class="reference internal" href="experiment-guide.html"><span class="std std-doc">tutorial</span></a>讲解完整 RL 流程。</p>
 <section id="id2">
-<h2>基础环境搭建<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<span id="基础环境搭建"></span><h2>基础环境搭建<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
 <p>建议使用预置的 Docker 镜像，获得相互兼容的 SGLang、Megatron 和补丁环境。</p>
 <section id="id3">
-<h3>硬件与镜像选择<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
+<span id="硬件与镜像选择"></span><h3>硬件与镜像选择<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>硬件</p></th>
@@ -506,7 +506,7 @@
 <p>不方便使用 Docker 时，可使用<a class="reference internal" href="#conda"><span class="std std-ref">下方的 conda 方案</span></a>。AMD 支持见 <a class="reference internal" href="../platform_support/amd_tutorial.html"><span class="std std-doc">AMD 使用教程</span></a>。</p>
 </section>
 <section id="docker">
-<h3>拉取并启动 Docker 容器<a class="headerlink" href="#docker" title="Link to this heading">#</a></h3>
+<span id="拉取并启动-docker-容器"></span><h3>拉取并启动 Docker 容器<a class="headerlink" href="#docker" title="Link to this heading">#</a></h3>
 <p>在 Linux x86_64 GPU 主机上准备 Git、Docker、兼容的 NVIDIA 驱动，并配置好 <a class="reference external" href="https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html">NVIDIA Container Toolkit</a>。在<strong>宿主机上</strong>执行以下命令，拉取镜像、克隆 slime 并启动容器：</p>
 <div class="highlight-shell notranslate"><div class="highlight"><pre><span></span><span class="nv">SLIME_IMAGE</span><span class="o">=</span>slimerl/slime:latest-cu130
 docker<span class="w"> </span>pull<span class="w"> </span><span class="s2">"</span><span class="nv">$SLIME_IMAGE</span><span class="s2">"</span>
@@ -521,7 +521,7 @@ docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </
 </div>
 </section>
 <section id="slime">
-<h3>安装 slime<a class="headerlink" href="#slime" title="Link to this heading">#</a></h3>
+<span id="安装-slime"></span><h3>安装 slime<a class="headerlink" href="#slime" title="Link to this heading">#</a></h3>
 <p>镜像已经包含 slime 及所需依赖；挂载后，镜像内的代码目录被宿主机 checkout 替代。在<strong>容器内</strong>执行以下命令，安装该 checkout、保留镜像中固定的依赖版本，并检查模块导入和 GPU 可见性：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.<span class="w"> </span>--no-deps
 python<span class="w"> </span>-c<span class="w"> </span><span class="s2">"import slime, sglang, megatron.core; import torch; print('GPUs:', torch.cuda.device_count())"</span>
@@ -530,8 +530,8 @@ python<span class="w"> </span>-c<span class="w"> </span><span class="s2">"import
 <p>输出的 GPU 数量应与容器可见设备一致。将配置器导出的 <code class="docutils literal notranslate"><span class="pre">experiment.sh</span></code> 保存到宿主机的 <code class="docutils literal notranslate"><span class="pre">slime</span></code> 目录后，即可在容器内的 <code class="docutils literal notranslate"><span class="pre">/root/slime/experiment.sh</span></code> 访问它。容器内 <code class="docutils literal notranslate"><span class="pre">/data</span></code> 下的模型、数据及 checkpoint 会保存在宿主机旁边的 <code class="docutils literal notranslate"><span class="pre">slime-data</span></code> 目录，退出容器后仍然保留。再次进入环境时，在同一 checkout 下重新执行 <code class="docutils literal notranslate"><span class="pre">docker</span> <span class="pre">run</span></code> 命令，并在新容器内执行上述 editable install。</p>
 </section>
 </section>
-<section id="conda-micromamba">
-<span id="conda"></span><h2>Conda / micromamba<a class="headerlink" href="#conda-micromamba" title="Link to this heading">#</a></h2>
+<section id="conda">
+<span id="conda-micromamba"></span><span id="conda--micromamba"></span><h2>Conda / micromamba<a class="headerlink" href="#conda" title="Link to this heading">#</a></h2>
 <p><a class="reference external" href="https://github.com/THUDM/slime/blob/main/build_conda.sh">build_conda.sh</a> 会安装 micromamba，创建使用 Python 3.12 和 CUDA 13.0 的 <code class="docutils literal notranslate"><span class="pre">slime</span></code> 环境，构建 Megatron、SGLang 及原生依赖，安装 slime 并应用仓库的配套补丁。首次构建会比启动预置镜像更久。</p>
 <p>适用于 Linux x86_64 NVIDIA 机器，需要 Bash、Git、curl、patch、C/C++ 编译工具及兼容的 GPU 驱动。当前脚本会写入 <code class="docutils literal notranslate"><span class="pre">/root</span></code>（包括 <code class="docutils literal notranslate"><span class="pre">/root/.cargo</span></code>），需要相应权限；以下命令使用脚本默认的 <code class="docutils literal notranslate"><span class="pre">/root</span></code> 源码目录。脚本会安装与 Docker 镜像相同的 CUDA 兼容库。</p>
 <p>在 Bash 中执行：</p>
@@ -550,7 +550,7 @@ python<span class="w"> </span>-c<span class="w"> </span><span class="s2">"import
 <p>继续在 slime 仓库根目录运行生成的脚本。在配置器的「文件」步骤，将模型、数据和输出路径设为本机可写目录；按上述安装方式，Megatron 路径为 <code class="docutils literal notranslate"><span class="pre">/root/Megatron-LM</span></code>。</p>
 </section>
 <section id="id4">
-<h2>挂载实验路径<a class="headerlink" href="#id4" title="Link to this heading">#</a></h2>
+<span id="挂载实验路径"></span><h2>挂载实验路径<a class="headerlink" href="#id4" title="Link to this heading">#</a></h2>
 <p>上述 Docker 命令已经将持久化数据目录挂载到 <code class="docutils literal notranslate"><span class="pre">/data</span></code>，与配置器默认值一致。使用已有数据或共享存储时，可将该挂载替换为 <code class="docutils literal notranslate"><span class="pre">-v</span> <span class="pre">/shared/data:/data</span></code>，并在向导中填写容器内可见路径。所有 Ray 节点以相同路径访问仓库和生成配置目录，安装相同依赖，并配置节点之间可达的网络；上述单机 Docker 命令不会自动搭好多机网络。</p>
 <p>继续阅读 <a class="reference internal" href="experiment-guide.html"><span class="std std-doc">tutorial 的准备与启动步骤</span></a>，完成所选模型的下载、转换和训练。已有 launcher 的参数说明见<a class="reference internal" href="usage.html"><span class="std std-doc">使用参考</span></a>。</p>
 </section>
@@ -609,7 +609,7 @@ python<span class="w"> </span>-c<span class="w"> </span><span class="s2">"import
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#slime">安装 slime</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#conda-micromamba">Conda / micromamba</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#conda">Conda / micromamba</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">挂载实验路径</a></li>
 </ul>
   </nav></div>
@@ -644,7 +644,7 @@ python<span class="w"> </span>-c<span class="w"> </span><span class="s2">"import
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 11 月 05 日.
+  最后更新于 2026 年 11 月 27 日.
   <br/>
 </p>
   </div>

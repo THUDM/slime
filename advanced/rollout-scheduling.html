@@ -419,7 +419,7 @@ window.runMermaid = runMermaid;</script>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="Nov 05, 2026"/>
+    <meta name="docbuild:last-update" content="Nov 27, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -817,8 +817,8 @@ window.runMermaid = runMermaid;</script>
             </div>
             <nav aria-label="Page">
                 <ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#what-partial-rollout-saves">What partial rollout saves</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#from-a-warm-local-queue-to-distributed-producers">From a warm local queue to distributed producers</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#partial">What partial rollout saves</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#distributed">From a warm local queue to distributed producers</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#staleness-and-throughput">Staleness and throughput</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#persistence-and-recovery-with-straw">Persistence and recovery with straw</a></li>
 </ul>
@@ -863,8 +863,8 @@ window.runMermaid = runMermaid;</script>
 </table>
 </div>
 <p>Separate training/serving GPUs permit overlap. Fully async still pauses admission around weight publication and coordinates in-flight work; it does not remove every synchronization point. straw can also be used with synchronous execution.</p>
-<section id="what-partial-rollout-saves">
-<span id="partial"></span><h2>What partial rollout saves<a class="headerlink" href="#what-partial-rollout-saves" title="Link to this heading">#</a></h2>
+<section id="partial">
+<span id="what-partial-rollout-saves"></span><h2>What partial rollout saves<a class="headerlink" href="#partial" title="Link to this heading">#</a></h2>
 <p>Suppose group A finishes quickly, while group B has generated only a prefix. Once the target number of <strong>complete accepted groups</strong> is ready, the synchronous sampler can abort remaining requests, train, update weights, and later continue B from its prefix. Partial rollout preserves generated work; it does not make an unfinished response a complete rewarded training sample.</p>
 <pre  class="mermaid">
         sequenceDiagram
@@ -880,16 +880,14 @@ window.runMermaid = runMermaid;</script>
     </pre><p>The lab exports <code class="docutils literal notranslate"><span class="pre">--partial-rollout</span></code>; for the synchronous recipe it also sets <code class="docutils literal notranslate"><span class="pre">--over-sampling-batch-size</span> <span class="pre">16</span></code> with a target <code class="docutils literal notranslate"><span class="pre">--rollout-batch-size</span> <span class="pre">8</span></code>. Oversampling supplies spare groups so slow unfinished groups can be retained. The standard sampler checks completion at group boundaries; a slow member can keep its group unfinished. Without excess in-flight work there may be little partial work to save.</p>
 <p>For a response whose first <span class="math notranslate nohighlight">\(k\)</span> tokens were generated under version <span class="math notranslate nohighlight">\(v_0\)</span> and remaining tokens under <span class="math notranslate nohighlight">\(v_1\)</span>, its behavior distribution is</p>
 <div class="math notranslate nohighlight">
-\[
-q(y\mid x)=\prod_{t=1}^{k}q_{v_0}(y_t\mid x,y_{&lt;t})
-\prod_{t=k+1}^{T}q_{v_1}(y_t\mid x,y_{&lt;t}).
-\]</div>
+\[q(y\mid x)=\prod_{t=1}^{k}q_{v_0}(y_t\mid x,y_{&lt;t})
+\prod_{t=k+1}^{T}q_{v_1}(y_t\mid x,y_{&lt;t}).\]</div>
 <p>Each sampled token’s log-prob belongs to its actual generating policy. R3 routes and SC sampler heads must follow the same token alignment. A token-level importance ratio uses <span class="math notranslate nohighlight">\(p_\theta(y_t\mid h_t)/q_{v(t)}(y_t\mid h_t)\)</span>; it cannot substitute one current sampler for the entire mixed-version response. See the <a class="reference internal" href="policy-mismatch.html#tis"><span class="std std-ref">importance-weight derivation</span></a>.</p>
 <p><code class="docutils literal notranslate"><span class="pre">--mask-offpolicy-in-partial-rollout</span></code> sets loss masks of an existing prefix to zero on continuation. If <span class="math notranslate nohighlight">\(m_t=0\)</span> for <span class="math notranslate nohighlight">\(t\le k\)</span> and <span class="math notranslate nohighlight">\(m_t=1\)</span> otherwise, the token objective becomes <span class="math notranslate nohighlight">\(\sum_t m_t\ell_t\)</span> (with the selected loss normalization). This removes those old tokens’ loss contribution. Later tokens still condition on the old prefix, so masking does not restore a fully on-policy trajectory distribution. It also reduces the amount of learning signal per generated token.</p>
 <p>Custom agent hooks must preserve continuation tokens, masks and required metadata, and implement compatible abort behavior. An external tool side effect is not automatically resumable merely because its text transcript was saved. The source of truth is <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/rollout/sglang_rollout.py">the standard sampler</a> and <a class="reference internal" href="../get_started/customization.html"><span class="std std-doc">hook contracts</span></a>.</p>
 </section>
-<section id="from-a-warm-local-queue-to-distributed-producers">
-<span id="distributed"></span><h2>From a warm local queue to distributed producers<a class="headerlink" href="#from-a-warm-local-queue-to-distributed-producers" title="Link to this heading">#</a></h2>
+<section id="distributed">
+<span id="from-a-warm-local-queue-to-distributed-producers"></span><h2>From a warm local queue to distributed producers<a class="headerlink" href="#distributed" title="Link to this heading">#</a></h2>
 <p>Both async paths use <code class="docutils literal notranslate"><span class="pre">slime.rollout.fully_async_rollout.generate_rollout_fully_async</span></code>. The default object-store data source selects a background worker in the manager process. Selecting straw gives the data source queue readers and selects <code class="docutils literal notranslate"><span class="pre">DistributedRollout</span></code> instead. Each eligible, alive Ray node with CPU resources receives one generation actor. These CPU producers send requests to SGLang engines; they are not additional model replicas.</p>
 <pre  class="mermaid">
         flowchart LR
@@ -978,8 +976,8 @@ q(y\mid x)=\prod_{t=1}^{k}q_{v_0}(y_t\mid x,y_{&lt;t})
   </div>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#what-partial-rollout-saves">What partial rollout saves</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#from-a-warm-local-queue-to-distributed-producers">From a warm local queue to distributed producers</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#partial">What partial rollout saves</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#distributed">From a warm local queue to distributed producers</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#staleness-and-throughput">Staleness and throughput</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#persistence-and-recovery-with-straw">Persistence and recovery with straw</a></li>
 </ul>
@@ -1015,7 +1013,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Nov 05, 2026.
+  Last updated on Nov 27, 2026.
   <br/>
 </p>
   </div>

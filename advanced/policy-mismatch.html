@@ -61,7 +61,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="Nov 05, 2026"/>
+    <meta name="docbuild:last-update" content="Nov 27, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -518,18 +518,14 @@
 </div>
 <p>At a fixed prefix define the score <span class="math notranslate nohighlight">\(s_a=\nabla_\theta\log p_\theta(a\mid h)\)</span>. Assuming normalized differentiable probabilities and legitimate interchange of summation and differentiation:</p>
 <div class="math notranslate nohighlight">
-\[
-\sum_a p_\theta(a\mid h)s_a
+\[\sum_a p_\theta(a\mid h)s_a
 =\sum_a\nabla_\theta p_\theta(a\mid h)
-=\nabla_\theta 1=0.
-\]</div>
+=\nabla_\theta 1=0.\]</div>
 <p>Starting with <span class="math notranslate nohighlight">\(J(\theta)=\sum_y p_\theta(y\mid x)R(x,y)\)</span>, apply <span class="math notranslate nohighlight">\(\nabla p=p\nabla\log p\)</span> and autoregressive factorization:</p>
 <div class="math notranslate nohighlight">
-\[
-\nabla J
+\[\nabla J
 =\mathbb E_{y\sim p_\theta}\left[R\nabla\log p_\theta(y\mid x)\right]
-=\mathbb E_{y\sim p_\theta}\left[R\sum_{t=1}^{T}s_{a_t}\right].
-\]</div>
+=\mathbb E_{y\sim p_\theta}\left[R\sum_{t=1}^{T}s_{a_t}\right].\]</div>
 <p>An action-independent baseline <span class="math notranslate nohighlight">\(b(h_t)\)</span> has zero expectation against the score <strong>under <span class="math notranslate nohighlight">\(p_\theta\)</span></strong>, so it can reduce variance without changing that expectation. Sampling from <span class="math notranslate nohighlight">\(q\)</span> generally breaks this cancellation. This is why identical checkpoint names do not prove an on-policy update.</p>
 </section>
 <section id="grpo">
@@ -537,19 +533,15 @@
 <p>Original work: <a class="reference external" href="https://arxiv.org/abs/2402.03300">DeepSeekMath</a>; clipping objective: <a class="reference external" href="https://arxiv.org/abs/1707.06347">PPO</a>.</p>
 <p>For <span class="math notranslate nohighlight">\(G\)</span> responses to one prompt, form group statistics and a response advantage:</p>
 <div class="math notranslate nohighlight">
-\[
-\bar R=\frac1G\sum_{i=1}^G R_i,\quad
+\[\bar R=\frac1G\sum_{i=1}^G R_i,\quad
 \sigma_R=\sqrt{\frac1G\sum_i(R_i-\bar R)^2},\quad
-A_i=\frac{R_i-\bar R}{\sigma_R+\epsilon}.
-\]</div>
+A_i=\frac{R_i-\bar R}{\sigma_R+\epsilon}.\]</div>
 <p>The response advantage is shared across its response tokens. The exact standard-deviation convention and numerical epsilon are implementation details; disabling standard-deviation normalization gives <span class="math notranslate nohighlight">\(A_i=R_i-\bar R\)</span>. Group baselines include the sampled response itself, so the usual unbiased-baseline argument does not apply literally. For independent responses, mean centering alone scales the expected on-policy gradient by <span class="math notranslate nohighlight">\(1-1/G\)</span>; standard-deviation normalization adds a random scale.</p>
 <p>Define <span class="math notranslate nohighlight">\(r_{i,t}(\theta)=p_\theta(a_{i,t}\mid h_{i,t})/p_0(a_{i,t}\mid h_{i,t})\)</span>. A clipped surrogate to maximize, omitting optional KL terms, is</p>
 <div class="math notranslate nohighlight">
-\[
-J_{\rm clip}=\frac1G\sum_i\frac1{T_i}\sum_t
+\[J_{\rm clip}=\frac1G\sum_i\frac1{T_i}\sum_t
 \min\left(r_{i,t} A_i,
-\operatorname{clip}(r_{i,t},1-\epsilon_-,1+\epsilon_+)A_i\right).
-\]</div>
+\operatorname{clip}(r_{i,t},1-\epsilon_-,1+\epsilon_+)A_i\right).\]</div>
 <p>For positive <span class="math notranslate nohighlight">\(A_i\)</span>, the upper clip limits incentive to increase token probability. For negative <span class="math notranslate nohighlight">\(A_i\)</span>, the lower clip limits incentive to decrease it. At <span class="math notranslate nohighlight">\(\theta=\theta_0\)</span>, inside the clip, <span class="math notranslate nohighlight">\(\nabla r=r\nabla\log p_\theta\)</span> reduces to the policy-gradient direction. This is a local surrogate, not a general identity for arbitrarily stale data.</p>
 <p>The lab emits <code class="docutils literal notranslate"><span class="pre">--advantage-estimator</span> <span class="pre">grpo</span></code>, eight samples per prompt, and PPO clipping unless SC is enabled. <code class="docutils literal notranslate"><span class="pre">--calculate-per-token-loss</span></code> changes the outer reduction to total loss divided by total response-token count; it is not the same weighting as averaging each response’s mean.</p>
 </section>
@@ -558,19 +550,15 @@ J_{\rm clip}=\frac1G\sum_i\frac1{T_i}\sum_t
 <p>Original work: <a class="reference external" href="https://openreview.net/forum?id=8MHqvb4lK9">On the Rollout-Training Mismatch in Modern RL Systems</a>, with the <a class="reference external" href="https://fengyao.notion.site/off-policy-rl">authors’ technical article</a>. The following algebra also describes the repository’s built-in callback.</p>
 <p>At a fixed prefix, provided <span class="math notranslate nohighlight">\(q(a)&gt;0\)</span> wherever <span class="math notranslate nohighlight">\(p_0(a)f(a)\ne0\)</span>, change of measure gives</p>
 <div class="math notranslate nohighlight">
-\[
-\mathbb E_{a\sim p_0}[f(a)]
+\[\mathbb E_{a\sim p_0}[f(a)]
 =\sum_a q(a)\frac{p_0(a)}{q(a)}f(a)
 =\mathbb E_{a\sim q}[\rho_a f(a)],\qquad
-\rho_a=\exp(\log p_0(a)-\log q(a)).
-\]</div>
+\rho_a=\exp(\log p_0(a)-\log q(a)).\]</div>
 <p>The PPO policy-update ratio <span class="math notranslate nohighlight">\(r=p_\theta/p_0\)</span> and behavior-correction ratio <span class="math notranslate nohighlight">\(\rho=p_0/q\)</span> serve different purposes. Before clipping, their product is <span class="math notranslate nohighlight">\(p_\theta/q\)</span>. slime multiplies the PPO loss by detached <span class="math notranslate nohighlight">\(w(\rho)=\operatorname{clip}(\rho,L,U)\)</span>; the lab uses <span class="math notranslate nohighlight">\(L=0,U=2\)</span>.</p>
 <p>Derive its bias by subtracting the exact expression:</p>
 <div class="math notranslate nohighlight">
-\[
-\mathbb E_q[w(\rho)f]-\mathbb E_{p_0}[f]
-=\mathbb E_q[(w(\rho)-\rho)f].
-\]</div>
+\[\mathbb E_q[w(\rho)f]-\mathbb E_{p_0}[f]
+=\mathbb E_q[(w(\rho)-\rho)f].\]</div>
 <p>For <span class="math notranslate nohighlight">\(L=0\)</span>, this becomes <span class="math notranslate nohighlight">\(-\mathbb E_q[(\rho-U)f\,\mathbf1_{\rho&gt;U}]\)</span>. Capping weights limits outliers but does not give unbiased importance sampling. With nonzero <span class="math notranslate nohighlight">\(L\)</span>, small weights are also increased.</p>
 <p>This fixed-prefix identity does not correct the distribution of prefixes. Full-sequence change of measure would use <span class="math notranslate nohighlight">\(p_0(y)/q(y)=\prod_t\rho_t\)</span>, often with high variance. Token-wise TIS is a practical surrogate, not an exact replacement for that product.</p>
 <p>Implementation: <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/backends/megatron_utils/loss.py"><code class="docutils literal notranslate"><span class="pre">vanilla_tis_function</span></code></a>, <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/utils/ppo_utils.py"><code class="docutils literal notranslate"><span class="pre">importance_weights</span></code></a>. REINFORCE, including SC, uses detached <strong>current</strong> trainer probabilities in the correction numerator instead of <span class="math notranslate nohighlight">\(p_0\)</span>.</p>
@@ -580,15 +568,11 @@ J_{\rm clip}=\frac1G\sum_i\frac1{T_i}\sum_t
 <p>Original work: <a class="reference external" href="https://arxiv.org/abs/2510.18855">Every Step Evolves: Scaling Reinforcement Learning for Trillion-Scale Thinking Model</a>.</p>
 <p>The lab selects slime’s built-in <code class="docutils literal notranslate"><span class="pre">icepop_function</span></code>. Its behavior-correction rule is</p>
 <div class="math notranslate nohighlight">
-\[
-w_{\rm ice}(\rho)=\rho\,\mathbf1_{L\le\rho\le U},\qquad L=0.5,\quad U=2.
-\]</div>
+\[w_{\rm ice}(\rho)=\rho\,\mathbf1_{L\le\rho\le U},\qquad L=0.5,\quad U=2.\]</div>
 <p>Inside the interval this equals importance sampling. Outside it, the contribution is zero. Its bias relative to the same fixed-prefix target is therefore</p>
 <div class="math notranslate nohighlight">
-\[
-\mathbb E_q[w_{\rm ice}(\rho)f]-\mathbb E_{p_0}[f]
-=-\mathbb E_q[\rho f\,\mathbf1_{\rho&lt;L\;\lor\;\rho&gt;U}].
-\]</div>
+\[\mathbb E_q[w_{\rm ice}(\rho)f]-\mathbb E_{p_0}[f]
+=-\mathbb E_q[\rho f\,\mathbf1_{\rho&lt;L\;\lor\;\rho&gt;U}].\]</div>
 <p>A token with <span class="math notranslate nohighlight">\(\rho=4\)</span> receives weight 2 under the lab’s TIS rule and weight 0 under IcePop. These are distinct estimators. The callback sets weights to zero; it does <strong>not</strong> renormalize the loss by the number of retained tokens. PPO clipping can still act on <span class="math notranslate nohighlight">\(r\)</span> independently. The paper’s complete training recipe contains other components; selecting this callback does not reproduce the whole paper.</p>
 <p>Exported settings: <code class="docutils literal notranslate"><span class="pre">--use-tis</span> <span class="pre">--custom-tis-function-path</span> <span class="pre">slime.backends.megatron_utils.loss.icepop_function</span> <span class="pre">--tis-clip-low</span> <span class="pre">0.5</span> <span class="pre">--tis-clip</span> <span class="pre">2</span></code>. Observe <code class="docutils literal notranslate"><span class="pre">tis</span></code>, <code class="docutils literal notranslate"><span class="pre">tis_clipfrac</span></code>, reward, and effective signal after masking.</p>
 </section>
@@ -597,17 +581,13 @@ w_{\rm ice}(\rho)=\rho\,\mathbf1_{L\le\rho\le U},\qquad L=0.5,\quad U=2.
 <p>Original work: <a class="reference external" href="https://arxiv.org/abs/2510.11370">Stabilizing MoE Reinforcement Learning by Aligning Training and Inference Routers</a>.</p>
 <p>Write a MoE layer as <span class="math notranslate nohighlight">\(F(x)=\sum_{i\in I(x)}g_i(x)E_i(x)\)</span>, with discrete expert set <span class="math notranslate nohighlight">\(I=\operatorname{TopK}(u(x))\)</span>. A perturbation near a top-k boundary can swap an expert even when its magnitude is tiny. Decompose the output difference by adding and subtracting the same intermediate term:</p>
 <div class="math notranslate nohighlight">
-\[
-F_{I_q}(x_q)-F_{I_p}(x_p)
+\[F_{I_q}(x_q)-F_{I_p}(x_p)
 =\underbrace{F_{I_q}(x_q)-F_{I_q}(x_p)}_{\text{same-route numerical/input difference}}
-+\underbrace{F_{I_q}(x_p)-F_{I_p}(x_p)}_{\text{expert-selection difference}}.
-\]</div>
++\underbrace{F_{I_q}(x_p)-F_{I_p}(x_p)}_{\text{expert-selection difference}}.\]</div>
 <p>Replay sets the trainer route to recorded <span class="math notranslate nohighlight">\(I_q\)</span>, eliminating the second term <strong>at this layer for this comparison</strong>. It does not eliminate the first. For a softmax-gated example,</p>
 <div class="math notranslate nohighlight">
-\[
-g_i=\frac{\mathbf1_{i\in I_q}\exp u_i}{\sum_{j\in I_q}\exp u_j},\qquad
-\frac{\partial g_i}{\partial u_j}=g_i(\mathbf1_{i=j}-g_j),\quad i,j\in I_q.
-\]</div>
+\[g_i=\frac{\mathbf1_{i\in I_q}\exp u_i}{\sum_{j\in I_q}\exp u_j},\qquad
+\frac{\partial g_i}{\partial u_j}=g_i(\mathbf1_{i=j}-g_j),\quad i,j\in I_q.\]</div>
 <p>Replay expert identities, not detached expert outputs. Gradients can still flow through selected gates and experts. GLM uses sigmoid-based routing and its own normalization/scaling, so this softmax example is illustrative; keep the architecture’s actual gate rule.</p>
 <p>The lab emits <code class="docutils literal notranslate"><span class="pre">--use-rollout-routing-replay</span></code>; slime-managed SGLang requests routed experts automatically. External engines must be launched with <code class="docutils literal notranslate"><span class="pre">--enable-return-routed-experts</span></code>. Storage grows with tokens × MoE layers × selected experts. R3 is independent of TIS/SC and is not meaningful for a dense model. Implementation: <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/backends/sglang_utils/sglang_engine.py"><code class="docutils literal notranslate"><span class="pre">sglang_engine.py</span></code></a> and the replay code in <a class="reference external" href="https://github.com/THUDM/slime/tree/main/slime/backends/megatron_utils"><code class="docutils literal notranslate"><span class="pre">megatron_utils</span></code></a>.</p>
 </section>
@@ -618,58 +598,44 @@ g_i=\frac{\mathbf1_{i\in I_q}\exp u_i}{\sum_{j\in I_q}\exp u_j},\qquad
 <h3>From an unwanted mean to a centered score<a class="headerlink" href="#from-an-unwanted-mean-to-a-centered-score" title="Link to this heading">#</a></h3>
 <p>Fix a prefix and let <span class="math notranslate nohighlight">\(\mu=\sum_a q_a s_a\)</span>. In general <span class="math notranslate nohighlight">\(\mu\ne0\)</span>, even with the same checkpoint on both sides. For a detached advantage <span class="math notranslate nohighlight">\(A\)</span>, covariance decomposition gives</p>
 <div class="math notranslate nohighlight">
-\[
-\mathbb E_q[A s]=\mathbb E_q[A]\mu+\operatorname{Cov}_q(A,s).
-\]</div>
+\[\mathbb E_q[A s]=\mathbb E_q[A]\mu+\operatorname{Cov}_q(A,s).\]</div>
 <p>Use <span class="math notranslate nohighlight">\(\tilde s_a=s_a-\mu\)</span>. Then <span class="math notranslate nohighlight">\(\mathbb E_q[\tilde s]=0\)</span>, and</p>
 <div class="math notranslate nohighlight">
-\[
-\mathbb E_q[A\tilde s]=\operatorname{Cov}_q(A,s).
-\]</div>
+\[\mathbb E_q[A\tilde s]=\operatorname{Cov}_q(A,s).\]</div>
 <p>The prefix-conditional mean term vanishes. The covariance is still under <span class="math notranslate nohighlight">\(q\)</span>, so this does not establish an unbiased gradient under <span class="math notranslate nohighlight">\(p_\theta\)</span>. Group-centered rewards across full responses do not ensure <span class="math notranslate nohighlight">\(\mathbb E[A\mid h]=0\)</span> at every prefix.</p>
 </section>
 <section id="compose-with-a-correction-weight">
 <h3>Compose with a correction weight<a class="headerlink" href="#compose-with-a-correction-weight" title="Link to this heading">#</a></h3>
 <p>Let <span class="math notranslate nohighlight">\(w_a=f(p_a/q_a)\)</span>, with <span class="math notranslate nohighlight">\(f\)</span> either identity, TIS, masking, or 1. Define <span class="math notranslate nohighlight">\(\mu_w=\sum_a q_aw_as_a\)</span> and center the <strong>weighted</strong> score:</p>
 <div class="math notranslate nohighlight">
-\[
-\tilde s^w_a=w_as_a-\mu_w,\qquad
-\mathbb E_q[\tilde s^w]=0.
-\]</div>
+\[\tilde s^w_a=w_as_a-\mu_w,\qquad
+\mathbb E_q[\tilde s^w]=0.\]</div>
 <p>An implementable minimization loss with exactly this local gradient direction is</p>
 <div class="math notranslate nohighlight">
-\[
-\ell=-\operatorname{sg}(A)\left[
+\[\ell=-\operatorname{sg}(A)\left[
 \operatorname{sg}(w_a)\log p_a
--\sum_v\operatorname{sg}(q_vw_v)\log p_v\right].
-\]</div>
+-\sum_v\operatorname{sg}(q_vw_v)\log p_v\right].\]</div>
 <p>Differentiate only <span class="math notranslate nohighlight">\(\log p\)</span>: <span class="math notranslate nohighlight">\(-\nabla\ell=A(w_as_a-\mu_w)\)</span>. Differentiating through <span class="math notranslate nohighlight">\(w\)</span> would add unwanted derivatives. With exact <span class="math notranslate nohighlight">\(w=p/q\)</span> and full support, <span class="math notranslate nohighlight">\(\mu_w=\sum p s=0\)</span>; clipped or masked weights generally make it nonzero.</p>
 </section>
 <section id="why-top-k-does-not-require-storing-the-full-vocabulary">
 <h3>Why top-k does not require storing the full vocabulary<a class="headerlink" href="#why-top-k-does-not-require-storing-the-full-vocabulary" title="Link to this heading">#</a></h3>
 <p>slime records the sampler’s head <span class="math notranslate nohighlight">\(H\)</span> (128 tokens in the lab). Its probabilities retain <strong>full-vocabulary mass</strong>, not a head-only renormalization. Set</p>
 <div class="math notranslate nohighlight">
-\[\begin{split}
-P_H=\sum_{v\in H}p_v,\quad Q_H=\sum_{v\in H}q_v,\quad
+\[\begin{split}P_H=\sum_{v\in H}p_v,\quad Q_H=\sum_{v\in H}q_v,\quad
 \alpha=\frac{1-Q_H}{1-P_H},\quad
-\hat q_v=\begin{cases}q_v&amp;v\in H\\\alpha p_v&amp;v\notin H.\end{cases}
-\end{split}\]</div>
+\hat q_v=\begin{cases}q_v&amp;v\in H\\\alpha p_v&amp;v\notin H.\end{cases}\end{split}\]</div>
 <p>This approximation sums to one. Since <span class="math notranslate nohighlight">\(\sum_v p_vs_v=0\)</span>, the tail score can be replaced algebraically:</p>
 <div class="math notranslate nohighlight">
-\[
-\mu_{\hat q}=\sum_{H}q_vs_v+\alpha\sum_{v\notin H}p_vs_v
-=\sum_H(q_v-\alpha p_v)s_v.
-\]</div>
+\[\mu_{\hat q}=\sum_{H}q_vs_v+\alpha\sum_{v\notin H}p_vs_v
+=\sum_H(q_v-\alpha p_v)s_v.\]</div>
 <p>In the tail <span class="math notranslate nohighlight">\(p_v/\hat q_v=1/\alpha\)</span>, so with <span class="math notranslate nohighlight">\(w=f(p/q)\)</span>:</p>
 <div class="math notranslate nohighlight">
-\[
-\mu_{\hat q,w}=\sum_{v\in H}
-\left[q_v f(p_v/q_v)-\alpha f(1/\alpha)p_v\right]s_v.
-\]</div>
+\[\mu_{\hat q,w}=\sum_{v\in H}
+\left[q_v f(p_v/q_v)-\alpha f(1/\alpha)p_v\right]s_v.\]</div>
 <p>This is the head-only residual used in the implementation. Full-distribution centering is exact; centering with the reconstructed tail is an approximation, and small tail masses need numerical protection. A minimal logit check uses <span class="math notranslate nohighlight">\(p=(0.6,0.4)\)</span>, <span class="math notranslate nohighlight">\(q=(0.5,0.5)\)</span> and <span class="math notranslate nohighlight">\(s_a=e_a-p\)</span>: the uncentered mean is <span class="math notranslate nohighlight">\(q-p=(-0.1,0.1)\)</span>; subtracting this mean makes the expected centered score zero.</p>
 </section>
 <section id="match-the-sampler-s-actual-distribution">
-<h3>Match the sampler’s actual distribution<a class="headerlink" href="#match-the-sampler-s-actual-distribution" title="Link to this heading">#</a></h3>
+<span id="match-the-samplers-actual-distribution"></span><h3>Match the sampler’s actual distribution<a class="headerlink" href="#match-the-sampler-s-actual-distribution" title="Link to this heading">#</a></h3>
 <p>The lab fixes temperature 1, top-p 1, top-k -1 and selects <code class="docutils literal notranslate"><span class="pre">--pg-loss-type</span> <span class="pre">reinforce</span></code>, <code class="docutils literal notranslate"><span class="pre">--disable-grpo-std-normalization</span></code>, <code class="docutils literal notranslate"><span class="pre">--calculate-per-token-loss</span></code>. SC cannot be substituted into GSPO/CISPO/PPO clipping. Streaming, constrained decoding, sampling penalties, and per-request temperature changes are unsupported here.</p>
 <p>slime also supports recorded top-p support <span class="math notranslate nohighlight">\(S\)</span>: normalize trainer probabilities on <span class="math notranslate nohighlight">\(S\)</span> and use all recorded <span class="math notranslate nohighlight">\(q_v\)</span> on that support. Then <span class="math notranslate nohighlight">\(\mu_w=\sum_{v\in S}q_vw_v\nabla\log p^S_v\)</span> needs no tail approximation. This is exact relative to the recorded support, not to an untruncated policy; storage can greatly exceed top-128. See <a class="reference internal" href="../get_started/usage.html#score-centering"><span class="std std-ref">sampling and compatibility details</span></a>.</p>
 </section>
@@ -773,7 +739,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Nov 05, 2026.
+  Last updated on Nov 27, 2026.
   <br/>
 </p>
   </div>

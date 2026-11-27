@@ -61,7 +61,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="2026 年 11 月 05 日"/>
+    <meta name="docbuild:last-update" content="2026 年 11 月 27 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -475,10 +475,10 @@
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="id1">
-<h1>投机采样<a class="headerlink" href="#id1" title="Link to this heading">#</a></h1>
+<span id="投机采样"></span><h1>投机采样<a class="headerlink" href="#id1" title="Link to this heading">#</a></h1>
 <p>投机采样是加速 rollout 的重要优化手段。推理过程中不再让昂贵的 Target Model 逐个 token 进行 decode，而是先由一个轻量级的 draft model 先进行 decode，生成多个 token 后，再由大模型进行批量验证。</p>
 <section id="id2">
-<h2>使用投机采样加速推理<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<span id="使用投机采样加速推理"></span><h2>使用投机采样加速推理<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
 <p>对于有 MTP 层的模型（例如 GLM-4.6、Deepseek-V3/R1），只需要添加：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--sglang-speculative-algorithm<span class="w"> </span>EAGLE
 --sglang-speculative-num-steps<span class="w"> </span><span class="m">3</span>
@@ -493,7 +493,7 @@
 <p>详细参数含义及配置方法，请参考 SGLang 的 speculative decoding <a class="reference external" href="https://docs.sglang.ai/advanced_features/speculative_decoding.html">文档</a></p>
 </section>
 <section id="eagle">
-<h2>在交互向导中配置 EAGLE<a class="headerlink" href="#eagle" title="Link to this heading">#</a></h2>
+<span id="在交互向导中配置-eagle"></span><h2>在交互向导中配置 EAGLE<a class="headerlink" href="#eagle" title="Link to this heading">#</a></h2>
 <p>在首页 <strong>Serving / 推理引擎</strong> 步骤开启 <strong>EAGLE · 投机采样</strong>。有内置 MTP 配方的模型可以使用 checkpoint 自带的预测层；也可选择「独立 EAGLE 头」，填写 checkpoint 目录或 Hugging Face 模型 ID。独立头必须匹配目标模型，任意较小的语言模型并不等于 EAGLE 头；每台推理主机都需要能访问其权重。</p>
 <p>向导固定使用 <code class="docutils literal notranslate"><span class="pre">EAGLE</span></code> 和 <code class="docutils literal notranslate"><span class="pre">speculative-eagle-topk</span> <span class="pre">=</span> <span class="pre">1</span></code>，提供投机深度配置。深度为 <span class="math notranslate nohighlight">\(\gamma\)</span> 时，生成 <code class="docutils literal notranslate"><span class="pre">speculative-num-steps</span> <span class="pre">=</span> <span class="pre">γ</span></code> 和 <code class="docutils literal notranslate"><span class="pre">speculative-num-draft-tokens</span> <span class="pre">=</span> <span class="pre">γ</span> <span class="pre">+</span> <span class="pre">1</span></code>。默认深度为 3，GLM-5.3 配方为 4；这些是起始值，不代表实测最优。GLM-5.3 内置 MTP 路径还使用配方中的 <code class="docutils literal notranslate"><span class="pre">nsa</span></code> draft attention 后端；选择独立头时，由 SGLang 选择其后端。</p>
 <p><strong>Your little RL world</strong> 展示 PD / HiCache / EAGLE 的八种开关组合。PD 把 prefill、decode 分成两个引擎池，增加缓存传输；HiCache 增加 CPU 缓存层，当前 PD 配方只在 prefill 使用它；EAGLE 增加投机头、候选 token、目标模型验证和最终提交。关闭 EAGLE 时，目标模型逐 token 解码。「演示一轮」会依次高亮这些阶段；接受与拒绝的结果仅为示意。</p>
@@ -501,7 +501,7 @@
 <p>向导配置的是推理，不会开启在线 MTP 或独立投机头训练。随着 RL 改变目标模型，需要观察 <code class="docutils literal notranslate"><span class="pre">spec_accept_rate</span></code>、<code class="docutils literal notranslate"><span class="pre">spec_accept_length</span></code> 和 rollout 延迟。投机头权重、验证 buffers，以及 hybrid 递归状态快照也会占用显存。</p>
 </section>
 <section id="id3">
-<h2>为什么需要验证<a class="headerlink" href="#id3" title="Link to this heading">#</a></h2>
+<span id="为什么需要验证"></span><h2>为什么需要验证<a class="headerlink" href="#id3" title="Link to this heading">#</a></h2>
 <p><a class="reference external" href="https://arxiv.org/abs/2401.15077">EAGLE</a> 用轻量投机头结合目标模型特征提出候选，再交给目标模型验证。下面是 <a class="reference external" href="https://arxiv.org/abs/2302.01318">Accelerating Large Language Model Decoding with Speculative Sampling</a> 中标准单路径拒绝采样的概率推导，描述理想采样过程，不意味着各后端的 kernel 完全相同。</p>
 <p>固定一个 prefix，设 <span class="math notranslate nohighlight">\(p(a)\)</span> 为目标分布，<span class="math notranslate nohighlight">\(q(a)\)</span> 为 draft 分布。对 <span class="math notranslate nohighlight">\(a\sim q\)</span>，接受概率为：</p>
 <div class="math notranslate nohighlight">
@@ -519,7 +519,7 @@
 <p>增加投机步数只有在额外接受的 token 能抵消额外计算时才有收益。因此向导提供深度与接受率指标，不承诺固定加速倍数。</p>
 </section>
 <section id="sft-draft-model">
-<h2>在线 SFT draft model<a class="headerlink" href="#sft-draft-model" title="Link to this heading">#</a></h2>
+<span id="在线-sft-draft-model"></span><h2>在线 SFT draft model<a class="headerlink" href="#sft-draft-model" title="Link to this heading">#</a></h2>
 <p>随着 RL 流程的进行，draft model 和 target model 的采样概率差异逐渐增大，能通过验证的 draft token 逐渐减少，spec 甚至可能造成负收益。</p>
 <p>目前，slime 支持了在 RL 流程中在线训练 MTP 层，随着训练的进行同步更新 draft model，稳定提高了采样速度，相关原理可参见 <a class="reference external" href="https://www.notion.so/jiajunli-guapisolo/Power-Up-Speculative-Decoding-In-Reinforcement-Learning-2a92d24a293b802d9c73dbae429e581e">blog</a>。使用方法如下：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--mtp-num-layers<span class="w"> </span><span class="m">1</span>
@@ -616,7 +616,7 @@
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 11 月 05 日.
+  最后更新于 2026 年 11 月 27 日.
   <br/>
 </p>
   </div>

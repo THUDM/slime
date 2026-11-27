@@ -61,7 +61,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="Nov 05, 2026"/>
+    <meta name="docbuild:last-update" content="Nov 27, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -517,30 +517,24 @@
 <h2>How It Works<a class="headerlink" href="#how-it-works" title="Link to this heading">#</a></h2>
 <p>Let <span class="math notranslate nohighlight">\(\pi_\theta\)</span> denote the student, <span class="math notranslate nohighlight">\(\pi_T\)</span> the teacher, and <span class="math notranslate nohighlight">\(h_t\)</span> the history before token <span class="math notranslate nohighlight">\(a_t\)</span> on a student-generated trajectory. Following <a class="reference external" href="https://thinkingmachines.ai/blog/on-policy-distillation/">Thinking Machines Lab’s definition</a>, the per-token reverse KL is</p>
 <div class="math notranslate nohighlight">
-\[
-D_{\mathrm{KL}}\left(\pi_\theta(\cdot \mid h_t) \| \pi_T(\cdot \mid h_t)\right)
+\[D_{\mathrm{KL}}\left(\pi_\theta(\cdot \mid h_t) \| \pi_T(\cdot \mid h_t)\right)
 = \mathbb{E}_{a_t \sim \pi_\theta(\cdot \mid h_t)}\left[
 \log \pi_\theta(a_t \mid h_t) - \log \pi_T(a_t \mid h_t)
-\right].
-\]</div>
+\right].\]</div>
 <p>The order is important: the student is the first argument of the KL, and the expectation is also over the student distribution. The teacher does not generate the training trajectory; it evaluates the token that the student actually sampled.</p>
 <p>slime does not enumerate the full vocabulary to compute this expectation. For each sampled token, it uses the Monte Carlo contribution</p>
 <div class="math notranslate nohighlight">
-\[
-\hat d_t = \log \pi_\theta(a_t \mid h_t) - \log \pi_T(a_t \mid h_t),
-\qquad a_t \sim \pi_\theta(\cdot \mid h_t),
-\]</div>
+\[\hat d_t = \log \pi_\theta(a_t \mid h_t) - \log \pi_T(a_t \mid h_t),
+\qquad a_t \sim \pi_\theta(\cdot \mid h_t),\]</div>
 <p>and modifies the base advantage as</p>
 <div class="math notranslate nohighlight">
-\[
-\hat A_t = A_t - \lambda_{\mathrm{opd}}\hat d_t.
-\]</div>
+\[\hat A_t = A_t - \lambda_{\mathrm{opd}}\hat d_t.\]</div>
 <p>Here, <span class="math notranslate nohighlight">\(A_t\)</span> is the advantage from the configured estimator (or zero for pure distillation), and <span class="math notranslate nohighlight">\(\lambda_{\mathrm{opd}}\)</span> is <code class="docutils literal notranslate"><span class="pre">--opd-kl-coef</span></code>. An individual <span class="math notranslate nohighlight">\(\hat d_t\)</span> may be negative even though the KL is non-negative in expectation. The policy loss uses <span class="math notranslate nohighlight">\(\hat A_t\)</span>, which makes the OPD term orthogonal to the choice of GRPO, PPO, REINFORCE++, GSPO, or another supported advantage estimator.</p>
 </section>
 <section id="two-teacher-modes">
 <h2>Two Teacher Modes<a class="headerlink" href="#two-teacher-modes" title="Link to this heading">#</a></h2>
 <section id="sglang-mode-opd-type-sglang">
-<h3>SGLang Mode (<code class="docutils literal notranslate"><span class="pre">--opd-type</span> <span class="pre">sglang</span></code>)<a class="headerlink" href="#sglang-mode-opd-type-sglang" title="Link to this heading">#</a></h3>
+<span id="sglang-mode---opd-type-sglang"></span><h3>SGLang Mode (<code class="docutils literal notranslate"><span class="pre">--opd-type</span> <span class="pre">sglang</span></code>)<a class="headerlink" href="#sglang-mode-opd-type-sglang" title="Link to this heading">#</a></h3>
 <p>The teacher runs on an external SGLang server. Teacher log-probs are obtained during the rollout phase.</p>
 <p><strong>When to use</strong>: The teacher has a different architecture from the student, or the teacher is too large to load alongside the training model. Because the teacher scores the student’s exact token IDs, the teacher and student must still use compatible tokenization and vocabularies.</p>
 <p><strong>How it works</strong>:</p>
@@ -561,7 +555,7 @@ D_{\mathrm{KL}}\left(\pi_\theta(\cdot \mid h_t) \| \pi_T(\cdot \mid h_t)\right)
 </div>
 </section>
 <section id="megatron-mode-opd-type-megatron">
-<h3>Megatron Mode (<code class="docutils literal notranslate"><span class="pre">--opd-type</span> <span class="pre">megatron</span></code>)<a class="headerlink" href="#megatron-mode-opd-type-megatron" title="Link to this heading">#</a></h3>
+<span id="megatron-mode---opd-type-megatron"></span><h3>Megatron Mode (<code class="docutils literal notranslate"><span class="pre">--opd-type</span> <span class="pre">megatron</span></code>)<a class="headerlink" href="#megatron-mode-opd-type-megatron" title="Link to this heading">#</a></h3>
 <p>The teacher model is loaded directly into Megatron via <code class="docutils literal notranslate"><span class="pre">--opd-teacher-load</span></code>. Teacher log-probs are computed during the training forward pass.</p>
 <p><strong>When to use</strong>: The teacher has the same architecture as the student/reference model and fits in GPU memory.</p>
 <p><strong>How it works</strong>:</p>
@@ -729,7 +723,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Nov 05, 2026.
+  Last updated on Nov 27, 2026.
   <br/>
 </p>
   </div>

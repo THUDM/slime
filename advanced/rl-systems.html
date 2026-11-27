@@ -61,7 +61,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="Nov 05, 2026"/>
+    <meta name="docbuild:last-update" content="Nov 27, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -501,16 +501,13 @@
 <p>If independent resources and a sufficiently full queue overlap generation and training perfectly, the optimistic steady-state lower bound becomes</p>
 <div class="math notranslate nohighlight">
 \[t_{\rm async}\gtrsim\max(t_R,t_T)+t_W,\quad
-\text{speedup}\lesssim\frac{t_R+t_T+t_W}{\max(t_R,t_T)+t_W}.
-\]</div>
+\text{speedup}\lesssim\frac{t_R+t_T+t_W}{\max(t_R,t_T)+t_W}.\]</div>
 <p>Weight-update stalls, sampling dependencies, reward latency, queue warmup, and GPU contention weaken this bound. It does not predict a measured speedup. Variable-length samples make synchronous barriers especially costly.</p>
 <p>The cost of overlap is staleness. If a sample was generated at weight version <span class="math notranslate nohighlight">\(v_s\)</span> and consumed at <span class="math notranslate nohighlight">\(v_t\)</span>, define age <span class="math notranslate nohighlight">\(d=v_t-v_s\)</span>. At a prefix <span class="math notranslate nohighlight">\(h\)</span>, mismatch can be split into</p>
 <div class="math notranslate nohighlight">
-\[
-\log p_{v_t}(a\mid h)-\log q_{v_s}(a\mid h)
+\[\log p_{v_t}(a\mid h)-\log q_{v_s}(a\mid h)
 =\underbrace{\log p_{v_t}-\log p_{v_s}}_{\text{parameter staleness}}
-+\underbrace{\log p_{v_s}-\log q_{v_s}}_{\text{same-version engine mismatch}}.
-\]</div>
++\underbrace{\log p_{v_s}-\log q_{v_s}}_{\text{same-version engine mismatch}}.\]</div>
 <p>Deterministic kernels can reduce the second term, not the first. A long trajectory may contain several versions; a single age statistic is only a diagnostic. TIS/SC can be useful, but do not justify an unlimited stale queue.</p>
 <p>slime uses <code class="docutils literal notranslate"><span class="pre">train.py</span></code> with <code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span> <span class="pre">slime.rollout.fully_async_rollout.generate_rollout_fully_async</span></code>. It preserves in-flight generations across calls and needs separate GPUs for meaningful overlap. Monitor <code class="docutils literal notranslate"><span class="pre">staleness/mean</span></code> and <code class="docutils literal notranslate"><span class="pre">staleness/max</span></code>. The generated recipe omits evaluation on that continuous queue; use a separate evaluation path/job. See the <a class="reference internal" href="../_examples_synced/fully_async/README.html"><span class="std std-doc">fully async implementation guide</span></a>. Related work: <a class="reference external" href="https://arxiv.org/abs/2509.19128">PipelineRL</a>; this citation is conceptual context, not a claim that slime implements the paper’s entire algorithm.</p>
 </section>
@@ -518,9 +515,7 @@
 <h2>Precision<a class="headerlink" href="#precision" title="Link to this heading">#</a></h2>
 <p>Suppose serving logits are <span class="math notranslate nohighlight">\(z+\delta\)</span> while trainer logits are <span class="math notranslate nohighlight">\(z\)</span>. For a fixed token, differentiate log-softmax:</p>
 <div class="math notranslate nohighlight">
-\[
-\frac{\partial\log p_a}{\partial z_j}=\mathbf1_{a=j}-p_j.
-\]</div>
+\[\frac{\partial\log p_a}{\partial z_j}=\mathbf1_{a=j}-p_j.\]</div>
 <p>A first-order expansion gives</p>
 <div class="math notranslate nohighlight">
 \[\log q_a-\log p_a\approx\delta_a-\sum_jp_j\delta_j.\]</div>
@@ -560,11 +555,9 @@
 \[B_{\rm cache}\approx N c_A + K c_R.\]</div>
 <p>For conventional GQA attention layers <span class="math notranslate nohighlight">\(\mathcal A\)</span>, count K and V elements at each token. For linear layers <span class="math notranslate nohighlight">\(\mathcal R\)</span>, count recurrent and convolution elements per slot:</p>
 <div class="math notranslate nohighlight">
-\[
-c_A=\sum_{\ell\in\mathcal A}2H^{KV}_\ell d_\ell\frac{b_{KV}}8,
+\[c_A=\sum_{\ell\in\mathcal A}2H^{KV}_\ell d_\ell\frac{b_{KV}}8,
 \qquad
-c_R=\sum_{\ell\in\mathcal R}\left(P^{SSM}_\ell\frac{b_{SSM}}8+P^{conv}_\ell\frac{b_{conv}}8\right).
-\]</div>
+c_R=\sum_{\ell\in\mathcal R}\left(P^{SSM}_\ell\frac{b_{SSM}}8+P^{conv}_\ell\frac{b_{conv}}8\right).\]</div>
 <p>Use tensor dimensions after sharding for a per-GPU estimate. DSA/MLA uses different cache tensors: measure their bytes instead of substituting GQA dimensions. A recurrent slot has a fixed shape, but the <strong>number of slots</strong> can grow with concurrency, prefix snapshots and scheduler buffering.</p>
 <p>Changing only BF16 attention KV to FP8 yields <span class="math notranslate nohighlight">\(B'\approx Nc_A/2+Kc_R\)</span>, so total cache memory does not generally halve. Similarly, BF16 SSM affects only the recurrent term, leaving convolution state untouched.</p>
 <p>The optional memory control sets <span class="math notranslate nohighlight">\(r=B_R/B_A\)</span> through <code class="docutils literal notranslate"><span class="pre">--sglang-mamba-full-memory-ratio</span></code>. For an ideal two-pool budget <span class="math notranslate nohighlight">\(B\)</span>, solve <span class="math notranslate nohighlight">\(B_A+B_R=B\)</span> and <span class="math notranslate nohighlight">\(B_R=rB_A\)</span>:</p>
@@ -697,7 +690,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Nov 05, 2026.
+  Last updated on Nov 27, 2026.
   <br/>
 </p>
   </div>

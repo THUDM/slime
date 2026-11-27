@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="2026 年 11 月 05 日"/>
+    <meta name="docbuild:last-update" content="2026 年 11 月 27 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -470,10 +470,10 @@
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="megatron-lm">
-<h1>在 Megatron-LM 中快速支持新模型架构<a class="headerlink" href="#megatron-lm" title="Link to this heading">#</a></h1>
+<span id="在-megatron-lm-中快速支持新模型架构"></span><h1>在 Megatron-LM 中快速支持新模型架构<a class="headerlink" href="#megatron-lm" title="Link to this heading">#</a></h1>
 <p>slime 可以通过替换部分层的规格（<code class="docutils literal notranslate"><span class="pre">ModuleSpec</span></code>）来扩展 Megatron 模型。Qwen3-Next 80B-A3B 的集成使用这一方式实现 Gated DeltaNet（GDN）层，同时保留 Megatron 的 full-attention 层、MoE 模块和流水线调度。</p>
 <section id="id1">
-<h2>实现原理与核心组件<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
+<span id="实现原理与核心组件"></span><h2>实现原理与核心组件<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
 <p>Qwen3-Next 的集成包含三个部分：</p>
 <ol class="arabic simple">
 <li><p><strong>选择需要替换的层。</strong> <code class="docutils literal notranslate"><span class="pre">get_qwen3_next_spec</span></code> 从 Megatron 的 decoder block 规格开始，只替换 Hugging Face 配置中标记为 <code class="docutils literal notranslate"><span class="pre">linear_attention</span></code> 的层，并根据流水线阶段的层偏移选择对应的配置。参见 <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime_plugins/models/qwen3_next.py">qwen3_next.py</a>。</p></li>
@@ -483,7 +483,7 @@
 <p>模型选择和启动配置见<a class="reference internal" href="../get_started/experiment-guide.html"><span class="std std-doc">实验 tutorial</span></a>。现有架构 launcher 保留在 <code class="docutils literal notranslate"><span class="pre">scripts/</span></code>。</p>
 </section>
 <section id="id2">
-<h2>当前限制<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<span id="当前限制"></span><h2>当前限制<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
 <p>自定义 GDN 模块可以运行在使用 TP 和 CP 的任务中，但参数和收集输入后的计算会在这些 rank 上复制。其投影层尚未按 TP 切分，因此增加 TP 不会像原生张量并行层那样降低该模块的参数显存和计算量。</p>
 <p>当前规格支持流水线阶段的层偏移，但不支持自定义 <code class="docutils literal notranslate"><span class="pre">pipeline_model_parallel_layout</span></code>。若要消除复制计算的成本，需要实现原生的并行 GDN 模块。</p>
 </section>
@@ -571,7 +571,7 @@
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 11 月 05 日.
+  最后更新于 2026 年 11 月 27 日.
   <br/>
 </p>
   </div>

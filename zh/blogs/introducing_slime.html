@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="2026 年 11 月 05 日"/>
+    <meta name="docbuild:last-update" content="2026 年 11 月 27 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -467,12 +467,12 @@
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="slime-rl-scaling-sglang-native">
-<h1>slime：为 RL Scaling 设计的 SGLang-Native 后训练框架<a class="headerlink" href="#slime-rl-scaling-sglang-native" title="Link to this heading">#</a></h1>
+<span id="slime为-rl-scaling-设计的-sglang-native-后训练框架"></span><h1>slime：为 RL Scaling 设计的 SGLang-Native 后训练框架<a class="headerlink" href="#slime-rl-scaling-sglang-native" title="Link to this heading">#</a></h1>
 <blockquote>
 <div><p>本文由英文版翻译而来，首发于 <a class="reference external" href="https://lmsys.org/blog/2025-07-09-slime/">lmsys.org</a>。</p>
 </div></blockquote>
 <section id="id1">
-<h2>愿景<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
+<span id="愿景"></span><h2>愿景<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
 <p>我们相信强化学习。我们相信强化学习是通往 AGI 的最后一块拼图。</p>
 <p>所以我们相信：</p>
 <ul class="simple">
@@ -490,7 +490,7 @@
 <p>以下是我们如何实现这一切的。</p>
 </section>
 <section id="id2">
-<h2>自定义才能自由<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<span id="自定义才能自由"></span><h2>自定义才能自由<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
 <blockquote>
 <div><p>我们应该停止尝试用简单的方式来思考心智的内容，例如简单地思考空间、物体、多智能体或对称性。</p>
 <p>— <em>The Bitter Lesson</em></p>
@@ -503,7 +503,7 @@
 <p>slime 只保留一个训练入口 <code class="docutils literal notranslate"><span class="pre">train.py</span></code>。Fully-async 能力由 rollout 实现负责，而不是另一套训练循环：通过 <code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code> 指定 <code class="docutils literal notranslate"><span class="pre">slime.rollout.fully_async_rollout.generate_rollout_fully_async</span></code> 即可启用。后台 worker 会持续维护正在生成的单个样本，并在训练 step 之间保留预热队列。</p>
 </section>
 <section id="id3">
-<h2>为性能而生<a class="headerlink" href="#id3" title="Link to this heading">#</a></h2>
+<span id="为性能而生"></span><h2>为性能而生<a class="headerlink" href="#id3" title="Link to this heading">#</a></h2>
 <p><strong>一个合格的强化学习框架必须既快，又持续地快。</strong></p>
 <p><strong>快</strong>意味着要利用最快的推理和训练框架。</p>
 <p>与预训练不同，强化学习工作负载在训练过程中涉及大量的在线采样，这使得推理性能至关重要。因此，slime 专门集成了 SGLang，并刻意提供了 SGLang 原生体验。</p>
@@ -537,7 +537,7 @@
 <p>这些功能在 <a class="reference external" href="https://github.com/sgl-project/sglang/pull/6698">#6698</a>、<a class="reference external" href="https://github.com/sgl-project/sglang/pull/6855">#6855</a>、<a class="reference external" href="https://github.com/sgl-project/sglang/pull/6184">#6184</a>、<a class="reference external" href="https://github.com/sgl-project/sglang/pull/5966">#5966</a> 中实现。</p>
 </section>
 <section id="id4">
-<h2>轻量且可扩展<a class="headerlink" href="#id4" title="Link to this heading">#</a></h2>
+<span id="轻量且可扩展"></span><h2>轻量且可扩展<a class="headerlink" href="#id4" title="Link to this heading">#</a></h2>
 <p>slime 专注于可定制性和性能：</p>
 <ol class="arabic simple">
 <li><p>提供了一个可定制的推理接口。</p></li>
@@ -557,7 +557,7 @@
 <p>统一的管道将我们从繁琐的“胶水代码”中解放出来，让我们能够专注于真正重要的事情：更好的强化学习。太棒了！</p>
 </section>
 <section id="id5">
-<h2>发展蓝图<a class="headerlink" href="#id5" title="Link to this heading">#</a></h2>
+<span id="发展蓝图"></span><h2>发展蓝图<a class="headerlink" href="#id5" title="Link to this heading">#</a></h2>
 <p>强化学习扩展的旅程才刚刚开始，slime 也在不断演进。在下一阶段，我们将专注于：</p>
 <ol class="arabic simple">
 <li><p>与 SGLang 团队合作，探索大规模 MoE 模型的最佳强化学习训练策略。</p></li>
@@ -645,7 +645,7 @@
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 11 月 05 日.
+  最后更新于 2026 年 11 月 27 日.
   <br/>
 </p>
   </div>

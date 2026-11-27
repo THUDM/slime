@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="2026 年 11 月 05 日"/>
+    <meta name="docbuild:last-update" content="2026 年 11 月 27 日"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -474,10 +474,10 @@
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="profiling">
-<h1>性能分析 (Profiling)<a class="headerlink" href="#profiling" title="Link to this heading">#</a></h1>
+<span id="性能分析-profiling"></span><h1>性能分析 (Profiling)<a class="headerlink" href="#profiling" title="Link to this heading">#</a></h1>
 <p>在 slime 中，我们可以通过 SGLang 提供的 profiling 接口对 rollout 过程进行详细的性能分析。</p>
 <section id="rollout-sleep-rollout">
-<h2>1. 使 Rollout 进程进入等待状态 (Sleep Rollout)<a class="headerlink" href="#rollout-sleep-rollout" title="Link to this heading">#</a></h2>
+<span id="1-使-rollout-进程进入等待状态-sleep-rollout"></span><h2>1. 使 Rollout 进程进入等待状态 (Sleep Rollout)<a class="headerlink" href="#rollout-sleep-rollout" title="Link to this heading">#</a></h2>
 <p>为了更自由地进行压力测试和性能分析，我们通常需要让 slime 的 rollout 进程在初始化完成后进入等待状态，而不是立即开始生成。</p>
 <p>你可以通过在启动参数中替换 <code class="docutils literal notranslate"><span class="pre">rollout_function_path</span></code> 来实现，而无需修改代码：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
@@ -488,7 +488,7 @@
 <p>该函数会让 rollout 进程进入无限循环等待状态，方便你手动发送请求或运行压测工具。</p>
 </section>
 <section id="sglang">
-<h2>2. 获取 SGLang 引擎列表<a class="headerlink" href="#sglang" title="Link to this heading">#</a></h2>
+<span id="2-获取-sglang-引擎列表"></span><h2>2. 获取 SGLang 引擎列表<a class="headerlink" href="#sglang" title="Link to this heading">#</a></h2>
 <p>SGLang 引擎（workers）注册在 router 上。你可以通过访问 router 的 <code class="docutils literal notranslate"><span class="pre">/workers</span></code> 接口来获取所有活跃引擎的列表。</p>
 <p>通常 router 地址会在启动日志中打印：</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">Router</span> <span class="n">launched</span> <span class="n">at</span> <span class="mf">127.0.0.1</span><span class="p">:</span><span class="mi">3000</span>
@@ -500,10 +500,10 @@
 </div>
 </section>
 <section id="id1">
-<h2>3. 使用自动化 Profiling 工具<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
+<span id="3-使用自动化-profiling-工具"></span><h2>3. 使用自动化 Profiling 工具<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
 <p>为了简化对多个引擎同时进行 profiling 的操作，我们提供了一个自动化脚本 <code class="docutils literal notranslate"><span class="pre">tools/profile_rollout.py</span></code>。</p>
 <section id="id2">
-<h3>启动 Profiling<a class="headerlink" href="#id2" title="Link to this heading">#</a></h3>
+<span id="启动-profiling"></span><h3>启动 Profiling<a class="headerlink" href="#id2" title="Link to this heading">#</a></h3>
 <p>默认情况下，该工具会对所有 worker 启动 profiling，并在执行 3 步后自动停止：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>tools/profile_rollout.py<span class="w"> </span>--router-url<span class="w"> </span>http://127.0.0.1:3000<span class="w"> </span>--action<span class="w"> </span>start<span class="w"> </span>--num-steps<span class="w"> </span><span class="m">3</span>
 </pre></div>
@@ -518,7 +518,7 @@
 </ul>
 </section>
 <section id="id3">
-<h3>手动停止 Profiling<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
+<span id="手动停止-profiling"></span><h3>手动停止 Profiling<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
 <p>如果你没有设置 <code class="docutils literal notranslate"><span class="pre">num_steps</span></code> 或想要提前停止：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>tools/profile_rollout.py<span class="w"> </span>--router-url<span class="w"> </span>http://127.0.0.1:3000<span class="w"> </span>--action<span class="w"> </span>stop
 </pre></div>
@@ -526,7 +526,7 @@
 </section>
 </section>
 <section id="id4">
-<h2>4. 进行压力测试<a class="headerlink" href="#id4" title="Link to this heading">#</a></h2>
+<span id="4-进行压力测试"></span><h2>4. 进行压力测试<a class="headerlink" href="#id4" title="Link to this heading">#</a></h2>
 <p>在 Rollout 进程通过 <code class="docutils literal notranslate"><span class="pre">sleep_rollout</span></code> 处于等待状态时，你可以：</p>
 <ol class="arabic simple">
 <li><p>使用 <code class="docutils literal notranslate"><span class="pre">tools/profile_rollout.py</span></code> 启动 profiling。</p></li>
@@ -625,7 +625,7 @@
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 11 月 05 日.
+  最后更新于 2026 年 11 月 27 日.
   <br/>
 </p>
   </div>

@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="Nov 05, 2026"/>
+    <meta name="docbuild:last-update" content="Nov 27, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -496,7 +496,7 @@
 <h2>Configuration Paths<a class="headerlink" href="#configuration-paths" title="Link to this heading">#</a></h2>
 <p>slime supports two ways to configure PD.</p>
 <section id="simple-path-prefill-num-servers">
-<h3>Simple Path: <code class="docutils literal notranslate"><span class="pre">--prefill-num-servers</span></code><a class="headerlink" href="#simple-path-prefill-num-servers" title="Link to this heading">#</a></h3>
+<span id="simple-path---prefill-num-servers"></span><h3>Simple Path: <code class="docutils literal notranslate"><span class="pre">--prefill-num-servers</span></code><a class="headerlink" href="#simple-path-prefill-num-servers" title="Link to this heading">#</a></h3>
 <p>For a single actor model with a simple PD layout, set:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--prefill-num-servers<span class="w"> </span><span class="m">1</span>
 </pre></div>
@@ -504,7 +504,7 @@
 <p>This is the lightweight path used by simple scripts. It is convenient when you only need to split prefill/decode without tuning each group separately.</p>
 </section>
 <section id="advanced-path-sglang-config">
-<h3>Advanced Path: <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code><a class="headerlink" href="#advanced-path-sglang-config" title="Link to this heading">#</a></h3>
+<span id="advanced-path---sglang-config"></span><h3>Advanced Path: <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code><a class="headerlink" href="#advanced-path-sglang-config" title="Link to this heading">#</a></h3>
 <p>For production rollout topologies, use <a class="reference internal" href="sglang-config.html"><span class="std std-doc">SGLang Config</span></a>. It lets you configure prefill and decode groups independently, and can also express EPD-style layouts, heterogeneous server groups, multi-model serving, and per-group SGLang overrides.</p>
 <p>Example:</p>
 <div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">sglang</span><span class="p">:</span>
@@ -653,7 +653,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Nov 05, 2026.
+  Last updated on Nov 27, 2026.
   <br/>
 </p>
   </div>

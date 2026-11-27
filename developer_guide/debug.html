@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.4.0" />
-    <meta name="docbuild:last-update" content="Nov 05, 2026"/>
+    <meta name="docbuild:last-update" content="Nov 27, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -547,7 +547,7 @@
 </ol>
 </section>
 <section id="int4-compressed-tensors-quantization-checkpoint-issues">
-<h2>INT4 / Compressed-Tensors Quantization Checkpoint Issues<a class="headerlink" href="#int4-compressed-tensors-quantization-checkpoint-issues" title="Link to this heading">#</a></h2>
+<span id="int4--compressed-tensors-quantization-checkpoint-issues"></span><h2>INT4 / Compressed-Tensors Quantization Checkpoint Issues<a class="headerlink" href="#int4-compressed-tensors-quantization-checkpoint-issues" title="Link to this heading">#</a></h2>
 <p>When using INT4-quantized models (e.g., <code class="docutils literal notranslate"><span class="pre">compressed-tensors</span></code> with <code class="docutils literal notranslate"><span class="pre">W4A16</span></code>), the checkpoint’s <code class="docutils literal notranslate"><span class="pre">config.json</span></code> contains a <code class="docutils literal notranslate"><span class="pre">quantization_config.ignore</span></code> list that specifies which parameters should <strong>not</strong> be quantized. During online weight updates (Megatron → SGLang), slime also reads this ignore list to decide which parameters to INT4-quantize. An incorrect ignore list can cause silent errors:</p>
 <ol class="arabic">
 <li><p><strong>MoE router weights (<code class="docutils literal notranslate"><span class="pre">mlp.gate.weight</span></code>) become all zeros</strong></p>
@@ -734,7 +734,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Nov 05, 2026.
+  Last updated on Nov 27, 2026.
   <br/>
 </p>
   </div>
