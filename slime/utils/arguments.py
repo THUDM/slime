@@ -723,7 +723,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help=(
                     "Number of epochs for the training. "
                     "This is used to calculate the number of rollout steps from the dataset size. "
-                    "If set, we will calculate the number of rollout steps as `num_rollout = num_epoch * dataset_size // rollout_batch_size`."
+                    "If set, we will calculate the number of rollout steps as `num_rollout = max(1, num_epoch * dataset_size // rollout_batch_size)`."
                     "If both `--num-epoch` and `--num-rollout` are set, `--num-epoch` will be ignored."
                 ),
             )

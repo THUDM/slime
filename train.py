@@ -10,7 +10,7 @@ from slime.utils.cleanup import Cleanup
 from slime.utils.misc import should_run_periodic_action
 
 
-def train(args, pgs, rollout_manager, num_rollout_per_epoch, restore_plan):
+def train(args, pgs, rollout_manager, epoch_boundaries, restore_plan):
     release_train = args.release_train
 
     actor_model, critic_model = create_training_models(args, pgs, rollout_manager)
@@ -71,7 +71,7 @@ def train(args, pgs, rollout_manager, num_rollout_per_epoch, restore_plan):
         ray.get(rollout_manager.training_completed.remote(rollout_id))
 
         if release_train or should_run_periodic_action(
-            rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout
+            rollout_id, args.save_interval, epoch_boundaries, args.num_rollout
         ):
             save_checkpoint(
                 args,
@@ -95,7 +95,7 @@ def train(args, pgs, rollout_manager, num_rollout_per_epoch, restore_plan):
         if args.offload_rollout:
             ray.get(rollout_manager.onload_kv.remote())
 
-        if should_run_periodic_action(rollout_id, args.eval_interval, num_rollout_per_epoch):
+        if should_run_periodic_action(rollout_id, args.eval_interval, epoch_boundaries):
             ray.get(rollout_manager.eval.remote(rollout_id))
 
 
@@ -107,9 +107,7 @@ def main(args, restore_plan):
         try:
             # Create or reattach rollout resources, then run this training attempt.
             startup = create_rollout_manager(args, restore_plan=restore_plan)
-            train(
-                startup.args, startup.placements, startup.manager, startup.num_rollout_per_epoch, startup.restore_plan
-            )
+            train(startup.args, startup.placements, startup.manager, startup.epoch_boundaries, startup.restore_plan)
         except BaseException:
             # Failures and interruptions retain serving and replay data for a manual
             # restart. Detach this driver's trainers instead of disposing the session.

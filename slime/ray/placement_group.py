@@ -249,7 +249,7 @@ class RolloutStartup:
     manager: object = None
     serving: object = None
     placements: dict | None = None
-    num_rollout_per_epoch: int | None = None
+    epoch_boundaries: frozenset[int] | None = None
 
     def close(self, *, failed):
         timeout = getattr(self.args, "rollout_cleanup_timeout", 60)
@@ -360,10 +360,9 @@ def _attach_rollout_manager(startup):
         restore_plan, reused = resume.restore_plan, resume.reused
         args = startup.args = resume.apply(args)
         logger.info("%s serving session %s", "Reusing" if reused else "Created", name)
-    num_rollout_per_epoch = None
+    epoch_boundaries = None
     if args.num_rollout is None:
-        num_rollout_per_epoch = ray.get(manager.get_num_rollout_per_epoch.remote())
-        args.num_rollout = num_rollout_per_epoch * args.num_epoch
+        args.num_rollout, epoch_boundaries = ray.get(manager.get_rollout_schedule.remote())
         assert args.num_rollout > 0
     if args.check_weight_update_equal and not reused:
         # This diagnostic resets initial weights. Reused engines must retain
@@ -372,5 +371,5 @@ def _attach_rollout_manager(startup):
         ray.get(manager.check_weights.remote(action="reset_tensors"))
     if args.offload_rollout:
         ray.get(manager.offload.remote())
-    startup.num_rollout_per_epoch = num_rollout_per_epoch
+    startup.epoch_boundaries = epoch_boundaries
     startup.restore_plan = restore_plan
