@@ -424,7 +424,14 @@ async def generate_and_rm_group(
             current_sampling_params["sampling_seed"] = seed
         tasks[idx] = asyncio.create_task(generate_and_rm(args, sample, current_sampling_params, evaluation=evaluation))
 
-    results = await asyncio.gather(*tasks.values())
+    try:
+        results = await asyncio.gather(*tasks.values())
+    except BaseException:
+        for task in tasks.values():
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks.values(), return_exceptions=True)
+        raise
     group = list(group)
     for idx, result in zip(tasks, results, strict=True):
         group[idx] = result
@@ -538,7 +545,17 @@ async def generate_rollout_async(
         # wait for the generation to finish
         done, state.pendings = await asyncio.wait(state.pendings, return_when=asyncio.FIRST_COMPLETED)
         for task in done:
-            group: list[Sample] = task.result()
+            try:
+                group: list[Sample] = task.result()
+            except BaseException:
+                siblings = state.pendings | (done - {task})
+                for sibling in siblings:
+                    if not sibling.done():
+                        sibling.cancel()
+                await asyncio.gather(*siblings, return_exceptions=True)
+                state.reset()
+                pbar.close()
+                raise
 
             if do_print:
                 sample = group[0][0] if isinstance(group[0], list) else group[0]
@@ -740,7 +757,15 @@ async def eval_rollout_single_dataset(
     do_print = True
     pbar = tqdm(total=len(tasks), desc=f"Eval {dataset_cfg.name}", disable=not do_print)
     for coro in asyncio.as_completed(tasks):
-        sample = await coro
+        try:
+            sample = await coro
+        except BaseException:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            pbar.close()
+            raise
         if do_print:
             logged_sample = sample[0] if isinstance(sample, list) else sample
             logger.info(
