@@ -1162,6 +1162,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--custom-optimizer-config-overrides-path",
+                type=str,
+                default=None,
+                help="Megatron parameter group overrides: function(args, optimizer_config) -> dict.",
+            )
+            parser.add_argument(
                 "--use-stateless-adam",
                 action="store_true",
                 default=False,
