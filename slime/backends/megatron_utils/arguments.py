@@ -1,4 +1,5 @@
 import ast
+import importlib.util
 import logging
 
 from megatron.training.arguments import parse_args as _megatron_parse_args
@@ -163,6 +164,14 @@ def _hf_validate_args(args, hf_config):
         raise AssertionError("hf_validate_args failed: " + "; ".join(errors))
 
 
+def _module_available(name: str) -> bool:
+    """Return whether a module can be found, without importing it."""
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):
+        return False
+
+
 def _set_default_megatron_args(args):
     # Megatron 0.19 validates MTP before resolving this legacy RoPE flag.
     # Normalize it here for both training and checkpoint conversion.
@@ -179,7 +188,16 @@ def _set_default_megatron_args(args):
     # Checkpoint I/O defaults: these keep checkpoint contents unchanged while
     # reducing repeated validation/planning work and parallelizing load.
     args.use_persistent_ckpt_worker = True
-    args.ckpt_assume_constant_structure = True
+    # Megatron caches checkpoint metadata with its own reader up to ae76c60e6 and through nvidia_resiliency_ext from
+    # then on; ROCm images ship without that package, so the cache is used only when one of the two is there.
+    args.ckpt_assume_constant_structure = _module_available(
+        "megatron.core.dist_checkpointing.strategies.cached_metadata_filesystem_reader"
+    ) or _module_available("nvidia_resiliency_ext")
+    if not args.ckpt_assume_constant_structure:
+        logger.warning(
+            "ckpt_assume_constant_structure is off: this Megatron has no cached metadata reader of its own and "
+            "nvidia_resiliency_ext is not installed, so torch_dist loads read the checkpoint metadata every time"
+        )
     args.ckpt_fully_parallel_load = True
     # placeholders
     if args.seq_length is None:
