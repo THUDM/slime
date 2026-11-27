@@ -42,6 +42,8 @@ Specifically, slime currently provides the following parameters for separate deb
 
     When enabled, slime will not load SGLang and will only initialize Megatron. You can use this method to debug the training part.
 
+    Periodic evaluation remains available when `--eval-function-path` explicitly names a custom evaluation function that does not depend on SGLang. slime rejects `--eval-interval` in train-only mode without such a function instead of silently skipping every evaluation.
+
 3.  `--save-debug-rollout-data /your/saved/debug/data_{rollout_id}.pt`
 
     When enabled, the results of each rollout will be saved. This can be used in conjunction with `--debug-rollout-only`. Note that the data is saved using the format: `args.save_debug_rollout_data.format(rollout_id=rollout_id)`.
