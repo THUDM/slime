@@ -358,7 +358,8 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=1,
                 help=(
                     "Flush rollout KV cache every N weight syncs after the initial publication. "
-                    "1 preserves the default abort/flush behavior; values <= 0 never flush during training. "
+                    "1 preserves the default abort/flush behavior; values <= 0 never flush during training "
+                    "(and enable --sglang-disable-radix-cache so shared prefixes cannot keep stale KV). "
                     "Other syncs pause generation in place and preserve unfinished sequences (PipelineRL). "
                     "Values other than 1 select fully-async rollout by default and require separate GPUs."
                 ),
@@ -2281,6 +2282,18 @@ def slime_validate_args(args):
             args.rollout_function_path = "slime.rollout.fully_async_rollout.generate_rollout_fully_async"
         if args.eval_function_path is None:
             args.eval_function_path = "slime.rollout.sglang_rollout.generate_rollout"
+        # Without a periodic flush, radix-cache prefixes (chat template, shared
+        # instructions) keep the KV of the first weight version for the whole
+        # run, and every new rollout/eval request reuses it. Unfinished requests
+        # keep their own KV either way; only cross-request reuse is disabled.
+        if args.flush_cache_interval <= 0 and not getattr(args, "sglang_disable_radix_cache", True):
+            logger.warning(
+                "--flush-cache-interval %d never flushes the radix cache, so shared prefixes would keep "
+                "KV from the first weight version. Enabling --sglang-disable-radix-cache. "
+                "Use a periodic --flush-cache-interval N > 1 to keep prefix reuse with bounded KV age.",
+                args.flush_cache_interval,
+            )
+            args.sglang_disable_radix_cache = True
 
     if args.eval_function_path is None:
         args.eval_function_path = args.rollout_function_path

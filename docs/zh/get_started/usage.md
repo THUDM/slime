@@ -435,10 +435,11 @@ SGLang 源码。跨更新的请求会使用旧权重计算的 KV；rollout log p
 对应实际生成各 token 的策略。周期性完整刷新会 abort 未完成请求，标准
 fully async worker 会将其重新排队生成。
 
-公共 prefix 也可能在刷新前一直复用旧 KV。设为 `<= 0` 时，高频 prefix 没有
-缓存年龄上限。可选地添加 `--sglang-disable-radix-cache`，关闭跨请求 prefix
-复用，同时保留未完成请求自身的 KV。周期性刷新则可以限制公共 KV 的存活
-时间，暂不引入权重版本缓存命名空间。
+公共 prefix 也可能在刷新前一直复用旧 KV。设为 `<= 0` 时，高频 prefix（chat
+template、公共指令）会在整个训练中一直使用第一个权重版本的 KV，因此 slime 会自动
+开启 `--sglang-disable-radix-cache`，关闭跨请求 prefix 复用，同时保留未完成请求自身
+的 KV。周期性刷新（`N > 1`）可以保留 prefix 复用并限制公共 KV 的存活时间，暂不引入
+权重版本缓存命名空间。
 
 ## sglang 使用方法
 

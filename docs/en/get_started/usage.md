@@ -453,10 +453,12 @@ generated their tokens. Periodic full refreshes abort unfinished requests, which
 the stock fully async worker requeues.
 
 Shared prefixes can also retain old KV between refreshes. With `<= 0`, frequently
-reused prefixes have no age bound. To prevent prefix reuse across requests while
-preserving each unfinished request's KV, optionally add
-`--sglang-disable-radix-cache`. Periodic refresh bounds the lifetime of shared KV
-without introducing weight-version cache namespaces.
+reused prefixes (chat template, shared instructions) would keep the KV of the
+first weight version for the whole run, so slime enables
+`--sglang-disable-radix-cache` automatically. This disables prefix reuse across
+requests and still preserves each unfinished request's KV. Periodic refresh
+(`N > 1`) keeps prefix reuse and bounds the lifetime of shared KV without
+introducing weight-version cache namespaces.
 
 ## How to Use SGLang
 
