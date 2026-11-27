@@ -117,5 +117,59 @@ def test_large_grading_command_avoids_exec_argument_limit(tmp_path, monkeypatch,
     assert (repo / "result.txt").read_text() == payload
 
 
+GNU_PATCH = shutil.which("patch") is not None and subprocess.run(
+    ["patch", "--version"], capture_output=True, text=True
+).stdout.startswith("GNU patch")
+
+
+BUGGY = "def answer():\n    return 1  # bug\n"
+FIXED = "def answer():\n    return 2  # fixed\n"
+TOX = "[tox]\nenvlist = py\n\n[testenv]\ncommands = pytest\n"
+# Differs from TOX two lines above the line the model patch edits.
+GRADER_TOX = TOX.replace("envlist = py", "envlist = py311")
+
+
+def grader_with_model_patch(tmp_path, monkeypatch, grader_code):
+    """Grader repo whose workspace holds grader_code and GRADER_TOX, with a model
+    patch that fixes code.py and adds -x to the tox.ini command."""
+    repo = tmp_path / "grader"
+    repo.mkdir()
+    git(repo, "init", "-q")
+    git(repo, "config", "user.name", "Test")
+    git(repo, "config", "user.email", "test@example.invalid")
+    (repo / "code.py").write_text(BUGGY)
+    (repo / "tox.ini").write_text(TOX)
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "base")
+    (repo / "code.py").write_text(FIXED)
+    (repo / "tox.ini").write_text(TOX.replace("pytest\n", "pytest -x\n"))
+    model_patch = tmp_path / "model.patch"
+    model_patch.write_text(git(repo, "diff") + "\n")
+    (repo / "code.py").write_text(grader_code)
+    (repo / "tox.ini").write_text(GRADER_TOX)
+    monkeypatch.setattr(swe, "_MODEL_PATCH", str(model_patch))
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "gitconfig"))
+    return repo
+
+
+@pytest.mark.skipif(not GNU_PATCH, reason="the fuzzy fallback needs GNU patch, as in grading images")
+def test_model_patch_fuzzy_fallback_applies_the_whole_patch(tmp_path, monkeypatch):
+    # `git apply` fails on the tox.ini context, so the fallback runs; it must not
+    # revert the code.py hunk.
+    repo = grader_with_model_patch(tmp_path, monkeypatch, BUGGY)
+
+    assert asyncio.run(swe._apply_model_patch(LocalShell(), str(repo)))
+    assert (repo / "code.py").read_text() == FIXED
+    assert (repo / "tox.ini").read_text() == GRADER_TOX.replace("pytest\n", "pytest -x\n")
+
+
+@pytest.mark.skipif(not GNU_PATCH, reason="the fuzzy fallback needs GNU patch, as in grading images")
+def test_model_patch_fuzzy_fallback_keeps_a_hunk_already_present(tmp_path, monkeypatch):
+    repo = grader_with_model_patch(tmp_path, monkeypatch, FIXED)
+
+    asyncio.run(swe._apply_model_patch(LocalShell(), str(repo)))
+    assert (repo / "code.py").read_text() == FIXED
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
