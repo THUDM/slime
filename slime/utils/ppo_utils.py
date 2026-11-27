@@ -40,13 +40,13 @@ class _VocabParallelTopKLogProbs(torch.autograd.Function):
 
     Saving autograd's exp/gather intermediates for every row chunk retains
     O(N * V_p) FP32 activations despite chunking. Save the original logits
-    (no copy), ids, and two scalars per row instead, and recompute softmax
+    (no copy), ids, and row statistics instead, and recompute softmax
     chunks in backward. The single Function also avoids a full [N, V_p]
     slice-backward allocation for each chunk.
     """
 
     @staticmethod
-    def forward(ctx, logits, token_ids, process_group, chunk_size, temperature):
+    def forward(ctx, logits, token_ids, process_group, chunk_size, temperature, with_entropy, with_entropy_grad):
         n, vocab_size = logits.shape
         rank, _ = _get_vocab_parallel_rank_size(process_group)
         vocab_start = rank * vocab_size
@@ -54,6 +54,8 @@ class _VocabParallelTopKLogProbs(torch.autograd.Function):
         output = torch.empty(token_ids.shape, device=logits.device, dtype=torch.float32)
         maxima = torch.empty((n, 1), device=logits.device, dtype=torch.float32)
         denominators = torch.empty_like(maxima)
+        entropy = output.new_empty((n,) if with_entropy else (0,))
+        mean_logits = torch.empty_like(maxima) if with_entropy else output.new_empty((0,))
         for start in range(0, n, chunk_size):
             end = min(start + chunk_size, n)
             # Always own the workspace: in-place operations must not modify
@@ -71,21 +73,31 @@ class _VocabParallelTopKLogProbs(torch.autograd.Function):
             work.sub_(maximum).exp_()
             denominator = work.sum(dim=-1, keepdim=True)
             _maybe_all_reduce(denominator, dist.ReduceOp.SUM, process_group)
+            if with_entropy:
+                # Reduce a dot product without a full-vocabulary product tensor.
+                mean = torch.einsum("ij,ij->i", work, logits[start:end].float()).unsqueeze(-1)
+                mean.div_(temperature).div_(denominator)
+                _maybe_all_reduce(mean, dist.ReduceOp.SUM, process_group)
+                entropy[start:end] = (maximum + denominator.log() - mean).squeeze(-1)
+                mean_logits[start:end] = mean
             # Normalize over the full distributed vocabulary.
             output[start:end] = (targets - maximum) - denominator.log()
             maxima[start:end] = maximum
             denominators[start:end] = denominator
             del work
-        ctx.save_for_backward(logits, token_ids, maxima, denominators)
+        ctx.save_for_backward(logits, token_ids, maxima, denominators, mean_logits)
         ctx.chunk_size = chunk_size
         ctx.temperature = temperature
         ctx.vocab_start = vocab_start
-        return output
+        ctx.with_entropy_grad = with_entropy and with_entropy_grad
+        if not ctx.with_entropy_grad:
+            ctx.mark_non_differentiable(entropy)
+        return output, entropy
 
     @staticmethod
     @torch.autograd.function.once_differentiable
-    def backward(ctx, grad_output):
-        logits, token_ids, maxima, denominators = ctx.saved_tensors
+    def backward(ctx, grad_output, grad_entropy):
+        logits, token_ids, maxima, denominators, mean_logits = ctx.saved_tensors
         n, vocab_size = logits.shape
         # Allocate the returned gradient once, in the input dtype. All softmax
         # and scatter accumulation stays FP32 within a bounded row chunk.
@@ -97,18 +109,25 @@ class _VocabParallelTopKLogProbs(torch.autograd.Function):
                 work.div_(ctx.temperature)
             work.sub_(maxima[start:end]).exp_().div_(denominators[start:end])
             grad = grad_output[start:end].float()
+            entropy_grad = None
+            if ctx.with_entropy_grad:
+                entropy_grad = logits[start:end].to(dtype=torch.float32, copy=True)
+                entropy_grad.div_(ctx.temperature).neg_().add_(mean_logits[start:end])
+                entropy_grad.mul_(work).mul_(grad_entropy[start:end, None])
             work.mul_(-grad.sum(dim=-1, keepdim=True))
             ids = token_ids[start:end]
             local_mask = (ids >= ctx.vocab_start) & (ids < ctx.vocab_start + vocab_size)
             local_ids = (ids - ctx.vocab_start).clamp(0, vocab_size - 1)
             work.scatter_add_(-1, local_ids, grad.masked_fill(~local_mask, 0.0))
+            if entropy_grad is not None:
+                work.add_(entropy_grad)
             if ctx.temperature != 1.0:
                 work.div_(ctx.temperature)
             grad_input[start:end] = work
-            del work
+            del work, entropy_grad
         # Every TP rank differentiates the replicated loss. No backward
         # all-reduce: that would multiply the gradient by the TP world size.
-        return grad_input, None, None, None, None
+        return grad_input, None, None, None, None, None, None
 
 
 def calculate_topk_log_probs(
@@ -131,7 +150,22 @@ def calculate_topk_log_probs(
     logits shard only. Saved state shares the original logits storage plus
     O(N * k + N) ids/normalizers; FP32 workspace is O(chunk_size * V_p).
     """
-    return _VocabParallelTopKLogProbs.apply(logits, token_ids, process_group, chunk_size, temperature)
+    return _VocabParallelTopKLogProbs.apply(logits, token_ids, process_group, chunk_size, temperature, False, False)[0]
+
+
+def calculate_joint_log_probs_and_entropy(
+    logits, tokens, head_ids, process_group, chunk_size=-1, temperature=1.0, with_entropy_grad=False
+):
+    """Share full-vocabulary normalization/backward for sampled tokens, SC heads and entropy.
+
+    Duplicate IDs (including a sampled token in the head) accumulate in FP32.
+    Entropy remains available as a metric when its gradient is disabled.
+    """
+    ids = torch.cat((tokens[:, None], head_ids), dim=-1)
+    values, entropy = _VocabParallelTopKLogProbs.apply(
+        logits, ids, process_group, chunk_size, temperature, True, with_entropy_grad
+    )
+    return values[:, 0].contiguous(), values[:, 1:], entropy
 
 
 class _VocabParallelRaggedLogProbs(torch.autograd.Function):
