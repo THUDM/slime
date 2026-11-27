@@ -44,6 +44,8 @@ def test_patch_uses_actual_image_baseline_without_changing_git_index(
     repo = tmp_path / "agent repo"
     repo.mkdir()
     git(repo, "init", "-q")
+    # Disable background auto-maintenance before copying the repository.
+    git(repo, "config", "maintenance.auto", "false")
     git(repo, "config", "user.name", "Test")
     git(repo, "config", "user.email", "test@example.invalid")
     # Copy a stable fixture; modern Git may otherwise remove maintenance.lock
