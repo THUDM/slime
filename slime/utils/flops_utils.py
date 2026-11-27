@@ -50,8 +50,11 @@ def calculate_attention_flops(args, seqlen, num_attention_heads):
     return flops
 
 
-def calculate_output_flops(seqlen, hidden_size):
-    return 2 * seqlen * hidden_size * hidden_size
+def calculate_output_flops(args, seqlen, hidden_size, num_attention_heads):
+    # The output projection maps the concatenated heads (heads x head dim) back to hidden, which is
+    # wider than hidden on e.g. Qwen3-32B (64 x 128 = 8192 vs 5120) and DeepSeek-V3 (MLA: v_head_dim).
+    head_dim = args.v_head_dim if _is_multi_latent_attention(args) else args.kv_channels
+    return 2 * seqlen * num_attention_heads * head_dim * hidden_size
 
 
 def calculate_mlp_flops(seqlen, hidden_size, ffn_hidden_size):
@@ -62,7 +65,7 @@ def calculate_layer_flops(args, seqlen, hidden_size, num_attention_heads, num_qu
     return (
         calculate_qkv_projection_flops(args, seqlen, hidden_size, num_attention_heads, num_query_groups)
         + calculate_attention_flops(args, seqlen, num_attention_heads)
-        + calculate_output_flops(seqlen, hidden_size)
+        + calculate_output_flops(args, seqlen, hidden_size, num_attention_heads)
         + calculate_mlp_flops(seqlen, hidden_size, ffn_hidden_size)
     )
 
