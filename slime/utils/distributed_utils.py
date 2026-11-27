@@ -133,29 +133,26 @@ def distributed_masked_whiten(
     Returns:
         torch.Tensor: The locally whitened tensor using global statistics.
     """
-    # Calculate local intermediate statistics
-    local_sum = (values * mask).sum()
-    local_sum_sq = ((values**2) * mask).sum()
-    local_mask_sum = mask.sum()
-
-    stats_tensor = torch.tensor(
-        [local_sum, local_sum_sq, local_mask_sum],
-        device=values.device,
-        dtype=torch.float32,
-    )
+    # Accumulate the mean accurately even for nearly constant advantages.
+    stats_values = values.to(torch.float64)
+    local_sum = (stats_values.detach() * mask).sum()
+    stats_tensor = torch.stack([local_sum, mask.sum(dtype=torch.float64)]).detach()
 
     # Aggregate via all_reduce within the DP group
     dist.all_reduce(stats_tensor, group=process_group)
 
     # Calculate global stats from aggregated results
-    global_sum, global_sum_sq, global_mask_sum = stats_tensor
+    global_sum, global_mask_sum = stats_tensor
 
     if global_mask_sum.item() == 0:
         raise ValueError("The global mask sum across all participating GPUs is zero.")
 
     global_mean = global_sum / global_mask_sum
-    global_mean_sq = global_sum_sq / global_mask_sum
-    global_var = global_mean_sq - global_mean**2
+    # A second, centered reduction avoids cancellation in E[x²] - E[x]².
+    # Empty local masks must participate in both collectives.
+    global_var = (((stats_values.detach() - global_mean) ** 2) * mask).sum().detach()
+    dist.all_reduce(global_var, group=process_group)
+    global_var /= global_mask_sum
 
     # Bessel's correction for unbiased estimate
     if global_mask_sum.item() >= 2:
@@ -163,9 +160,10 @@ def distributed_masked_whiten(
         global_var = global_var * bessel_correction
 
     # Whiten local data using global stats
-    whitened_values = (values - global_mean) * torch.rsqrt(global_var + epsilon)
+    whitened_values = (stats_values - global_mean) * torch.rsqrt(global_var + epsilon)
 
     if not shift_mean:
         whitened_values += global_mean
 
-    return whitened_values
+    output_dtype = values.dtype if values.is_floating_point() else torch.float32
+    return whitened_values.to(output_dtype)

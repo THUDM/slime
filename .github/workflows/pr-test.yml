@@ -987,6 +987,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_whiten_numerics.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_logprob_response_spans.py"
             },
             {
