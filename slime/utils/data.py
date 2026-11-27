@@ -300,11 +300,16 @@ class Dataset:
         return len(self.samples)
 
 
-def process_rollout_data(rollout_data_ref, dp_rank, dp_size):
+def process_rollout_data(rollout_data_ref, dp_rank, dp_size, args=None):
     assert len(rollout_data_ref) == dp_size
     from slime.data.transport import TrainBatchRef, unpack_rollout_payload
 
-    reference = ray.get(rollout_data_ref[dp_rank].inner)
+    if args is not None and getattr(args, "rollout_data_transport", "object-store") == "mooncake":
+        from slime.utils.data_transfer import get_mooncake_rollout_data
+
+        reference = get_mooncake_rollout_data(args, rollout_data_ref[dp_rank])
+    else:
+        reference = ray.get(rollout_data_ref[dp_rank].inner)
     if isinstance(reference, TrainBatchRef):
         references = [ray.get(box.inner) for box in rollout_data_ref]
         if any(

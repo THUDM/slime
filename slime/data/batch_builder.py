@@ -36,6 +36,7 @@ class BatchBuilder:
         self.raw_ref = None
         self.batch_id = None
         self._plan = None
+        self._mooncake_refs = []
         self.custom_reward_post_process_func = None
         if self.args.custom_reward_post_process_path is not None:
             self.custom_reward_post_process_func = load_function(self.args.custom_reward_post_process_path)
@@ -142,6 +143,13 @@ class BatchBuilder:
         return reference
 
     def training_completed(self, rollout_id):
+        if self._mooncake_refs:
+            if rollout_id != self.rollout_id:
+                raise ValueError("Training completion does not match the current batch")
+            from slime.utils.data_transfer import cleanup_mooncake_rollout_refs
+
+            cleanup_mooncake_rollout_refs(self.args, self._mooncake_refs)
+            self._mooncake_refs = []
         if self.batch_id is not None:
             if rollout_id != self.rollout_id:
                 raise ValueError("Training completion does not match the current batch")
@@ -521,7 +529,13 @@ class BatchBuilder:
                 value.update({key: data[key] for key in ("raw_reward", "total_lengths") if key in data})
                 value.update(schedule)
                 tensorize_rollout_data_for_training(value)
-            if transport == "nixl":
+            if transport == "mooncake":
+                from slime.utils.data_transfer import put_mooncake_rollout_data
+
+                ref = put_mooncake_rollout_data(self.args, value, partition=f"rollout-{self.rollout_id}-dp{rank}")
+                self._mooncake_refs.append(ref)
+                result.append(ref)
+            elif transport == "nixl":
                 result.append(Box(ray.put(value, _tensor_transport="nixl")))
             elif transport in {"straw", "object-store"}:
                 result.append(Box(ray.put(value)))
