@@ -85,7 +85,7 @@ def _parse_generalized_path(s: str):
 
 
 def filter_long_prompt(origin_samples: list[Sample], tokenizer, processor, max_length: int | None) -> list[Sample]:
-    if max_length is None:
+    if max_length is None or not origin_samples:
         return origin_samples
 
     if not isinstance(origin_samples[0].prompt, str):

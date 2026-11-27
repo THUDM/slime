@@ -13,16 +13,57 @@ text-only prompt before any prompt carrying an image.
 
 from __future__ import annotations
 
+import json
 import sys
 import types
 
 import pytest
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from tokenizers.pre_tokenizers import Whitespace
+from transformers import PreTrainedTokenizerFast
 
-from slime.utils.data import filter_long_prompt
+from slime.utils.data import Dataset, filter_long_prompt
 from slime.utils.types import Sample
 
-
 NUM_GPUS = 0
+
+
+@pytest.fixture
+def local_tokenizer():
+    backend = Tokenizer(WordLevel({"[UNK]": 0, "word": 1}, unk_token="[UNK]"))
+    backend.pre_tokenizer = Whitespace()
+    return PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="[UNK]")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("empty_input", ["file", "slice"])
+@pytest.mark.parametrize("max_length", [None, 8])
+def test_empty_dataset_remains_empty(tmp_path, local_tokenizer, empty_input, max_length):
+    path = tmp_path / "data.jsonl"
+    path.write_text("" if empty_input == "file" else json.dumps({"text": "word"}) + "\n")
+    source = str(path) + ("@[0:0]" if empty_input == "slice" else "")
+    dataset = Dataset(source, local_tokenizer, None, max_length)
+    assert len(dataset) == 0
+    assert dataset.samples == []
+    dataset.shuffle(1)
+    assert dataset.samples == []
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("max_length,expected", [(None, ["word " * 8, "word " * 9]), (8, ["word " * 8]), (0, [])])
+def test_real_tokenizer_keeps_existing_length_filtering(tmp_path, local_tokenizer, max_length, expected):
+    path = tmp_path / "data.jsonl"
+    path.write_text("".join(json.dumps({"text": prompt}) + "\n" for prompt in ["word " * 8, "word " * 9]))
+    dataset = Dataset(str(path), local_tokenizer, None, max_length)
+    assert [sample.prompt for sample in dataset.samples] == expected
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("processor", [None, object()])
+def test_empty_filter_preserves_input_list(local_tokenizer, processor):
+    samples = []
+    assert filter_long_prompt(samples, local_tokenizer, processor, max_length=8) is samples
 
 
 @pytest.fixture
