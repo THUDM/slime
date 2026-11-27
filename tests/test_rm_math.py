@@ -16,6 +16,10 @@ holds.
 
 from __future__ import annotations
 
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 
 from slime.rollout.rm_hub.math_utils import (
@@ -28,6 +32,7 @@ from slime.rollout.rm_hub.math_utils import (
     last_boxed_only_string,
     mathd_normalize_answer,
     remove_boxed,
+    should_allow_eval,
 )
 
 
@@ -228,6 +233,65 @@ def test_grade_answer_verl_returns_false_on_missing_extraction():
 def test_grade_answer_verl_returns_false_on_empty_ground_truth():
     """Empty / falsy ground truth → False at the top guard."""
     assert grade_answer_verl(r"\boxed{42}", "") is False
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "9**9**9",
+        "9**(9**9)",
+        "9**-9**9",
+        "9^+9^9",
+        "(10^9)!",
+        "(10**9)!",
+        "1000000000!",
+        "(1000*1000)!",
+        "((10!)!)",
+        "1000000000!!",
+        "(10**1000/10**990)!",
+    ],
+)
+def test_expensive_math_is_rejected_before_sympy(expression):
+    assert not should_allow_eval(expression)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "given,ground_truth",
+    [
+        ("(n+1)!", "(1+n)!"),
+        ("(2^3)^x", "8^x"),
+        ("2^-10", "1/1024"),
+        ("2**(-10)", "1/1024"),
+        ("x**(1/2)", r"\sqrt{x}"),
+        ("2**10/3", "1024/3"),
+        ("(3+2)!/7", "120/7"),
+        ("5!!/7", "15/7"),
+    ],
+)
+def test_math_cost_guard_preserves_correct_answers(given, ground_truth):
+    assert grade_answer_sympy(given, ground_truth)
+    assert grade_answer_verl(r"\boxed{" + given + "}", ground_truth)
+
+
+@pytest.mark.unit
+def test_reported_hangs_return_from_both_graders():
+    # Isolate SymPy so a regression cannot hang the entire CPU CI worker.
+    module_path = Path(__file__).resolve().parents[1] / "slime/rollout/rm_hub/math_utils.py"
+    script = r"""
+import importlib.util
+import sys
+
+spec = importlib.util.spec_from_file_location("math_utils", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+for expression in ("9**9**9", "(10^9)!"):
+    assert module.grade_answer_sympy(expression, r"\frac{1}{2}") is False
+    assert module.grade_answer_verl(r"\boxed{" + expression + "}", r"\frac{1}{2}") is False
+assert module.grade_answer_verl(r"\boxed{1/2}", r"\frac{1}{2}") is True
+"""
+    subprocess.run([sys.executable, "-I", "-c", script, str(module_path)], check=True, timeout=10)
 
 
 if __name__ == "__main__":
