@@ -224,6 +224,59 @@ def test_boundary_health_check_bypasses_grace_and_cleans_dead_actor(monkeypatch,
         monitor.stop()
 
 
+def test_weight_update_recovery_retires_engine_dead_since_rollout(monkeypatch):
+    from slime.backends.sglang_utils import engine_group
+    from slime.ray.serving import ServingCluster
+    from slime.utils import health_monitor
+
+    calls = []
+    dead = SimpleNamespace(
+        health_generate=SimpleNamespace(remote=lambda **kw: "dead"),
+        shutdown=SimpleNamespace(remote=lambda: "shutdown"),
+    )
+    alive = SimpleNamespace(health_generate=SimpleNamespace(remote=lambda **kw: "alive"))
+    group = engine_group.ServerGroup(
+        args=SimpleNamespace(num_gpus_per_node=1),
+        pg=None,
+        num_gpus_per_engine=1,
+        num_new_engines=0,
+        all_engines=[dead, alive],
+        engine_urls={0: "http://dead", 1: "http://alive"},
+        router_ip="router",
+        router_port=8000,
+    )
+    server = engine_group.RolloutServer(server_groups=[group])
+    server.recover = lambda: calls.append(("recover", list(group.all_engines)))
+    args = SimpleNamespace(
+        rollout_health_check_interval=600, rollout_health_check_first_wait=600, rollout_health_check_timeout=0.1
+    )
+    monitor = health_monitor.RolloutHealthMonitor(group, args)
+    serving = object.__new__(ServingCluster.__ray_metadata__.modified_class)
+    serving.args = args
+    serving._health_monitors = [monitor]
+    serving.servers = {"model": server}
+
+    def wait(refs, *, num_returns, timeout):
+        return ([], refs) if refs == ["shutdown"] else (refs, [])
+
+    def get(ref, *, timeout):
+        if ref in {"dead", "shutdown"}:
+            raise ConnectionError("connection refused")
+        return True
+
+    monkeypatch.setattr(health_monitor.ray, "wait", wait)
+    monkeypatch.setattr(health_monitor.ray, "get", get)
+    monkeypatch.setattr(health_monitor.ray, "kill", lambda engine, **kw: calls.append(("kill", engine)))
+    monkeypatch.setattr(engine_group, "unregister_worker", lambda router, url, **kw: calls.append(("unregister", url)))
+    monitor.start()
+    try:
+        # Both engines passed the check at the end of the rollout; one died during training.
+        serving.recover_updatable_engines()
+        assert calls == [("unregister", "http://dead"), ("kill", dead), ("recover", [None, alive])]
+    finally:
+        monitor.stop()
+
+
 @pytest.mark.unit
 def test_abort_uses_supported_load_sections_and_waits_for_pd_transfers(monkeypatch):
     abort_calls = 0
