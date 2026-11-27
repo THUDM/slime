@@ -160,7 +160,7 @@ index 2f92a45c..69fc2c2c 100644
          try:
              role_payloads = []
 diff --git a/python/sglang/srt/managers/tokenizer_control_mixin.py b/python/sglang/srt/managers/tokenizer_control_mixin.py
-index 2490ccb3..adf48712 100644
+index 373926f9..ed480447 100644
 --- a/python/sglang/srt/managers/tokenizer_control_mixin.py
 +++ b/python/sglang/srt/managers/tokenizer_control_mixin.py
 @@ -62,6 +62,8 @@ from sglang.srt.managers.io_struct import (
@@ -181,8 +181,8 @@ index 2490ccb3..adf48712 100644
      ("release_memory_occupation", ReleaseMemoryOccupationReqOutput),
      ("resume_memory_occupation", ResumeMemoryOccupationReqOutput),
 @@ -899,6 +902,15 @@ class TokenizerControlMixin:
-             results = await self.post_process_weights_communicator(obj)
-         return FanOutCommunicator.merge_results(results)
+             self.post_process_weights_communicator, obj
+         )
 
 +    async def pull_weights(
 +        self: TokenizerManager,
