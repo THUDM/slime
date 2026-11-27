@@ -1,13 +1,16 @@
 import asyncio
 import base64
+import copy
 import json
 import struct
 import sys
+import weakref
 from contextlib import asynccontextmanager, nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from PIL import Image
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -616,6 +619,240 @@ def test_abort_while_waiting_for_generation_pacer_does_not_start_request(monkeyp
         assert state.active_server_generations == 0
 
     asyncio.run(exercise())
+
+
+@pytest.fixture
+def native_image_requests(monkeypatch):
+    encoded = []
+    requests = []
+    original_encode = sglang_rollout.encode_image_for_rollout_engine
+
+    def encode(image):
+        encoded.append(image)
+        return original_encode(image)
+
+    async def default_reward(args, sample):
+        return 1.0
+
+    monkeypatch.setattr(sglang_rollout, "encode_image_for_rollout_engine", encode)
+
+    async def run(groups, *, after_request=None, processor=None, reward=None):
+        monkeypatch.setattr(sglang_rollout, "async_rm", reward or default_reward)
+        args = SimpleNamespace(
+            ci_test=True,
+            sglang_router_ip="router",
+            sglang_router_port=30000,
+            router_policy="consistent_hashing",
+            use_rollout_routing_replay=False,
+            partial_rollout=False,
+            group_rm=False,
+            custom_generate_function_path=None,
+            sglang_enable_deterministic_inference=True,
+            rollout_sample_hook_path=None,
+        )
+        state = SimpleNamespace(
+            aborted=False,
+            semaphore=asyncio.Semaphore(1),
+            generation_pacer=AsyncPacer(),
+            active_server_generations=0,
+            dp_rank_context=nullcontext,
+            processor=processor,
+            tokenizer=SimpleNamespace(encode=lambda *_args, **_kwargs: [17]),
+            group_sampling_seeds=list(range(max(map(len, groups)))),
+        )
+
+        async def post(url, payload, headers, **kwargs):
+            assert url == "http://router:30000/generate"
+            requests.append((copy.deepcopy(payload), headers["X-SMG-Routing-Key"]))
+            seed = payload["sampling_params"]["sampling_seed"]
+            if after_request is not None:
+                after_request(state)
+            return {
+                "text": f"response-{seed}",
+                "meta_info": {
+                    "output_token_logprobs": [[-0.125 * (seed + 1), 50 + seed]],
+                    "finish_reason": {"type": "stop"},
+                },
+            }
+
+        monkeypatch.setattr(sglang_rollout, "GenerateState", lambda _args: state)
+        monkeypatch.setattr(sglang_rollout, "post", post)
+        outputs = await asyncio.gather(
+            *(sglang_rollout.generate_and_rm_group(args, group, {"max_new_tokens": 4}) for group in groups)
+        )
+        assert state.active_server_generations == 0
+        return outputs
+
+    return run, encoded, requests, original_encode
+
+
+@pytest.mark.parametrize("use_jpeg", [False, True])
+def test_native_groups_reuse_equal_rgb_images_with_independent_requests(native_image_requests, tmp_path, use_jpeg):
+    run, encoded, requests, original_encode = native_image_requests
+    image = Image.new("RGB", (4, 5), (80, 90, 100))
+    if use_jpeg:
+        path = tmp_path / "prompt.jpg"
+        image.save(path)
+        with Image.open(path) as jpeg:
+            image = jpeg.convert("RGB").resize((5, 6))
+        assert image.info["jfif_version"]
+
+    groups = [
+        [Sample(prompt=prompt, multimodal_inputs={"images": [copy.deepcopy(image)]}) for _ in range(8)]
+        for prompt in ("group-one", "group-two")
+    ]
+
+    outputs = asyncio.run(run(groups))
+
+    assert len(encoded) == 2
+    assert len(requests) == 16 and len({session_id for _, session_id in requests}) == 16
+    by_session = {session_id: payload for payload, session_id in requests}
+    expected_payload = original_encode(image)
+    for group in outputs:
+        for index, sample in enumerate(group):
+            assert sample.tokens == [17, 50 + index]
+            assert sample.rollout_log_probs == [-0.125 * (index + 1)]
+            assert sample.response == f"response-{index}"
+            assert sample.reward == 1.0
+            assert by_session[sample.session_id] == {
+                "sampling_params": {"max_new_tokens": 4, "sampling_seed": index},
+                "return_logprob": True,
+                "image_data": [expected_payload],
+                "text": sample.prompt,
+            }
+
+
+@pytest.mark.parametrize("variant", ["late-pixels", "transparency", "icc", "processor", "order", "rgba", "oversize"])
+def test_native_image_requests_encode_variants_as_before(native_image_requests, variant):
+    run, encoded, requests, original_encode = native_image_requests
+    first = Image.new("RGB", (4, 5))
+    images = [first]
+    if variant == "order":
+        images.append(Image.new("RGB", (4, 5), "red"))
+    elif variant == "rgba":
+        images = [Image.new("RGBA", (4, 5))]
+    elif variant == "oversize":
+        images = [Image.new("RGB", (1025, 1024))]
+
+    group = [
+        Sample(prompt=prompt, multimodal_inputs={"images": [image.copy() for image in images]})
+        for prompt in ("first", "second")
+    ]
+    second = group[1].multimodal_inputs["images"]
+
+    def after_request(state):
+        if len(requests) == 1 and variant == "late-pixels":
+            second[0].putpixel((0, 0), (1, 2, 3))
+        elif len(requests) == 1 and variant == "transparency":
+            second[0].info["transparency"] = (0, 0, 0)
+        elif len(requests) == 1 and variant == "icc":
+            second[0].info["icc_profile"] = b"fixture profile"
+        elif len(requests) == 1 and variant == "order":
+            second.reverse()
+
+    def processor(text, images, **kwargs):
+        if variant == "processor" and text == "second":
+            images[0].putpixel((0, 0), (9, 8, 7))
+        return {"input_ids": [[17]]}
+
+    asyncio.run(run([group], after_request=after_request, processor=processor))
+
+    assert len(encoded) == (3 if variant == "order" else 2)
+    for (payload, _session_id), sample in zip(requests, group, strict=True):
+        assert payload["image_data"] == [original_encode(image) for image in sample.multimodal_inputs["images"]]
+    if variant in ("late-pixels", "transparency", "icc", "processor", "order"):
+        assert requests[0][0]["image_data"] != requests[1][0]["image_data"]
+
+
+def test_native_image_memo_does_not_enter_custom_generation(native_image_requests, monkeypatch):
+    run, encoded, requests, _original_encode = native_image_requests
+    image = Image.new("RGB", (4, 5))
+    native = Sample(prompt="native", multimodal_inputs={"images": [image]})
+    custom = Sample(
+        prompt="custom",
+        multimodal_inputs={"images": [image.copy()]},
+        generate_function_path="fixture.generate",
+    )
+
+    async def generate(args, sample, sampling_params, *, evaluation):
+        assert sample is custom
+        assert sampling_params == {"max_new_tokens": 4, "sampling_seed": 1}
+        assert evaluation is False
+        sample.status = Sample.Status.COMPLETED
+        return sample
+
+    monkeypatch.setattr(sglang_rollout, "load_function", lambda _path: generate)
+
+    outputs = asyncio.run(run([[native, custom]]))
+
+    assert outputs == [[native, custom]]
+    assert len(encoded) == len(requests) == 1
+    assert requests[0][0]["text"] == "native"
+
+
+def test_native_group_abort_does_not_encode_or_retain_for_unstarted_sibling(native_image_requests):
+    run, encoded, requests, _original_encode = native_image_requests
+    image = Image.new("RGB", (4, 5))
+    group = [Sample(prompt="image", multimodal_inputs={"images": [image.copy()]}) for _ in range(2)]
+
+    def abort_after_first_request(state):
+        state.aborted = True
+
+    asyncio.run(run([group], after_request=abort_after_first_request))
+    assert len(encoded) == len(requests) == 1
+    assert group[0].status == Sample.Status.COMPLETED
+    assert group[1].status == Sample.Status.ABORTED
+
+    asyncio.run(run([group]))
+    assert len(encoded) == len(requests) == 2
+    assert group[1].status == Sample.Status.COMPLETED
+
+
+def test_native_image_memo_is_released_before_reward_only_work(native_image_requests, monkeypatch):
+    run, encoded, requests, _original_encode = native_image_requests
+    image = Image.new("RGB", (4, 5))
+    group = [Sample(index=index, prompt="image", multimodal_inputs={"images": [image.copy()]}) for index in range(2)]
+    memo_refs = []
+    original_memo = sglang_rollout._GroupImageMemo
+
+    def make_memo():
+        memo = original_memo()
+        memo_refs.append(weakref.ref(memo))
+        return memo
+
+    async def reward(args, sample):
+        assert len(memo_refs) == 1
+        if sample.index == 0:
+            assert memo_refs[0]() is not None
+        else:
+            assert memo_refs[0]() is None
+        return 1.0
+
+    monkeypatch.setattr(sglang_rollout, "_GroupImageMemo", make_memo)
+
+    asyncio.run(run([group], reward=reward))
+    assert len(encoded) == 1 and len(requests) == 2
+
+
+def test_native_image_memo_does_not_cache_failed_encoding(monkeypatch):
+    original_encode = sglang_rollout.encode_image_for_rollout_engine
+    attempts = 0
+
+    def encode(image):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ValueError("fixture image encoding failed")
+        return original_encode(image)
+
+    monkeypatch.setattr(sglang_rollout, "encode_image_for_rollout_engine", encode)
+    image = Image.new("RGB", (4, 5))
+    memo = sglang_rollout._GroupImageMemo()
+
+    with pytest.raises(ValueError, match="fixture image encoding failed"):
+        memo.encode(image)
+    assert memo.encode(image) == memo.encode(image.copy()) == original_encode(image)
+    assert attempts == 2
 
 
 if __name__ == "__main__":
