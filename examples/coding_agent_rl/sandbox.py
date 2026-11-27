@@ -13,4 +13,8 @@ def create_sandbox(image: str) -> Sandbox:
         from .sunabako_sandbox import SunabakoSandbox
 
         return SunabakoSandbox(image)
-    raise ValueError(f"Unknown SWE_SANDBOX_PROVIDER={provider!r}; expected e2b or sunabako")
+    if provider == "runta":
+        from .runta_sandbox import RuntaSandbox
+
+        return RuntaSandbox(image)
+    raise ValueError(f"Unknown SWE_SANDBOX_PROVIDER={provider!r}; expected e2b, runta or sunabako")
