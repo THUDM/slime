@@ -211,6 +211,11 @@ async def _post(client, url, payload, max_retries=60, headers=None, timeout=None
 
             if isinstance(e, httpx.HTTPStatusError):
                 response_text = e.response.text
+                status_code = e.response.status_code
+                # The same request gets the same client error again, so do not retry it.
+                if 400 <= status_code < 500 and status_code not in (408, 429):
+                    logger.info(f"Error: {e!r}, not retrying a client error (url={url}, response={response_text})")
+                    raise
             else:
                 response_text = None
 
