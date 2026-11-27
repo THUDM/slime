@@ -76,3 +76,22 @@ The regression gate is `tests/test_glm52_6layer_deterministic_e2e.py` (6-layer G
 An additional short EP8 gate, `tests/test_glm52_layerwise_zero_e2e.py`, records
 the visible output of decoder layers 0–5 on both sides and requires every
 matched hidden-state element to have an absolute difference of exactly zero.
+
+## Deterministic training sampling seeds
+
+With `--sglang-enable-deterministic-inference`, the default
+`--deterministic-sampling-seed-mode group` preserves the existing seed policy:
+`rollout_seed + response_index` is reused for every prompt group.
+
+Use `--deterministic-sampling-seed-mode sample` to assign
+`rollout_seed + sample.index` to each training sample occurrence. The global
+index is allocated by `RolloutDataSource` before asynchronous generation and
+is saved with the rollout dataset state. Retries keep their index, and a
+continuation must restore that dataset state to preserve the seed sequence.
+Custom data sources must likewise supply stable, globally unique, nonnegative
+integer sample indices. Out-of-range seeds fail rather than wrapping and
+reusing a stream. This option does not change evaluation seeds or
+non-deterministic sampling.
+
+Keep the mode unchanged within a training chain. Changing it changes sampled
+trajectories; independent seed streams do not guarantee higher reward.

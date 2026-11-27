@@ -516,6 +516,12 @@ def _wrap_te_linear(module: torch.nn.Module, module_name: str) -> bool:
 
     class_name = type(module).__name__
     if class_name not in _SUPPORTED_TE_CLASS_NAMES:
+        # qwen3_moe_aligned spec swaps attention linear_qkv/linear_proj to plain
+        # ColumnParallelLinear / RowParallelLinear. These are intentionally
+        # left as BF16 matmul (matches SGLang attention path) and skipped here.
+        import os
+        if os.environ.get('SLIME_DEEPGEMM_SKIP_NON_TE', '1') == '1' and class_name in {'ColumnParallelLinear', 'RowParallelLinear', 'Linear'}:
+            return False
         raise RuntimeError(f"DeepGEMM target {module_name} has unsupported module class {class_name}")
     if getattr(module, "use_bias", False):
         raise RuntimeError(f"DeepGEMM alignment probe currently requires bias-free linears: {module_name}")
@@ -620,8 +626,18 @@ def enable_deepgemm_forward(args, model, store_prefix: str) -> None:
         logger.debug("DeepGEMM wrapped Megatron linears: %s", ", ".join(wrapped))
 
 
-def enable_sglang_router_gemm(args, model, store_prefix: str) -> None:
-    """Use one SGLang persistent FP32 forward with Megatron GEMM backward."""
+def enable_sglang_router_gemm(
+    args,
+    model,
+    store_prefix: str,
+    selected_layers: Iterable | None = None,
+) -> None:
+    """Use one SGLang persistent FP32 forward with Megatron GEMM backward.
+
+    ``selected_layers`` overrides ``--megatron-deepgemm-moe-forward-layers`` so
+    NVFP4 cutlass alignment can reuse this installer with
+    ``--megatron-cutlass-nvfp4-moe-forward-layers``.
+    """
 
     del store_prefix
     saved_rollout_replay = bool(
@@ -633,10 +649,9 @@ def enable_sglang_router_gemm(args, model, store_prefix: str) -> None:
             "--sglang-enable-fp32-moe-router so Megatron and SGLang "
             "use the same FP32 router forward"
         )
-    target_layers = _as_set(
-        getattr(args, "megatron_deepgemm_moe_forward_layers", None),
-        (),
-    )
+    if selected_layers is None:
+        selected_layers = getattr(args, "megatron_deepgemm_moe_forward_layers", None)
+    target_layers = _as_set(selected_layers, ())
     if not target_layers:
         return
 
@@ -709,6 +724,12 @@ def enable_sglang_global_batch_invariant_ops() -> None:
     enable_batch_invariant_mode()
     if not is_batch_invariant_mode_enabled():
         raise RuntimeError("SGLang global batch-invariant mode did not enable")
+
+    from slime.backends.megatron_utils.alignment.residual_checkpoint import (
+        enable_exact_residual_checkpointing,
+    )
+
+    enable_exact_residual_checkpointing()
 
 
 def _sglang_batch_invariant_rmsnorm(
@@ -784,7 +805,7 @@ def enable_sglang_layer0_input_rmsnorm(
         if module is None or getattr(module, "_slime_sglang_pipeline_input_rmsnorm_wrapped", False):
             continue
         if not hasattr(module, "weight") or not hasattr(module, "eps"):
-            raise RuntimeError(f"{layer_name}.input_layernorm is missing RMSNorm weight/eps")
+            continue  # skip: missing weight/eps (offloaded?)
 
         original_forward = module.forward
 
@@ -955,7 +976,7 @@ def enable_sglang_final_rmsnorm(
             if getattr(module, "_slime_sglang_final_rmsnorm_wrapped", False):
                 continue
             if not hasattr(module, "weight") or not hasattr(module, "eps"):
-                raise RuntimeError(f"{module_name} is missing RMSNorm weight/eps")
+                continue  # skip: missing weight/eps
 
             decoder_name = module_name.removesuffix(".final_layernorm")
             decoder = named_modules.get(decoder_name)
