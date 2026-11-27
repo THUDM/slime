@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from slime.utils.misc import load_function
 from slime.utils.model_config import load_hf_config
 
 from .common import load_model_hf_weights
@@ -36,13 +37,20 @@ _LOADERS = {
 }
 
 
-def supports_hf_weight_loading(path: str | Path) -> bool:
+def supports_hf_weight_loading(path: str | Path, custom_loader_path: str | None = None) -> bool:
     config = load_hf_config(path, trust_remote_code=True)
+    if custom_loader_path is not None:
+        load_function(custom_loader_path)
+        return True
     return config.model_type in _LOADERS
 
 
 def load_hf_weights(args, model, path: str | Path) -> None:
     config = load_hf_config(path, trust_remote_code=True)
+    if getattr(args, "custom_hf_weight_loader_path", None):
+        mapper = load_function(args.custom_hf_weight_loader_path)
+        load_model_hf_weights(args, model, path, config, mapper)
+        return
     try:
         get_hf_tensor = _LOADERS[config.model_type]
     except KeyError as exc:

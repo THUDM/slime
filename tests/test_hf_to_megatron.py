@@ -45,6 +45,69 @@ from slime.backends.megatron_utils.megatron_to_hf.qwen3moe import convert_qwen3m
 NUM_GPUS = 0
 
 
+def _custom_hf_tensor(name, reader, config):
+    assert name == "module.module.weight"
+    assert config.model_type == "external_test_model"
+    return reader.get_tensor("external.weight")
+
+
+def _custom_hf_export(args, name, tensor):
+    return [("external.weight", tensor + 1)]
+
+
+def test_custom_hf_loader_uses_shared_loading_and_shape_validation(tmp_path, monkeypatch):
+    from slime.backends.megatron_utils import hf_to_megatron as loader
+
+    config = types.SimpleNamespace(model_type="external_test_model")
+    monkeypatch.setattr(loader, "load_hf_config", lambda *args, **kwargs: config)
+    mapper_path = f"{__name__}._custom_hf_tensor"
+    assert not loader.supports_hf_weight_loading(tmp_path)
+    assert loader.supports_hf_weight_loading(tmp_path, mapper_path)
+    with pytest.raises(AttributeError):
+        loader.supports_hf_weight_loading(tmp_path, f"{__name__}.missing_mapper")
+    with pytest.raises(ValueError, match="Unsupported HuggingFace model type"):
+        loader.load_hf_weights(types.SimpleNamespace(), [], tmp_path)
+
+    model = torch.nn.Linear(2, 2, bias=False)
+    runtime = types.ModuleType("slime.backends.megatron_utils.update_weight.common")
+    runtime.named_params_and_buffers = lambda args, models: iter([("module.module.weight", models[0].weight)])
+    monkeypatch.setitem(sys.modules, runtime.__name__, runtime)
+    monkeypatch.setattr(loader.common, "shard_mcore_tensor", lambda name, tensor, parameter: tensor)
+    args = types.SimpleNamespace(custom_hf_weight_loader_path=mapper_path)
+    expected = torch.arange(4, dtype=torch.float32).reshape(2, 2)
+    save_file({"external.weight": expected}, tmp_path / "model.safetensors")
+
+    loader.load_hf_weights(args, [model], tmp_path)
+    torch.testing.assert_close(model.weight, expected, rtol=0, atol=0)
+
+    save_file({"external.weight": torch.ones(3, 2)}, tmp_path / "model.safetensors")
+    with pytest.raises(ValueError, match="Shape mismatch loading"):
+        loader.load_hf_weights(args, [model], tmp_path)
+    torch.testing.assert_close(model.weight, expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("name", ["module.module.output_layer.weight", "module.module.model.visual.weight"])
+def test_custom_hf_export_keeps_padding_and_quantization_pipeline(monkeypatch, name):
+    from slime.backends.megatron_utils import megatron_to_hf as exporter
+
+    args = types.SimpleNamespace(custom_hf_weight_converter_path=f"{__name__}._custom_hf_export", vocab_size=2)
+    tensor = torch.arange(6, dtype=torch.float32).reshape(3, 2)
+    quantization = {"quant_method": "test"}
+    calls = []
+
+    def quantize(args, name, converted, config, transform_ue8m0):
+        calls.append((name, config, transform_ue8m0))
+        return converted
+
+    monkeypatch.setattr(exporter, "quantize_params", quantize)
+    [(hf_name, converted)] = exporter.convert_to_hf(args, "external_test_model", name, tensor, quantization, False)
+
+    assert hf_name == "external.weight"
+    expected = tensor[:2] if name.endswith("output_layer.weight") else tensor
+    torch.testing.assert_close(converted, expected + 1, rtol=0, atol=0)
+    assert calls == [(name, quantization, False)]
+
+
 def test_direct_hf_load_preserves_fp32_expert_bias(tmp_path, monkeypatch):
     from slime.backends.megatron_utils.hf_to_megatron import common
 

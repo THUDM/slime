@@ -25,6 +25,8 @@ Below is a summary of all available customization interfaces and their purposes.
 | [`--custom-eval-rollout-log-function-path`](#logging-functions) | Custom logging for evaluation rollouts. |
 | [`--data-source-path`](#data-source-path) | Override the data source for rollout prompts. |
 | [`--eval-function-path`](#eval-function-path) | Override the rollout function specifically for evaluation. |
+| [`--custom-hf-weight-loader-path`](#custom-hf-weight-mapping) | Map HF checkpoint tensors into a custom Megatron model. |
+| [`--custom-hf-weight-converter-path`](#custom-hf-weight-mapping) | Map custom Megatron tensors to HF names for weight sync/export. |
 | [`--custom-megatron-init-path`](#megatron-hooks) | Custom initialization after Megatron setup. |
 | [`--custom-megatron-before-log-prob-hook-path`](#megatron-hooks) | Custom logic before log probability computation. |
 | [`--custom-megatron-before-train-step-hook-path`](#megatron-hooks) | Custom logic before each training step. |
@@ -449,6 +451,32 @@ class CustomDataSource(DataSource):
 **Use Cases**:
 - Different sampling parameters for evaluation
 - Evaluation-specific logic
+
+---
+
+### Custom HF Weight Mapping
+
+Models supplied through a custom model provider can keep their HF weight mapping
+outside slime's built-in model registries. These hooks apply to the direct
+Megatron conversion path, not the Megatron-Bridge path. The custom model's HF
+configuration must still be loadable by `load_hf_config`.
+
+- `--custom-hf-weight-loader-path`: import path of
+  `mapper(name, safetensor_reader, hf_config) -> Tensor`. The mapper receives a
+  Megatron parameter or buffer name and returns the full HF tensor for it.
+  Slime keeps its shared vocabulary padding, tensor-parallel sharding, shape
+  validation and dtype/device copy. This hook also lets argument validation
+  recognize an HF checkpoint whose model type is not in the built-in registry.
+- `--custom-hf-weight-converter-path`: import path of
+  `mapper(args, name, tensor) -> list[tuple[str, Tensor]]`. It receives the
+  Megatron name and tensor after shared name normalization and vocabulary
+  unpadding. Its HF tensors continue through the shared quantization path for
+  weight sync and direct HF export. An explicit mapper also overrides the
+  default vision-weight passthrough.
+
+Both hooks default to `None`, preserving the built-in mappings. They use the same
+Python import-path convention as the other custom functions. Mapping or import
+errors propagate instead of falling back to a different model's mapping.
 
 ---
 
