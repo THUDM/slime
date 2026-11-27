@@ -202,6 +202,7 @@ class BufferQueue:
 
             if instance_id in self.data:
                 self.data.pop(instance_id)
+                self.group_timestamps.pop(instance_id, None)
 
         return output
 
