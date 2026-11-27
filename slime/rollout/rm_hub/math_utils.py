@@ -482,7 +482,7 @@ def extract_answer(passage: str) -> str:
 
 
 def grade_answer_verl(solution_str, ground_truth):
-    if not ground_truth:
+    if ground_truth is None or ground_truth == "":
         return False
     ground_truth = str(ground_truth)
     if "\\boxed" in ground_truth:
