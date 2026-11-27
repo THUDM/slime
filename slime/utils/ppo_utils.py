@@ -13,7 +13,9 @@ def get_pg_loss_type(args):
     configured = getattr(args, "pg_loss_type", None)
     sc = getattr(args, "use_score_centering", False)
     estimator = getattr(args, "advantage_estimator", None)
-    objective = configured or ("reinforce" if sc else "cispo" if estimator == "cispo" else "ppo")
+    objective = configured or (
+        "reinforce" if sc or estimator == "flash_reinforce" else "cispo" if estimator == "cispo" else "ppo"
+    )
     if sc and objective != "reinforce":
         raise ValueError("--use-score-centering requires --pg-loss-type reinforce.")
     if configured is not None and estimator in ("gspo", "cispo"):

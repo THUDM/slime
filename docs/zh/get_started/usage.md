@@ -205,11 +205,12 @@ slime 支持加载 `.jsonl` 和 `.parquet` 格式文件；读取 Parquet 需要�
   - `gspo`（https://arxiv.org/abs/2507.18071）；
   - `cispo`（https://arxiv.org/abs/2506.13585）；
   - `reinforce_plus_plus` 与 `reinforce_plus_plus_baseline`（https://arxiv.org/abs/2501.03262）；
-  - `ppo`（https://arxiv.org/abs/1707.06347）。
+  - `ppo`（https://arxiv.org/abs/1707.06347）；
+  - `flash_reinforce`（FlashREINFORCE，出自 [NVIDIA molt](https://github.com/NVIDIA-NeMo/labs-molt)），详见下方的 [FlashREINFORCE](#flashreinforce)。
 
   注意：在策略蒸馏 (OPD) 现在与 advantage estimator 正交，使用 `--use-opd` 和 `--opd-kl-coef` 可以在任意 estimator 之上启用 OPD。
 - `--calculate-per-token-loss`：slime 中默认的方案是 per sample loss，即 `mean(sum(sample_i) / len(sample_i))`，如果需要计算 per token loss，即 `sum(sum(sample_i)) / sum(len(sample_i))`，可以开启 `--calculate-per-token-loss`；
-- `--use-tis`：如果需要开启 tis（https://fengyao.notion.site/off-policy-rl），可以开启这一设置；
+- `--use-tis`：如果需要开启 tis（https://fengyao.notion.site/off-policy-rl），可以开启这一设置；通过 `--custom-tis-function-path` 可以换成其他校正方式，包括内置的 `slime.backends.megatron_utils.loss.icepop_function` 和 `slime.backends.megatron_utils.loss.binary_kl_trust_region_function`（FlashREINFORCE）；
 - `--use-score-centering`：启用 [Score Centering](https://arxiv.org/abs/2609.20807)，可与 TIS 组合使用，详见下方的 [Score Centering](#score-centering)。
 
 #### GRPO 算法
@@ -293,6 +294,33 @@ PPO 相关参数：
 top-p 概率与 replay ID/offset 一起驻留在 CPU，支持 partial rollout、masked tool token、DP、TP 和两种 CP 布局。PD 模式当前每步 metadata 容量为 4096 个 token，SC 超出容量会报错，不能降级为 sampled-token-only；精确 top-p SC 暂不支持 Ascend sampler。
 
 sampler top-k 数据支持 partial rollout 续接、masked tool token、DP 划分、microbatch 选择、TP 及两种 CP 布局；使用 R3 spill hook 时共享其文件生命周期。相关日志指标包括 `sc_correction`、`sc_sampler_head_mass`、`sc_train_head_mass` 和 `sc_importance_weight`。
+
+#### FlashREINFORCE
+
+FlashREINFORCE（[NVIDIA molt](https://github.com/NVIDIA-NeMo/labs-molt)）是一种不需要 critic、每个 prompt 只采一条回复的 RL 方法，为异步 rollout 设计。在 slime 中由以下参数组合而成：
+
+```bash
+--advantage-estimator flash_reinforce \
+--n-samples-per-prompt 1 \
+--num-steps-per-rollout 1 \
+--use-tis \
+--custom-tis-function-path slime.backends.megatron_utils.loss.binary_kl_trust_region_function \
+--tis-binary-kl-threshold 5e-3 \
+--kl-coef 0 \
+--entropy-coef 0
+```
+
+- `--advantage-estimator flash_reinforce`：每个样本的 advantage 是它的 reward 减去整个 rollout batch 的平均 reward，并广播到所有回复 token。不按 prompt 分组，不除以标准差，也不做 whitening。reward 为 0/1 时，正负梯度的总量相互平衡；一个 batch 的 reward 全部相同时不产生更新。policy gradient 目标默认使用 `--pg-loss-type reinforce`。
+- `--num-steps-per-rollout 1`：每个 rollout batch 只做一次优化步。这时 slime 直接复用训练前向得到的 log-prob 作为 old log-prob，不再单独跑一次前向。`--kl-coef` 不为 0、`--use-rollout-logprobs` 或 `--get-mismatch-metrics` 会关闭这种复用。
+- `binary_kl_trust_region_function`：每个回复 token 乘上训练端与 rollout 引擎之间不截断的 importance ratio。对每条序列，计算采样 token 在 rollout 概率和训练概率之间的 binary KL，并在 loss token 上取平均；平均值超过 `--tis-binary-kl-threshold` 的序列不产生 policy gradient，但仍计入 loss 的分母，它的 entropy 和 KL 项不受影响。`--tis-binary-kl-threshold inf` 会关闭这个门控。日志指标为 `tis`、`tis_abs`、`tis_binary_kl` 和 `tis_seq_reject_frac`。
+- 保持默认的 per sample loss（不要开启 `--calculate-per-token-loss`），也不要开启 `--normalize-advantages`。
+
+注意事项：
+
+- 门控比较的是 rollout 引擎和训练端的 log-prob，因此不要设置 `SGLANG_RETURN_ORIGINAL_LOGPROB`。
+- baseline 是按样本求的平均；如果自定义 rollout 为一条轨迹返回多个样本，这条轨迹会按样本数被重复计入。设置 `--custom-reward-post-process-path` 会替换这里的中心化。
+- `--n-samples-per-prompt 1` 时，丢弃零方差 prompt 组的动态采样过滤器（例如 `check_reward_nonzero_std`）会把所有组都丢掉。
+- 使用 [fully-async rollout](../_examples_synced/fully_async/README.md) 时，在飞的轨迹会跨权重更新继续生成，因此一条回复可能包含多个策略版本生成的 token。逐 token 的 importance weight 和门控会对此做校正。
 
 ### 高级 Megatron 配置（--megatron-config-path）
 
