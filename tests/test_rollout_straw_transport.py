@@ -778,6 +778,7 @@ def test_debug_archive_replay_reuses_records_and_isolates_training(
 
     args.rollout_queue_run_id = "source-run"
     samples = [Sample(index=i, rollout_id=i, tokens=[1, 2, 3], response_length=2, reward=0.5) for i in range(2)]
+    samples[1].remove_sample = True
     for sample in samples:
         sample.rollout_routed_experts = torch.zeros((2, 1, 1), dtype=torch.int32)
         # Archives must discard live source-queue authorization before replay.
@@ -866,6 +867,7 @@ def test_debug_archive_replay_reuses_records_and_isolates_training(
                         assert replay.batch(builder.batch_id)["input_positions"] == [2 * (step - 7)]
                         refs = builder.split_by_dp(builder.convert(loaded))
                     batch = process_rollout_data(refs, 0, 1)
+                    assert batch["loss_rollout_counts"] == [1]
                     assert [t.tolist() for t in batch["tokens"]] == [[1, 2, 3], [1, 2, 3]]
                     assert [box.inner for box in builder.begin(loaded)] == [box.inner for box in refs]
                     builder.training_completed(step)

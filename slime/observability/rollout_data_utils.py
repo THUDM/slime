@@ -1,4 +1,5 @@
 import logging
+from itertools import islice
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,29 @@ def _cpu_tensor(value, dtype: torch.dtype | None = None) -> torch.Tensor:
         value = value.copy()
     tensor = torch.as_tensor(value, dtype=dtype) if dtype is not None else torch.as_tensor(value)
     return tensor.detach().cpu().contiguous()
+
+
+def get_rollout_mask_sums(rollout_ids, loss_masks):
+    totals = {}
+    for rid, mask in zip(rollout_ids, loss_masks, strict=True):
+        count = int(mask.sum()) if isinstance(mask, torch.Tensor) else sum(mask)
+        totals[rid] = totals.get(rid, 0) + count
+    return [totals[rid] for rid in rollout_ids]
+
+
+def get_rollout_has_training_tokens(rollout_ids, mask_sums) -> list[bool]:
+    """One flag per distinct rollout, in the first-occurrence order used by the DP scheduler."""
+    if mask_sums is None:
+        return [True] * len(dict.fromkeys(rollout_ids))
+    if isinstance(mask_sums, torch.Tensor):
+        mask_sums = mask_sums.tolist()
+    totals = dict(zip(rollout_ids, mask_sums, strict=True))
+    return [bool(total > 0) for total in totals.values()]
+
+
+def get_loss_rollout_counts(active_rollouts, global_batch_sizes) -> list[int]:
+    flags = iter(active_rollouts)
+    return [sum(islice(flags, size)) for size in global_batch_sizes]
 
 
 def tensorize_rollout_data_for_training(rollout_data: dict[str, Any]) -> None:

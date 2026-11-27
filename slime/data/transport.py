@@ -183,10 +183,41 @@ class TrainBatchRef(DiskPayloadRef):
     schedule: dict | None = field(default=None, kw_only=True)
 
     def load(self, *, root=None):
-        value = super().load(root=root, selection=self.selection)
-        if self.schedule is not None:
-            value.update(self.schedule)
+        schedule = self.schedule or {}
+        selection = self.selection
+        if "global_batch_sizes" in schedule and schedule.get("loss_rollout_counts") is None:
+            # Pre-activity-column archive. Only the trainer may materialize its mask tensors.
+            normalization = self._load_legacy_normalization(root)
+            schedule = {**schedule, **normalization}
+            if selection is not None:
+                selection = {key: indices for key, indices in selection.items() if key not in normalization}
+        value = super().load(root=root, selection=selection)
+        value.update(schedule)
         return value
+
+    def _load_legacy_normalization(self, root):
+        import torch
+
+        from slime.observability.rollout_data_utils import (
+            get_loss_rollout_counts,
+            get_rollout_has_training_tokens,
+            get_rollout_mask_sums,
+        )
+
+        partition = self.schedule["partition"]
+        data = super().load(root=root, selection={"rollout_ids": None, "rollout_mask_sums": None})
+        totals = data.get("rollout_mask_sums")
+        fields = {}
+        if totals is None:
+            masks = super().load(root=root, selection={"loss_masks": None}).get("loss_masks")
+            if masks is not None:
+                totals = get_rollout_mask_sums(data["rollout_ids"], masks)
+                fields["loss_masks"] = [masks[i] for i in partition]
+        if totals is not None:
+            fields["rollout_mask_sums"] = torch.as_tensor(totals, dtype=torch.float32)[partition]
+        active_rollouts = get_rollout_has_training_tokens(data["rollout_ids"], totals)
+        fields["loss_rollout_counts"] = get_loss_rollout_counts(active_rollouts, self.schedule["global_batch_sizes"])
+        return fields
 
 
 def group_lease(group):

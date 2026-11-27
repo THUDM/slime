@@ -204,7 +204,7 @@ The recommended contract is to put the source identifier in `metadata["source_na
     - `ppo` ([https://arxiv.org/abs/1707.06347](https://arxiv.org/abs/1707.06347))
 
   Note: On-policy distillation (OPD) is now orthogonal to the advantage estimator. Use `--use-opd` and `--opd-kl-coef` to enable OPD on top of any estimator.
-- `--calculate-per-token-loss`: By default, slime calculates loss on a per-sample basis, i.e., `mean(sum(sample_i) / len(sample_i))`. Enable this flag to calculate loss on a per-token basis, i.e., `sum(sum(sample_i)) / sum(len(sample_i))`.
+- `--calculate-per-token-loss` enables per-token loss across the training step. By default, slime averages token losses within each rollout and gives equal weight to each rollout with at least one training token. Segments from the same rollout count together.
 - `--use-tis`: Enable this setting to use TIS (Truncated Importance Sampling) (https://fengyao.notion.site/off-policy-rl).
 - `--use-score-centering`: Enable [Score Centering](https://arxiv.org/abs/2609.20807), optionally combined with TIS. See [Score Centering](#score-centering) below.
 

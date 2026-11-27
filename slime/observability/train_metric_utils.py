@@ -19,7 +19,7 @@ def reduce_train_step_metrics(
     losses_reduced: list[dict],
     *,
     calculate_per_token_loss: bool,
-    step_global_batch_size: int,
+    loss_divisor: int,
     cp_size: int,
     dp_with_cp_group,
 ) -> dict[str, float]:
@@ -34,7 +34,7 @@ def reduce_train_step_metrics(
            num_tokens off the FULL (not chunked) masks; the
            ``cp_factor = cp_size`` multiplier cancels that inflation, leaving
            the genuine per-token average.
-         - per-rollout-mean: divisor = constant ``step_global_batch_size`` from
+         - per-rollout-mean: divisor = constant ``loss_divisor`` from
            the rollout side, never all-reduced, so no CP inflation to cancel
            and ``cp_factor = 1``.
 
@@ -54,7 +54,7 @@ def reduce_train_step_metrics(
         num_samples_or_tokens = values[0]
         cp_factor = cp_size
     else:
-        num_samples_or_tokens = step_global_batch_size
+        num_samples_or_tokens = loss_divisor
         cp_factor = 1
     return {key: value * cp_factor / num_samples_or_tokens for key, value in zip(keys, values[1:], strict=False)}
 
@@ -173,6 +173,7 @@ def log_rollout_data(
             "rollout_top_p_log_probs",
             "rollout_routed_experts",
             "global_batch_sizes",
+            "loss_rollout_counts",
             "num_microbatches",
             "micro_batch_indices",
             "source_names",

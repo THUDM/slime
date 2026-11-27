@@ -38,6 +38,7 @@ def test_optimizer_step_returns_scalar_norm_and_skips_invalid_gradients(norm_typ
         calculate_per_token_loss=False,
     )
     updates, samples = [], []
+    # Exercise a fully masked step. Its loss divisor is one, its scheduler increment is still 16.
 
     def step():
         updates.append(True)
@@ -57,7 +58,9 @@ def test_optimizer_step_returns_scalar_norm_and_skips_invalid_gradients(norm_typ
             get_context_parallel_world_size=lambda: 1,
             get_data_parallel_group=lambda **kwargs: None,
         ),
-        "train_metric_utils": types.SimpleNamespace(reduce_train_step_metrics=lambda *args, **kwargs: {"loss": 1.0}),
+        "train_metric_utils": types.SimpleNamespace(
+            reduce_train_step_metrics=lambda *args, loss_divisor, **kwargs: {"divisor": loss_divisor}
+        ),
     }
     isolated = ast.Module(
         body=[ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0), function],
@@ -74,8 +77,9 @@ def test_optimizer_step_returns_scalar_norm_and_skips_invalid_gradients(norm_typ
         types.SimpleNamespace(step=lambda *, increment: samples.append(increment)),
         1,
         16,
+        loss_rollout_count=0,
     )
-    assert losses == {"loss": 1.0} and isinstance(grad_norm, float)
+    assert losses == {"divisor": 1} and isinstance(grad_norm, float)
     assert grad_norm == value if finite else math.isnan(grad_norm)
     assert updates == ([True] if finite else [])
     assert samples == ([16] if finite else [])

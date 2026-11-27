@@ -298,7 +298,7 @@ def test_train_one_step_per_rollout_mean_report_invariant_to_cp(monkeypatch, moc
         reduced = reduce_train_step_metrics(
             [{"keys": ["metric"], "values": torch.tensor([0.0, value_after_allreduce])}],
             calculate_per_token_loss=False,
-            step_global_batch_size=step_global_batch_size,
+            loss_divisor=step_global_batch_size,
             cp_size=cp_size,
             dp_with_cp_group=mock_dp_with_cp_group,
         )
@@ -356,7 +356,7 @@ def test_train_one_step_per_token_loss_report_invariant_to_cp(monkeypatch, mock_
                 }
             ],
             calculate_per_token_loss=True,
-            step_global_batch_size=999,  # unused in per-token-loss path
+            loss_divisor=999,  # unused in per-token-loss path
             cp_size=cp_size,
             dp_with_cp_group=mock_dp_with_cp_group,
         )

@@ -208,7 +208,7 @@ slime 支持加载 `.jsonl` 和 `.parquet` 格式文件；读取 Parquet 需要�
   - `ppo`（https://arxiv.org/abs/1707.06347）。
 
   注意：在策略蒸馏 (OPD) 现在与 advantage estimator 正交，使用 `--use-opd` 和 `--opd-kl-coef` 可以在任意 estimator 之上启用 OPD。
-- `--calculate-per-token-loss`：slime 中默认的方案是 per sample loss，即 `mean(sum(sample_i) / len(sample_i))`，如果需要计算 per token loss，即 `sum(sum(sample_i)) / sum(len(sample_i))`，可以开启 `--calculate-per-token-loss`；
+- `--calculate-per-token-loss` 开启后，整个训练步按 token 求平均 loss。默认情况下，slime 先对每条 rollout 的有效训练 token 求平均 loss，再对至少含一个有效训练 token 的 rollout 求平均。同一条 rollout 拆成多个片段时只计一次。
 - `--use-tis`：如果需要开启 tis（https://fengyao.notion.site/off-policy-rl），可以开启这一设置；
 - `--use-score-centering`：启用 [Score Centering](https://arxiv.org/abs/2609.20807)，可与 TIS 组合使用，详见下方的 [Score Centering](#score-centering)。
 

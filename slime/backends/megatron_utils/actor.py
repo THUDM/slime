@@ -439,6 +439,7 @@ class MegatronTrainRayActor(TrainRayActor):
             data_iterator,
             num_microbatches,
             global_batch_sizes,
+            rollout_data.get("loss_rollout_counts"),
         )
 
         if mpu.is_pipeline_last_stage() and "values" in rollout_data:
@@ -561,6 +562,7 @@ class MegatronTrainRayActor(TrainRayActor):
                     data_iterator,
                     num_microbatches,
                     global_batch_sizes,
+                    rollout_data.get("loss_rollout_counts"),
                 )
             if capture_log_probs:
                 captured = drain_captured_log_probs()
