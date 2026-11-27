@@ -704,6 +704,19 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=60.0,
                 help="Total time budget in seconds for detaching or disposing a training attempt.",
             )
+            parser.add_argument(
+                "--serving-lifetime",
+                type=str,
+                choices=["detached", "task"],
+                default="detached",
+                help=(
+                    "Lifetime of internal rollout serving. 'detached' (default) keeps engines, routers and their "
+                    "GPU placements in a named session after a failed or interrupted run so a restarted driver "
+                    "can reuse them. 'task' ties serving to this job: it is torn down on every exit, including "
+                    "failures and interruptions, and Ray reclaims it if the driver process dies. Use 'task' for "
+                    "benchmarks, sweeps and CI, where a retained session would keep rollout GPUs occupied."
+                ),
+            )
             return parser
 
         # data
