@@ -1,3 +1,4 @@
+import re
 from types import SimpleNamespace
 
 import numpy as np
@@ -63,6 +64,49 @@ def test_r3_validation_rejects_row_mismatch_and_expert_range():
     routes[1, 5, 0] = 16
     with pytest.raises(ValueError, match=r"outside \[0, 15\].*16"):
         validate_rollout_routed_experts_for_replay([routes], _args())
+
+
+def test_r3_validation_reports_missing_layers_for_strided_moe_layout():
+    args = _args()
+    args.moe_layer_freq = 2  # MoE layers 0, 2 and 4.
+    routes = torch.zeros((4, 6, 2), dtype=torch.int32)
+    routes[:, [0, 2], 1] = 7
+    with pytest.raises(ValueError, match=r"all zero for MoE layers \[4\]"):
+        validate_rollout_routed_experts_for_replay([routes], args)
+
+    routes[:, 4, 1] = 7
+    validate_rollout_routed_experts_for_replay([routes], args)
+
+
+def test_r3_validation_accepts_uint8_ids_up_to_255_with_256_experts():
+    args = _args()
+    args.num_experts = 256
+    validate_rollout_routed_experts_for_replay([torch.full((4, 6, 2), 255, dtype=torch.uint8)], args)
+
+
+@pytest.mark.parametrize(
+    ("moe_layer_freq", "moe_layers"),
+    [([0, 0, 0, 1, 1, 1], [3, 4, 5]), (2, [0, 2, 4]), ([1, 0, 1, 1, 0, 1], [0, 2, 3, 5])],
+)
+@pytest.mark.parametrize("dtype", [torch.uint8, torch.int32, torch.int64])
+def test_r3_expert_range_check_matches_elementwise_check(moe_layer_freq, moe_layers, dtype):
+    args = _args()
+    args.moe_layer_freq = moe_layer_freq
+    generator = torch.Generator().manual_seed(0)
+    bad_values = [16, 200] if dtype == torch.uint8 else [-3, 16, 200]
+    for _ in range(32):
+        routes = torch.randint(1, 16, (5, 6, 2), generator=generator).to(dtype)
+        for _ in range(int(torch.randint(0, 3, (1,), generator=generator))):
+            index = tuple(int(torch.randint(0, size, (1,), generator=generator)) for size in routes.shape)
+            routes[index] = bad_values[int(torch.randint(0, len(bad_values), (1,), generator=generator))]
+
+        selected = routes[:, moe_layers, :].to(torch.int64)
+        invalid_ids = torch.unique(selected[(selected < 0) | (selected >= 16)]).tolist()
+        if invalid_ids:
+            with pytest.raises(ValueError, match=re.escape(f"outside [0, 15]: {invalid_ids}.")):
+                validate_rollout_routed_experts_for_replay([routes], args)
+        else:
+            validate_rollout_routed_experts_for_replay([routes], args)
 
 
 def test_tensorize_rollout_data_for_training_normalizes_cpu_tensors():

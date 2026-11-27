@@ -44,8 +44,10 @@ def validate_routed_experts_tensor(
         moe_layers = [layer_id for layer_id in range(num_layers) if layer_id % moe_layer_freq == 0]
     else:
         moe_layers = list(range(num_layers))
+    # Slice contiguous MoE layers (the usual dense-prefix layout); advanced indexing copies every route.
+    start, stop = (moe_layers[0], moe_layers[-1] + 1) if moe_layers else (0, 0)
+    moe_routes = experts[:, start:stop] if stop - start == len(moe_layers) else experts[:, moe_layers, :]
     if topk > 1:
-        moe_routes = experts[:, moe_layers, :]
         token_layer_present = torch.any(moe_routes != 0, dim=-1)
         missing_layer_mask = ~torch.any(token_layer_present, dim=0)
         missing_layers = [moe_layers[idx] for idx in torch.nonzero(missing_layer_mask).reshape(-1).tolist()]
@@ -88,17 +90,20 @@ def validate_routed_experts_tensor(
                 experts.shape[0],
             )
 
-    if moe_layers:
-        # Cast first so uint8 expert ids compare correctly with num_experts=256.
-        moe_routes = experts[:, moe_layers, :].to(torch.int64)
+    if moe_routes.numel():
         num_experts = int(getattr(args, "num_experts", torch.iinfo(torch.int32).max))
-        invalid = (moe_routes < 0) | (moe_routes >= num_experts)
-        if torch.any(invalid):
-            invalid_ids = torch.unique(moe_routes[invalid])[:16].tolist()
-            raise ValueError(
-                f"R3 sample {sample_index} contains routed expert ids outside "
-                f"[0, {num_experts - 1}]: {invalid_ids}."
-            )
+        low, high = torch.aminmax(moe_routes)
+        # Skip the element-wise check only when the bounds prove every id valid; NaN bounds never do.
+        if not (low.item() >= 0 and high.item() < num_experts):
+            # Cast first so uint8 expert ids compare correctly with num_experts=256.
+            moe_routes = moe_routes.to(torch.int64)
+            invalid = (moe_routes < 0) | (moe_routes >= num_experts)
+            if torch.any(invalid):
+                invalid_ids = torch.unique(moe_routes[invalid])[:16].tolist()
+                raise ValueError(
+                    f"R3 sample {sample_index} contains routed expert ids outside "
+                    f"[0, {num_experts - 1}]: {invalid_ids}."
+                )
 
 
 def validate_routed_experts_value(
