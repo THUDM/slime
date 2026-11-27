@@ -70,12 +70,42 @@ def test_packed_mrope_rejects_unused_grids():
 
 
 @pytest.mark.unit
-def test_thd_cp_indices_select_two_chunks_per_packed_sequence():
-    rank_0 = get_packed_cp_local_indices([0, 8, 16], cp_size=2, cp_rank=0, device=torch.device("cpu"))
-    rank_1 = get_packed_cp_local_indices([0, 8, 16], cp_size=2, cp_rank=1, device=torch.device("cpu"))
+@pytest.mark.parametrize(
+    "boundaries, expected_by_rank",
+    [
+        ([0, 8, 16], [[0, 1, 6, 7, 8, 9, 14, 15], [2, 3, 4, 5, 10, 11, 12, 13]]),
+        (
+            [0, 8, 24],
+            [[0, 7, 8, 9, 22, 23], [1, 6, 10, 11, 20, 21], [2, 5, 12, 13, 18, 19], [3, 4, 14, 15, 16, 17]],
+        ),
+    ],
+)
+def test_thd_cp_indices_select_two_chunks_per_packed_sequence(boundaries, expected_by_rank):
+    for rank, expected in enumerate(expected_by_rank):
+        indices = get_packed_cp_local_indices(
+            boundaries, cp_size=len(expected_by_rank), cp_rank=rank, device=torch.device("cpu")
+        )
+        assert indices.tolist() == expected
 
-    assert rank_0.tolist() == [0, 1, 6, 7, 8, 9, 14, 15]
-    assert rank_1.tolist() == [2, 3, 4, 5, 10, 11, 12, 13]
+
+@pytest.mark.unit
+@pytest.mark.parametrize("as_tensor", [False, True])
+@pytest.mark.parametrize("boundaries", [[], [0], [0, 0], [0, 5], [0, 3, 8], [0, 4, 10], [0, 3, 3, 8], [2, 5, 9]])
+def test_thd_cp_indices_are_identity_without_cp(boundaries, as_tensor):
+    cu_seqlens = torch.tensor(boundaries, dtype=torch.int32) if as_tensor else boundaries
+    indices = get_packed_cp_local_indices(cu_seqlens, cp_size=1, cp_rank=0, device=torch.device("cpu"))
+
+    expected = list(range(boundaries[0], boundaries[-1])) if boundaries else []
+    assert indices.tolist() == expected
+    assert indices.dtype == torch.long
+    assert indices.device == torch.device("cpu")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("cp_size, boundaries", [(2, [0, 3]), (4, [0, 12])])
+def test_thd_cp_indices_still_reject_indivisible_sequences_with_cp(cp_size, boundaries):
+    with pytest.raises(ValueError, match="must be divisible by 2 \\* CP size"):
+        get_packed_cp_local_indices(boundaries, cp_size=cp_size, cp_rank=0, device=torch.device("cpu"))
 
 
 @pytest.mark.unit

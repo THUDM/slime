@@ -15,6 +15,11 @@ def get_packed_cp_local_indices(
     """Map a THD CP rank's local tokens back to the full packed token stream."""
 
     boundaries = [int(value) for value in cu_seqlens]
+    # Without CP, the local stream is the full packed stream; no two-chunk
+    # split (or even-length requirement) applies to individual sequences.
+    if cp_size == 1 and boundaries:
+        return torch.arange(boundaries[0], boundaries[-1], device=device)
+
     indices = []
     for start, end in zip(boundaries[:-1], boundaries[1:], strict=True):
         sequence_length = end - start
