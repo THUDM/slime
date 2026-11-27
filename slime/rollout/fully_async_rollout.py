@@ -102,6 +102,10 @@ class AsyncRolloutWorker:
         self.output_queue: queue.Queue[tuple[int, list[Sample]]] = queue.Queue()
         self.poll_interval = 0.01
         self.worker_thread: threading.Thread | None = None
+        # Inputs of unfinished groups, so a snapshot can requeue them instead of
+        # waiting. Done callbacks take the lock, so no group is seen twice.
+        self.inflight: dict[int, list[Sample]] = {}
+        self.snapshot_lock = threading.RLock()
         self.state = GenerateState(args)
 
     # -- public --------------------------------------------------------------
@@ -126,16 +130,20 @@ class AsyncRolloutWorker:
             self.paused = False
 
     def state_dict(self):
-        if not self.admission_paused or self.active:
+        if not self.admission_paused:
             raise RuntimeError("Pause generation before saving worker state")
-        with self.output_queue.mutex:
-            return {"ready": list(self.output_queue.queue)}
+        with self.snapshot_lock:
+            with self.output_queue.mutex:
+                ready = list(self.output_queue.queue)
+            return {"ready": ready, "inflight": copy.deepcopy(list(self.inflight.values()))}
 
     def load_state_dict(self, state):
         if self.worker_thread is not None:
             raise RuntimeError("Restore worker state before starting generation")
         for result in state["ready"]:
             self.output_queue.put(result)
+        if state.get("inflight"):
+            self.data_buffer.add_samples(state["inflight"])
 
     def close(self):
         self.running = False
@@ -248,8 +256,10 @@ class AsyncRolloutWorker:
         # Save their inputs before generation mutates them; completed siblings
         # will retain their results when the group is retried.
         retry_group = [sample if isinstance(sample, list) else copy.deepcopy(sample) for sample in input_group]
+        with self.snapshot_lock:
+            self.inflight[gid] = retry_group
 
-        def _cb(done_task: asyncio.Task) -> None:
+        def _finish(done_task: asyncio.Task) -> None:
             try:
                 result = done_task.result()
             except asyncio.CancelledError:
@@ -271,6 +281,11 @@ class AsyncRolloutWorker:
                     logger.exception("fully-async: failed to requeue aborted group")
                 return
             self.output_queue.put((gid, result))
+
+        def _cb(done_task: asyncio.Task) -> None:
+            with self.snapshot_lock:
+                self.inflight.pop(gid, None)
+                _finish(done_task)
 
         return _cb
 

@@ -417,5 +417,89 @@ def test_local_worker_lifecycle_is_scoped_to_source(monkeypatch, transport):
     assert all(not worker.worker_thread.is_alive() for worker in workers)
 
 
+def _make_buffer_source(groups):
+    from slime.data.data_source import RolloutDataSourceWithBuffer, pop_first
+
+    source = object.__new__(RolloutDataSourceWithBuffer)
+    source.args = SimpleNamespace(n_samples_per_prompt=1, rollout_shuffle=False)
+    source.dataset = None
+    source.consumers, source._restored_consumers = {}, {}
+    source.sample_offset = source.epoch_id = source.sample_group_index = source.sample_index = 0
+    source.metadata = {}
+    source.buffer = list(groups)
+    source.buffer_filter = pop_first
+    return source
+
+
+def _make_buffer_worker(monkeypatch, source):
+    # Not _make_worker: an empty data source is falsy (it defines __len__).
+    monkeypatch.setattr(fa, "GenerateState", _FakeGenerateState)
+    worker = fa.AsyncRolloutWorker(SimpleNamespace(n_samples_per_prompt=1), source, concurrency=1)
+    source.register_consumer("fully_async", worker)
+    return worker
+
+
+def _blocking_generate(monkeypatch):
+    started, finish = threading.Event(), threading.Event()
+
+    async def generate(args, group, sampling_params, evaluation):
+        started.set()
+        while not finish.is_set():
+            await asyncio.sleep(0.01)
+        return group
+
+    monkeypatch.setattr(fa, "generate_and_rm_group", generate)
+    return started, finish
+
+
+def test_source_snapshot_requeues_unfinished_groups_without_waiting(monkeypatch):
+    started, finish = _blocking_generate(monkeypatch)
+    source = _make_buffer_source([_make_group(7)])
+    worker = _make_buffer_worker(monkeypatch, source)
+    worker.start()
+    try:
+        assert started.wait(5)
+        began = time.monotonic()
+        state = source.state_dict()
+        # The unfinished group neither blocks the snapshot nor stops generating.
+        assert time.monotonic() - began < 1
+        assert worker.active == 1 and not worker.paused
+        saved = state["consumers"]["fully_async"]
+        assert saved["ready"] == []
+        assert [group[0].index for group in saved["inflight"]] == [7]
+
+        rebuilt = _make_buffer_source([])
+        rebuilt.load_state_dict(state)
+        rebuilt.register_consumer("fully_async", fa.AsyncRolloutWorker(worker.args, rebuilt, concurrency=1))
+        assert [group[0].index for group in rebuilt.buffer] == [7]
+    finally:
+        finish.set()
+        worker.close()
+
+
+def test_group_finishing_during_snapshot_is_recorded_once(monkeypatch):
+    started, finish = _blocking_generate(monkeypatch)
+    source = _make_buffer_source([_make_group(3)])
+    worker = _make_buffer_worker(monkeypatch, source)
+    worker.start()
+    try:
+        assert started.wait(5)
+        with worker.snapshot_lock:
+            finish.set()
+            time.sleep(0.1)
+            # The done callback waits for the snapshot instead of moving the group.
+            assert worker.queue_size() == 0 and list(worker.inflight) == [0]
+        deadline = time.monotonic() + 5
+        while worker.queue_size() == 0:
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        saved = source.state_dict()["consumers"]["fully_async"]
+        assert [group[0].index for _, group in saved["ready"]] == [3]
+        assert saved["inflight"] == []
+    finally:
+        finish.set()
+        worker.close()
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
