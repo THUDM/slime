@@ -410,17 +410,18 @@ def last_boxed_only_string(string):
 
 
 def remove_boxed(s):
-    left = "\\boxed{"
     try:
-        assert s[: len(left)] == left
-        assert s[-1] == "}"
-        return s[len(left) : -1]
+        for left in ("\\boxed{", "\\fbox{"):
+            if s[: len(left)] == left:
+                assert s[-1] == "}"
+                return s[len(left) : -1]
+        return None
     except Exception:
         return None
 
 
 def extract_boxed_answer(solution: str) -> str:
-    """Extract the answer from inside a LaTeX \\boxed{} command"""
+    """Extract the answer from inside a LaTeX \\boxed{} or \\fbox{} command."""
     solution = last_boxed_only_string(solution)
     solution = remove_boxed(solution)
     return solution
@@ -476,7 +477,7 @@ def grade_answer_mathd(given_answer: str, ground_truth: str) -> bool:
 
 
 def extract_answer(passage: str) -> str:
-    if "\\boxed" in passage:
+    if "\\boxed" in passage or "\\fbox" in passage:
         return extract_boxed_answer(passage)
     return None
 
@@ -485,7 +486,7 @@ def grade_answer_verl(solution_str, ground_truth):
     if not ground_truth:
         return False
     ground_truth = str(ground_truth)
-    if "\\boxed" in ground_truth:
+    if "\\boxed" in ground_truth or "\\fbox" in ground_truth:
         ground_truth = extract_answer(ground_truth)
     given_answer = extract_answer(solution_str)
     if given_answer is None:

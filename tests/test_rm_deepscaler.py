@@ -36,6 +36,12 @@ def test_response_split_on_response_marker_grades_tail():
 
 
 @pytest.mark.unit
+def test_response_with_fbox_grades_tail():
+    response = r"Reasoning</think>Final: \fbox{42}"
+    assert get_deepscaler_rule_based_reward(response, "42") == 1
+
+
+@pytest.mark.unit
 def test_response_without_any_marker_returns_zero():
     """No ``</think>`` AND no ``###Response`` → fall through to 0
     immediately (deepscaler.py:9-10). This is the silent-failure pole —
@@ -78,6 +84,11 @@ def test_label_with_boxed_marker_is_extracted_too():
     """If the ground truth itself is wrapped in ``\\boxed{}``, it must be
     unwrapped before grading (deepscaler.py:26-29)."""
     assert get_deepscaler_rule_based_reward(r"</think>\boxed{42}", r"\boxed{42}") == 1
+
+
+@pytest.mark.unit
+def test_label_with_fbox_marker_is_extracted_too():
+    assert get_deepscaler_rule_based_reward(r"</think>\fbox{42}", r"\fbox{42}") == 1
 
 
 @pytest.mark.unit
