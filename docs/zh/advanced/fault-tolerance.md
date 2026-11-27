@@ -95,7 +95,8 @@ rollout 过程中，slime 定期请求 SGLang 的 `/health_generate` 接口，�
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
-| `--rollout-health-check-first-wait` | `600` 秒 | 每次恢复后台检查后，先等待这段时间，给模型预热和算子编译留出时间。rollout 收尾检查不受影响。 |
+| `--rollout-health-check-first-wait` | `600` 秒 | 首次后台检查前先等待这段时间，给模型预热和算子编译留出时间。rollout 收尾检查不受影响。 |
+| `--rollout-health-check-resume-wait` | 同 `--rollout-health-check-first-wait` | 之后每次恢复后台检查（例如每次 rollout 开始时）先等待的时间。rollout 较短时，将其设为小于 rollout 时长，后台检查才会在 rollout 期间运行。 |
 | `--rollout-health-check-interval` | `600` 秒 | 后台健康检查的间隔。 |
 | `--rollout-health-check-timeout` | `600` 秒 | 单次健康检查的超时，也限制等待 Ray 健康检查调用的时间。 |
 

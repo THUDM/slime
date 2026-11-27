@@ -30,6 +30,9 @@ class RolloutHealthMonitor:
         self._check_interval = args.rollout_health_check_interval
         self._check_timeout = args.rollout_health_check_timeout
         self._check_first_wait = args.rollout_health_check_first_wait
+        resume_wait = getattr(args, "rollout_health_check_resume_wait", None)
+        self._check_resume_wait = self._check_first_wait if resume_wait is None else resume_wait
+        self._next_wait = self._check_first_wait
         self._need_first_wait = True  # Need to wait after each resume
         self._check_lock = threading.Lock()
 
@@ -50,6 +53,7 @@ class RolloutHealthMonitor:
         self._stop_event.clear()
         self._pause_event.set()
         self._need_first_wait = True
+        self._next_wait = self._check_first_wait
         self._thread = threading.Thread(
             target=self._health_monitor_loop,
             name="RolloutHealthMonitor",
@@ -102,8 +106,10 @@ class RolloutHealthMonitor:
 
             # Do first wait after each resume (for large MoE models to be ready)
             if self._need_first_wait:
-                logger.info(f"Health monitor doing first wait after resume: {self._check_first_wait}s")
-                if self._stop_event.wait(self._check_first_wait):
+                # The first wait after start() is for warmup; later resumes use the resume wait.
+                wait_seconds, self._next_wait = self._next_wait, self._check_resume_wait
+                logger.info(f"Health monitor doing first wait after resume: {wait_seconds}s")
+                if self._stop_event.wait(wait_seconds):
                     logger.info("Health monitor stopped during first wait.")
                     break
                 if self._pause_event.is_set():

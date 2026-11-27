@@ -1,5 +1,7 @@
 import asyncio
 import json
+import threading
+import time
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
@@ -162,6 +164,34 @@ def test_register_worker_raises_any_other_refusal(monkeypatch, status, body):
 
     with pytest.raises(requests.HTTPError):
         server_control.register_worker("http://router", {"url": "http://e:1", "worker_type": "regular"})
+
+
+@pytest.mark.parametrize("resume_wait", [None, 0.0])
+def test_health_monitor_resume_wait_applies_after_the_first_resume(monkeypatch, resume_wait):
+    from slime.utils import health_monitor
+
+    args = SimpleNamespace(
+        rollout_health_check_interval=600,
+        rollout_health_check_first_wait=2.0,
+        rollout_health_check_resume_wait=resume_wait,
+        rollout_health_check_timeout=0.1,
+    )
+    monitor = health_monitor.RolloutHealthMonitor(SimpleNamespace(all_engines=[object()]), args)
+    checked = threading.Event()
+    monkeypatch.setattr(monitor, "_run_health_checks", checked.set)
+    monitor.start()
+    try:
+        # A rollout shorter than the first wait ends before any check.
+        monitor.resume()
+        time.sleep(1.0)  # The paused loop polls every 0.5 s, then starts the 2 s wait.
+        monitor.pause()
+        time.sleep(2.0)  # The wait ends by 2.5 s after resume() and finds the monitor paused.
+        assert not checked.is_set()
+        # The next rollout waits again: the first wait by default, else the resume wait.
+        monitor.resume()
+        assert checked.wait(timeout=1.0) == (resume_wait is not None)
+    finally:
+        monitor.stop()
 
 
 @pytest.mark.parametrize("actor_failure", ["dead", "wedged"])

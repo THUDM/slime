@@ -136,6 +136,7 @@ def retained_rollout_configuration(args):
         "rollout_health_check_interval",
         "rollout_health_check_timeout",
         "rollout_health_check_first_wait",
+        "rollout_health_check_resume_wait",
         "rollout_cleanup_timeout",
         "train_env_vars",
         "actor_config",
