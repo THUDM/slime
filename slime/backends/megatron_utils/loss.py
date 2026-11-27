@@ -1496,7 +1496,7 @@ def loss_function(
     args: Namespace,
     batch: RolloutBatch,
     num_microbatches: int,
-    step_global_batch_size: int,
+    loss_divisor: int,
     logits: torch.Tensor,
 ) -> tuple[torch.Tensor, int | torch.Tensor, dict[str, list[str] | torch.Tensor]]:
     """Dispatch to the configured loss and rescale for Megatron integration.
@@ -1512,10 +1512,8 @@ def loss_function(
         batch: Mini-batch with "loss_masks", "response_lengths", and other
             keys required by the selected loss function.
         num_microbatches: Number of gradient accumulation steps.
-        step_global_batch_size: Sample count for the current training step
-            (total across DP). Replaces the legacy ``args.global_batch_size``
-            fallback so the train side stops depending on "every DP rank holds
-            the same N samples".
+        loss_divisor: Global count of rollouts with training tokens in this step,
+            clamped to one for a fully masked step.
         logits: Model outputs (policy or value head).
 
     Returns:
@@ -1563,12 +1561,7 @@ def loss_function(
 
     # Here we need to divide by cp_size because to cancel the multiply in Megatron.
     if not args.calculate_per_token_loss:
-        loss = (
-            loss
-            * num_microbatches
-            / step_global_batch_size
-            * mpu.get_data_parallel_world_size(with_context_parallel=True)
-        )
+        loss = loss * num_microbatches / loss_divisor * mpu.get_data_parallel_world_size(with_context_parallel=True)
     else:
         loss = loss * mpu.get_context_parallel_world_size()
 
@@ -1580,7 +1573,7 @@ def loss_function(
             # values[0] is the consumer's reporting denominator after
             # all-reduce. For per-token-loss it must equal step total tokens
             # (only known by summing per-mb num_tokens across mbs / DP). For
-            # per-rollout-mean it is a constant — ``step_global_batch_size`` —
+            # per-rollout-mean it is a constant — ``loss_divisor`` —
             # so we leave a 0 placeholder here and let ``train_one_step``
             # substitute the constant directly, instead of routing it through
             # per-mb fractions.

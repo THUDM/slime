@@ -158,7 +158,7 @@ def restore_context_parallel_fields_to_cpu(
 
 # Per-rank scheduling arrangement (not per-sample); stored under `dp_shards` so
 # the flat `samples` view can stay aligned with the rollout debug dump.
-_LAYOUT_FIELDS = ("micro_batch_indices", "num_microbatches", "global_batch_sizes")
+_LAYOUT_FIELDS = ("micro_batch_indices", "num_microbatches", "global_batch_sizes", "loss_rollout_counts")
 # Whole-batch fields that are identical on every DP shard; stored once at the top.
 _WHOLE_BATCH_FIELDS = ("raw_reward",)
 

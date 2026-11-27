@@ -108,7 +108,7 @@ def _train_step_distributed_worker(
         reduced = reduce_train_step_metrics(
             [{"keys": ["metric"], "values": values_tensor}],
             calculate_per_token_loss=per_token_loss,
-            step_global_batch_size=step_global_batch_size,
+            loss_divisor=step_global_batch_size,
             cp_size=cp_size,
             dp_with_cp_group=dp_with_cp_group,
         )

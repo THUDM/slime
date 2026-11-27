@@ -542,6 +542,8 @@ def train_one_step(
     num_microbatches: int,
     step_global_batch_size: int,
     microbatch_pbar=None,
+    *,
+    loss_rollout_count: int,
 ) -> tuple[dict[str, float], float]:
     """Execute a single pipeline-parallel training step.
 
@@ -560,16 +562,17 @@ def train_one_step(
         step_global_batch_size (int): Rollout count for this training step
             (total across DP; one "rollout" = one execution of one of the
             ``n_samples_per_prompt`` rollouts, which may emit >1 training
-            sample under compact / subagent). Used both as the loss
-            normalizer inside the closure and as the LR scheduler
-            ``increment``. In the common case (1 rollout = 1 sample) this
-            equals the per-step sample count, so behavior is unchanged.
+            sample under compact / subagent). Used as the LR scheduler increment.
+        loss_rollout_count: Rollouts in the step with at least one training token.
 
     Returns:
         tuple[dict[str, float], float]: Reduced loss dictionary (last stage only)
         and gradient norm for logging.
     """
     args = get_args()
+
+    # A fully masked step has a zero numerator and still advances the scheduler.
+    loss_divisor = max(loss_rollout_count, 1)
 
     # Set grad to zero.
     for model_chunk in model:
@@ -666,7 +669,7 @@ def train_one_step(
         if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
             os.environ["ROUTING_REPLAY_STAGE"] = old_stage
 
-        return output_tensor, partial(loss_function, args, batch, num_microbatches, step_global_batch_size)
+        return output_tensor, partial(loss_function, args, batch, num_microbatches, loss_divisor)
 
     # Forward pass.
     forward_backward_func = get_forward_backward_func()
@@ -722,7 +725,7 @@ def train_one_step(
         loss_reduced = train_metric_utils.reduce_train_step_metrics(
             losses_reduced,
             calculate_per_token_loss=args.calculate_per_token_loss,
-            step_global_batch_size=step_global_batch_size,
+            loss_divisor=loss_divisor,
             cp_size=mpu.get_context_parallel_world_size(),
             dp_with_cp_group=mpu.get_data_parallel_group(with_context_parallel=True),
         )
@@ -743,6 +746,7 @@ def train(
     data_iterator: Sequence[DataIterator],
     num_microbatches: Sequence[int],
     global_batch_sizes: Sequence[int],
+    loss_rollout_counts: Sequence[int] | None = None,
 ) -> None:
     """Run training over a rollout consisting of multiple steps.
 
@@ -759,9 +763,8 @@ def train(
         global_batch_sizes (Sequence[int]): Rollout count per step (total
             across DP; one "rollout" = one execution of one of the
             ``n_samples_per_prompt`` rollouts of a prompt). Same length as
-            ``num_microbatches``; consumed by ``train_one_step`` for loss
-            scaling and LR scheduler increments. Equals per-step sample count
-            in the common case (1 rollout = 1 sample).
+            ``num_microbatches``; used for LR scheduler increments.
+        loss_rollout_counts: Number of rollouts contributing to the loss in each step.
     """
     args = get_args()
 
@@ -853,6 +856,9 @@ def train(
         disable=_disable_tqdm_for_non_main_rank(),
     )
 
+    if loss_rollout_counts is None:
+        loss_rollout_counts = global_batch_sizes
+
     # Run training iterations till done.
     for step_id in range(num_steps_per_rollout):
 
@@ -868,6 +874,7 @@ def train(
             num_microbatches[step_id],
             global_batch_sizes[step_id],
             microbatch_pbar=microbatch_pbar,
+            loss_rollout_count=loss_rollout_counts[step_id],
         )
 
         if step_id == 0:
