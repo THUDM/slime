@@ -86,7 +86,6 @@ def build_dp_schedule(
     *,
     global_batch_size: int,
     rollout_indices: list[int],
-    rollout_mask_sums: list[float] | None = None,
 ) -> tuple[list[list[int]], list[list[list[int]]], list[int], list[int]]:
     """Compute the per-rank DP partition and micro-batch schedule.
 
@@ -104,12 +103,11 @@ def build_dp_schedule(
             samples don't fit are dropped.
         rollout_indices: rollout id for each sample (``samples[i].index``).
             Samples sharing the same id are kept together in one step.
-        rollout_mask_sums: Total trainable tokens in each sample's rollout, repeated for siblings.
-            If omitted, every rollout counts toward the loss.
 
     Returns:
-        ``(partitions, micro_batch_indices, num_microbatches, loss_rollout_counts)``.
-        ``loss_rollout_counts[s]`` counts active rollouts in step s before distributing its samples.
+        ``(partitions, micro_batch_indices, num_microbatches, global_batch_sizes)``.
+        ``global_batch_sizes[s]`` = rollout count for step s (constant
+        ``global_batch_size`` for every step).
     """
     dp_size = train_parallel_config["dp_size"]
     cp_size = train_parallel_config["cp_size"]
@@ -143,16 +141,13 @@ def build_dp_schedule(
     partitions: list[list[int]] = [[] for _ in range(dp_size)]
     micro_batch_indices: list[list[list[int]]] = [[] for _ in range(dp_size)]
     num_microbatches: list[int] = []
-    loss_rollout_counts: list[int] = []
+    global_batch_sizes: list[int] = []
 
     for step_i in range(num_steps):
         step_rollouts = rollout_ids[step_i * global_batch_size : (step_i + 1) * global_batch_size]
         sample_indices = [pos for rid in step_rollouts for pos in rollout_id_to_samples[rid]]
         step_lengths = [total_lengths[i] for i in sample_indices]
-        count = len(step_rollouts)
-        if rollout_mask_sums is not None:
-            count = sum(rollout_mask_sums[rollout_id_to_samples[rid][0]] > 0 for rid in step_rollouts)
-        loss_rollout_counts.append(count)
+        global_batch_sizes.append(global_batch_size)
         assert len(sample_indices) >= dp_size, (
             f"step {step_i}: {len(sample_indices)} samples < dp_size {dp_size}; "
             f"each step needs at least one sample per rank."
@@ -211,4 +206,4 @@ def build_dp_schedule(
                 partitions[r].extend(sample_indices[i] for i in mbs_locals)
                 micro_batch_indices[r].append(list(range(local_start, local_start + len(mbs_locals))))
 
-    return partitions, micro_batch_indices, num_microbatches, loss_rollout_counts
+    return partitions, micro_batch_indices, num_microbatches, global_batch_sizes

@@ -125,14 +125,17 @@ def training_builder(global_batch_size, dp_size, **options):
     return batch
 
 
-@pytest.mark.parametrize("transport", ["object-store", "straw"])
+@pytest.mark.parametrize("transport", ["object-store", "straw", "legacy-straw"])
 @pytest.mark.parametrize("precomputed", [True, False])
 def test_loss_counts_follow_rollouts_across_ranks_and_steps(transport, precomputed, monkeypatch, tmp_path):
     from slime.data import batch_builder
     from slime.utils.data import process_rollout_data
 
+    legacy = transport == "legacy-straw"
+    if legacy:
+        transport = "straw"
     if transport == "straw":
-        pytest.importorskip("straw")
+        tensor = pytest.importorskip("straw.tensor")
     monkeypatch.setattr(batch_builder.ray, "put", lambda value: value)
     monkeypatch.setattr(batch_builder.ray, "get", lambda value: value)
     batch = training_builder(2, 2, rollout_data_transport=transport, rollout_data_dir=str(tmp_path))
@@ -144,15 +147,18 @@ def test_loss_counts_follow_rollouts_across_ranks_and_steps(transport, precomput
     data = batch.convert(samples)
     if not precomputed:
         del data["rollout_mask_sums"]
-        if transport == "straw":
-            # Replay a conversion written before the per-rollout totals were persisted.
-            from slime.data.transport import pack_rollout_payload
-            from slime.observability.rollout_data_utils import tensorize_rollout_data_for_training
+    if legacy:
+        # A pre-activity-column conversion, with either tensorized totals or only tensorized masks.
+        from slime.data.transport import pack_rollout_payload
+        from slime.observability.rollout_data_utils import tensorize_rollout_data_for_training
 
-            data["total_lengths"] = [len(tokens) for tokens in data["tokens"]]
-            tensorize_rollout_data_for_training(data)
-            data = pack_rollout_payload(data, batch.args, 0)
-    refs = batch.split_by_dp(data)
+        data["total_lengths"] = [len(tokens) for tokens in data["tokens"]]
+        tensorize_rollout_data_for_training(data)
+        data = pack_rollout_payload(data, batch.args, 0)
+    with monkeypatch.context() as guard:
+        if transport == "straw":
+            guard.setattr(tensor.TensorRef, "load", lambda *a, **kw: pytest.fail("scheduler read an archived tensor"))
+        refs = batch.split_by_dp(data)
     for rank in range(2):
         shard = process_rollout_data(refs, rank, 2)
         assert shard["loss_rollout_counts"] == [1, 0]

@@ -17,6 +17,9 @@ import torch
 from slime.data.tensor import TensorRef
 from slime.data.transport import DiskPayloadRef, TrainBatchRef, pack_rollout_payload
 from slime.observability.rollout_data_utils import (
+    get_loss_rollout_counts,
+    get_rollout_has_training_tokens,
+    get_rollout_mask_sums,
     tensorize_rollout_data_for_training,
     validate_rollout_routed_experts_for_replay,
 )
@@ -26,14 +29,6 @@ from slime.utils.misc import Box, load_function
 from slime.utils.types import Sample
 
 logger = logging.getLogger(__name__)
-
-
-def _rollout_mask_sums(rollout_ids, loss_masks):
-    totals = {}
-    for rid, mask in zip(rollout_ids, loss_masks, strict=True):
-        count = int(mask.sum()) if isinstance(mask, torch.Tensor) else sum(mask)
-        totals[rid] = totals.get(rid, 0) + count
-    return [totals[rid] for rid in rollout_ids]
 
 
 class BatchBuilder:
@@ -137,7 +132,10 @@ class BatchBuilder:
         data = dict(data)
         data["total_lengths"] = [len(tokens) for tokens in data["tokens"]]
         if "loss_masks" in data and "rollout_mask_sums" not in data:
-            data["rollout_mask_sums"] = _rollout_mask_sums(data["rollout_ids"], data["loss_masks"])
+            data["rollout_mask_sums"] = get_rollout_mask_sums(data["rollout_ids"], data["loss_masks"])
+        data["rollout_has_training_tokens"] = get_rollout_has_training_tokens(
+            data["rollout_ids"], data.get("rollout_mask_sums")
+        )
         tensorize_rollout_data_for_training(data)
         # Keep selection/raw dependencies alive with the conversion. This also
         # makes a queue commit sufficient to recover a lost manager reply.
@@ -323,7 +321,7 @@ class BatchBuilder:
         #   sample in sample i's rollout. Used as the reducer's denominator
         #   so summing partial contributions across mbs yields one
         #   token-weighted mean per rollout.
-        train_data["rollout_mask_sums"] = _rollout_mask_sums(rollout_ids, loss_masks)
+        train_data["rollout_mask_sums"] = get_rollout_mask_sums(rollout_ids, loss_masks)
 
         # Overwrite raw_reward when available. Mixed-source batches may only
         # populate this field for a subset of samples (e.g. SWE but not code).
@@ -453,30 +451,29 @@ class BatchBuilder:
         if transport == "straw":
             # Read only the small scheduling columns from a standard conversion.
             reference = data if isinstance(data, DiskPayloadRef) else self.publish_converted(data)
-            data = reference.load(selection={"total_lengths": None, "rollout_ids": None, "rollout_mask_sums": None})
-            if "rollout_mask_sums" not in data:
-                # Older custom conversions may have persisted only the masks.
-                data.update(reference.load(selection={"loss_masks": None}))
+            data = reference.load(
+                selection={"total_lengths": None, "rollout_ids": None, "rollout_has_training_tokens": None}
+            )
+            active_rollouts = data.get("rollout_has_training_tokens")
+        else:
+            if "rollout_mask_sums" not in data and "loss_masks" in data:
+                data["rollout_mask_sums"] = get_rollout_mask_sums(data["rollout_ids"], data["loss_masks"])
+            active_rollouts = get_rollout_has_training_tokens(data["rollout_ids"], data.get("rollout_mask_sums"))
         total_lengths = data.get("total_lengths")
         if total_lengths is None:
             total_lengths = [len(tokens) for tokens in data["tokens"]]
         data["total_lengths"] = total_lengths
-        # Custom conversions can omit the precomputed per-rollout totals.
-        derived_mask_sums = "rollout_mask_sums" not in data and "loss_masks" in data
-        if derived_mask_sums:
-            data["rollout_mask_sums"] = _rollout_mask_sums(data["rollout_ids"], data["loss_masks"])
-        mask_sums = data.get("rollout_mask_sums")
-        if isinstance(mask_sums, torch.Tensor):
-            mask_sums = mask_sums.tolist()
-        partitions, micro_batch_indices, num_microbatches, loss_rollout_counts = build_dp_schedule(
+        partitions, micro_batch_indices, num_microbatches, global_batch_sizes = build_dp_schedule(
             self.args,
             self.train_parallel_config,
             total_lengths,
             global_batch_size=self.args.global_batch_size,
             rollout_indices=data["rollout_ids"],
-            rollout_mask_sums=mask_sums,
         )
-        global_batch_sizes = [self.args.global_batch_size] * len(num_microbatches)
+        # Older conversions have no activity column. Their trainer resolves the divisor when it reads the data.
+        loss_rollout_counts = (
+            get_loss_rollout_counts(active_rollouts, global_batch_sizes) if active_rollouts is not None else None
+        )
         fields = [
             "tokens",
             "multimodal_train_inputs",
@@ -521,10 +518,6 @@ class BatchBuilder:
                 "micro_batch_indices": micro_batch_indices[rank],
             }
             if transport == "straw":
-                if derived_mask_sums:
-                    schedule["rollout_mask_sums"] = torch.tensor(
-                        [data["rollout_mask_sums"][i] for i in partition], dtype=torch.float32
-                    )
                 selection = {key: partition for key in fields}
                 # Training's pass-rate and load metrics use the global arrays;
                 # all per-sample tensors are selected before storage reads.
