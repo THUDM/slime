@@ -943,6 +943,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_checkpoint_no_save_optim.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_update_weight_factory.py"
             },
             {
