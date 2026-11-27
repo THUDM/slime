@@ -21,7 +21,7 @@ from slime.rollout.base_types import RolloutFnTrainOutput, call_rollout_fn
 from slime.rollout.sample_hooks import set_current_rollout_id
 from slime.utils.cleanup import Cleanup
 from slime.utils.http_utils import init_http_client
-from slime.utils.misc import load_function
+from slime.utils.misc import compute_rollout_schedule, load_function
 from slime.utils.staleness import fully_async_metrics_enabled
 
 from .utils import Lock, add_default_ray_env_vars
@@ -311,8 +311,8 @@ class RolloutManager:
         num_new = srv.num_new_engines if srv else 0
         return engines, self.rollout_engine_lock, num_new, gpu_counts, gpu_offsets, parallel_configs
 
-    def get_num_rollout_per_epoch(self):
-        return len(self.data_source) // self.args.rollout_batch_size
+    def get_rollout_schedule(self):
+        return compute_rollout_schedule(len(self.data_source), self.args.rollout_batch_size, self.args.num_epoch)
 
     def generate(self, rollout_id):
         start_time = time.time()
