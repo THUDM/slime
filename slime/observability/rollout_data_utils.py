@@ -25,9 +25,35 @@ _ROLLOUT_DATA_TENSOR_DTYPES = {
 }
 
 
+# torch.as_tensor walks a Python list in the interpreter. np.asarray does the same copy in C.
+_LIST_NUMPY_DTYPES = {
+    torch.int64: np.int64,
+    torch.int32: np.int32,
+    torch.float32: np.float32,
+    torch.float64: np.float64,
+    torch.int16: np.int16,
+    torch.uint8: np.uint8,
+}
+
+
+def _is_number_list(value) -> bool:
+    if not isinstance(value, list):
+        return False
+    if not value:
+        return True
+    item = value[0]
+    if isinstance(item, bool):
+        return False
+    return isinstance(item, (int, float, np.integer, np.floating))
+
+
 def _cpu_tensor(value, dtype: torch.dtype | None = None) -> torch.Tensor:
     if isinstance(value, np.ndarray) and not value.flags.writeable:
         value = value.copy()
+    numpy_dtype = _LIST_NUMPY_DTYPES.get(dtype) if dtype is not None else None
+    if numpy_dtype is not None and _is_number_list(value):
+        # clone() so the result is a normal tensor, not a from_numpy view.
+        return torch.from_numpy(np.asarray(value, dtype=numpy_dtype)).clone()
     tensor = torch.as_tensor(value, dtype=dtype) if dtype is not None else torch.as_tensor(value)
     return tensor.detach().cpu().contiguous()
 
