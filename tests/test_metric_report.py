@@ -36,6 +36,76 @@ from slime.observability.train_metric_utils import (  # noqa: E402
 NUM_GPUS = 0
 
 
+@pytest.mark.parametrize("split", [False, True], ids=["whole-rollouts", "segments-across-ranks"])
+def test_raw_reward_mean_counts_each_rollout_once(monkeypatch, split):
+    from types import SimpleNamespace
+
+    import ray
+    from megatron.core import mpu
+
+    from slime.data.batch_builder import BatchBuilder
+    from slime.observability import train_metric_utils
+    from slime.utils.data import process_rollout_data
+
+    monkeypatch.setattr(ray, "put", lambda value: value)
+    monkeypatch.setattr(ray, "get", lambda value: value)
+    monkeypatch.setattr(mpu, "get_tensor_model_parallel_rank", lambda: 0, raising=False)
+    monkeypatch.setattr(mpu, "is_pipeline_last_stage", lambda: True, raising=False)
+    monkeypatch.setattr(mpu, "get_data_parallel_world_size", lambda **kwargs: 2, raising=False)
+    reported = []
+    monkeypatch.setattr(
+        train_metric_utils, "gather_log_data", lambda name, args, step, metrics: reported.append(metrics)
+    )
+
+    args = SimpleNamespace(
+        custom_reward_post_process_path=None,
+        custom_convert_samples_to_train_data_path=None,
+        rollout_data_transport="object-store",
+        global_batch_size=4,
+        micro_batch_size=1,
+        use_dynamic_batch_size=False,
+        balance_by_flops=False,
+        balance_data=False,
+        ci_test=False,
+        log_multi_turn=False,
+        log_passrate=False,
+        log_correct_samples=False,
+    )
+    builder = BatchBuilder(args)
+    builder.train_parallel_config = {
+        "dp_size": 2,
+        "cp_size": 1,
+        "vpp_size": 1,
+        "microbatch_group_size_per_vp_stage": 1,
+    }
+    rollout_ids = [10, 10, 20, 30, 40, 40] if split else [10, 20, 30, 40]
+    raw_rewards = [float(rollout_id == 10) for rollout_id in rollout_ids]
+    refs = builder.split_by_dp(
+        {
+            "tokens": [[1, 2] for _ in rollout_ids],
+            "response_lengths": [1] * len(rollout_ids),
+            "loss_masks": [[1] for _ in rollout_ids],
+            "rollout_ids": rollout_ids,
+            "raw_reward": raw_rewards,
+        }
+    )
+
+    for rank in range(2):
+        shard = process_rollout_data(refs, rank, 2)
+        if split:
+            assert 10 in shard["rollout_ids"]
+        assert shard["raw_reward"] == raw_rewards
+        train_metric_utils.log_rollout_data(0, args, shard)
+
+    def gather_object(value, output, **kwargs):
+        output[:] = reported
+
+    monkeypatch.setattr(train_metric_utils.dist, "get_rank", lambda: 0)
+    monkeypatch.setattr(train_metric_utils.dist, "gather_object", gather_object)
+    reduced = train_metric_utils.gather_and_reduce_log_dict(reported[0], dp_size=2, dp_src_rank=0, dp_group=None)
+    assert reduced["raw_reward"] == 0.25
+
+
 def test_truncation_fraction_is_reported_once_for_all_rollout_sources(monkeypatch):
     from types import SimpleNamespace
 
