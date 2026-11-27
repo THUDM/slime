@@ -597,6 +597,9 @@ def get_log_probs_and_entropy(
         with_entropy_grad=with_entropy_grad,
         chunk_size=chunk_size,
         log_prob_keep_mask=top_p_keep_mask,
+        # Normalize over the real vocabulary, as the rollout engine does, not
+        # over Megatron's padded output layer.
+        global_vocab_size=getattr(args, "vocab_size", None),
     )
     log_prob_full = log_prob_full.squeeze(-1)  # [T, 1] -> [T]
 
@@ -1114,6 +1117,7 @@ def get_score_centering_terms(args, batch, logits):
             mpu.get_tensor_model_parallel_group(),
             chunk_size=args.log_probs_chunk_size,
             temperature=args.rollout_temperature,
+            global_vocab_size=getattr(args, "vocab_size", None),
         )
         correction, q_mass, p_mass = score_centering_correction(p, q, **weighting)
         for key, value in zip(res, (correction, q_mass, p_mass), strict=True):

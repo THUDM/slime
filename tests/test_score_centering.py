@@ -193,6 +193,34 @@ def test_policy_loss_gradient_matches_dense_reference(mode, dtype, monkeypatch):
     assert actual_grad[0, 5].count_nonzero() == 0  # masked response position
 
 
+@pytest.mark.parametrize("sc", [False, True])
+def test_policy_loss_ignores_megatron_vocab_padding(sc, monkeypatch):
+    """args.vocab_size keeps Megatron's padded output columns out of the loss and its gradient."""
+    from megatron.core import mpu
+    from slime.backends.megatron_utils.cp_utils import get_sum_of_sample_mean
+    from slime.backends.megatron_utils.loss import policy_loss_function
+
+    monkeypatch.setattr(mpu, "get_tensor_model_parallel_group", lambda: None, raising=False)
+    batch = make_batch()
+    batch["log_probs"] = [x + 0.7 for x in batch["rollout_log_probs"]]
+    reducer = get_sum_of_sample_mean(
+        batch["total_lengths"], batch["response_lengths"], batch["loss_masks"], batch["rollout_mask_sums"]
+    )
+    torch.manual_seed(5)
+    real = torch.randn(1, 16, 12)
+    # The second sample's real logits sit far below the padding columns (logit 0).
+    real[0, 8:] -= 30.0
+    padded = torch.cat([real, torch.zeros(1, 16, 4)], dim=-1).requires_grad_()
+    real.requires_grad_()
+
+    loss, _ = policy_loss_function(args(use_score_centering=sc, vocab_size=12), batch, padded, reducer)
+    expected, _ = policy_loss_function(args(use_score_centering=sc), batch, real, reducer)
+    torch.testing.assert_close(loss, expected, atol=2e-6, rtol=2e-6)
+    grad = torch.autograd.grad(loss, padded)[0]
+    torch.testing.assert_close(grad[..., :12], torch.autograd.grad(expected, real)[0], atol=2e-6, rtol=2e-6)
+    assert grad[..., 12:].count_nonzero() == 0
+
+
 def distributed_worker(rank, world_size, port, layout, mode, disk=False):
     import torch.distributed as dist
     from megatron.core import mpu
