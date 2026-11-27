@@ -87,7 +87,12 @@ async def generate_streaming(args: Namespace, sample: Sample, sampling_params: d
     images = sample.multimodal_inputs.get("images") if sample.multimodal_inputs else None
     if images:
         payload["image_data"] = [encode_image_for_rollout_engine(image) for image in images]
+    if images and not sample.response_length:
         payload["text"] = sample.prompt
+    elif images:
+        # A partial-rollout continuation must be conditioned on the response
+        # generated so far, which only sample.tokens carries.
+        payload["input_ids"] = list(sample.tokens)
     else:
         payload["input_ids"] = prompt_ids
 
