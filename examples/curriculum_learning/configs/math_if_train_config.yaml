@@ -1,0 +1,29 @@
+# Example config demonstrating curriculum learning with dynamic reward caps
+# This shows how to combine dynamic weights with dynamic reward caps for sophisticated curriculum strategies
+
+prompt_data:
+  - examples/curriculum_learning/data/dapo-math-17k.jsonl
+  - examples/curriculum_learning/data/verinstruct.jsonl
+
+prompt_data_source_names:
+  - dapo_math_17k
+  - verinstruct
+
+num_rollout: 200
+# Dynamic weights: gradually shift from reasoning to instruction following
+data_source_weights:
+  - "lambda step: 0.9 - 0.7 * min(step / 200, 1.0)"  # dapo_math_17k: 0.9 -> 0.2
+  - "lambda step: 0.1 + 0.7 * min(step / 200, 1.0)"  # verinstruct: 0.1 -> 0.8
+
+# Dynamic reward caps: start relaxed, then gradually become more strict
+data_source_reward_caps:
+  - "lambda step: 0.9 - 0.05 * min(step / 200, 1.0)"  # dapo_math_17k: 0.9 -> 0.85
+  - "lambda step: 0.9 - 0.1 * min(step / 200, 1.0)"  # verinstruct: 0.9 -> 0.8
+
+# Enable dynamic filtering with reward caps
+over_sampling_batch_size: 256
+dynamic_sampling_filter_path: examples.curriculum_learning.reward_cap_filter.check_reward_cap_per_source
+
+data_source_path: examples.curriculum_learning.data_source.MultipleWeightedRolloutDataSourceWithBuffer
+custom_rm_path: examples.curriculum_learning.reward.async_rm_math_if
+custom_rollout_log_function_path: examples.curriculum_learning.custom_log.custom_rollout_log_function
