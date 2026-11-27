@@ -365,5 +365,18 @@ def test_train_one_step_per_token_loss_report_invariant_to_cp(monkeypatch, mock_
     assert simulate(1) == pytest.approx(simulate(2))
 
 
+@pytest.mark.unit
+def test_per_token_loss_report_handles_step_without_loss_tokens(mock_dp_with_cp_group):
+    """Every sample in the step is fully masked (for example remove_sample=True)."""
+    reduced = reduce_train_step_metrics(
+        [{"keys": ["metric"], "values": torch.tensor([0.0, 0.0])}],
+        calculate_per_token_loss=True,
+        step_global_batch_size=2,
+        cp_size=1,
+        dp_with_cp_group=mock_dp_with_cp_group,
+    )
+    assert reduced == {"metric": 0.0}
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))

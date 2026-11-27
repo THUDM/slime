@@ -51,7 +51,7 @@ def reduce_train_step_metrics(
     values = values.tolist()
 
     if calculate_per_token_loss:
-        num_samples_or_tokens = values[0]
+        num_samples_or_tokens = max(values[0], 1)
         cp_factor = cp_size
     else:
         num_samples_or_tokens = step_global_batch_size

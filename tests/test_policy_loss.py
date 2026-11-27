@@ -103,5 +103,39 @@ def test_training_loss_keeps_metric_values_normalization_and_gradients(per_token
     torch.testing.assert_close(logits.grad, logits.detach() * scale)
 
 
+def test_per_token_loss_normalizer_ignores_fully_masked_rows():
+    # A row with remove_sample=True has an all-zero loss mask and no loss tokens.
+    path = Path(__file__).parents[1] / "slime" / "backends" / "megatron_utils" / "loss.py"
+    source = path.read_text()
+    function = next(
+        node for node in ast.parse(source).body if isinstance(node, ast.FunctionDef) and node.name == "loss_function"
+    )
+    logits = torch.zeros(1, requires_grad=True)
+    namespace = {
+        "torch": torch,
+        "mpu": SimpleNamespace(get_data_parallel_world_size=lambda **_: 1, get_context_parallel_world_size=lambda: 1),
+        "get_sum_of_sample_mean": lambda *args: None,
+        "policy_loss_function": lambda *args: (logits.sum(), {}),
+    }
+    exec(
+        compile("from __future__ import annotations\n" + ast.get_source_segment(source, function), str(path), "exec"),
+        namespace,
+    )
+    args = SimpleNamespace(
+        loss_type="policy_loss", calculate_per_token_loss=True, recompute_loss_function=False, allgather_cp=False
+    )
+    batch = {
+        "loss_masks": [torch.tensor([1, 1]), torch.tensor([0, 0, 0])],
+        "total_lengths": [4, 5],
+        "response_lengths": [2, 3],
+        "rollout_mask_sums": [2, 0],
+    }
+
+    _, normalizer, report = namespace["loss_function"](args, batch, 1, 2, logits)
+
+    assert normalizer.item() == 2
+    assert report["values"][0].item() == 2
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
