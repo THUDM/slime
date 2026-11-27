@@ -709,6 +709,10 @@ def train_one_step(
         # batching is on so the scheduler's samples-seen counter tracks reality.
         assert update_successful
         opt_param_scheduler.step(increment=step_global_batch_size)
+        # Megatron saves this counter in the checkpoint args, and on resume with
+        # --override-opt-param-scheduler it resets the scheduler's num_steps to it.
+        # slime replaces Megatron's train loop, so keep it equal to num_steps here.
+        args.consumed_train_samples += step_global_batch_size
 
     if isinstance(grad_norm, torch.Tensor):
         grad_norm = grad_norm.item()
