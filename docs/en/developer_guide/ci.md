@@ -23,7 +23,7 @@ The workflow is defined in `.github/workflows/pr-test.yml`, generated from `.git
 
 ### CPU Tests
 
-CPU jobs run on GitHub-hosted `ubuntu-latest` runners. They install CPU PyTorch and test dependencies, then execute `python tests/<test_file>.py`. They do not use Docker or acquire GPUs.
+CPU jobs run on GitHub-hosted `ubuntu-latest` runners. They install CPU PyTorch and test dependencies once per shard, then run each registered test file in a separate Python process. Each file has its own GitHub Actions log group and elapsed time. A failed file does not stop the remaining tests in its shard, and the shard fails if any file fails. These jobs do not use Docker or acquire GPUs.
 
 `cpu-unittest` checks:
 
@@ -34,7 +34,7 @@ CPU jobs run on GitHub-hosted `ubuntu-latest` runners. They install CPU PyTorch 
 - `Sample` behavior, rollout validation, and agent trajectory merging;
 - Hugging Face checkpoint saving and interface contracts for custom rollout, generation functions, and runtime hooks.
 
-Agent adapter tests run in a separate `agent-test` job because they also require SDKs such as `openai`, `openai-agents`, and `anthropic`.
+Agent adapter tests run in a separate `agent-test` job because they also require SDKs such as `openai`, `openai-agents`, and `anthropic`. Both CPU suites use shards of up to seven test files per dependency installation. The CPU unit suite keeps straw-enabled and straw-free tests in separate shards so `test_optional_straw.py` can verify behavior without the optional package installed.
 
 CPU test entries marked with `straw: true` install the latest `straw-queue` wheel from PyPI. They do not need a Rust toolchain or the straw source repository. `test_optional_straw.py` deliberately runs without straw to check that default data transport still works and that explicitly selecting straw produces a clear installation hint.
 
