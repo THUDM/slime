@@ -2045,6 +2045,17 @@ def slime_validate_args(args):
     if args.save_interval is not None:
         assert args.save is not None, "'--save' is required when save_interval is set."
 
+    # Checkpoints are numbered by the 0-based rollout id (N-1, 2N-1, ... for --save-interval N), while
+    # Megatron's retention deletes every previous checkpoint that is not a multiple of the retain
+    # interval, so forwarding the option would keep none of them.
+    if getattr(args, "save_retain_interval", None) is not None:
+        raise ValueError(
+            "--save-retain-interval is not supported: slime numbers checkpoints by the 0-based rollout id "
+            "(iter_{N-1}, iter_{2N-1}, ... for --save-interval N), which is never a multiple of the retain "
+            "interval, so Megatron would delete every previous checkpoint "
+            "(https://github.com/THUDM/slime/issues/2532)."
+        )
+
     assert not (args.kl_coef != 0 and args.kl_loss_coef != 0), "Only one of kl_coef and kl_loss_coef can be set"
 
     if args.advantage_estimator in ["reinforce_plus_plus", "reinforce_plus_plus_baseline"]:
