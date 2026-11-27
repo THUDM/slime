@@ -100,17 +100,26 @@ dependencies. The download host needs `hf` and `skopeo`; `DATA_ROOT` must be
 mounted at the same absolute path on the GPU and sandbox nodes.
 
 First download the complete code split and its official image-name mapping.
-This pinned dataset revision contains 2,698 code tasks:
+Use the same revision for both files. This pinned revision contains 2,602 code
+tasks, after the [upstream dataset update](https://huggingface.co/datasets/XiaomiMiMo/MiMo-V2.6-RL-oss/commits/main)
+removed 96 tasks and their image mappings.
+
+If upgrading from the earlier revision, use a fresh `DATA_ROOT` as below and
+rerun the download, conversion and image preparation commands. An existing
+`train-mixed.jsonl` still contains the old image references, including the removed
+`format-code-task-000484` task. The dataset revision pins the task data and
+mapping, not the contents of mutable Docker Hub tags; a fresh image directory
+avoids reusing images cached before an upstream update.
 
 ```bash
-export DATA_ROOT=/shared/mimo
-export MIMO_REVISION=639865fd3374018d6cb29b9fb82dd531406fcf5f
+export MIMO_REVISION=e8e81e4945270b6212204bad99de1e598f7fb077
+export DATA_ROOT=/shared/mimo/$MIMO_REVISION
 hf download XiaomiMiMo/MiMo-V2.6-RL-oss code.parquet image-mapping.jsonl \
   --repo-type dataset --revision "$MIMO_REVISION" --local-dir "$DATA_ROOT/data"
 ```
 
 Convert every task for both CLIs. Omitting `--ids` selects the full code split;
-the following command produces 5,396 rows in `train-mixed.jsonl`:
+the following command produces 5,204 rows in `train-mixed.jsonl`:
 
 ```bash
 python examples/coding_agent_rl/prepare_mimo.py \
@@ -125,7 +134,21 @@ batches. For a smaller subset, pass instance IDs through `--ids`.
 
 Download the task images as compressed OCI layouts. The helper uses
 `image-mapping.jsonl` through the converted rows to resolve the official Docker
-Hub tags, and downloads each unique image once even though it has two rows:
+Hub tags, and downloads each unique image once even though it has two rows.
+
+For a data and image preparation smoke test before downloading the full image
+set, prepare one task for both CLIs using separate output files:
+
+```bash
+python examples/coding_agent_rl/prepare_mimo.py \
+  --data "$DATA_ROOT/data" --output "$DATA_ROOT/train-smoke.jsonl" \
+  --ids format-code-task-000723 --agents codex claude_code
+python examples/coding_agent_rl/prepare_sunabako_images.py \
+  --data "$DATA_ROOT/train-smoke.jsonl" --root "$DATA_ROOT/oci" \
+  --output "$DATA_ROOT/images-smoke.json" --format oci --workers 1
+```
+
+Then prepare all images for `train-mixed.jsonl`:
 
 ```bash
 python examples/coding_agent_rl/prepare_sunabako_images.py \
