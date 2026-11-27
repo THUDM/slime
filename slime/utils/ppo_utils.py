@@ -922,7 +922,12 @@ class _ChunkedLogProbEntropy(torch.autograd.Function):
     @torch.autograd.function.once_differentiable
     def backward(ctx, grad_log_prob, grad_entropy):
         logits, tokens, keep_mask = ctx.saved_tensors
-        grad_input = torch.empty_like(logits)
+        # Each chunk is recomputed from its own rows before those rows are overwritten, so a
+        # non-leaf input (the model output) can take its own gradient instead of a second [T, V]
+        # buffer. Nothing may read these logits after backward: a node that saved them fails
+        # its version check, but a plain reference would see the gradient. A leaf belongs to
+        # the caller and is never overwritten.
+        grad_input = torch.empty_like(logits) if logits.is_leaf else logits
         for start in range(0, logits.size(0), ctx.chunk_size):
             end = min(start + ctx.chunk_size, logits.size(0))
             with torch.enable_grad():
