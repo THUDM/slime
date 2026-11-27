@@ -311,5 +311,65 @@ def test_append_response_tokens_rejects_non_trainable_log_probs():
         sample.append_response_tokens(tokens=[10], log_probs=[-0.1], trainable=False)
 
 
+@pytest.mark.unit
+def test_append_response_tokens_validates_pd_merged_routed_experts_and_continuation():
+    from slime.utils.routed_experts import validate_routed_experts_tensor
+
+    args = _make_args()
+    args.num_experts = 16
+
+    # Turn 1: prompt (3 tokens) + response (2 tokens) -> 4 routed-expert rows:
+    # prefill returns [0, 3) (3 rows) and decode returns [3, 4) (1 row), merged by router.
+    prefill_rows = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    decode_rows = [13, 14, 15, 1]
+    sample = Sample(tokens=[101, 102, 103])
+    sample.append_response_tokens(
+        args,
+        tokens=[201, 202],
+        log_probs=[-0.1, -0.2],
+        trainable=True,
+        meta_info={
+            "routed_experts": _b64_int32(prefill_rows + decode_rows),
+            "finish_reason": {"type": "length"},
+        },
+    )
+    validate_routed_experts_tensor(
+        sample.rollout_routed_experts, args, sample_index=0, expected_rows=len(sample.tokens) - 1
+    )
+
+    # Turn 2 continuation with routed_experts_start_len=4 (prompt_len=5, 2 new tokens -> 2 rows):
+    # prefill returns [4, 5) (1 row) and decode returns [5, 6) (1 row).
+    cont_prefill = [2, 3, 4, 5]
+    cont_decode = [6, 7, 8, 9]
+    sample.append_response_tokens(
+        args,
+        tokens=[203, 204],
+        log_probs=[-0.3, -0.4],
+        trainable=True,
+        meta_info={
+            "routed_experts": _b64_int32(cont_prefill + cont_decode),
+            "routed_experts_start_len": 4,
+            "finish_reason": {"type": "stop"},
+        },
+    )
+    merged = sample.materialize_rollout_routed_experts()
+    assert merged.shape == (6, 2, 2)
+    validate_routed_experts_tensor(merged, args, sample_index=0, expected_rows=len(sample.tokens) - 1)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("patch_version", ["v0.5.15.post1", "v0.5.21", "latest"])
+def test_sglang_patches_preserve_pd_routed_experts_collection_and_decode_clamp(patch_version):
+    from pathlib import Path
+
+    patch_path = Path(__file__).resolve().parents[1] / "docker" / "patch" / patch_version / "sglang.patch"
+    patch_text = patch_path.read_text()
+
+    assert "+                if req.return_routed_experts:" in patch_text
+    assert "+                    self.batch_result_processor._maybe_collect_routed_experts(req)" in patch_text
+    assert "+            if self.disaggregation_mode == DisaggregationMode.DECODE:" in patch_text
+    assert "+                req.routed_experts_start_len = len(req.origin_input_ids)" in patch_text
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
