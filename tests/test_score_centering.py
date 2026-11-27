@@ -193,9 +193,64 @@ def test_policy_loss_gradient_matches_dense_reference(mode, dtype, monkeypatch):
     assert actual_grad[0, 5].count_nonzero() == 0  # masked response position
 
 
-def distributed_worker(rank, world_size, port, layout, mode, disk=False):
-    import torch.distributed as dist
+def _run_distributed_gradient_case(rank, layout, group, singles, mode, disk=False):
+    is_tp = layout == "tp"
     from megatron.core import mpu
+
+    mpu.get_tensor_model_parallel_group = lambda: group if is_tp else singles[rank]
+    mpu.get_context_parallel_group = lambda: group
+    batch = make_batch()
+    full_logits = torch.randn(16, 12)
+    a = args(mode=mode, allgather_cp=layout == "allgather")
+    if is_tp:
+        local = full_logits[:, rank * 6 : (rank + 1) * 6]
+    elif layout == "allgather":
+        local = full_logits[rank * 8 : (rank + 1) * 8]
+    else:
+        row_ids = torch.cat(
+            [
+                torch.tensor([i + rank * 2, i + rank * 2 + 1, i + (3 - rank) * 2, i + (3 - rank) * 2 + 1])
+                for i in [0, 8]
+            ]
+        )
+        local = full_logits[row_ids]
+    local = local.clone().requires_grad_()
+    original = dict(batch)
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as directory:
+        if disk:
+            from straw import SharedFilesystemStore
+            from straw.tensor import publish_tensors
+
+            with SharedFilesystemStore(directory, "sc", codecs=("tensor.v1",)) as store:
+                for key in ("rollout_topk_token_ids", "rollout_topk_log_probs"):
+                    batch[key] = list(
+                        publish_tensors(
+                            store,
+                            {
+                                str(i): value.int() if key.endswith("ids") else value
+                                for i, value in enumerate(batch[key])
+                            },
+                            submission_id=key,
+                        )
+                    )
+        _check_distributed_batch(
+            rank,
+            layout,
+            is_tp,
+            batch,
+            original,
+            full_logits,
+            local,
+            a,
+            None if is_tp or layout == "allgather" else row_ids,
+            disk,
+        )
+
+
+def distributed_worker(rank, world_size, port, layout, modes):
+    import torch.distributed as dist
 
     torch.set_num_threads(1)
     group = _cp_dist_helpers.init_worker_process_group(rank, world_size, port)
@@ -203,57 +258,12 @@ def distributed_worker(rank, world_size, port, layout, mode, disk=False):
     _cp_dist_helpers.stub_megatron_in_worker(1 if is_tp else world_size, 0 if is_tp else rank)
     # Every rank must create the singleton groups in the same order.
     singles = [dist.new_group([i]) for i in range(world_size)]
-    mpu.get_tensor_model_parallel_group = lambda: group if is_tp else singles[rank]
-    mpu.get_context_parallel_group = lambda: group
     try:
-        batch = make_batch()
-        full_logits = torch.randn(16, 12)
-        a = args(mode=mode, allgather_cp=layout == "allgather")
-        if is_tp:
-            local = full_logits[:, rank * 6 : (rank + 1) * 6]
-        elif layout == "allgather":
-            local = full_logits[rank * 8 : (rank + 1) * 8]
-        else:
-            row_ids = torch.cat(
-                [
-                    torch.tensor([i + rank * 2, i + rank * 2 + 1, i + (3 - rank) * 2, i + (3 - rank) * 2 + 1])
-                    for i in [0, 8]
-                ]
-            )
-            local = full_logits[row_ids]
-        local = local.clone().requires_grad_()
-        original = dict(batch)
-        import tempfile
-
-        with tempfile.TemporaryDirectory() as directory:
-            if disk:
-                from straw import SharedFilesystemStore
-                from straw.tensor import publish_tensors
-
-                with SharedFilesystemStore(directory, "sc", codecs=("tensor.v1",)) as store:
-                    for key in ("rollout_topk_token_ids", "rollout_topk_log_probs"):
-                        batch[key] = list(
-                            publish_tensors(
-                                store,
-                                {
-                                    str(i): value.int() if key.endswith("ids") else value
-                                    for i, value in enumerate(batch[key])
-                                },
-                                submission_id=key,
-                            )
-                        )
-            _check_distributed_batch(
-                rank,
-                layout,
-                is_tp,
-                batch,
-                original,
-                full_logits,
-                local,
-                a,
-                None if is_tp or layout == "allgather" else row_ids,
-                disk,
-            )
+        for mode, disk in modes:
+            try:
+                _run_distributed_gradient_case(rank, layout, group, singles, mode, disk)
+            except Exception as exc:
+                raise AssertionError(f"layout={layout}, mode={mode}") from exc
     finally:
         dist.destroy_process_group()
 
@@ -307,9 +317,17 @@ def _check_distributed_batch(rank, layout, is_tp, batch, original, full_logits, 
 
 
 @pytest.mark.parametrize("layout", ["tp", "zigzag", "allgather"])
-@pytest.mark.parametrize("mode", ["none", "tis", "mis"])
-def test_distributed_gradients(layout, mode):
-    torch.multiprocessing.spawn(distributed_worker, args=(2, _cp_dist_helpers.free_port(), layout, mode), nprocs=2)
+def test_distributed_gradients(layout):
+    torch.multiprocessing.spawn(
+        distributed_worker,
+        args=(
+            2,
+            _cp_dist_helpers.free_port(),
+            layout,
+            [(mode, False) for mode in ("none", "tis", "mis")],
+        ),
+        nprocs=2,
+    )
 
 
 def meta(n=1):
@@ -634,7 +652,9 @@ def test_shared_weight_rule_preserves_legacy_callbacks(mode):
 @pytest.mark.parametrize("layout", ["tp", "zigzag", "allgather"])
 def test_distributed_disk_gradients(layout):
     torch.multiprocessing.spawn(
-        distributed_worker, args=(2, _cp_dist_helpers.free_port(), layout, "none", True), nprocs=2
+        distributed_worker,
+        args=(2, _cp_dist_helpers.free_port(), layout, [("none", True)]),
+        nprocs=2,
     )
 
 
@@ -884,74 +904,90 @@ def test_exact_correction_cancels_expected_drift(mode):
     )
 
 
-def top_p_distributed_worker(rank, world_size, port, layout, mode, directory=None):
-    import torch.distributed as dist
+def _run_top_p_distributed_case(rank, layout, group, singles, mode, directory):
     from megatron.core import mpu
+
+    from slime.backends.megatron_utils.cp_utils import get_sum_of_sample_mean, slice_log_prob_with_cp
+    from slime.backends.megatron_utils.loss import policy_loss_function
+
+    is_tp = layout == "tp"
+    mpu.get_tensor_model_parallel_group = lambda: group if is_tp else singles[rank]
+    mpu.get_context_parallel_group = lambda: group
+    mpu.get_tensor_model_parallel_rank = lambda: rank if is_tp else 0
+
+    batch = top_p_batch()
+    full_logits = torch.randn(16, 12)
+    a = args(mode=mode, rollout_top_p=0.95, allgather_cp=layout == "allgather")
+    if is_tp:
+        local = full_logits[:, rank * 6 : (rank + 1) * 6]
+    elif layout == "allgather":
+        local = full_logits[rank * 8 : (rank + 1) * 8]
+    else:
+        row_ids = torch.cat(
+            [
+                torch.tensor([i + rank * 2, i + rank * 2 + 1, i + (3 - rank) * 2, i + (3 - rank) * 2 + 1])
+                for i in [0, 8]
+            ]
+        )
+        local = full_logits[row_ids]
+    local = local.clone().requires_grad_()
+    original = dict(batch)
+    if directory is not None:
+        from pathlib import Path
+
+        store_top_p_batch(batch, Path(directory) / str(rank))
+    if not is_tp:
+        for key in ["advantages", "rollout_log_probs"]:
+            batch[key] = [
+                slice_log_prob_with_cp(x, t, r)
+                for x, t, r in zip(batch[key], batch["total_lengths"], batch["response_lengths"], strict=True)
+            ]
+    reducer = get_sum_of_sample_mean(
+        batch["total_lengths"], batch["response_lengths"], batch["loss_masks"], batch["rollout_mask_sums"]
+    )
+    loss, _ = policy_loss_function(a, batch, local.unsqueeze(0), reducer)
+    ref_logits = full_logits.clone().requires_grad_()
+    expected_loss = top_p_reference(ref_logits.unsqueeze(0), original, a)
+    loss.backward()
+    expected_loss.backward()
+    expected = (
+        ref_logits.grad[:, rank * 6 : (rank + 1) * 6]
+        if is_tp
+        else ref_logits.grad[rank * 8 : (rank + 1) * 8] if layout == "allgather" else ref_logits.grad[row_ids]
+    )
+    torch.testing.assert_close(local.grad, expected, atol=2e-6, rtol=2e-6)
+
+
+def top_p_distributed_worker(rank, world_size, port, layout, cases, directory):
+    import torch.distributed as dist
 
     torch.set_num_threads(1)
     group = _cp_dist_helpers.init_worker_process_group(rank, world_size, port)
     is_tp = layout == "tp"
     _cp_dist_helpers.stub_megatron_in_worker(1 if is_tp else world_size, 0 if is_tp else rank)
     singles = [dist.new_group([i]) for i in range(world_size)]
-    mpu.get_tensor_model_parallel_group = lambda: group if is_tp else singles[rank]
-    mpu.get_context_parallel_group = lambda: group
-    mpu.get_tensor_model_parallel_rank = lambda: rank if is_tp else 0
     try:
-        from slime.backends.megatron_utils.cp_utils import get_sum_of_sample_mean, slice_log_prob_with_cp
-        from slime.backends.megatron_utils.loss import policy_loss_function
-
-        batch = top_p_batch()
-        full_logits = torch.randn(16, 12)
-        a = args(mode=mode, rollout_top_p=0.95, allgather_cp=layout == "allgather")
-        if is_tp:
-            local = full_logits[:, rank * 6 : (rank + 1) * 6]
-        elif layout == "allgather":
-            local = full_logits[rank * 8 : (rank + 1) * 8]
-        else:
-            row_ids = torch.cat(
-                [
-                    torch.tensor([i + rank * 2, i + rank * 2 + 1, i + (3 - rank) * 2, i + (3 - rank) * 2 + 1])
-                    for i in [0, 8]
-                ]
-            )
-            local = full_logits[row_ids]
-        local = local.clone().requires_grad_()
-        original = dict(batch)
-        if directory is not None:
-            from pathlib import Path
-
-            store_top_p_batch(batch, Path(directory) / str(rank))
-        if not is_tp:
-            for key in ["advantages", "rollout_log_probs"]:
-                batch[key] = [
-                    slice_log_prob_with_cp(x, t, r)
-                    for x, t, r in zip(batch[key], batch["total_lengths"], batch["response_lengths"], strict=True)
-                ]
-        reducer = get_sum_of_sample_mean(
-            batch["total_lengths"], batch["response_lengths"], batch["loss_masks"], batch["rollout_mask_sums"]
-        )
-        loss, _ = policy_loss_function(a, batch, local.unsqueeze(0), reducer)
-        ref_logits = full_logits.clone().requires_grad_()
-        expected_loss = top_p_reference(ref_logits.unsqueeze(0), original, a)
-        loss.backward()
-        expected_loss.backward()
-        expected = (
-            ref_logits.grad[:, rank * 6 : (rank + 1) * 6]
-            if is_tp
-            else ref_logits.grad[rank * 8 : (rank + 1) * 8] if layout == "allgather" else ref_logits.grad[row_ids]
-        )
-        torch.testing.assert_close(local.grad, expected, atol=2e-6, rtol=2e-6)
+        for case_index, (mode, disk) in enumerate(cases):
+            case_directory = f"{directory}/{case_index}" if disk else None
+            try:
+                _run_top_p_distributed_case(rank, layout, group, singles, mode, case_directory)
+            except Exception as exc:
+                raise AssertionError(f"layout={layout}, mode={mode}, disk={disk}") from exc
     finally:
         dist.destroy_process_group()
 
 
 @pytest.mark.parametrize("layout", ["tp", "zigzag", "allgather"])
-@pytest.mark.parametrize("mode", ["none", "tis", "mis"])
-@pytest.mark.parametrize("disk", [False, True])
-def test_distributed_exact_gradients(layout, mode, disk, tmp_path):
+def test_distributed_exact_gradients(layout, tmp_path):
     torch.multiprocessing.spawn(
         top_p_distributed_worker,
-        args=(2, _cp_dist_helpers.free_port(), layout, mode, str(tmp_path) if disk else None),
+        args=(
+            2,
+            _cp_dist_helpers.free_port(),
+            layout,
+            [(mode, disk) for disk in (False, True) for mode in ("none", "tis", "mis")],
+            str(tmp_path),
+        ),
         nprocs=2,
     )
 
