@@ -35,7 +35,7 @@ from slime.utils.routed_experts import (
     RoutedExpertsMicrobatch,
     RoutedExpertsMicrobatchPrefetcher,
 )
-from slime.utils.routing_replay import RoutingReplay
+from slime.utils.routing_replay import RoutingReplay, router_recomputed
 from slime.utils.types import RolloutBatch
 
 from ...utils.tensor_backper import TensorBackuper
@@ -308,6 +308,7 @@ class MegatronTrainRayActor(TrainRayActor):
         from slime.utils.routing_replay import RoutingReplay
 
         layer_ids = []
+        recomputed = []
         for vp_stage, model in enumerate(self.model):
             config = model.module.config
             num_layers_to_build = get_num_layers_to_build(config, vp_stage=vp_stage)
@@ -321,7 +322,13 @@ class MegatronTrainRayActor(TrainRayActor):
                     if config.moe_layer_freq[layer_id] == 0:
                         continue
                 layer_ids.append(layer_id)
+                recomputed.append(router_recomputed(config, layer_id - offset))
         assert len(layer_ids) == len(RoutingReplay.all_routing_replays)
+        for replay, layer_id, layer_recomputed in zip(
+            RoutingReplay.all_routing_replays, layer_ids, recomputed, strict=True
+        ):
+            replay.layer_id = layer_id
+            replay.recomputed = layer_recomputed
 
         for iterator in data_iterator:
             iterator.reset()
@@ -575,6 +582,8 @@ class MegatronTrainRayActor(TrainRayActor):
 
         train_data_utils.save_debug_train_data(self.args, rollout_id=rollout_id, rollout_data=rollout_data)
 
+        if self.args.use_rollout_routing_replay and self.args.ci_test:
+            RoutingReplay.assert_all_consumed()
         if self.args.use_routing_replay:
             RoutingReplay.clear_all()
 

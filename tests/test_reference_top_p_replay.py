@@ -143,7 +143,15 @@ def test_initial_kl_check_respects_policy_support(top_p):
         "train/pg_clipfrac": 0.0,
         "train/kl_loss": 0.000169,
     }
-    namespace = {"args": args, "log_dict": log_dict, "step_id": 0, "accumulated_step_id": 0}
+    # No R3 route-mismatch counts: that CI check is covered in test_routing_replay.py.
+    namespace = {
+        "args": args,
+        "log_dict": log_dict,
+        "step_id": 0,
+        "accumulated_step_id": 0,
+        "route_mismatch": None,
+        "role_tag": "",
+    }
     if top_p == 1.0:
         with pytest.raises(AssertionError):
             exec(program, namespace)

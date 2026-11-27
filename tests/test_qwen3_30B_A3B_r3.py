@@ -101,7 +101,9 @@ def execute():
     if USE_DEEPEP:
         sglang_args += "--sglang-moe-a2a-backend deepep --sglang-deepep-mode auto "
 
-    ci_args = "--ci-test "
+    # Every MoE layer must replay real tokens, and its route mismatch must stay under the bound: above the
+    # SGLang/Megatron routing disagreement (FP8 rollout here), below the near-total mismatch of a misaligned replay.
+    ci_args = "--ci-test --log-r3-route-mismatch --ci-r3-route-mismatch-threshold 0.7 "
 
     misc_args = (
         # default dropout in megatron is 0.1

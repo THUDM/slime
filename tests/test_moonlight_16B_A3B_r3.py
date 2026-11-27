@@ -90,7 +90,9 @@ def execute():
         "--sglang-max-running-requests 512 "
     )
 
-    ci_args = "--ci-test "
+    # Every MoE layer must replay real tokens, and its route mismatch must stay under the bound: above the
+    # SGLang/Megatron routing disagreement, below the near-total mismatch of a misaligned replay.
+    ci_args = "--ci-test --log-r3-route-mismatch --ci-r3-route-mismatch-threshold 0.5 "
 
     misc_args = (
         "--attention-dropout 0.0 "
