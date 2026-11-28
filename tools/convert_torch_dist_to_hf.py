@@ -63,6 +63,41 @@ class EmptyStateDictLoadPlanner(dist_cp.default_planner.DefaultLoadPlanner):
         super().set_up_planner(state_dict, metadata, is_coordinator)
 
 
+# Native GDN checkpoints store the projection weights split into named
+# sections; re-pack them into the live-parameter layout the HF converter
+# expects (a single tensor with ``partition_sections``).
+_GDN_SECTION_PATTERN = re.compile(
+    r"^(.*\.self_attention\.(?:in_proj|conv1d)\.weight)\.(query|key|value|z|beta|alpha)$"
+)
+_GDN_IN_PROJ_SECTIONS = ("query", "key", "value", "z", "beta", "alpha")
+_GDN_CONV_SECTIONS = ("query", "key", "value")
+
+
+def _merge_gdn_sections(state_dict):
+    """Merge native GDN checkpoint section tensors into packed parameters.
+
+    Megatron serializes GDN ``in_proj.weight`` / ``conv1d.weight`` as one
+    tensor per section (``.query``, ``.key``, ...). The HF converter expects
+    the packed live-parameter layout plus ``partition_sections``.
+    """
+    grouped = {}
+    for key in list(state_dict):
+        match = _GDN_SECTION_PATTERN.match(key)
+        if match:
+            grouped.setdefault(match.group(1), {})[match.group(2)] = key
+    for base, parts in grouped.items():
+        if base in state_dict:
+            raise RuntimeError(f"both packed and split GDN parameters found for {base}")
+        order = _GDN_IN_PROJ_SECTIONS if base.endswith(".in_proj.weight") else _GDN_CONV_SECTIONS
+        if set(parts) != set(order):
+            raise RuntimeError(f"unexpected GDN sections for {base}: {sorted(parts)}")
+        tensors = [state_dict.pop(parts[name]) for name in order]
+        merged = torch.cat(tensors, dim=0)
+        merged.partition_sections = tuple(tensor.shape[0] for tensor in tensors)
+        state_dict[base] = merged
+    return state_dict
+
+
 def get_expert_param(args, name, param):
     if ".experts." not in name:
         yield name, param
@@ -228,6 +263,7 @@ if __name__ == "__main__":
         planner=EmptyStateDictLoadPlanner(),
         no_dist=True,
     )
+    _merge_gdn_sections(state_dict)
     print(f"model loaded in {time.time()-t:.2f} sec.")
 
     save_tensors(

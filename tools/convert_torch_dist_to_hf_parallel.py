@@ -224,6 +224,51 @@ class EmptyStateDictLoadPlanner(dist_cp.default_planner.DefaultLoadPlanner):
         super().set_up_planner(state_dict, metadata, is_coordinator)
 
 
+# Native GDN checkpoints store the projection weights split into named
+# sections; re-pack them into the live-parameter layout the HF converter
+# expects (a single tensor with ``partition_sections``).
+_GDN_SECTION_PATTERN = re.compile(
+    r"^(.*\.self_attention\.(?:in_proj|conv1d)\.weight)\.(query|key|value|z|beta|alpha)$"
+)
+_GDN_IN_PROJ_SECTIONS = ("query", "key", "value", "z", "beta", "alpha")
+_GDN_CONV_SECTIONS = ("query", "key", "value")
+
+
+def _merge_gdn_sections(state_dict):
+    """Merge native GDN checkpoint section tensors into packed parameters.
+
+    Megatron serializes GDN ``in_proj.weight`` / ``conv1d.weight`` as one
+    tensor per section (``.query``, ``.key``, ...). The HF converter expects
+    the packed live-parameter layout plus ``partition_sections``.
+    """
+    grouped = {}
+    for key in list(state_dict):
+        match = _GDN_SECTION_PATTERN.match(key)
+        if match:
+            grouped.setdefault(match.group(1), {})[match.group(2)] = key
+    for base, parts in grouped.items():
+        if base in state_dict:
+            raise RuntimeError(f"both packed and split GDN parameters found for {base}")
+        order = _GDN_IN_PROJ_SECTIONS if base.endswith(".in_proj.weight") else _GDN_CONV_SECTIONS
+        if set(parts) != set(order):
+            raise RuntimeError(f"unexpected GDN sections for {base}: {sorted(parts)}")
+        tensors = [state_dict.pop(parts[name]) for name in order]
+        merged = torch.cat(tensors, dim=0)
+        merged.partition_sections = tuple(tensor.shape[0] for tensor in tensors)
+        state_dict[base] = merged
+    return state_dict
+
+
+def _group_gdn_sections(all_keys):
+    """Group per-section GDN checkpoint keys by their packed parameter name."""
+    groups = {}
+    for key in all_keys:
+        match = _GDN_SECTION_PATTERN.match(key)
+        if match:
+            groups.setdefault(match.group(1), []).append(key)
+    return groups
+
+
 def get_expert_param(args, name, param):
     if ".experts." not in name:
         yield name, param
@@ -381,6 +426,7 @@ def conversion_worker(
         planner=planner,
         no_dist=True,
     )
+    _merge_gdn_sections(state_dict)
     print(f"Worker {worker_id}: State dict loaded in {time.time()-t:.2f} sec.")
 
     save_tensors(
@@ -463,13 +509,24 @@ if __name__ == "__main__":
     metadata = reader.read_metadata()
     all_keys = [k for k in metadata.state_dict_metadata.keys() if "optimizer" not in k and "_state" not in k]
 
+    # Keep all GDN sections of a projection in one worker for re-packing.
+    gdn_groups = _group_gdn_sections(all_keys)
+
     # Group paired keys (linear_q_down_proj and linear_kv_down_proj) together
     # These will be converted to q_a_proj and kv_a_proj_with_mqa later
     paired_keys = set()
+    gdn_grouped_keys = set()
     key_groups = []  # Each element is either a single key or a pair of keys
 
     for key in all_keys:
-        if key in paired_keys:
+        if key in paired_keys or key in gdn_grouped_keys:
+            continue
+
+        match = _GDN_SECTION_PATTERN.match(key)
+        if match:
+            group = gdn_groups[match.group(1)]
+            key_groups.append(group)
+            gdn_grouped_keys.update(group)
             continue
 
         # Check if this is a linear_q_down_proj or linear_kv_down_proj key
